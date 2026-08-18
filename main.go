@@ -11,10 +11,12 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -37,6 +39,15 @@ var uiFS embed.FS
 // const) for the -X override to take effect. The in-repo default marks any
 // non-release build as a development build of the upcoming release.
 var appVersion = "0.9.0-dev"
+
+// requestedByHeader/Value are the same-origin handshake enforced on every /api/
+// route (see apiGuard). The UI's fetch wrapper sets this header on every request; a
+// cross-origin page cannot set a custom header without a CORS preflight we never
+// grant, so its presence proves a same-origin caller.
+const (
+	requestedByHeader = "X-Requested-By"
+	requestedByValue  = "mnemosyne-ui"
+)
 
 func main() {
 	listen := flag.String("listen", "127.0.0.1:7821", "listen address host:port. Default is localhost-only; use 0.0.0.0:7821 in a container (which then REQUIRES an auth token).")
@@ -100,7 +111,7 @@ func main() {
 		auth = "ON — Authorization: Bearer <token> required for /api"
 	}
 	log.Printf("Mnemosyne %s — http://%s  (data: %s · auth: %s)", appVersion, addr, *dataDir, auth)
-	log.Fatal(http.ListenAndServe(addr, authMiddleware(mux, token)))
+	log.Fatal(http.ListenAndServe(addr, apiGuard(authMiddleware(mux, token))))
 }
 
 // isLocalhostAddr reports whether addr binds only the loopback interface, so it
@@ -147,6 +158,89 @@ func authMiddleware(next http.Handler, token string) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// apiGuard is the cross-origin / CSRF gate in front of every /api/ route. It is
+// independent of token auth (which protects non-localhost binds): it defends the
+// default localhost bind against a malicious web page in the user's browser making
+// requests to 127.0.0.1 (CSRF), including via DNS rebinding.
+//
+// The core move: require a custom request header (X-Requested-By) on every /api
+// call. A cross-origin page cannot set a custom header on a fetch/XHR without a
+// CORS preflight — and we never emit an Access-Control-Allow-* header, so that
+// preflight is never granted. So the header's presence proves the request came
+// from our own same-origin UI (whose fetch wrapper sets it globally).
+//
+// One carve-out and one extra check:
+//   - A genuine same-origin top-level navigation — a GET opened in a new tab to
+//     download a label, report, or structure export — cannot carry a custom header.
+//     It is allowed only when the browser marks it as a real navigation
+//     (Sec-Fetch-Mode: navigate) AND it is not cross-origin: such a GET changes no
+//     state and can't be read back by a cross-origin attacker.
+//   - State-changing methods additionally get an Origin/Referer host check: if
+//     either header is present and its host differs from the bound host, refuse.
+//
+// We deliberately never write CORS headers anywhere, so a browser that tries to
+// preflight simply fails. This gate runs regardless of whether token auth is on.
+func apiGuard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// State-changing methods: a present Origin/Referer must name the bound host.
+		if !isSafeMethod(r.Method) && crossOriginRequest(r) {
+			forbidCSRF(w, "cross-origin request refused")
+			return
+		}
+		// The custom-header handshake proves a same-origin caller (our fetch wrapper).
+		if r.Header.Get(requestedByHeader) == requestedByValue {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// A genuine same-origin top-level navigation (new-tab download) can't set the
+		// header — allow that, and nothing else.
+		if isSafeMethod(r.Method) && r.Header.Get("Sec-Fetch-Mode") == "navigate" && !crossOriginRequest(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		forbidCSRF(w, "missing or invalid "+requestedByHeader+" header — /api is for the Mnemosyne UI only")
+	})
+}
+
+func isSafeMethod(m string) bool { return m == http.MethodGet || m == http.MethodHead }
+
+// crossOriginRequest reports whether the request's Origin (or, absent that,
+// Referer) names a host different from the one we are bound to. A missing Origin
+// AND Referer is treated as NOT cross-origin (a same-origin navigation or a
+// non-browser client) — the header rule still gates those.
+func crossOriginRequest(r *http.Request) bool {
+	if o := r.Header.Get("Origin"); o != "" {
+		if o == "null" { // opaque origin (sandboxed iframe, file://) — treat as foreign
+			return true
+		}
+		return !sameHost(o, r.Host)
+	}
+	if ref := r.Header.Get("Referer"); ref != "" {
+		return !sameHost(ref, r.Host)
+	}
+	return false
+}
+
+// sameHost reports whether rawURL's host:port equals host (case-insensitive).
+func sameHost(rawURL, host string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return strings.EqualFold(u.Host, host)
+}
+
+// forbidCSRF writes a 403 with a plain one-line body. It sets no CORS headers.
+func forbidCSRF(w http.ResponseWriter, msg string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = io.WriteString(w, msg+"\n")
 }
 
 func defaultDataDir() string {
@@ -1560,6 +1654,9 @@ func api(mux *http.ServeMux, app *App) {
 					size = bc.DataBytes
 				}
 				res["staged_dir"], res["files"] = bc.StagedDir, bc.FileCount
+				if len(bc.BuildWarnings) > 0 {
+					res["warnings"] = bc.BuildWarnings
+				}
 				arts = append(arts, Artifact{
 					Kind: "package", Label: bc.Name + " (staged)", Path: bc.StagedDir, Size: size,
 					Count: bc.FileCount, ShowView: "packages", ShowID: id,

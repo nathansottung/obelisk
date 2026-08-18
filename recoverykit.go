@@ -85,13 +85,26 @@ func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string))
 		if err != nil || len(exp.Files) == 0 {
 			continue
 		}
+		// A kit that silently drops members is worse than no kit — the operator would
+		// trust an incomplete kit. So a failed structure-companion write FAILS the kit
+		// job (logged too, for the event trail), rather than producing a partial kit.
 		fn := "STRUCTURE-" + safeName(c.Name) + ".md"
-		if err := os.WriteFile(filepath.Join(kit, fn), []byte(StructureMarkdown(exp)), 0o644); err == nil {
-			structDocs = append(structDocs, fn)
+		if err := os.WriteFile(filepath.Join(kit, fn), []byte(StructureMarkdown(exp)), 0o644); err != nil {
+			a.Store.Log("recoverykit", "structure companion write failed: "+err.Error())
+			return nil, fmt.Errorf("writing recovery kit member %s: %w", fn, err)
 		}
+		structDocs = append(structDocs, fn)
 		// The machine-readable twins ride along too (re-importable on a fresh machine).
-		_ = os.WriteFile(filepath.Join(kit, "STRUCTURE-"+safeName(c.Name)+".json"), exportJSON(exp), 0o644)
-		_ = os.WriteFile(filepath.Join(kit, "STRUCTURE-"+safeName(c.Name)+".csv"), StructureCSV(exp), 0o644)
+		jn := "STRUCTURE-" + safeName(c.Name) + ".json"
+		if err := os.WriteFile(filepath.Join(kit, jn), exportJSON(exp), 0o644); err != nil {
+			a.Store.Log("recoverykit", "structure companion write failed: "+err.Error())
+			return nil, fmt.Errorf("writing recovery kit member %s: %w", jn, err)
+		}
+		cn := "STRUCTURE-" + safeName(c.Name) + ".csv"
+		if err := os.WriteFile(filepath.Join(kit, cn), StructureCSV(exp), 0o644); err != nil {
+			a.Store.Log("recoverykit", "structure companion write failed: "+err.Error())
+			return nil, fmt.Errorf("writing recovery kit member %s: %w", cn, err)
+		}
 	}
 
 	// Escrow Bundle: the archive preserves its own reader. The Kit always gets the

@@ -192,6 +192,9 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 				progress(0.05+frac*0.6, progBytes(done, total, fmt.Sprintf("writing segment %d/%d", seg.Index, N)))
 			})
 		c.RingStats = &stats
+		// A ringCopy read error (including a short/truncated source segment) is
+		// reported as the I/O error it is — checked BEFORE the read-back hash
+		// comparison below, so a read failure never manifests as a hash mismatch.
 		if err != nil {
 			return fail(err)
 		}
@@ -309,19 +312,20 @@ func copySidecars(stagedDir, destChunk string, c *Chunk) error {
 // `cat seg* > payload` step RESTORE.txt documents by hand. The joined file is
 // named after whichever par2 set is present (current <payload>.par2, or a legacy
 // <name>.tar.gpg.par2 set) so `par2 verify <payload>.par2` matches either way.
-func rejoinSegments(sourceDir, outputDir string, c *Chunk, progress func(float64, string)) (string, error) {
+func rejoinSegments(sourceDir, outputDir string, c *Chunk, progress func(float64, string)) (string, []string, error) {
+	var warnings []string
 	segs, _ := filepath.Glob(filepath.Join(sourceDir, c.Name+".seg*"))
 	if len(segs) == 0 {
 		// maybe segments are in per-tape subfolders under sourceDir
 		segs, _ = filepath.Glob(filepath.Join(sourceDir, "*", c.Name+".seg*"))
 	}
 	if len(segs) == 0 {
-		return "", fmt.Errorf("no segment files (%s.segNNN) found under %s — copy every tape's segment into one folder first", c.Name, sourceDir)
+		return "", nil, fmt.Errorf("no segment files (%s.segNNN) found under %s — copy every tape's segment into one folder first", c.Name, sourceDir)
 	}
 	sort.Strings(segs) // segNNN zero-padded => lexical order == segment order
 	want := dataSegmentCount(c.Segments)
 	if want > 0 && len(segs) != want {
-		return "", fmt.Errorf("found %d segment files but package needs %d — some tapes are missing", len(segs), want)
+		return "", nil, fmt.Errorf("found %d segment files but package needs %d — some tapes are missing", len(segs), want)
 	}
 	// Pick the payload base name from the par2 set actually on the media.
 	base := payloadName(c)
@@ -338,7 +342,7 @@ func rejoinSegments(sourceDir, outputDir string, c *Chunk, progress func(float64
 	joined := filepath.Join(outputDir, base)
 	out, err := os.Create(joined)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer out.Close()
 	buf := make([]byte, 8<<20)
@@ -346,22 +350,33 @@ func rejoinSegments(sourceDir, outputDir string, c *Chunk, progress func(float64
 		progress(float64(i)/float64(len(segs))*0.2, fmt.Sprintf("rejoin %d/%d", i+1, len(segs)))
 		in, err := os.Open(sp)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		if _, err := io.CopyBuffer(out, in, buf); err != nil {
 			in.Close()
-			return "", err
+			return "", nil, err
 		}
 		in.Close()
 	}
-	// bring the par2 set next to the joined payload for verify/repair
+	// Bring the par2 set next to the joined payload for verify/repair. A failure here
+	// is NOT swallowed: the payload rejoined fine, but without its par2 set the
+	// restore can no longer repair damage — a warning the operator must see (surfaced
+	// on the restore job and in the event log), not a silent omission.
+	par2Copied := 0
 	for _, glob := range []string{filepath.Join(sourceDir, base+"*.par2"), filepath.Join(sourceDir, "*", base+"*.par2")} {
 		if m, _ := filepath.Glob(glob); len(m) > 0 {
 			for _, p := range m {
-				_ = copyFile(p, filepath.Join(outputDir, filepath.Base(p)))
+				if err := copyFile(p, filepath.Join(outputDir, filepath.Base(p))); err != nil {
+					warnings = append(warnings, fmt.Sprintf("par2 file %s could not be placed beside the rejoined payload (%v) — the payload is intact, but it cannot be repaired if damaged", filepath.Base(p), err))
+					continue
+				}
+				par2Copied++
 			}
 			break
 		}
 	}
-	return joined, nil
+	if par2Copied == 0 && c.Par2 > 0 {
+		warnings = append(warnings, "no par2 recovery set was found beside the segments — the payload rejoined, but it cannot be repaired if it is damaged")
+	}
+	return joined, warnings, nil
 }

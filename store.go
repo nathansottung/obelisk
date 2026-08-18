@@ -169,6 +169,7 @@ type Chunk struct {
 	BuildVerified   *BuildVerified     `json:"build_verified,omitempty"`  // build-time proof the payload faithfully contains the source
 	VerifyEvents    []VerifyEvent      `json:"verify_events,omitempty"`   // append-only integrity-check log
 	RingStats       *RingStats         `json:"ring_stats,omitempty"`      // last write's ring-buffer telemetry
+	BuildWarnings   []string           `json:"build_warnings,omitempty"`  // non-fatal build issues the operator should see (e.g. BagIt tag files that failed to write)
 	Spanned         bool               `json:"spanned"`                   // payload split across several media
 	Segments        []Segment          `json:"segments,omitempty"`        // one per medium/tape when Spanned
 	Copies          []Copy             `json:"copies,omitempty"`          // physical copies of this chunk on registered volumes
@@ -1255,13 +1256,34 @@ func (s *Store) writeCatalog() error {
 	if err != nil {
 		return err
 	}
+	// Crash durability: os.Rename swaps the directory entry atomically, but the
+	// rename does NOT guarantee the temp file's CONTENTS reached stable storage —
+	// after a power loss the entry can point at a file whose data blocks were never
+	// flushed (a zero-length or torn catalog). So fsync the temp file's bytes BEFORE
+	// the rename, then fsync the parent directory AFTER so the rename itself is
+	// durable. On Windows syncDir is a no-op (directory fsync is unsupported there).
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
 		return err
 	}
+	// Best-effort; gracefully skipped where the platform/filesystem does not support
+	// a directory fsync (the file content is already durable via f.Sync above).
+	_ = syncDir(filepath.Dir(s.path))
 	s.lastSave, s.dirty = time.Now(), false
 	s.dailyBackup(b)
 	return nil

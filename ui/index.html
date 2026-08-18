@@ -328,7 +328,10 @@ function askToken(){if(_tokPrompt)return _tokPrompt;
    label/QR/report in a new tab can't set an Authorization header). */
 function mediaURL(u){return _tok?u+(u.includes('?')?'&':'?')+'token='+encodeURIComponent(_tok):u;}
 const api=async(m,u,b)=>{
-  const go=()=>{const h={'Content-Type':'application/json'};if(_tok)h['Authorization']='Bearer '+_tok;
+  // X-Requested-By is the same-origin handshake the server requires on every /api
+  // call: a cross-origin page can't set a custom header without a CORS preflight we
+  // never grant, so this closes CSRF / DNS-rebinding. Set globally on every request.
+  const go=()=>{const h={'Content-Type':'application/json','X-Requested-By':'mnemosyne-ui'};if(_tok)h['Authorization']='Bearer '+_tok;
     return fetch(u,{method:m,headers:h,body:b?JSON.stringify(b):undefined});};
   let r=await go();
   if(r.status===401){await askToken();r=await go();}

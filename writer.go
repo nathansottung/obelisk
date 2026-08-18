@@ -98,6 +98,15 @@ func ringCopy(src, dst string, offset, length int64, blockMB int, bufferGB, thro
 				remaining -= int64(n)
 			}
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				// A bounded (byte-range) copy that reaches EOF before the requested
+				// length has a TRUNCATED source — that is a read failure, not a clean
+				// end. Surface it as the real I/O error so the caller reports the read
+				// error, instead of silently streaming a short payload whose hash then
+				// fails downstream and manifests as a misleading "hash mismatch".
+				// (For a whole-file copy, length<=0, EOF is the normal end of stream.)
+				if length > 0 && remaining > 0 {
+					errCh <- fmt.Errorf("short read from %s: source ended %d byte(s) before the expected %d", src, remaining, length)
+				}
 				break
 			}
 			if err != nil {
@@ -280,6 +289,9 @@ func (a *App) WriteChunk(id int, destDir string, bufferGB float64, blockMB int, 
 			progress(0.02+frac*0.66, progBytes(done, total, "writing payload"))
 		})
 	c.RingStats = &stats // telemetry: proof the buffer decoupled read from a throttled write
+	// A ringCopy read error (including a short/truncated source) must be reported as
+	// the I/O error it is — checked BEFORE the hash comparison, so a read failure is
+	// never masked as a stream-hash mismatch.
 	if err != nil {
 		return mediumFail(err)
 	}
@@ -537,6 +549,7 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	if sourceDir == "" {
 		sourceDir = c.WrittenDest
 	}
+	var restoreWarnings []string // non-fatal issues the operator must still see (e.g. a missing par2 set)
 	// Restore WRITES extracted files into outputDir — it must never target source
 	// data (that would overwrite the very originals we exist to protect).
 	if err := a.Store.AssertOutsideSources(outputDir); err != nil {
@@ -551,10 +564,14 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 		// segment files are (all copied into one scratch dir), rejoin them —
 		// the same `cat seg* > payload` step RESTORE.txt documents by hand.
 		if c.Spanned {
-			joined, jerr := rejoinSegments(sourceDir, outputDir, c, progress)
+			joined, warns, jerr := rejoinSegments(sourceDir, outputDir, c, progress)
 			if jerr != nil {
 				return nil, jerr
 			}
+			for _, wmsg := range warns {
+				a.Store.Log("restore", c.Name+": "+wmsg)
+			}
+			restoreWarnings = append(restoreWarnings, warns...)
 			enc = joined
 		} else {
 			return nil, fmt.Errorf("payload for %s not found under %s (point source at the package folder on the medium)", c.Name, sourceDir)
@@ -600,7 +617,7 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 		}
 		progress(1.0, "restored")
 		a.Store.Log("restore", fmt.Sprintf("%s -> %s (repaired=%v)", c.Name, outputDir, repaired))
-		return map[string]any{"chunk": c.Name, "repaired": repaired, "output": outputDir}, nil
+		return restoreResult(c, outputDir, repaired, restoreWarnings), nil
 	}
 
 	progress(0.25, "decrypt + extract")
@@ -640,7 +657,18 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	}
 	progress(1.0, "restored")
 	a.Store.Log("restore", fmt.Sprintf("%s -> %s (repaired=%v)", c.Name, outputDir, repaired))
-	return map[string]any{"chunk": c.Name, "repaired": repaired, "output": outputDir}, nil
+	return restoreResult(c, outputDir, repaired, restoreWarnings), nil
+}
+
+// restoreResult builds the restore job's result map, attaching any non-fatal
+// warnings (e.g. a par2 set that couldn't be placed beside a rejoined payload) so
+// the operator sees them on the job — never a silently incomplete restore.
+func restoreResult(c *Chunk, outputDir string, repaired bool, warnings []string) map[string]any {
+	res := map[string]any{"chunk": c.Name, "repaired": repaired, "output": outputDir}
+	if len(warnings) > 0 {
+		res["warnings"] = warnings
+	}
+	return res
 }
 
 func tail(s string, n int) string {

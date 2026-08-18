@@ -1081,7 +1081,14 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 		}
 	}
 	writeRestoreTxt(work, c, cfg.eccIntended())
-	writeBagItTags(work, c) // BagIt tag files beside the package (institutional legibility)
+	// BagIt tag files beside the package (institutional legibility). These are a
+	// description layer, not needed to restore — so a write failure does NOT fail the
+	// build, but it must not be swallowed: log it and record it on the package so the
+	// build's job result surfaces an "incomplete BagIt tags" warning to the operator.
+	if err := writeBagItTags(work, c); err != nil {
+		a.Store.Log("build", c.Name+": "+err.Error())
+		c.BuildWarnings = append(c.BuildWarnings, "BagIt tag files incomplete: "+err.Error())
+	}
 
 	c.StagedDir = work
 	setStatus("STAGED", "")

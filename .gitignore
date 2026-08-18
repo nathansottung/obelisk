@@ -16,3 +16,6 @@ keystore*.json
 # editor cruft
 .vscode/*.log
 .DS_Store
+
+# Claude Code local session/config dir — never commit
+.claude/
