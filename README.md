@@ -11,11 +11,12 @@
 writes them onto LTO tape, hard drives, or optical discs — each package
 restorable decades from now with three stock, open-source tools (`par2`,
 `gpg`, `tar`) even if this program no longer exists.** It is one small Go
-binary (no installer, no runtime, no database service): a local web app that
-catalogs your files, packages them at a size that fits your medium, encrypts
-and adds error-correction, writes them through a RAM buffer with read-back
-verification, and remembers exactly which physical volume — in which drawer,
-in which house — each verified copy lives on.
+binary — no installer, no runtime, no database service. It's a local web app
+that catalogs your files and packages them at a size that fits your chosen
+medium, encrypting each package and adding error-correction. It writes every
+copy through a memory buffer and immediately reads it back to confirm it landed
+intact — then remembers exactly which physical volume, in which drawer and which
+house, each verified copy lives on.
 
 > Not another sync tool. Mnemosyne is for **cold, offline, decades-long
 > preservation**: the stuff you write once, put on a shelf, and need to trust
@@ -51,9 +52,10 @@ the technical/maintainer reference.
 Mnemosyne doesn't need a server or a single "source of truth" folder. If your
 stuff is **scattered across a pile of external drives** with overlapping copies and
 no master, make a **sourceless archive**: at create time, pick *"scattered across
-drives."* Then **adopt each drive** — Mnemosyne hashes its loose files and folds
-them into the archive's **deduped union** (identical content across drives counts
-once). The union *is* the archive; there's no source to scan or drift against.
+drives."* Then **adopt each drive** — Mnemosyne fingerprints its loose files and folds
+them into one combined list for the archive, counting identical files that appear
+on several drives only once. That combined list *is* the archive: there is no
+separate "master" folder to keep it in sync with.
 
 The other half is **Locations** — first-class physical places like *"Shoe Box #1"*
 (onsite) or *"Grandma's house"* (offsite). You assign each drive to a location, and
@@ -322,7 +324,7 @@ Mnemosyne backs up two ways, and they are peers — every archive can have both:
   the live, browsable form for the spinning drive on the shelf.* Use whichever
   fits the medium — or both, for belt-and-suspenders.
 
-### ️ Write
+### Write
 - **RAM ring buffer** decouples reading from writing so a slow tape never
   starves — *because tape and optical punish stop-start writes.*
 - **Throttle (MB/s)** caps the write rate — *because sustained writes cook
@@ -862,7 +864,8 @@ doctrine is immovable: *extraction always yields your original tree*. The split 
 deliberate and exact:
 
 - **Every package carries a BagIt payload manifest.** `manifest-sha256.txt` (plain
-  `sha256␣␣relative/path` lines over the original tree) is written **both as the
+  `sha256  relative/path` lines, two spaces between hash and path, over the
+  original tree) is written **both as the
   first member inside the package's `tar`** — so a reader can stream-verify each
   file as it extracts — **and as a sidecar on the media**. A
   `bag-info.txt`-style metadata sidecar rides along too (source organization,

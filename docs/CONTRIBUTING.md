@@ -16,17 +16,28 @@ gofmt -l .            # must print nothing — run `gofmt -w .` to fix
 **Pictograph check** (the emoji policy — only ✓ and ✗ are allowed anywhere):
 
 ```bash
-# Prints any forbidden pictograph in the UI or docs. Must output nothing.
-# (Matches emoji, dingbats, box-drawing, and geometric shapes; excludes the
-#  permitted ✓ U+2713 and ✗ U+2717, and ordinary typography like — · … → ×.)
+# Prints any forbidden pictograph in the UI, docs, README, or Go source.
+# Must output nothing. This is an ALLOW-LIST, not a block-list: anything that
+# is not plain ASCII, permitted typography, a math sign, or an accented letter
+# is flagged — so a new emoji from any Unicode block is caught, not just the
+# ones we thought of. The only permitted pictographs are ✓ (U+2713, success)
+# and ✗ (U+2717, failure). Permitted typography: — – … · × ≥ ≤ ≈ ≠ − ° ′ ″
+# superscripts, curly quotes, non-breaking space, and the arrows → ← • ‹ › » «.
 python - <<'PY'
 import glob
-BAD=lambda o:((0x1F000<=o<=0x1FAFF)or(0x2600<=o<=0x27BF)or(0x2B00<=o<=0x2BFF)
-    or(0x2500<=o<=0x25FF))and o not in (0x2713,0x2717)
-for f in ['ui/index.html','README.md']+glob.glob('docs/**/*.md',recursive=True):
+ALLOWED = set('✓✗—–…·×≥≤≈≠−°²³⁷′″©→←•‹›»«“”‘’')
+def bad(ch):
+    o = ord(ch)
+    if o < 128 or ch in ALLOWED or o in (0x00A0,0x2011): return False
+    if 0x00C0 <= o <= 0x017F: return False   # accented Latin letters
+    return True
+files = (['ui/index.html','README.md','RELEASE_CHECKLIST.md']
+         + glob.glob('docs/**/*.md', recursive=True)
+         + [f for f in glob.glob('*.go') if not f.endswith('_test.go')])
+for f in files:
     for n,line in enumerate(open(f,encoding='utf-8'),1):
-        hit=[c for c in line if BAD(ord(c))]
-        if hit: print(f"{f}:{n}: {''.join(sorted(set(hit)))}")
+        hit=[c for c in line if bad(c)]
+        if hit: print(f"{f}:{n}: {' '.join('U+%04X'%ord(c) for c in dict.fromkeys(hit))}  {line.strip()[:70]}")
 PY
 ```
 

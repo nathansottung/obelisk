@@ -357,7 +357,7 @@ const HELP={
   vault:['Vault — archives & file search','An Archive is a body of work you keep together (e.g. "Personal", "Client Work"). Scan folders into it — every file is SHA-256 hashed at the source. Plan groups files into media-sized packages; Rescan & compare detects what changed since you backed up. The search box answers the real questions: which package and which physical volume holds a given file — searchable by path, by SHA-256 (exact or prefix, to ask "is THIS file backed up?"), by extension, and by protection status, scoped to one archive (e.g. "show me every unprotected original").'],
   protection:['Protection — the 3-2-1 model, made explicit','The real 3-2-1 rule has THREE dimensions: how many copies, across how many distinct kinds of media, and how many offsite. A Profile expresses all three; you assign one to an Archive and, optionally, override it on any folder path (nearest-ancestor-wins). Every file then gets exactly one of six statuses — Unassigned, Not backed up, Partial, Complete, Over-complete, Out-of-policy — always shown as colour + icon + text. Only verified copies count toward requirements. Built-in profiles are immutable; duplicate one to start a custom policy.'],
   integrity:['Integrity — how hard each copy is proven','The app has many independent assurance knobs — build verification depth, par2 redundancy, routine verify level, the re-verify window, read-back. This panel unifies them into three presets: ARCHIVAL (prove everything — for anything irreplaceable), BALANCED, and FAST (skip proving contents — only for re-creatable data, and flagged amber). Pick one globally or override per archive; every individual knob stays editable, at which point the preset reads "Custom". Read-back after every write is always on and cannot be disabled. Each package\'s manifest and each volume inventory record the effective settings used, so the media self-document how much assurance they were built with.'],
-  packages:['Packages — the archival units','A Package is one self-contained, media-sized unit: a tar of files + par2 parity + manifest + RESTORE.txt (an OAIS AIP in plain English). The lifecycle rail reads PLANNED → BUILDING → STAGED → WRITING → WRITTEN → VERIFIED; red means FAILED. Build a package, then Write it to a volume with read-back verification. Packages too big for one medium are spanned across several, one tape at a time.'],
+  packages:['Packages — the archival units','A Package is one self-contained, media-sized unit: a tar of files + par2 parity + manifest + RESTORE.txt (a self-describing archival bundle — an OAIS AIP, in plain English). The lifecycle rail reads PLANNED → BUILDING → STAGED → WRITING → WRITTEN → VERIFIED; red means FAILED. Build a package, then Write it to a volume with read-back verification. Packages too big for one medium are spanned across several, one tape at a time.'],
   burn:['Burn — the optical disc queue','Optical media can\'t stream continuously, so discs are fed one at a time. A burn queue holds one disc per package and survives reboots (a disc caught mid-burn resets to pending — it may be a coaster). Click "Burn next disc", wait, then write the package name on the physical disc. Square colours: green = done, red = failed, amber = in progress, grey = pending.'],
   volumes:['Volumes — where the bytes physically live','A Volume is a physical medium you can hold: a tape, drive, or disc, with a barcode, kind, an Onsite/Offsite flag (the "1" in 3-2-1), and free-text location ("office safe"). Each Copy records which package sits on which volume and when it last verified. Scan a barcode into the lookup box to jump straight to a medium\'s contents — no mounting needed. When a volume is done, Finalize seals it: it enforces preconditions (recent verify, free-space buffer, SMART), writes a seal record + inventory onto the medium, marks it SEALED (further writes need an audit-logged unseal), and opens the printable label — the "close the box and label it" moment.'],
   cardcheck:['Check a card — is it already backed up?','Plug in an SD/CF card or a drive and Mnemosyne reads it (never writes, never adds it as a source) and checks every file BY CONTENT against your entire inventory — archives, packaged copies, and every drive you have inventoried. You get the answer that matters before a reformat: which frames are already safe (and where they live), and which are new and still need copying off. Matching is by SHA-256, so a file counts as backed up the moment its content is found anywhere, no matter its name or folder on the card.'],
@@ -410,7 +410,7 @@ const TORDER=['tar','hash','stage_verify','encrypt','stage','crypt_verify','par2
 function timingStr(t){if(!t)return '';const parts=[];
   for(const k of TORDER)if(t[k]!=null)parts.push(`${k} ${(+t[k]).toFixed(1)}s`);
   for(const k in t)if(!TORDER.includes(k))parts.push(`${k} ${(+t[k]).toFixed(1)}s`);
-  return parts.length?'⏱ '+parts.join(' · '):''}
+  return parts.length?parts.join(' · '):''}
 /* Build-time attestation: every hop of the custody chain now PROVEN. "full"
    shows a green stamp; "fast" shows the amber warning that contents +
    decryptability are unproven. */
@@ -574,7 +574,7 @@ async function vArchiveProtection(id){
   const name=((cs||[]).find(c=>c.id===id)||{}).name||('Archive #'+id);
   const ap=res.archive_profile;
   window._profs=profs||[];
-  let h=`<h1>Protection — ${esc(name)}</h1><div class="crumb">3-2-1 model · nearest-ancestor-wins assignment</div>
+  let h=`<h1>Protection — ${esc(name)}</h1><div class="crumb">3-2-1 model · each folder uses the setting of the nearest folder above it</div>
   <div class="wbtabs row" style="margin-bottom:12px;gap:6px"><button class="btn" onclick="vArchiveProtection(${id})">Protection</button>
     <button class="btn ghost" onclick="tmOpen(${id})">Treemap</button>
     <span style="flex:1"></span>
@@ -591,7 +591,7 @@ async function vArchiveProtection(id){
         <b style="color:${ivColor(ieff.preset)}">${esc(ieff.preset||'—')}</b>
         <span class="dim">· ${esc(IV_BV[ieff.build_verify]||ieff.build_verify||'')} · par2 ${ieff.par2_redundancy}% · verify ${esc(ieff.routine_verify_level||'')} · due ${ieff.verify_due_months}mo${iv&&iv.override?'':' · inherited (global)'}</span></div>
       <button class="btn" onclick="integrityArchiveDlg(${id},'${esc(name)}')">Change…</button></div></div>
-  <div class="panel"><h2>Folders — assign a profile to override (context action per row)</h2>
+  <div class="panel"><h2>Folders — give a folder its own profile to override the inherited one</h2>
     <div class="dim" style="font-size:11.5px;margin-bottom:8px">Muted profile = inherited from an ancestor. Solid = an explicit assignment on this folder. A folder's status is the worst status among its files.</div>`;
   if(!_tnodes.length)h+='<div class="empty">No scanned files yet — scan a folder into this archive first.</div>';
   else _tnodes.forEach((n,i)=>h+=treeRow(i));
@@ -1390,7 +1390,7 @@ async function mirrorDlg(id,name){
     <div style="max-height:150px;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:6px">${folderChecks}</div>
     <label style="margin-top:10px">Target volumes — add more than one to fill several drives at once (one job per volume)</label>
     <div id="mtargets"></div>
-    <button class="btn ghost" style="margin-top:6px" onclick="addMirrorTarget()">＋ add another volume</button>
+    <button class="btn ghost" style="margin-top:6px" onclick="addMirrorTarget()">+ add another volume</button>
     <label style="margin-top:10px">Throttle MB/s (blank/0 = setting; caps write speed to keep drives cool)</label>
     <input id="mthrottle" class="full" type="number" step="1" placeholder="0 = use setting">
     <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Start mirror job(s)</button></div>`,
@@ -1437,7 +1437,7 @@ async function backupChangesDlg(id,name){
     <label class="row" style="gap:8px;align-items:flex-start;margin-top:4px"><input type="radio" name="bcbase" value="volume" checked style="width:auto;margin-top:3px" onchange="bcPreview()"> <span><b>Everything not yet on this volume</b> — new + changed files this drive doesn't already hold. For rotating per-drive incrementals.</span></label>
     <label class="row" style="gap:8px;align-items:flex-start;margin-top:6px"><input type="radio" name="bcbase" value="protection" style="width:auto;margin-top:3px" onchange="bcPreview()"> <span><b>Everything not fully protected</b> — files below their COMPLETE goal (their profile). For topping up overall protection.</span></label>
     <label style="margin-top:12px">Destination volume</label>
-    <select id="bcvol" class="full" onchange="bcVolChange()">${volOpts}<option value="__new">＋ register a new volume…</option></select>
+    <select id="bcvol" class="full" onchange="bcVolChange()">${volOpts}<option value="__new">+ register a new volume…</option></select>
     <div id="bcnew" style="display:none;margin-top:6px" class="row">
       <input id="bcnewlabel" placeholder="new volume label (e.g. ARCH-03)" style="flex:2" oninput="bcPreview()">
       <select id="bcnewkind" style="flex:1" onchange="bcPreview()"><option value="HDD">HDD</option><option value="SSD">SSD</option><option value="TAPE">TAPE</option><option value="OPTICAL">OPTICAL</option><option value="OTHER">OTHER</option></select>
@@ -1949,7 +1949,7 @@ function volPicker(vols){
   const opts=(vols||[]).map(r=>{const v=r.volume||r;return `<option value="${v.id}">${esc(v.label)}${v.barcode?' · '+esc(v.barcode):''}${v.location?' · '+esc(v.location):''}</option>`}).join('');
   return `<label>Volume this copy lands on</label>
     <select id="vol" class="full" onchange="document.querySelector('#newvol').style.display=this.value==='new'?'block':'none'">
-      ${opts||''}<option value="new">＋ register new volume…</option></select>
+      ${opts||''}<option value="new">+ register new volume…</option></select>
     <div id="newvol" style="display:${opts?'none':'block'};border-left:2px solid var(--line);padding-left:10px;margin-top:6px">
       <label>Label</label><input id="nvlabel" class="full" placeholder="e.g. NSP-0007">
       <label>Barcode (scan or type)</label><input id="nvbc" class="full" placeholder="scan…">
@@ -2451,7 +2451,7 @@ function activityMeta(j){const b=[];
   if(j.files_total)b.push(`<b>${fmtN(j.files_done)}</b>/${fmtN(j.files_total)} files`);
   if(j.rate_mbps)b.push(`<b>${j.rate_mbps}</b> MB/s`);
   if(j.bytes_total)b.push(`${GB(j.bytes_done)}/${GB(j.bytes_total)} GB`);
-  if(j.eta_seconds)b.push('⏳ '+fmtETA(j.eta_seconds));
+  if(j.eta_seconds)b.push('ETA '+fmtETA(j.eta_seconds));
   return b.join(' · ');}
 async function activity(){
   const el=$('#activity');if(!el)return;
@@ -2539,14 +2539,16 @@ function jobStamp(st){return st==='COMPLETED'?'VERIFIED':st==='FAILED'?'FAILED':
    A single job's plain summary, live counters while running, and an ARTIFACTS list
    where every output has a Show action that opens the thing itself. */
 let jobDetailTimer;
-const ARTIFACT_ICON={package:'📦',file:'📄',label:'🏷',kit:'🗝',catalog:'🗂',export:'📤',volume:'💽',drift:'🔀'};
+// Artifact type shown as a plain TEXT label (the emoji icon map was removed in the
+// professional-language pass — only ✓ and ✗ are permitted as pictographs).
+const ARTIFACT_TYPE={package:'Package',file:'File',label:'Label',kit:'Recovery kit',catalog:'Catalog',export:'Export',volume:'Volume',drift:'Drift report'};
 function artifactRow(a){
   const meta=[];
   if(a.count)meta.push(a.count.toLocaleString()+(a.kind==='catalog'?' records':a.kind==='package'?' files':''));
   if(a.size)meta.push(tmBytes(a.size));
-  const show=a.show_view?`<button class="btn ghost" style="font-size:11px;padding:2px 12px" onclick='showArtifact(${JSON.stringify(a)})'>Show →</button>`:'';
+  const show=a.show_view?`<button class="btn ghost" style="font-size:11px;padding:2px 12px" onclick='showArtifact(${JSON.stringify(a)})'>Show</button>`:'';
   return `<tr>
-    <td style="width:22px">${ARTIFACT_ICON[a.kind]||'•'}</td>
+    <td style="vertical-align:top;white-space:nowrap"><span class="etag">${esc(ARTIFACT_TYPE[a.kind]||a.kind)}</span></td>
     <td><div style="font-weight:600">${esc(a.label||a.kind)}</div>${a.path?`<div class="dim mono" style="font-size:11px;word-break:break-all">${esc(a.path)}</div>`:''}</td>
     <td class="num dim" style="font-size:11.5px;white-space:nowrap">${meta.join(' · ')}</td>
     <td style="text-align:right">${show}</td></tr>`;
@@ -2947,7 +2949,7 @@ async function vSettings(){
     <input id="bg" class="full" type="number" step="0.5" min="0.5" value="${cfg.buffer_gb||8}" oninput="bufCheck()">
     <div id="bgwarn" class="err" style="display:none;margin-top:6px"></div>
     <div class="help">How much RAM to use as a fast work buffer while building. Bigger can be faster on capable machines — but keep it well under your free memory; the OS and your other apps need room too.</div>
-    <label style="margin-top:14px">Chunk size (MB)</label>
+    <label style="margin-top:14px">Block size (MB)</label>
     <input id="bm" class="full" type="number" value="${cfg.block_mb||64}">
     <div class="help">How much data to move at a time. The default suits most drives; leave it unless you're tuning.</div>
     <label style="margin-top:14px">Default write-speed limit (MB/s)</label>
@@ -3311,8 +3313,8 @@ async function pickFileRender(path){let data;
     <div style="max-height:46vh;overflow:auto;border:1px solid var(--line);border-radius:6px">`;
   const dirs=window._pfDirs,files=window._pfFiles;
   if(!dirs.length&&!files.length)h+='<div class="dim" style="padding:12px">Nothing to choose here.</div>';
-  for(let i=0;i<dirs.length;i++)h+=`<div class="row" style="padding:6px 10px;border-bottom:1px solid var(--line-2);cursor:pointer;gap:8px" onclick="pickFileRender(window._pfDirs[${i}].path)"><span style="flex:1">📁 ${esc(dirs[i].name)}/</span></div>`;
-  for(let i=0;i<files.length;i++)h+=`<div class="row" style="padding:6px 10px;border-bottom:1px solid var(--line-2);cursor:pointer;gap:8px" onclick="pickFileUse(window._pfFiles[${i}].path)"><span style="flex:1">📄 ${esc(files[i].name)}</span></div>`;
+  for(let i=0;i<dirs.length;i++)h+=`<div class="row" style="padding:6px 10px;border-bottom:1px solid var(--line-2);cursor:pointer;gap:8px" onclick="pickFileRender(window._pfDirs[${i}].path)"><span style="flex:1">${esc(dirs[i].name)}/</span></div>`;
+  for(let i=0;i<files.length;i++)h+=`<div class="row" style="padding:6px 10px;border-bottom:1px solid var(--line-2);cursor:pointer;gap:8px" onclick="pickFileUse(window._pfFiles[${i}].path)"><span style="flex:1">${esc(files[i].name)}</span></div>`;
   h+=`</div><div class="row" style="margin-top:12px;justify-content:flex-end">
       <button class="btn ghost" onclick="document.querySelector('#pickf').close()">Cancel</button>
       <button class="btn" onclick="pickFileUse((($('#pffpath')||{}).value||'').trim())">Use this path</button></div>`;
@@ -3471,7 +3473,7 @@ function reviewProposed(props,meta){_proposed=props.map((p,i)=>({...p,_keep:true
   // Type field is also allowed via the New/Edit dialogs.
   const vocab=['wedding','portrait','family','album','single','live','short','documentary','commercial','personal','work','travel','project','other'];
   let h=`<div class="panel" ${meta.append?'':''}><h2>${props.length} proposed event(s) — confirm, rename, or drop</h2>`;
-  if(!props.length)h+='<div class="empty">No bursts met the threshold. Lower the min-files, or the files may lack capture/created dates (install ffprobe to read them from audio and video).</div>';
+  if(!props.length)h+='<div class="empty">No events were found. Try lowering the minimum files per group, or the files may be missing their capture dates (install ffprobe to read dates from audio and video).</div>';
   else{h+='<table><tr><th>Keep</th><th>Name</th><th>Type</th><th class="num">Year</th><th class="num">Files</th><th>Dates</th></tr>';
     _proposed.forEach(p=>{h+=`<tr>
       <td><input type="checkbox" checked onchange="_proposed[${p._i}]._keep=this.checked"></td>
@@ -3495,7 +3497,7 @@ async function vTemplates(){
   const d=await api('GET','/api/templates');const ts=d.templates||[];
   let h=`${hdr('Templates','where files should live — one destination pattern per role','templates')}
   <div class="panel"><div class="row"><button class="btn" onclick="editTemplate(0)">New template…</button></div>
-    <div class="dim" style="font-size:11.5px;margin-top:6px">A template is a small document, not a wall of options: a destination pattern per file role, built from a fixed set of tokens. Exceptions are handled by drag-in-tree, not more knobs.</div></div>
+    <div class="dim" style="font-size:11.5px;margin-top:6px">A template is a small document, not a wall of options: a destination pattern per file role, built from a fixed set of tokens. Exceptions are handled by dragging files in the tree, not more options.</div></div>
   <div class="panel"><h2>Templates (${ts.length})</h2>`;
   for(const t of ts){h+=`<div style="border-bottom:1px solid var(--line);padding:8px 0">
     <div class="row" style="align-items:center"><div style="flex:1"><b>${esc(t.name)}</b>${t.built_in?' <span class="etag">built-in</span>':''}${t.group_noun?` <span class="dim" style="font-size:11px">· groups by ${esc(t.group_noun)}</span>`:''}</div>
@@ -3535,7 +3537,7 @@ function tplPreview(){clearTimeout(_tplPrevT);_tplPrevT=setTimeout(async()=>{
   try{const p=await api('POST','/api/templates/preview',{template:t,collection_id:cid});
     let h='';
     if(p.blocked)h+=`<div class="err" style="margin-bottom:8px">Plan blocked — ${commaN(p.unresolved_conflicts)} unresolved content conflict(s) in scope. <a href="#conflicts" style="color:var(--act)">Resolve them in the Conflicts queue →</a></div>`;
-    h+=`<div style="font-size:14px;font-weight:600">places ${commaN(p.placed)} file(s) · ${commaN(p.no_route)} match no route${p.disambiguated?` · ${commaN(p.disambiguated)} auto-disambiguated`:''}</div>`;
+    h+=`<div style="font-size:14px;font-weight:600">places ${commaN(p.placed)} file(s) · ${commaN(p.no_route)} match no route${p.disambiguated?` · ${commaN(p.disambiguated)} auto-renamed to avoid name clashes`:''}</div>`;
     h+=`<div class="dim" style="font-size:11.5px;margin:4px 0 8px">of ${commaN(p.total)} file(s) in scope${p.blocked?' · plan will not compile until conflicts are resolved':''}</div>`;
     if((p.examples||[]).length){h+='<div class="dim" style="font-size:11px;margin-bottom:3px">Example placements:</div>';
       for(const e of p.examples)h+=`<div class="mono" style="font-size:10.5px">${esc(e.src)} <span class="dim">→</span> ${esc(e.dest)}</div>`}
@@ -3564,7 +3566,7 @@ function conflictVersion(cid,v,role,isRaw){
 async function vConflicts(){
   const d=await api('GET','/api/conflicts');const cs=d.conflicts||[];
   let h=`${hdr('Conflicts','same logical file, different bytes — resolved without a source of truth','conflicts')}`;
-  if(!cs.length){h+='<div class="panel"><div class="empty">✓ No conflicts to review. When two versions of the same file disagree during ingest, they land here for a human decision.</div></div>';$('#view').innerHTML=h;return}
+  if(!cs.length){h+='<div class="panel"><div class="empty">✓ No conflicts to review. When two versions of the same file disagree while being added, they land here for you to decide.</div></div>';$('#view').innerHTML=h;return}
   h+=`<div class="panel"><div class="dim" style="font-size:12px">${cs.length} conflict(s) awaiting a decision. Neither version is auto-preferred; nothing is ever discarded — the version you don't keep is retained in the file's history.</div></div>`;
   for(const c of cs){const raw=c.raw_alert;const vs=c.versions||[];
     h+=`<div class="panel" style="border-left:3px solid ${raw?'var(--bad)':'var(--warn)'}">
@@ -3591,7 +3593,7 @@ async function vQuarantine(){
   const d=await api('GET','/api/quarantine');const es=d.entries||[];
   let h=hdr('Quarantine','never delete, made usable — staged, reversible, never emptied by the tool','quarantine');
   h+=`<div class="panel" style="border-left:3px solid var(--act)">
-    <div style="font-size:12.5px">️ <b>${esc(d.standing_note)}</b></div>
+    <div style="font-size:12.5px"><b>${esc(d.standing_note)}</b></div>
     <div class="dim" style="font-size:11.5px;margin-top:6px">Quarantine only exists inside <b>managed territory</b> — the destinations Mnemosyne itself populated. Marking a file or folder "quarantine" moves it (bytes intact, structure preserved) into <span class="mono">${esc('_deleted')}</span> under its destination root and stops counting it toward protection. Un-quarantine is a straight reverse move. On adopted media and source drives the action does not exist.</div>
     ${(d.roots||[]).length?`<div class="dim" style="font-size:11px;margin-top:6px">Managed roots: ${(d.roots||[]).map(r=>`<span class="mono">${esc(r)}</span>`).join(' · ')}</div>`:`<div class="dim" style="font-size:11px;margin-top:6px">No managed territory yet — execute a plan to populate a destination, and its files become quarantine-eligible.</div>`}
     <div class="row" style="margin-top:10px"><button class="btn" onclick="quarantineDlg()">Quarantine a path…</button></div></div>`;

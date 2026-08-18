@@ -73,7 +73,7 @@ A burn queue is tough. If the app or your PC restarts in the middle of a burn, t
 
 ### Optional: an extra armour layer for discs (dvdisaster ECC)
 
-Discs die differently from drives. A scratch or a bad patch of dye kills a **run of neighbouring sectors** all at once — a kind of damage that a per-file repair can't always see coming. Every package already carries **par2** repair data, which protects the *contents* of the payload file. **dvdisaster** adds a second, different kind of armour: Reed–Solomon error correction computed over the disc's whole *sector geometry*, so even a scratch that wipes out a band of physical sectors can be healed.
+Discs die differently from drives. A scratch or a bad patch of dye kills a **run of neighbouring sectors** all at once — a kind of damage that a per-file repair can't always see coming. Every package already carries **par2** repair data, which protects the *contents* of the payload file. **dvdisaster** adds a second, different kind of armour: a layer of repair data computed across the disc's whole physical surface — every sector, not just the payload file — so even a scratch that wipes out a whole band of the disc at once can be healed.
 
 This layer is **completely optional and never required to restore**. Your files come back from par2 + tar (+ gpg if encrypted) whether or not dvdisaster was ever used — the RESTORE.txt on every disc says this in plain words. dvdisaster is just belt-and-suspenders for the physical disc.
 

@@ -164,7 +164,7 @@ That RESTORE.txt is your safety net. Your backup does not depend on this app bei
 - **Write failed or verify failed.** The drive may have been unplugged, gone to sleep, or run out of space. Reconnect the drive, make sure it is mounted and has room, and try **Write to volume…** again. A failed verify means the app did its job and caught a bad copy — your originals are untouched.
 - **The app will not build because you chose encryption.** You need **two keystores** registered first. See the "Set up safely" guide.
 - **No file count after scanning.** Check the **Jobs** tab — the scan may still be running, or it may show an error (for example, if the folder was moved or unplugged mid-scan). Rescan once the folder is available.
-- Stuck on any screen? Click the small **ⓘ** help button for a reminder.
+- Stuck on any screen? Click the small **i** help button for a reminder.
 
 ## Screenshots to capture
 

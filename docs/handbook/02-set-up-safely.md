@@ -99,7 +99,7 @@ You can also export a **Recovery Kit** for safekeeping: on the **Keys** tab, cli
 - **The app will not build an encrypted package and mentions keystores.** This is the two-keystore rule doing its job. Register a second keystore in Settings, ideally on a second device.
 - **Browse… does not open a picker.** Make sure Mnemosyne is still running and refresh the page in your browser (press F5).
 - **Not enough space when building later.** Your staging folder's drive may be too full. Free up space, or choose a staging folder on a drive with more room. Remember it only needs room for your single biggest package.
-- Need a reminder on any screen? Click the small **ⓘ** help button on that screen.
+- Need a reminder on any screen? Click the small **i** help button on that screen.
 
 ## Screenshots to capture
 

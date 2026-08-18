@@ -137,7 +137,7 @@ Tip: update the volume's **location** text to match where it now lives (for exam
 - **A new copy did not raise the count.** Check the **Jobs** tab — the write may still be running or may have failed verify. Only a **VERIFIED** copy counts. Re-run **Write to volume…** if needed.
 - **"kinds ok" never appears.** Both your copies may be the same kind of media (for example two HDDs). Make one copy on a genuinely different kind — SSD, tape, or optical discs.
 - **You cannot mark a volume Offsite.** Make sure you opened the volume's **detail page** first, then look for **Mark offsite**. You can also set Onsite/Offsite when registering a volume during a write.
-- Need a reminder on any screen? Click the small **ⓘ** help button.
+- Need a reminder on any screen? Click the small **i** help button.
 
 ## Screenshots to capture
 

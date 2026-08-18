@@ -16,7 +16,7 @@ Some words you'll see:
 ## The five-step ritual
 
 1. Plug in the drive you rotate your backups onto, and wait for it to mount.
-2. Open the **Archives** tab and click **Back up changes…** on the archive you're keeping current.
+2. Open the **Vault** tab and click **Back up changes…** on the archive you're keeping current.
 3. Choose **what to back up** (see the two options below). Pick the destination volume — or register a new one right there.
 4. Read the preview: it shows **how many files, how many gigabytes, a per-type breakdown, and whether it fits** on the drive. Nothing has moved yet.
 5. Click **Back up changes**. Each file is copied and immediately re-read to verify it landed intact, then recorded as a verified copy. Done.

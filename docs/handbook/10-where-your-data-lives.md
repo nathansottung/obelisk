@@ -40,9 +40,9 @@ This list is just as important as the one above.
 
 ---
 
-## Verify this claim yourself
+## Verify this claim (if you're comfortable with code)
 
-You don't have to take our word for it. The promise is guarded by one function and proven by tests that ship in the source tree. Run them with `go test ./...`:
+You don't have to take our word for it. The promise is guarded by one function and proven by tests that ship with the source code. If you're comfortable at a command line — or have a friend who is — run them with `go test ./...`:
 
 - **`TestIntegration_SourceSafetyRefusals`** (`integration_test.go`) — staging, write, restore, and kit targets inside a source are all refused.
 - **`TestMirror_RefusesSourceDest`** (`mirror_test.go`) — a mirror copy cannot target a source folder.

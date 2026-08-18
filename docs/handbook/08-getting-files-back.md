@@ -4,7 +4,11 @@ This is the guide that matters most. A backup is only worth something if you can
 
 A few words you will see below:
 
-- A **"package"** is one sealed unit of your backup on a drive, disc, or tape. It is a folder that holds: `NAME.tar` (the actual bundle of your files — "tar" is a plain, decades-old way to pack many files into one) — or `NAME.tar.gpg` if you encrypted it (**"encrypted"** = scrambled so only someone with the secret passphrase can read it); a `NAME.par2` **recovery set** (extra repair data that can fix a limited amount of damage, like scratches on a disc); a `NAME.manifest.json` (the list of files inside); and a `RESTORE.txt` (plain-English restore steps that live right on the medium).
+- A **"package"** is one sealed unit of your backup on a drive, disc, or tape. It is a folder holding four things:
+  - `NAME.tar` — the actual bundle of your files. ("tar" is a plain, decades-old way to pack many files into one.) If you encrypted the package, this file is `NAME.tar.gpg` instead — **"encrypted"** means scrambled so only someone with the secret passphrase can read it.
+  - `NAME.par2` — a **recovery set**: extra repair data that can fix a limited amount of damage, like scratches on a disc.
+  - `NAME.manifest.json` — the list of files inside.
+  - `RESTORE.txt` — plain-English restore steps that live right on the medium.
 - A **"medium"** or **"volume"** is one physical thing that holds packages: a drive, a disc, or a tape.
 - To **"mount"** a drive means to plug it in so it appears on your computer — as a drive letter like `E:\` on Windows, or a folder you can open on a Mac.
 - A **"passphrase"** is the long secret password that unlocks an encrypted package. It lives in a **"keystore"** (a small file that holds your passphrases).
