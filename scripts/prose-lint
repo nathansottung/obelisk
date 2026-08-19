@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# prose-lint — warns on print-worn, wordy, passive, or jargon prose in the
+# user-facing UI strings and docs, enforcing the project Writing standard (George
+# Orwell's six rules; see "Writing standard" in docs/CONTRIBUTING.md).
+#
+# The banned patterns live in scripts/banned-phrases.txt, one per line as
+#   <extended-regex> => <why / fix>
+# so the standard grows by editing that data file, not this script.
+#
+# Scope: FUNCTIONAL text only — the UI, the README, and the handbook. Developer
+# docs (ARCHITECTURE.md, CONTRIBUTING.md) and code are out of scope by design, so
+# the banned words may appear there and in the list itself as examples.
+#
+# Warning-only: it prints findings and exits non-zero so CI can surface them as a
+# NON-blocking annotation (the CI step sets continue-on-error). Run it locally:
+#   scripts/prose-lint
+set -u
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+LIST="$ROOT/scripts/banned-phrases.txt"
+
+if [ ! -f "$LIST" ]; then
+  echo "prose-lint: cannot find $LIST" >&2
+  exit 2
+fi
+
+# Files to scan: the UI + the user-facing docs (handbook + README).
+FILES=("$ROOT/ui/index.html" "$ROOT/README.md")
+if [ -d "$ROOT/docs/handbook" ]; then
+  while IFS= read -r f; do FILES+=("$f"); done < <(find "$ROOT/docs/handbook" -name '*.md')
+fi
+
+count=0
+while IFS= read -r line; do
+  case "$line" in ''|\#*) continue ;; esac
+  pattern="${line%% => *}"
+  note="${line#* => }"
+  [ "$note" = "$line" ] && note=""
+  for f in "${FILES[@]}"; do
+    [ -f "$f" ] || continue
+    rel="${f#"$ROOT"/}"
+    while IFS= read -r hit; do
+      count=$((count + 1))
+      echo "$rel:$hit"
+      [ -n "$note" ] && echo "      fix: $note"
+    done < <(grep -niE "$pattern" "$f" 2>/dev/null)
+  done
+done < "$LIST"
+
+echo ""
+if [ "$count" -gt 0 ]; then
+  echo "prose-lint: $count warning(s). See the Writing standard in docs/CONTRIBUTING.md;"
+  echo "edit scripts/banned-phrases.txt to tune the list."
+  exit 1
+fi
+echo "prose-lint: clean."
+exit 0

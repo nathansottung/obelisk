@@ -289,7 +289,7 @@ func copyVerifyToDest(srcPath, destPath string, th *throttler, onBytes func(int6
 	// file gets its real name.
 	if rb, rerr := hashFileHex(tmp); rerr != nil || rb != streamHash {
 		_ = os.Remove(tmp)
-		return "", n, fmt.Errorf("read-back verification failed for %s", filepath.Base(destPath))
+		return "", n, fmt.Errorf("read-back check failed for %s: the copy on the drive does not match the source. The drive may be failing, or the file changed while copying. Copy it again; if it keeps failing, check the drive's health", filepath.Base(destPath))
 	}
 	if err := atomicRename(tmp, destPath); err != nil {
 		_ = os.Remove(tmp)

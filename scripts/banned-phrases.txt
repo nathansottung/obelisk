@@ -1,0 +1,54 @@
+# banned-phrases.txt — the editable prose banned-list for scripts/prose-lint.
+#
+# This is where the project Writing standard grows. Each line is one rule:
+#
+#     <extended-regex pattern> => <why / what to write instead>
+#
+# Matching is case-insensitive. Use \b for word boundaries. Lines starting with #
+# and blank lines are ignored. The lint scans the FUNCTIONAL, user-facing text
+# (the UI, the README, the handbook) — not developer docs or code comments — so a
+# banned word may still, and should, appear here and in CONTRIBUTING.md as an
+# example. See "Writing standard" in docs/CONTRIBUTING.md for the rules behind it.
+
+# --- Filler: if you can cut a word, cut it (Orwell rule 3) ---
+\bin order to\b => cut it — plain "to" is enough
+\bit should be noted that\b => cut it — just state the thing
+\bit is important to note\b => cut it — just state the thing
+\bplease note\b => cut it — just state the thing
+\bneedless to say\b => cut it
+\bas a matter of fact\b => cut it
+
+# --- Long word where a short one will do (Orwell rule 2) ---
+\butiliz(e|es|ed|ing|ation)\b => use "use"
+\bprior to\b => use "before"
+\bsubsequent(ly)?\b => use "after" or "then"
+\bcommenc(e|es|ed|ing|ement)\b => use "start"
+\bin the event that\b => use "if"
+\bwith regard to\b => use "about"
+\bendeavou?r\b => use "try"
+\bfacilitate\b => use "help" or "let"
+\bapproximately\b => use "about"
+\badditional(ly)?\b => use "more" / "also"
+
+# --- Print-worn figures: say what it actually does (Orwell rule 1) ---
+\bcutting[- ]edge\b => say what it does
+\bstate[- ]of[- ]the[- ]art\b => say what it does
+\bseamless(ly)?\b => say what it does
+\brobust(ness)?\b => say what it does (e.g. "reliable", "recovers from a bad block")
+\bleverag(e|es|ed|ing)\b => use "use"
+\bworld[- ]class\b => say what it does
+\bblazing(ly)?[- ]fast\b => give the actual speed
+
+# --- Jargon → everyday English (Orwell rule 5; keep the term only in a gloss) ---
+# NOTE: "reconcile" and "ingest" are deliberately NOT auto-linted. They are also
+# code identifiers and stable API names (the /reconcile and /ingest routes, the
+# 'reconcile' job kind, doReconcile, dockIngest) that MUST NOT change, so a grep
+# would flag them forever as noise. They are handled in the one-time functional
+# sweep instead: user-facing prose says "compare" and "inventory"; the technical
+# term stays only in code and in a first-use gloss. Re-enable a line below only if
+# you can scope it to prose:
+# \breconcil(e|es|ed|ing|iation)\b => use "compare" in prose (keep "reconcile" for code + a gloss)
+# \bingest(s|ed|ing|ion)?\b => use "inventory" / "read in" in prose (keep "ingest" for code + a gloss)
+
+# --- Passive where the active works (Orwell rule 4) ---
+\bwill be [a-z]+ed\b => passive — name the actor ("the app verifies every file …")

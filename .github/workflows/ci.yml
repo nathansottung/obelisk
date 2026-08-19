@@ -34,3 +34,11 @@ jobs:
       # push/PR is checked for data races even though release binaries stay pure-Go.
       - name: go test -race
         run: CGO_ENABLED=1 go test -race ./...
+
+      # Prose lint: warns on print-worn, wordy, or passive phrasing in user-facing
+      # UI strings and docs (the Writing standard in docs/CONTRIBUTING.md). Advisory
+      # only — continue-on-error keeps it from blocking a merge; it surfaces findings
+      # as an annotation so the standard is visible on every PR.
+      - name: prose-lint (advisory)
+        continue-on-error: true
+        run: bash scripts/prose-lint

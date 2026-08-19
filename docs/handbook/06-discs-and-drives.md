@@ -125,22 +125,22 @@ Dock recognizes files by their **contents** (their fingerprints), not by name. T
 
 You should now see the session waiting for a drive.
 
-### Step 2: Plug in a drive and ingest it
+### Step 2: Plug in a drive and inventory it
 
 1. Plug one old drive into your computer.
 2. Within about 5 seconds it appears in the Dock session.
-3. Click **Ingest this drive**.
+3. Click **Inventory this drive**.
 
 Mnemosyne fingerprints every file on the drive and matches it **by content** against your archive. Because it matches by content, it still recognizes your files even if they were renamed or moved into different folders on that old drive. Every match is recorded as a verified copy, and a small inventory file is written onto the drive.
 
-![Dock session showing a drive ready to ingest with a coverage bar](../img/06-discs-and-drives-dock-ingest.png)
+![Dock session showing a drive ready to inventory with a coverage bar](../img/06-discs-and-drives-dock-ingest.png)
 
 You should now see a **coverage bar** showing how much of the archive that drive covers, and each matched file recorded as a verified copy.
 
 ### Step 3: Repeat, re-verify, and export
 
 1. Unplug that drive and plug in the next one. Repeat Step 2 for the whole box.
-2. If you plug in a drive Mnemosyne has seen before, it offers **Re-verify…** instead of Ingest. Re-verify re-checks that the drive still holds good copies.
+2. If you plug in a drive Mnemosyne has seen before, it offers **Re-verify…** instead of Inventory. Re-verify re-checks that the drive still holds good copies.
 3. When you're done, use **Export report (.md)** to save a plain-text summary of what each drive holds.
 
 You should now see rising coverage as you work through the box, and a saved report you can keep.
@@ -151,7 +151,7 @@ You should now see rising coverage as you work through the box, and a saved repo
 
 - **Discs:** every square in the burn queue is green, and each disc is labeled with a marker.
 - **Mirror:** the Jobs tab job finished with every file copied and verified, and you can open the plain files on the drive in any file manager.
-- **Dock:** the coverage bar rose as you ingested drives, matches are recorded as verified copies, and you exported a report.
+- **Dock:** the coverage bar rose as you inventoried drives, Mnemosyne recorded the matches as verified copies, and you exported a report.
 
 ## If something went wrong
 
@@ -168,4 +168,4 @@ You should now see rising coverage as you work through the box, and a saved repo
 - `../img/06-discs-and-drives-squares.png` — Burn tab showing green/amber/red/grey disc squares.
 - `../img/06-discs-and-drives-mirror.png` — Vault tab "Mirror backup…" dialog picking folders and a target drive.
 - `../img/06-discs-and-drives-dock-start.png` — Dock tab starting a session and choosing archives.
-- `../img/06-discs-and-drives-dock-ingest.png` — Dock session with a drive ready to ingest and a coverage bar.
+- `../img/06-discs-and-drives-dock-ingest.png` — Dock session with a drive ready to inventory and a coverage bar.

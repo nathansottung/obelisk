@@ -121,6 +121,47 @@ Match the surrounding code — it is intentional, not accidental:
   correctly). Don't commit CRLF into source or docs; if a clone shows spurious
   whole-file diffs, run `git add --renormalize .` once.
 
+## Writing standard (George Orwell's six rules)
+
+All functional, user-facing prose follows the six rules from George Orwell's
+*"Politics and the English Language"* (1946), quoted here in full:
+
+> 1. Never use a metaphor, simile, or other figure of speech which you are used to
+>    seeing in print.
+> 2. Never use a long word where a short one will do.
+> 3. If it is possible to cut a word out, always cut it out.
+> 4. Never use the passive where you can use the active.
+> 5. Never use a foreign phrase, a scientific word, or a jargon word if you can
+>    think of an everyday English equivalent.
+> 6. Break any of these rules sooner than say anything outright barbarous.
+
+Two project amendments:
+
+- **(a) Rule 5, clarified.** A *necessary* technical term (hash, parity, mount,
+  SMART, par2) is allowed — with a plain gloss at its first use on each screen, per
+  the [plain-language standard](#plain-language-standard-all-ui-copy) below.
+  *Invented or borrowed* jargon is not: prefer "compare" over "reconcile" and
+  "inventory" / "read in" over "ingest" in prose, keeping the technical term only in
+  code and in that first-use gloss.
+- **(b) Scope.** These rules govern **functional** text: labels, help lines, error
+  messages, dialogs, the handbook, and README instructions. **Brand** lines — the
+  tagline and the About-page epigraph — sit under rule 6 and may keep a deliberate
+  flourish. Developer docs (this file, `ARCHITECTURE.md`) are out of scope.
+
+**Error messages get special attention.** In active voice, each states — in this
+order, three sentences maximum — **what happened, what it means, and what to do
+next**. *"Read-back check failed for FILE: the copy on the drive does not match the
+source. The drive may be failing, or the file changed while copying. Copy it again;
+if it keeps failing, check the drive's health."* Not *"read-back verification
+failed."*
+
+**The lint.** `scripts/prose-lint` greps the UI and docs for a banned list — the
+filler, worn figures, and passive patterns above — and runs in CI as a non-blocking
+warning. The list lives in one editable file, `scripts/banned-phrases.txt`, so the
+standard grows there, not in the script. Jargon like "reconcile"/"ingest" is swept
+by hand rather than linted, because those words are also stable code and API names
+that must not change.
+
 ## Plain-language standard (all UI copy)
 
 Every label, setting, button, message, view header, and empty state must read at
