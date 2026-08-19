@@ -162,6 +162,34 @@ standard grows there, not in the script. Jargon like "reconcile"/"ingest" is swe
 by hand rather than linted, because those words are also stable code and API names
 that must not change.
 
+### Appendix: twenty teaching examples (before → after)
+
+The first sweep against this standard produced these rewrites. Keep them as worked
+examples of what each rule looks like in practice.
+
+| Rule | Before | After |
+|---|---|---|
+| 4 — active over passive | This folder doesn't exist yet — it **will be created** on first use. | This folder doesn't exist yet — **the app creates it** on first use. |
+| 4 — active over passive | …as you inventoried drives, matches **are recorded** as verified copies. | …as you inventoried drives, **Obelisk records the matches** as verified copies. |
+| 5 — jargon → everyday | Pick the Archive(s) to **reconcile** against | Pick the Archive(s) to **compare** against |
+| 5 — jargon → everyday | scan, build, write, verify, **reconcile**, recovery kit | scan, build, write, verify, **compare**, recovery kit |
+| 5 — jargon → everyday | these drives should be **reconciled** against | these drives should be **compared** against |
+| 5 — jargon → everyday | **Reconciling** against: … | **Comparing** against: … |
+| 5 — jargon → everyday | the tool **reconciles** a hand-emptied `_deleted` gracefully | the tool **handles** a hand-emptied `_deleted` gracefully |
+| 5 — jargon → everyday | the next scan **reconciles** gracefully (README) | the next scan **copes** gracefully |
+| 5 — jargon → everyday | Dock — **ingest** a stack of legacy drives | Dock — **inventory** a stack of legacy drives |
+| 5 — jargon → everyday | Click **Ingest** and the app does the rest | Click **Inventory** and the app does the rest |
+| 5 — jargon → everyday | …or **ingest** a specific mounted path / folder | …or **inventory** a specific mounted path / folder |
+| 5 — jargon → everyday | **Ingest path** (button) | **Inventory path** |
+| 5 — jargon → everyday | **Ingest this drive** (button) | **Inventory this drive** |
+| 5 — jargon → everyday | No drives **ingested** yet. | No drives **inventoried** yet. |
+| 5 — jargon → everyday | **Ingesting** X — hashing & matching… (toast) | **Inventorying** X — hashing & matching… |
+| 5 — jargon → everyday | Step 2: Plug in a drive and **ingest** it (handbook) | Step 2: Plug in a drive and **inventory** it |
+| 5 — jargon → everyday | it offers Re-verify… instead of **Ingest** (handbook) | it offers Re-verify… instead of **Inventory** |
+| 5 — jargon → everyday | ### Dock — **ingest** a stack of legacy drives (README) | ### Dock — **inventory** a stack of legacy drives |
+| 5 — jargon → everyday | job fallback label: `ingest failed` | `inventory failed` |
+| errors (what/why/next) | read-back **verification failed** for FILE | **Read-back check failed for FILE: the copy on the drive does not match the source. The drive may be failing, or the file changed while copying. Copy it again; if it keeps failing, check the drive's health.** |
+
 ## Plain-language standard (all UI copy)
 
 Every label, setting, button, message, view header, and empty state must read at
