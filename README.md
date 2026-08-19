@@ -719,8 +719,8 @@ my risk?"* at a glance.
 
 <!-- SCREENSHOT: docs/img/treemap.png — Archive treemap, one large red (NOT_BACKED_UP) block dominating a field of green, drift toggle top-right -->
 
-### Dock — ingest a stack of legacy drives
-- **Guided, resumable, hands-off.** Pick the Archive(s) to reconcile against,
+### Dock — inventory a stack of legacy drives
+- **Guided, resumable, hands-off.** Pick the Archive(s) to compare against,
   then dock old backup drives one at a time. Mnemosyne **watches** for each
   newly-inserted drive (polling mounts, diffed against session start) and, on one
   click, does everything: identifies the drive by **serial**, hashes every file
@@ -810,7 +810,7 @@ roots the action simply does not appear, because there is nothing there the tool
 The Quarantine view lists everything staged (contents, age, total bytes) under one
 standing promise: *removing these permanently is a manual act you perform in your file
 manager — this tool has no delete button and never will.* The tool **never empties
-`_deleted`**; if you clear it by hand, the next scan reconciles gracefully, marking those
+`_deleted`**; if you clear it by hand, the next scan copes gracefully, marking those
 entries *human-removed* while keeping their history.
 
 ---
