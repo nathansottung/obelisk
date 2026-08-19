@@ -1,6 +1,6 @@
 # Discs, mirror drives, and adopting old drives
 
-This guide covers three ways to keep copies that don't involve tape: burning discs, copying plain files to an external drive, and bringing a box of old drives into Mnemosyne. As always, the app only reads your source folders. It never changes, moves, or deletes your originals, and it never sends anything over the internet.
+This guide covers three ways to keep copies that don't involve tape: burning discs, copying plain files to an external drive, and bringing a box of old drives into Obelisk. As always, the app only reads your source folders. It never changes, moves, or deletes your originals, and it never sends anything over the internet.
 
 Some words you'll see:
 
@@ -15,11 +15,11 @@ Some words you'll see:
 
 ## Part A: Burning Blu-ray or DVD discs
 
-Discs are handy for small, cheap, shelf-stable copies. Mnemosyne burns them from the **Burn** tab using a **burn queue** — a list of packages to burn, one disc each, all the same disc type.
+Discs are handy for small, cheap, shelf-stable copies. Obelisk burns them from the **Burn** tab using a **burn queue** — a list of packages to burn, one disc each, all the same disc type.
 
 ### Step 1: Set up a burn command (one time)
 
-Mnemosyne uses a separate burning program on your computer to actually write discs. You tell it which one to use, once.
+Obelisk uses a separate burning program on your computer to actually write discs. You tell it which one to use, once.
 
 1. Open the **Settings** tab.
 2. Find the burn command setting and point it at your burning program. The recommended default is **xorriso** — one free, actively-maintained, cross-platform program. On the Settings page, click **Use xorriso default** to fill it in:
@@ -28,7 +28,7 @@ Mnemosyne uses a separate burning program on your computer to actually write dis
    xorriso -outdev /dev/sr0 -volid "{LABEL}" -blank as_needed -map "{SRC}" / -commit -eject
    ```
 
-   `{SRC}` is the package's staged folder and `{LABEL}` is the package name — Mnemosyne fills those in for each disc. Install xorriso with `apt install xorriso` (Linux) or `brew install xorriso` (macOS).
+   `{SRC}` is the package's staged folder and `{LABEL}` is the package name — Obelisk fills those in for each disc. Install xorriso with `apt install xorriso` (Linux) or `brew install xorriso` (macOS).
 
    Other burners work too: **growisofs** on Linux, and **ImgBurn** (a common free choice) on Windows. Whatever you pick, the burn command just needs to write the `{SRC}` folder to the disc and return success (exit code 0).
 
@@ -83,13 +83,13 @@ To turn it on:
 2. In **Settings → Optical burning**, set **Disc-level ECC** to **RS02** or **RS03**.
 3. Optionally tell it which optical drive to read (blank works when your burn command already names one, like `/dev/sr0`).
 
-After each disc **verifies**, Mnemosyne reads it back and writes an error-correction file named `<package>.ecc`. Because that file is made *after* the disc is finished, it can't live on the disc it protects — so it either **rides onto the next disc in the set** (tick "Carry onto the next disc") or **stays in your staging folder**, your choice. Keep those `.ecc` files with your discs; if a disc later develops read errors, dvdisaster can use its `.ecc` to repair it.
+After each disc **verifies**, Obelisk reads it back and writes an error-correction file named `<package>.ecc`. Because that file is made *after* the disc is finished, it can't live on the disc it protects — so it either **rides onto the next disc in the set** (tick "Carry onto the next disc") or **stays in your staging folder**, your choice. Keep those `.ecc` files with your discs; if a disc later develops read errors, dvdisaster can use its `.ecc` to repair it.
 
 ---
 
 ## Part B: Mirror copies to a plain external drive
 
-A **mirror** copies an archive's files onto an external drive as ordinary, browsable files. There is no sealing and no unpacking — you can open the drive on any computer with any file manager, even without Mnemosyne. This is the best choice for a drive you actually browse.
+A **mirror** copies an archive's files onto an external drive as ordinary, browsable files. There is no sealing and no unpacking — you can open the drive on any computer with any file manager, even without Obelisk. This is the best choice for a drive you actually browse.
 
 1. Open the **Vault** tab.
 2. Choose **Mirror backup…**.
@@ -113,7 +113,7 @@ Dock is **read-only toward your source folders and toward the old drives' folder
 
 ### Prerequisite: scan the original source first
 
-Dock recognizes files by their **contents** (their fingerprints), not by name. To match the loose files on an old drive, Mnemosyne needs something to compare them against. So you must have already **scanned the original source folder into an Archive**. If you have not done that yet, do it first (see the earlier vault/scan guide). Without it, there is nothing to match against.
+Dock recognizes files by their **contents** (their fingerprints), not by name. To match the loose files on an old drive, Obelisk needs something to compare them against. So you must have already **scanned the original source folder into an Archive**. If you have not done that yet, do it first (see the earlier vault/scan guide). Without it, there is nothing to match against.
 
 ### Step 1: Start a Dock session
 
@@ -131,7 +131,7 @@ You should now see the session waiting for a drive.
 2. Within about 5 seconds it appears in the Dock session.
 3. Click **Ingest this drive**.
 
-Mnemosyne fingerprints every file on the drive and matches it **by content** against your archive. Because it matches by content, it still recognizes your files even if they were renamed or moved into different folders on that old drive. Every match is recorded as a verified copy, and a small inventory file is written onto the drive.
+Obelisk fingerprints every file on the drive and matches it **by content** against your archive. Because it matches by content, it still recognizes your files even if they were renamed or moved into different folders on that old drive. Every match is recorded as a verified copy, and a small inventory file is written onto the drive.
 
 ![Dock session showing a drive ready to ingest with a coverage bar](../img/06-discs-and-drives-dock-ingest.png)
 
@@ -140,7 +140,7 @@ You should now see a **coverage bar** showing how much of the archive that drive
 ### Step 3: Repeat, re-verify, and export
 
 1. Unplug that drive and plug in the next one. Repeat Step 2 for the whole box.
-2. If you plug in a drive Mnemosyne has seen before, it offers **Re-verify…** instead of Ingest. Re-verify re-checks that the drive still holds good copies.
+2. If you plug in a drive Obelisk has seen before, it offers **Re-verify…** instead of Ingest. Re-verify re-checks that the drive still holds good copies.
 3. When you're done, use **Export report (.md)** to save a plain-text summary of what each drive holds.
 
 You should now see rising coverage as you work through the box, and a saved report you can keep.

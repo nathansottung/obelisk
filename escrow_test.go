@@ -36,7 +36,7 @@ func seedEscrowCache(t *testing.T, a *App, opts struct{ binaries, toolchain, rea
 	}
 	if opts.binaries {
 		for _, tg := range escrowBinTargets {
-			write(verDir, "mnemosyne-"+tg.GOOS+"-"+tg.GOARCH+".zip")
+			write(verDir, "obelisk-"+tg.GOOS+"-"+tg.GOARCH+".zip")
 		}
 		write(verDir, "SHA-256SUMS.txt")
 	}
@@ -97,7 +97,7 @@ func TestPlanBinariesOnlyVsFull(t *testing.T) {
 		t.Fatalf("binaries-only should be complete with a seeded cache, missing: %v", bin.MissingNames)
 	}
 	for _, c := range bin.Components {
-		if c.Kind == "toolchain-source" || c.Kind == "mnemosyne-source" {
+		if c.Kind == "toolchain-source" || c.Kind == "obelisk-source" {
 			t.Errorf("binaries-only must not include source component %q", c.Name)
 		}
 	}
@@ -106,8 +106,8 @@ func TestPlanBinariesOnlyVsFull(t *testing.T) {
 	}
 
 	full := a.planEscrow(EscrowFull, false, census)
-	if !hasKind(full.Components, "mnemosyne-source") {
-		t.Error("full must include the Mnemosyne source tarball")
+	if !hasKind(full.Components, "obelisk-source") {
+		t.Error("full must include the Obelisk source tarball")
 	}
 	if !hasKind(full.Components, "toolchain-source") {
 		t.Error("full must include restore-toolchain source")
@@ -157,10 +157,10 @@ func TestWriteBundleAssemblesAndVerifies(t *testing.T) {
 		}
 	}
 	// Binaries + source + toolchain landed in their subfolders.
-	mustExist(t, filepath.Join(root, "mnemosyne", "mnemosyne-linux-amd64.zip"))
+	mustExist(t, filepath.Join(root, "obelisk", "obelisk-linux-amd64.zip"))
 	mustExist(t, filepath.Join(root, "restore-toolchain", "par2cmdline-0.8.1.tar.gz"))
-	if _, err := os.Stat(filepath.Join(root, "mnemosyne")); err != nil {
-		t.Error("mnemosyne/ subdir missing")
+	if _, err := os.Stat(filepath.Join(root, "obelisk")); err != nil {
+		t.Error("obelisk/ subdir missing")
 	}
 
 	// The philosophy note states the belt-and-suspenders doctrine and three tools.
@@ -251,7 +251,7 @@ func TestRecoveryKitCarriesEscrow(t *testing.T) {
 	}
 	kit := res["output_dir"].(string)
 	mustExist(t, filepath.Join(kit, escrowBundleDir, "ESCROW_README.md"))
-	mustExist(t, filepath.Join(kit, escrowBundleDir, "mnemosyne", "mnemosyne-windows-amd64.zip"))
+	mustExist(t, filepath.Join(kit, escrowBundleDir, "obelisk", "obelisk-windows-amd64.zip"))
 	if res["escrow"] == nil {
 		t.Error("kit summary should include an escrow entry")
 	}

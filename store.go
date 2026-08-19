@@ -253,9 +253,9 @@ type Volume struct {
 	SealedAt      *time.Time     `json:"sealed_at,omitempty"`
 	Finalizations []Finalization `json:"finalizations,omitempty"`
 	// Drive-level (hardware) AES — e.g. an LTO drive's built-in encryption set via
-	// `stenc`. This sits ENTIRELY OUTSIDE Mnemosyne's par2→gpg→tar restore story:
+	// `stenc`. This sits ENTIRELY OUTSIDE Obelisk's par2→gpg→tar restore story:
 	// the bytes on the tape are ciphertext only the drive+key can decrypt, so a lost
-	// drive key means the tape is unreadable by ANYTHING — gpg included. Mnemosyne
+	// drive key means the tape is unreadable by ANYTHING — gpg included. Obelisk
 	// does not set it; this flag records that it WAS set (so inventories and the
 	// Recovery Kit can shout about it). DriveEncNote records where the drive key lives.
 	DriveEncrypted bool   `json:"drive_encrypted,omitempty"`
@@ -803,7 +803,7 @@ var schemaMigrations = []schemaMigration{
 	// their execution progress). Empty body.
 	{To: 6, Fn: func(c *catalog) {}},
 	// 6 → 7: managed-territory Quarantine (staged, reversible, never-completable
-	// isolation of files inside destinations Mnemosyne populated) became first-class.
+	// isolation of files inside destinations Obelisk populated) became first-class.
 	// Additive; the bump makes older builds refuse to write (they'd drop the
 	// _deleted staging records and their restore/history state). Empty body.
 	{To: 7, Fn: func(c *catalog) {}},
@@ -1071,7 +1071,7 @@ func OpenStore(dataDir string) (*Store, error) {
 			// don't understand. Viewing is fine; every write is blocked in writeCatalog.
 			s.readOnly = true
 			s.readOnlyReason = fmt.Sprintf(
-				"catalog.json was created by a newer version of Mnemosyne (catalog schema v%d; this build understands v%d). "+
+				"catalog.json was created by a newer version of Obelisk (catalog schema v%d; this build understands v%d). "+
 					"Upgrade the app to write to it — refusing to save so newer fields aren't silently dropped. Read-only viewing is allowed.",
 				s.c.SchemaVersion, currentSchemaVersion)
 		case s.c.SchemaVersion < currentSchemaVersion:
@@ -1451,7 +1451,7 @@ func (s *Store) FoldersOf(collectionID int) []*Folder {
 }
 
 // SourceRoots returns every registered Archive source folder (across all
-// collections) — the directories Mnemosyne only ever OPENS FOR READING.
+// collections) — the directories Obelisk only ever OPENS FOR READING.
 func (s *Store) SourceRoots() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1464,7 +1464,7 @@ func (s *Store) SourceRoots() []string {
 	return out
 }
 
-// AssertOutsideSources enforces Mnemosyne's core invariant — it NEVER writes into
+// AssertOutsideSources enforces Obelisk's core invariant — it NEVER writes into
 // source data. Any WRITABLE destination (staging, write/span target, restore or
 // recovery-kit output, keystore path, …) is refused when it resolves to a path
 // at or beneath a registered source root. Empty paths pass (callers do their own
@@ -1489,7 +1489,7 @@ func (s *Store) AssertOutsideSources(path string) error {
 			continue
 		}
 		if np == rp || strings.HasPrefix(np, rp+"/") {
-			return fmt.Errorf("refusing: %s is inside source root %s; Mnemosyne never writes into source data", path, root)
+			return fmt.Errorf("refusing: %s is inside source root %s; Obelisk never writes into source data", path, root)
 		}
 	}
 	return nil

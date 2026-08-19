@@ -14,12 +14,12 @@ push-time items (CI, tag) after pushing; everything else is verified in-repo.
   and OCI labels from the tag via `docker/metadata-action`.
 - [x] **Everything else derives from `appVersion`:** startup banner, `GET /api/health`,
   About/escrow status (`GET /api/escrow`), BagIt `Bag-Software-Agent`, package
-  manifests (`mnemosyne_version`), dock inventory sidecars, and the Recovery Kit all
+  manifests (`obelisk_version`), dock inventory sidecars, and the Recovery Kit all
   read `appVersion` — no independent version literal anywhere.
 - [x] **No hardcoded `2.0`/`2.1`/`v1`/`v2` app-version strings remain.** Fixed:
   `main.go` default + comment, `escrow.go` comment, `README.md` (Docker pin →
   Releases page), `release.yml` + `CONTRIBUTING.md` tag examples (`v0.9.0`), handbook
-  install banner (`Mnemosyne <version>`).
+  install banner (`Obelisk <version>`).
 - [x] **README stops claiming version numbers in prose** — it points to
   **the latest release** (badges + Releases page + "pin a release tag from the
   Releases page").
@@ -37,8 +37,8 @@ push-time items (CI, tag) after pushing; everything else is verified in-repo.
 ## 2. Schema versioning — the forward-compatibility guarantee
 
 - [x] **`schema_version` on every persisted file.** `catalog.json` root (first field),
-  keystores (`schema_version` beside `mnemosyne_keystore`), package manifests
-  (`schema_version` + `mnemosyne_version`), and dock inventory sidecars. Current
+  keystores (`schema_version` beside `obelisk_keystore`), package manifests
+  (`schema_version` + `obelisk_version`), and dock inventory sidecars. Current
   version: **`schema_version: 1`** (`currentSchemaVersion` in [store.go](store.go)).
 - [x] **Load contract enforced** ([store.go](store.go) `OpenStore` / `writeCatalog`):
   - `== current` → proceed;
@@ -66,12 +66,12 @@ push-time items (CI, tag) after pushing; everything else is verified in-repo.
 - [x] **`go test ./...`** — all packages pass locally (with `gpg`/`par2` present, same
   as CI installs).
 - [x] **`gofmt -l`** — clean.
-- [x] **README links point to `nathansottung/mnemosyne`** — all 8 repo references (CI
+- [x] **README links point to `nathansottung/obelisk`** — all 8 repo references (CI
   badge, Release badge, Releases page, GHCR image ×2, etc.) updated; the only
-  `github.com/*/mnemosyne` link is `nathansottung/mnemosyne`. Third-party links
+  `github.com/*/obelisk` link is `nathansottung/obelisk`. Third-party links
   (LTFS, par2cmdline-turbo, stenc) are unrelated and correct.
 - [x] **Release-download repo fixed** — `escrowRepo` ([escrow.go](escrow.go)) now
-  `nathansottung/mnemosyne`, matching where `release.yml` publishes, so Escrow-Bundle
+  `nathansottung/obelisk`, matching where `release.yml` publishes, so Escrow-Bundle
   binary fetches resolve instead of 404ing.
 - [x] **No `microsoft`/wrong-org references** remain in code, docs, or workflows.
 - [x] **CI workflow is valid** ([.github/workflows/ci.yml](.github/workflows/ci.yml)):
@@ -83,5 +83,5 @@ push-time items (CI, tag) after pushing; everything else is verified in-repo.
   (drives `release.yml`: cross-compiled binaries, checksums, GitHub Release, GHCR image).
 
 - [x] **Go module path matches the repo** — `go.mod` is now
-  `github.com/nathansottung/mnemosyne` (no internal imports referenced it, so the
+  `github.com/nathansottung/obelisk` (no internal imports referenced it, so the
   rename is inert to the build; verified with `go build`/`go vet`/`go test`).

@@ -1,7 +1,7 @@
 package main
 
 // cardcheck.go — "Is this card already backed up?" Plug in an SD/CF/USB card, and
-// Mnemosyne reads it (NEVER writes, NEVER registers it as a source) and checks every
+// Obelisk reads it (NEVER writes, NEVER registers it as a source) and checks every
 // file BY CONTENT against the ENTIRE known inventory: your archives (and their retained
 // prior versions), packaged chunks and the volumes their copies live on, and the
 // offline snapshots of every drive you've inventoried. The answer is the one a
@@ -160,7 +160,7 @@ func cardSkipDir(name string) bool {
 		return true
 	}
 	switch name {
-	case dockSidecarDir, sealSidecarDir:
+	case dockSidecarDir, sealSidecarDir, dockSidecarDirLegacy, sealSidecarDirLegacy:
 		return true
 	}
 	return false

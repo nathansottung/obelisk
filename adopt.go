@@ -2,13 +2,13 @@ package main
 
 // adopt.go — bring pre-existing media into the catalog without rewriting a byte.
 //
-// Archives written before Mnemosyne (or by hand: `tar` + `par2`) become
+// Archives written before Obelisk (or by hand: `tar` + `par2`) become
 // first-class cataloged packages. We scan a mount for payload candidates
 // (*.tar / *.tar.gpg), hash each, import its manifest if one rode along
 // (decrypting via the keystores when it's a .gpg), and record an ADOPTED-VERIFIED
 // package with a verified Copy on the operator's chosen volume. Adoption is
 // idempotent: a payload whose hash is already cataloged is skipped, so re-running
-// it — or pointing it at one of Mnemosyne's own written chunks — is a no-op
+// it — or pointing it at one of Obelisk's own written chunks — is a no-op
 // beyond the report.
 
 import (
@@ -36,7 +36,7 @@ type adoptCand struct {
 }
 
 // scanAdoptCandidates finds payloads directly under mount and one level deep
-// (the NAME/NAME.tar folder layout Mnemosyne itself writes).
+// (the NAME/NAME.tar folder layout Obelisk itself writes).
 func scanAdoptCandidates(mount string) []adoptCand {
 	var out []adoptCand
 	consider := func(dir, fname string) {

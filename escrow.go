@@ -5,11 +5,11 @@ package main
 // An Escrow Bundle is a self-contained folder that travels in the Recovery Kit
 // (always) and, optionally, onto each finalized volume (config escrow_on_media).
 // It is belt-and-suspenders, NOT a dependency: the three-tool restore
-// (par2 → gpg → tar) never needs Mnemosyne, and the compiled static binaries run
+// (par2 → gpg → tar) never needs Obelisk, and the compiled static binaries run
 // on a compatible OS without a compiler. The bundle carries, in descending order
 // of practical usefulness:
 //
-//   (a) Mnemosyne's own static binaries (the practical escrow) + source tarball
+//   (a) Obelisk's own static binaries (the practical escrow) + source tarball
 //       (the audit trail and recompile path) + SHA-256SUMS.
 //   (b) source tarballs of the restore toolchain — par2cmdline + GnuPG — whose
 //       GPL licenses permit redistribution WITH source. LICENSES.md states each
@@ -20,7 +20,7 @@ package main
 //
 // Two acquisition paths feed the bundle (nothing here ever reaches the network
 // while WRITING a bundle — it only assembles what is already on disk):
-//   - Mnemosyne's source tarball is embedded by the release build (or, in a
+//   - Obelisk's source tarball is embedded by the release build (or, in a
 //     source checkout, regenerated from the working tree via `git archive`).
 //   - Binaries + toolchain/reader source are fetched once into an on-disk cache
 //     (FetchEscrowCache / the /api/escrow/fetch endpoint) and reused thereafter.
@@ -57,7 +57,7 @@ const escrowBundleDir = "escrow-bundle"
 // it MUST match the repository that .github/workflows/release.yml publishes to, or
 // the download-and-cache path 404s. This is the release repo, not the Go module
 // path (which is an internal import identifier).
-const escrowRepo = "nathansottung/mnemosyne"
+const escrowRepo = "nathansottung/obelisk"
 
 // escrowBinTargets are the platforms whose static binaries make up the practical
 // escrow. Kept to the three OS families named in the spec (amd64 + Apple-silicon
@@ -70,8 +70,8 @@ var escrowBinTargets = []struct{ GOOS, GOARCH string }{
 	{"darwin", "amd64"},
 }
 
-//go:embed escrow/mnemosyne-src.tar.gz
-var embeddedMnemosyneSource []byte
+//go:embed escrow/obelisk-src.tar.gz
+var embeddedObeliskSource []byte
 
 //go:embed escrow_manifest.json
 var escrowManifestJSON []byte
@@ -143,7 +143,7 @@ func loadEscrowManifest() escrowManifest {
 // data / cachePath supplies its bytes; Present is false when the source could not
 // be located (it is then reported as missing, never fatal).
 type escrowComponent struct {
-	Kind        string `json:"kind"`    // mnemosyne-source | mnemosyne-binary | mnemosyne-sums | toolchain-source | reader-source
+	Kind        string `json:"kind"`    // obelisk-source | obelisk-binary | obelisk-sums | toolchain-source | reader-source
 	Name        string `json:"name"`    // human label
 	File        string `json:"file"`    // destination filename
 	Subdir      string `json:"subdir"`  // bundle subfolder
@@ -154,19 +154,19 @@ type escrowComponent struct {
 	LicenseNote string `json:"license_note,omitempty"`
 	URL         string `json:"url,omitempty"` // where to fetch it if missing
 
-	data      []byte // in-memory bytes (mnemosyne source); nil when cachePath set
+	data      []byte // in-memory bytes (obelisk source); nil when cachePath set
 	cachePath string // on-disk source; "" when data set
 }
 
-// mnemosyneSourceComponent resolves the app's own source tarball: a real
+// obeliskSourceComponent resolves the app's own source tarball: a real
 // release-embedded tarball if present, else a fresh `git archive` of the working
 // tree, else the dev placeholder (still emitted, clearly labelled).
-func mnemosyneSourceComponent(version string) escrowComponent {
-	file := "mnemosyne-src-" + fsSafe(version) + ".tar.gz"
-	c := escrowComponent{Kind: "mnemosyne-source", Name: "Mnemosyne source", File: file,
-		Subdir: "mnemosyne", License: "MIT", LicenseNote: "Mnemosyne itself — see LICENSE inside the tarball.", Present: true}
-	if len(embeddedMnemosyneSource) >= embeddedSourceThreshold {
-		c.data, c.Bytes, c.Source = embeddedMnemosyneSource, int64(len(embeddedMnemosyneSource)), "embedded at release build"
+func obeliskSourceComponent(version string) escrowComponent {
+	file := "obelisk-src-" + fsSafe(version) + ".tar.gz"
+	c := escrowComponent{Kind: "obelisk-source", Name: "Obelisk source", File: file,
+		Subdir: "obelisk", License: "MIT", LicenseNote: "Obelisk itself — see LICENSE inside the tarball.", Present: true}
+	if len(embeddedObeliskSource) >= embeddedSourceThreshold {
+		c.data, c.Bytes, c.Source = embeddedObeliskSource, int64(len(embeddedObeliskSource)), "embedded at release build"
 		return c
 	}
 	if b, err := gitArchiveSource(version); err == nil && len(b) > 0 {
@@ -175,7 +175,7 @@ func mnemosyneSourceComponent(version string) escrowComponent {
 	}
 	// Last resort: the placeholder. Still "present" so full bundles are never
 	// silently missing the recompile path — the file itself explains the gap.
-	c.data, c.Bytes, c.Source = embeddedMnemosyneSource, int64(len(embeddedMnemosyneSource)), "DEV PLACEHOLDER — no release embed and no git tree; recompile from the tagged release"
+	c.data, c.Bytes, c.Source = embeddedObeliskSource, int64(len(embeddedObeliskSource)), "DEV PLACEHOLDER — no release embed and no git tree; recompile from the tagged release"
 	return c
 }
 
@@ -183,7 +183,7 @@ func mnemosyneSourceComponent(version string) escrowComponent {
 // HEAD. Best-effort: any failure (no git, not a repo) returns an error and the
 // caller falls back.
 func gitArchiveSource(version string) ([]byte, error) {
-	prefix := "mnemosyne-" + fsSafe(version) + "/"
+	prefix := "obelisk-" + fsSafe(version) + "/"
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "archive", "--format=tar.gz", "--prefix="+prefix, "HEAD")
@@ -195,15 +195,15 @@ func gitArchiveSource(version string) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-// mnemosyneBinaryComponents finds cached release binaries (as shipped .zip
+// obeliskBinaryComponents finds cached release binaries (as shipped .zip
 // artifacts) for each target platform, plus the release SHA-256SUMS if cached.
-func mnemosyneBinaryComponents(cacheDir, version string) []escrowComponent {
+func obeliskBinaryComponents(cacheDir, version string) []escrowComponent {
 	var comps []escrowComponent
 	verDir := filepath.Join(cacheDir, fsSafe(version))
 	for _, t := range escrowBinTargets {
-		file := fmt.Sprintf("mnemosyne-%s-%s.zip", t.GOOS, t.GOARCH)
-		name := fmt.Sprintf("Mnemosyne binary %s/%s", t.GOOS, t.GOARCH)
-		c := escrowComponent{Kind: "mnemosyne-binary", Name: name, File: file, Subdir: "mnemosyne",
+		file := fmt.Sprintf("obelisk-%s-%s.zip", t.GOOS, t.GOARCH)
+		name := fmt.Sprintf("Obelisk binary %s/%s", t.GOOS, t.GOARCH)
+		c := escrowComponent{Kind: "obelisk-binary", Name: name, File: file, Subdir: "obelisk",
 			License: "MIT", URL: fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", escrowRepo, version, file)}
 		if p, sz, ok := cachedFile(verDir, file); ok {
 			c.Present, c.cachePath, c.Bytes, c.Source = true, p, sz, "cached release artifact"
@@ -212,7 +212,7 @@ func mnemosyneBinaryComponents(cacheDir, version string) []escrowComponent {
 	}
 	// The release's own checksum file over all zips.
 	sums := "SHA-256SUMS.txt"
-	c := escrowComponent{Kind: "mnemosyne-sums", Name: "Release SHA-256SUMS", File: sums, Subdir: "mnemosyne",
+	c := escrowComponent{Kind: "obelisk-sums", Name: "Release SHA-256SUMS", File: sums, Subdir: "obelisk",
 		URL: fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", escrowRepo, version, sums)}
 	if p, sz, ok := cachedFile(verDir, sums); ok {
 		c.Present, c.cachePath, c.Bytes, c.Source = true, p, sz, "cached release artifact"
@@ -305,10 +305,10 @@ func (a *App) planEscrow(mode string, includeReaders bool, census Census) Escrow
 	m := loadEscrowManifest()
 
 	// Binaries + release checksums are in every non-off bundle: the practical escrow.
-	comps := mnemosyneBinaryComponents(cache, version)
+	comps := obeliskBinaryComponents(cache, version)
 	// Full adds the recompile/audit trail: source tarballs.
 	if mode == EscrowFull {
-		comps = append(comps, mnemosyneSourceComponent(version))
+		comps = append(comps, obeliskSourceComponent(version))
 		comps = append(comps, toolchainComponents(cache, m)...)
 		if includeReaders {
 			comps = append(comps, readerComponents(cache, m, census)...)
@@ -382,7 +382,7 @@ func (a *App) WriteEscrowBundle(destDir string, plan EscrowPlan, progress func(f
 		"LICENSES.md":      []byte(escrowLicensesMD(plan)),
 	}
 	manifest, _ := json.MarshalIndent(map[string]any{
-		"mnemosyne_escrow_bundle": 1, "generated_utc": time.Now().UTC().Format(time.RFC3339),
+		"obelisk_escrow_bundle": 1, "generated_utc": time.Now().UTC().Format(time.RFC3339),
 		"version": plan.Version, "mode": plan.Mode, "include_readers": plan.IncludeReaders,
 		"written": written, "missing": plan.MissingNames, "present_bytes": writtenBytes,
 	}, "", "  ")
@@ -465,7 +465,7 @@ func (a *App) FetchEscrowCache(includeReaders bool, census Census, progress func
 		url, dest, sha256 string
 	}
 	var list []dl
-	for _, c := range mnemosyneBinaryComponents(cache, version) {
+	for _, c := range obeliskBinaryComponents(cache, version) {
 		if !c.Present {
 			list = append(list, dl{c.URL, filepath.Join(verDir, c.File), ""})
 		}

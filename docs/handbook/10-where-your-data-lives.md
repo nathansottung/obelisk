@@ -1,12 +1,12 @@
 # Where your data lives (the honesty map)
 
-A backup tool touches your files. So you deserve a plain, complete answer to one question: **where does this tool write, and what does it promise never to touch?** Mnemosyne answers it on one screen — open **Home → "Where your data lives"** (also linked from **Settings** and the end of first-run setup) — and this chapter is the paper version.
+A backup tool touches your files. So you deserve a plain, complete answer to one question: **where does this tool write, and what does it promise never to touch?** Obelisk answers it on one screen — open **Home → "Where your data lives"** (also linked from **Settings** and the end of first-run setup) — and this chapter is the paper version.
 
 Nothing here is a policy you have to trust on faith. Every path on that screen is read straight from your live settings, and the one promise that matters ("it never writes into your originals") is enforced in code and checked by tests you can run yourself.
 
 Some words you'll see:
 
-- **Catalog** = Mnemosyne's own record of everything it knows — hashes, drives, plans. Not your file content.
+- **Catalog** = Obelisk's own record of everything it knows — hashes, drives, plans. Not your file content.
 - **Keystore** = a small file holding the passphrases that lock and unlock encrypted backups.
 - **Staging** = a scratch workspace where a package is assembled before it's written to media.
 - **Source folder** = a folder you pointed the tool at to scan (your originals).
@@ -24,7 +24,7 @@ Some words you'll see:
 | **Keystores** | Your encryption keys. The app **refuses to run encryption without two**, on different devices. Secrets live only here; the catalog stores fingerprints, never the key itself. |
 | **Staging** | A temporary workspace while building packages, **emptied as packages complete**. It can't live inside a folder you back up. |
 | **Destinations you choose** | The tape, disc, or drive you pick for each copy. The tool writes the package there and then re-reads it to verify. On sealed media it also writes the recovery tools (escrow) so the media can rebuild itself years from now. |
-| **Inventory & seal sidecars** | Small folders (`MNEMOSYNE_SEAL` when sealing, `MNEMOSYNE_DOCK` on a mirror target) written **only to media this tool itself writes** — never to drives you adopt, never to your source folders. |
+| **Inventory & seal sidecars** | Small folders (`OBELISK_SEAL` when sealing, `OBELISK_DOCK` on a mirror target) written **only to media this tool itself writes** — never to drives you adopt, never to your source folders. |
 | **Quarantine folders** | Reversible `_deleted` holding areas, created **only inside libraries this tool built**. Setting a file aside moves it here; nothing is ever destroyed, and it can always be put back. |
 
 ---

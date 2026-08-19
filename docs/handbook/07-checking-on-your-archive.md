@@ -6,7 +6,7 @@ Some words you'll see:
 
 - **Hash / fingerprint** = a short code made from a file's exact contents. Change one byte and it changes. Checking compares fingerprints to prove a copy still matches.
 - **Bit-rot** = when a stored file slowly goes bad on its own over the years, even though nobody touched it. A checkup catches this early.
-- **Catalog** = Mnemosyne's own record of what your backups should contain.
+- **Catalog** = Obelisk's own record of what your backups should contain.
 - **Package** = one sealed unit on your media. **Copy** = one package living on one volume (a physical disc, drive, or tape). **Volume** = the physical medium you hold.
 - **Drift** = the difference between your original source folders today and what you backed up earlier.
 - **Mount / mounted** = when a tape, disc, or drive shows up as a drive letter (like `E:\`) you can open.

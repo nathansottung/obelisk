@@ -8,7 +8,7 @@ package main
 //     (bagit.txt, bag-info.txt, manifest-sha256.txt). A curator or an
 //     institutional ingest pipeline can read a standard, parseable manifest of
 //     exactly what the package preserves — "institutional legibility for free" —
-//     without Mnemosyne changing anything about how the data is stored.
+//     without Obelisk changing anything about how the data is stored.
 //
 //  2. A conformant-bag EXPORT action materializes a fully valid BagIt bag (data/
 //     payload + manifest + tagmanifest) for handoff to a repository that ingests
@@ -16,7 +16,7 @@ package main
 //     along inside it.
 //
 // The trap BagIt usually sets is that adopting it reshapes your storage into a
-// data/ tree you can only navigate through bag tooling. Mnemosyne refuses that:
+// data/ tree you can only navigate through bag tooling. Obelisk refuses that:
 // the storage format stays a plain tar that yields your ORIGINAL tree on
 // extraction. BagIt here is a *description* layer, never the storage layer.
 //
@@ -81,27 +81,27 @@ func bagPayloadManifest(files []ChunkFileRef) string {
 // and that a fully conformant bag comes from the export action — so a reader is
 // never misled into treating the beside-the-package tags as a validatable bag.
 func bagInfo(c *Chunk, oxumBytes int64, oxumCount int, conformant bool) string {
-	desc := "Mnemosyne package. The payload lives in " + payloadName(c) +
+	desc := "Obelisk package. The payload lives in " + payloadName(c) +
 		" (a plain POSIX tar); manifest-sha256.txt lists the original files it preserves, " +
 		"by their tree-relative paths — exactly what the tar yields on extraction, and it " +
 		"is also the FIRST member inside the tar. For a fully conformant BagIt bag with a " +
-		"data/ payload tree, use Mnemosyne's bag export."
+		"data/ payload tree, use Obelisk's bag export."
 	if conformant {
-		desc = "Conformant BagIt bag exported by Mnemosyne. data/ holds this package's " +
+		desc = "Conformant BagIt bag exported by Obelisk. data/ holds this package's " +
 			"artifacts (the tar payload, par2 parity, package manifest, and RESTORE.txt). " +
 			"Extract data/" + payloadName(c) + " with tar to recover the original tree."
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Source-Organization: Mnemosyne\n")
+	fmt.Fprintf(&b, "Source-Organization: Obelisk\n")
 	fmt.Fprintf(&b, "Bagging-Date: %s\n", nowDate())
 	fmt.Fprintf(&b, "External-Identifier: %s\n", c.Name)
 	fmt.Fprintf(&b, "External-Description: %s\n", desc)
 	fmt.Fprintf(&b, "Payload-Oxum: %d.%d\n", oxumBytes, oxumCount)
-	fmt.Fprintf(&b, "Bag-Software-Agent: Mnemosyne %s\n", appVersion)
+	fmt.Fprintf(&b, "Bag-Software-Agent: Obelisk %s\n", appVersion)
 	if c.Encrypted {
-		fmt.Fprintf(&b, "Mnemosyne-Encryption: OpenPGP symmetric AES-256; key_ref %s (secret not in this bag)\n", c.KeyRef)
+		fmt.Fprintf(&b, "Obelisk-Encryption: OpenPGP symmetric AES-256; key_ref %s (secret not in this bag)\n", c.KeyRef)
 	}
-	fmt.Fprintf(&b, "Mnemosyne-Payload-SHA256: %s\n", c.EncHash)
+	fmt.Fprintf(&b, "Obelisk-Payload-SHA256: %s\n", c.EncHash)
 	return b.String()
 }
 
@@ -284,19 +284,19 @@ func (a *App) exportBagForChunks(bagBaseName string, chunks []*Chunk, outputDir 
 
 func exportBagInfo(name string, payloadBytes int64, payloadCount, pkgs, skipped int) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Source-Organization: Mnemosyne\n")
+	fmt.Fprintf(&b, "Source-Organization: Obelisk\n")
 	fmt.Fprintf(&b, "Bagging-Date: %s\n", nowDate())
 	fmt.Fprintf(&b, "External-Identifier: %s\n", name)
-	fmt.Fprintf(&b, "External-Description: Conformant BagIt export of Mnemosyne archive %q. "+
+	fmt.Fprintf(&b, "External-Description: Conformant BagIt export of Obelisk archive %q. "+
 		"data/ holds each package's artifacts (plain-tar payload, par2 parity, manifest, RESTORE.txt). "+
-		"Extract any data/<package>/<name>.tar to recover the original tree — no Mnemosyne required. "+
+		"Extract any data/<package>/<name>.tar to recover the original tree — no Obelisk required. "+
 		"See COMPARISON.md for why this format over restic/borg/Bacula/dar/Canister.\n", name)
 	fmt.Fprintf(&b, "Payload-Oxum: %d.%d\n", payloadBytes, payloadCount)
 	fmt.Fprintf(&b, "Bag-Count: %d package(s)\n", pkgs)
 	if skipped > 0 {
-		fmt.Fprintf(&b, "Mnemosyne-Skipped-Packages: %d (artifacts only on media, not staged locally)\n", skipped)
+		fmt.Fprintf(&b, "Obelisk-Skipped-Packages: %d (artifacts only on media, not staged locally)\n", skipped)
 	}
-	fmt.Fprintf(&b, "Bag-Software-Agent: Mnemosyne %s\n", appVersion)
+	fmt.Fprintf(&b, "Bag-Software-Agent: Obelisk %s\n", appVersion)
 	return b.String()
 }
 

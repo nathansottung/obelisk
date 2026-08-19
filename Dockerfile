@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 #
-# Mnemosyne container image — the NAS-side "brain".
+# Obelisk container image — the NAS-side "brain".
 #
 # The container catalogs, plans, builds packages, and MIRRORS to spinning drives.
 # Hardware-in-the-loop workflows (tape/optical burning, the docking flow, SMART)
@@ -16,7 +16,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 ARG VERSION=docker
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.appVersion=${VERSION}" -o /out/mnemosyne .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.appVersion=${VERSION}" -o /out/obelisk .
 
 # ---- runtime --------------------------------------------------------------
 FROM alpine:3.20
@@ -24,7 +24,7 @@ FROM alpine:3.20
 # (supports --format=posix and -T); par2cmdline provides `par2`; gnupg `gpg`.
 RUN apk add --no-cache tar gnupg par2cmdline ca-certificates wget
 
-COPY --from=build /out/mnemosyne /usr/local/bin/mnemosyne
+COPY --from=build /out/obelisk /usr/local/bin/obelisk
 
 # /data  — catalog.json, config.json, daily backups (mount a persistent volume)
 # /staging — scratch space for package builds (big + fast; can be ephemeral)
@@ -33,9 +33,9 @@ VOLUME ["/data", "/staging"]
 EXPOSE 7821
 
 # Binding 0.0.0.0 makes the UI reachable off-box, which the binary REFUSES unless
-# an auth token is set (env MNEMO_AUTH_TOKEN or config.json auth_token). Set one.
-#   docker run -e MNEMO_AUTH_TOKEN=... -p 7821:7821 -v mnemo-data:/data ...
-ENTRYPOINT ["mnemosyne"]
+# an auth token is set (env OBELISK_AUTH_TOKEN or config.json auth_token). Set one.
+#   docker run -e OBELISK_AUTH_TOKEN=... -p 7821:7821 -v mnemo-data:/data ...
+ENTRYPOINT ["obelisk"]
 CMD ["-listen", "0.0.0.0:7821", "-data", "/data"]
 
 # A healthcheck that needs no token: the static UI root is public (only /api is

@@ -89,7 +89,7 @@ func TestDockIngest_TwoDrivesSequentialAndReinsert(t *testing.T) {
 	// inventory lives in the catalog snapshot alone), and the NAS source is never
 	// touched either.
 	if _, err := os.Stat(filepath.Join(driveA, dockSidecarDir)); err == nil {
-		t.Error("adopted media must NOT get a sidecar written onto them — found MNEMOSYNE_DOCK on drive A")
+		t.Error("adopted media must NOT get a sidecar written onto them — found OBELISK_DOCK on drive A")
 	}
 	if _, err := os.Stat(filepath.Join(src, dockSidecarDir)); err == nil {
 		t.Error("source (NAS) must NEVER be written to — found a sidecar there")

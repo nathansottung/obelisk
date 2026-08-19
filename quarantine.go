@@ -2,7 +2,7 @@ package main
 
 // quarantine.go — "never delete, made usable."
 //
-// The regret-proofing model. Mnemosyne has no delete button and never will: the
+// The regret-proofing model. Obelisk has no delete button and never will: the
 // worst thing a user can do to a file through this tool is QUARANTINE it, which
 // MOVES it (bytes intact, structure preserved) into a staging folder and stops
 // counting it toward protection. Removing quarantined bytes for good is a manual
@@ -10,7 +10,7 @@ package main
 //
 // The territory rule (enforced by the same read-only-source guard that keeps the
 // tool out of source data): quarantine exists ONLY inside MANAGED TERRITORY — the
-// destination roots Mnemosyne itself populated via Plans. On adopted media and on
+// destination roots Obelisk itself populated via Plans. On adopted media and on
 // source roots the action does not exist: there is nothing here the tool created,
 // so it will not move anything. managedRootFor + AssertOutsideSources are the two
 // gates every quarantine/un-quarantine passes.
@@ -37,7 +37,7 @@ import (
 )
 
 // QuarantineDir is the staging folder created directly under a managed destination
-// root. Its contents are never removed by Mnemosyne.
+// root. Its contents are never removed by Obelisk.
 const QuarantineDir = "_deleted"
 
 // Quarantine entry statuses.
@@ -87,14 +87,14 @@ func (e *QuarantineEntry) originalPath() string {
 	return filepath.Join(filepath.FromSlash(e.Root), filepath.FromSlash(e.OriginalRel))
 }
 
-// managedRoot is one destination root Mnemosyne populated, plus the volume its
+// managedRoot is one destination root Obelisk populated, plus the volume its
 // reorganized copies are credited to.
 type managedRoot struct {
 	Root         string // slash form
 	DestVolumeID int
 }
 
-// ManagedRoots returns the destination roots Mnemosyne itself populated via Plans —
+// ManagedRoots returns the destination roots Obelisk itself populated via Plans —
 // the ONLY territory quarantine operates in. A plan qualifies once it has begun
 // realizing its destination (a destination volume, execution progress, or a
 // terminal status); a draft/compiled-but-never-run plan names a root the tool has
@@ -160,7 +160,7 @@ func (s *Store) QuarantineTerritory(absPath string) (root string, destVolumeID i
 			return mr.Root, mr.DestVolumeID, nil
 		}
 	}
-	return "", 0, fmt.Errorf("not managed territory: quarantine applies only to destinations Mnemosyne populated (adopted media and sources are never moved)")
+	return "", 0, fmt.Errorf("not managed territory: quarantine applies only to destinations Obelisk populated (adopted media and sources are never moved)")
 }
 
 // QuarantineEligible reports whether a path can be quarantined — the predicate the UI
@@ -414,7 +414,7 @@ func roleNoun(role string) string {
 func quarantineWarning(label string, copiesAfter int) string {
 	switch copiesAfter {
 	case 0:
-		return fmt.Sprintf("this drops %s to 0 copies — the last copy Mnemosyne tracks", label)
+		return fmt.Sprintf("this drops %s to 0 copies — the last copy Obelisk tracks", label)
 	case 1:
 		return fmt.Sprintf("this drops %s to 1 copy", label)
 	default:

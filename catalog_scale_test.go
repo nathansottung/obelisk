@@ -12,17 +12,17 @@ import (
 // TestCatalogScale is a synthetic scalability benchmark for a 1M+ file catalog.
 // It is SKIPPED by default (it builds a ~hundreds-of-MB catalog); run it with:
 //
-//	MNEMO_SCALE=1 go test -run TestCatalogScale -v -timeout 20m
+//	OBELISK_SCALE=1 go test -run TestCatalogScale -v -timeout 20m
 //
-// Override sizes with MNEMO_FILES / MNEMO_MIRROR. It measures load time, save
+// Override sizes with OBELISK_FILES / OBELISK_MIRROR. It measures load time, save
 // time, per-mutation save cost (save frequency proxy), memory footprint, and
 // search latency, and prints a table — the numbers the decision gate needs.
 func TestCatalogScale(t *testing.T) {
-	if os.Getenv("MNEMO_SCALE") == "" {
-		t.Skip("set MNEMO_SCALE=1 to run the large-catalog benchmark")
+	if os.Getenv("OBELISK_SCALE") == "" {
+		t.Skip("set OBELISK_SCALE=1 to run the large-catalog benchmark")
 	}
-	nFiles := envInt("MNEMO_FILES", 1_000_000)
-	nMirror := envInt("MNEMO_MIRROR", 500_000)
+	nFiles := envInt("OBELISK_FILES", 1_000_000)
+	nMirror := envInt("OBELISK_MIRROR", 500_000)
 
 	dir := t.TempDir()
 	st, err := OpenStore(dir)

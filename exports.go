@@ -73,19 +73,31 @@ type ExportLocationRef struct {
 }
 
 type StructureExport struct {
-	Format           string              `json:"format"` // "mnemosyne-structure"
-	Version          int                 `json:"version"`
-	ArchiveID        int                 `json:"archive_id"`
-	Archive          string              `json:"archive"`
-	Kind             string              `json:"kind,omitempty"`
-	GeneratedUTC     time.Time           `json:"generated_utc"`
-	MnemosyneVersion string              `json:"mnemosyne_version,omitempty"`
-	Note             string              `json:"note"`
-	Events           []ExportEventRef    `json:"events,omitempty"`
-	Volumes          []ExportVolumeRef   `json:"volumes,omitempty"`
-	Locations        []ExportLocationRef `json:"locations,omitempty"`
-	Files            []ExportFile        `json:"files"`
+	Format         string              `json:"format"` // "obelisk-structure" (accepts legacy "mnemosyne-structure")
+	Version        int                 `json:"version"`
+	ArchiveID      int                 `json:"archive_id"`
+	Archive        string              `json:"archive"`
+	Kind           string              `json:"kind,omitempty"`
+	GeneratedUTC   time.Time           `json:"generated_utc"`
+	ObeliskVersion string              `json:"mnemosyne_version,omitempty"`
+	Note           string              `json:"note"`
+	Events         []ExportEventRef    `json:"events,omitempty"`
+	Volumes        []ExportVolumeRef   `json:"volumes,omitempty"`
+	Locations      []ExportLocationRef `json:"locations,omitempty"`
+	Files          []ExportFile        `json:"files"`
 }
+
+// Export format markers. New exports are written under the Obelisk marker; the
+// legacy Mnemosyne marker is accepted on import forever (see importStructure /
+// importPlan and the "Name compatibility" section in ARCHITECTURE.md). The
+// per-export "mnemosyne_version" JSON field is a persisted contract field and is
+// intentionally NOT renamed, so pre-rename exports round-trip unchanged.
+const (
+	structureFormat       = "obelisk-structure"
+	structureFormatLegacy = "mnemosyne-structure"
+	planFormat            = "obelisk-plan"
+	planFormatLegacy      = "mnemosyne-plan"
+)
 
 const structureExportVersion = 1
 
@@ -95,9 +107,9 @@ func (a *App) StructureExport(collectionID int) (StructureExport, error) {
 	if coll == nil {
 		return StructureExport{}, fmt.Errorf("archive %d not found", collectionID)
 	}
-	exp := StructureExport{Format: "mnemosyne-structure", Version: structureExportVersion,
+	exp := StructureExport{Format: structureFormat, Version: structureExportVersion,
 		ArchiveID: collectionID, Archive: coll.Name, Kind: coll.Kind, GeneratedUTC: time.Now().UTC(),
-		MnemosyneVersion: appVersion, Note: exportNoContentNote}
+		ObeliskVersion: appVersion, Note: exportNoContentNote}
 
 	// Physical locations per file (serial + path + location name + last verified).
 	fileLoc := a.fileExportLocations()
@@ -325,8 +337,8 @@ func StructureMarkdown(exp StructureExport) string {
 // volumes/locations, every file (hash/role/event/capture), and content-addressed
 // copies so search and locations answer exactly as on the source machine.
 func (a *App) ImportStructure(exp StructureExport) (map[string]any, error) {
-	if exp.Format != "mnemosyne-structure" {
-		return nil, fmt.Errorf("not a Mnemosyne structure export")
+	if exp.Format != structureFormat && exp.Format != structureFormatLegacy {
+		return nil, fmt.Errorf("not an Obelisk structure export")
 	}
 	a.Store.BeginBatch()
 	defer a.Store.EndBatch()
@@ -437,16 +449,16 @@ type ExportPlanDrive struct {
 }
 
 type PlanExport struct {
-	Format           string            `json:"format"` // "mnemosyne-plan"
-	Version          int               `json:"version"`
-	Name             string            `json:"name"`
-	DestinationRoot  string            `json:"destination_root"`
-	GeneratedUTC     time.Time         `json:"generated_utc"`
-	MnemosyneVersion string            `json:"mnemosyne_version,omitempty"`
-	Note             string            `json:"note"`
-	TemplateName     string            `json:"template_name,omitempty"`
-	TemplateRoutes   map[string]string `json:"template_routes,omitempty"`
-	Drives           []ExportPlanDrive `json:"drives"`
+	Format          string            `json:"format"` // "obelisk-plan" (accepts legacy "mnemosyne-plan")
+	Version         int               `json:"version"`
+	Name            string            `json:"name"`
+	DestinationRoot string            `json:"destination_root"`
+	GeneratedUTC    time.Time         `json:"generated_utc"`
+	ObeliskVersion  string            `json:"mnemosyne_version,omitempty"`
+	Note            string            `json:"note"`
+	TemplateName    string            `json:"template_name,omitempty"`
+	TemplateRoutes  map[string]string `json:"template_routes,omitempty"`
+	Drives          []ExportPlanDrive `json:"drives"`
 }
 
 const planExportVersion = 1
@@ -462,9 +474,9 @@ func (a *App) PlanExport(planID int) (PlanExport, error) {
 	if len(plan.Mapping) == 0 {
 		return PlanExport{}, fmt.Errorf("compile the plan before exporting it")
 	}
-	exp := PlanExport{Format: "mnemosyne-plan", Version: planExportVersion, Name: plan.Name,
+	exp := PlanExport{Format: planFormat, Version: planExportVersion, Name: plan.Name,
 		DestinationRoot: plan.DestinationRoot, GeneratedUTC: time.Now().UTC(),
-		MnemosyneVersion: appVersion, Note: exportNoContentNote}
+		ObeliskVersion: appVersion, Note: exportNoContentNote}
 	if t := a.Store.Template(plan.TemplateID); t != nil {
 		exp.TemplateName, exp.TemplateRoutes = t.Name, t.Routes
 	}
@@ -493,8 +505,8 @@ func (a *App) PlanExport(planID int) (PlanExport, error) {
 // binding keeps it safe: a drive only advances the plan when its real serial matches
 // what the export recorded.
 func (a *App) ImportPlan(exp PlanExport) (map[string]any, error) {
-	if exp.Format != "mnemosyne-plan" {
-		return nil, fmt.Errorf("not a Mnemosyne plan export")
+	if exp.Format != planFormat && exp.Format != planFormatLegacy {
+		return nil, fmt.Errorf("not an Obelisk plan export")
 	}
 	a.Store.BeginBatch()
 	defer a.Store.EndBatch()

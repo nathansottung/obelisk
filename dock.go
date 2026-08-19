@@ -30,8 +30,12 @@ import (
 )
 
 // dockSidecarDir is the single folder the dock writes onto each drive. The
-// mirror-adoption walk skips it so the tool never re-ingests its own output.
-const dockSidecarDir = "MNEMOSYNE_DOCK"
+// mirror-adoption walk skips it so the tool never re-inventories its own output.
+// New sidecars are written under the Obelisk name; the legacy Mnemosyne folder is
+// still recognized on read forever (drives written under the old name keep their
+// MNEMOSYNE_DOCK sidecar — see the "Name compatibility" section in ARCHITECTURE.md).
+const dockSidecarDir = "OBELISK_DOCK"
+const dockSidecarDirLegacy = "MNEMOSYNE_DOCK"
 
 // MountInfo is one mounted volume the dock watcher can see (platform-resolved).
 type MountInfo struct {
@@ -692,7 +696,7 @@ func (a *App) SessionReportMarkdown(sessionID int) (string, error) {
 				float64(d.MatchedBytes)/1e9, d.Historical, d.Unreadable, fin))
 		}
 	}
-	b.WriteString("\nMnemosyne treated every source folder as READ-ONLY: NAS paths were only hashed for comparison, never written.\n")
+	b.WriteString("\nObelisk treated every source folder as READ-ONLY: NAS paths were only hashed for comparison, never written.\n")
 	return b.String(), nil
 }
 
@@ -738,7 +742,8 @@ func safeName(name string) string {
 // common OS bookkeeping that is unreadable or irrelevant.
 func skipDockDir(name string) bool {
 	switch name {
-	case dockSidecarDir, "System Volume Information", "$RECYCLE.BIN", ".Trashes", ".Spotlight-V100", ".fseventsd":
+	case dockSidecarDir, dockSidecarDirLegacy, sealSidecarDir, sealSidecarDirLegacy,
+		"System Volume Information", "$RECYCLE.BIN", ".Trashes", ".Spotlight-V100", ".fseventsd":
 		return true
 	}
 	return false

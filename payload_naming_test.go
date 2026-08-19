@@ -313,7 +313,7 @@ func TestSpannedPayloadNaming(t *testing.T) {
 // renameToLegacy builds a faithful pre-rename plaintext package in dstPkg: the
 // payload is copied under the old uniform <name>.tar.gpg name and a fresh par2
 // set is generated OVER that file (so the target filename embedded in the .par2
-// is <name>.tar.gpg, exactly as an older Mnemosyne would have produced). Non-par2
+// is <name>.tar.gpg, exactly as an older Obelisk would have produced). Non-par2
 // sidecars (manifest, RESTORE.txt) are copied verbatim.
 func renameToLegacy(t *testing.T, srcPkg, dstPkg, name, par2Bin string) {
 	t.Helper()

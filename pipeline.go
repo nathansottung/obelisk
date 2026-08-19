@@ -321,7 +321,12 @@ func (a *App) computePreflight() map[string]any {
 // ---- keystores -----------------------------------------------------------
 
 type keystoreFile struct {
-	Marker int `json:"mnemosyne_keystore"`
+	// Marker is written on every save under the Obelisk tag. LegacyMarker is the
+	// pre-rename Mnemosyne marker, ACCEPTED on read forever (see readStore and the
+	// "Name compatibility" section in ARCHITECTURE.md). A file is a valid keystore
+	// if EITHER is 1.
+	Marker       int `json:"obelisk_keystore,omitempty"`
+	LegacyMarker int `json:"mnemosyne_keystore,omitempty"`
 	// SchemaVersion is stamped on every write (absent/0 on legacy keystores, which
 	// are structurally identical). Keys is append-only; entries tolerate being absent.
 	SchemaVersion int              `json:"schema_version"`
@@ -337,11 +342,11 @@ func readStore(path string) (*keystoreFile, error) {
 		return nil, err
 	}
 	var ks keystoreFile
-	if err := json.Unmarshal(b, &ks); err != nil || ks.Marker != 1 {
-		return nil, fmt.Errorf("not a Mnemosyne keystore: %s", path)
+	if err := json.Unmarshal(b, &ks); err != nil || (ks.Marker != 1 && ks.LegacyMarker != 1) {
+		return nil, fmt.Errorf("not an Obelisk keystore: %s", path)
 	}
 	if ks.SchemaVersion > currentSchemaVersion {
-		return nil, fmt.Errorf("keystore %s was written by a newer Mnemosyne (schema v%d > v%d) — upgrade the app before writing keys", path, ks.SchemaVersion, currentSchemaVersion)
+		return nil, fmt.Errorf("keystore %s was written by a newer Obelisk (schema v%d > v%d) — upgrade the app before writing keys", path, ks.SchemaVersion, currentSchemaVersion)
 	}
 	return &ks, nil
 }
@@ -1201,7 +1206,7 @@ func findPayload(dir string, c *Chunk) string {
 
 func writeManifest(dir string, c *Chunk, keyFpr string) error {
 	m := map[string]any{
-		"mnemosyne_chunk": 1, "schema_version": currentSchemaVersion, "mnemosyne_version": appVersion,
+		"obelisk_package": 1, "schema_version": currentSchemaVersion, "obelisk_version": appVersion,
 		"name": c.Name, "created_utc": time.Now().UTC().Format(time.RFC3339),
 		"collection_id": c.CollectionID, "source_root": c.SrcRoot,
 		"encrypted": c.Encrypted,
@@ -1274,7 +1279,7 @@ You need exactly three ubiquitous open-source programs:
   par2  (github.com/Parchive/par2cmdline)  - repair
   gpg   (gnupg.org)                        - decrypt
   tar   (POSIX standard, preinstalled)     - extract
-And the passphrase for key %[2]s (Mnemosyne keystore, or the
+And the passphrase for key %[2]s (Obelisk keystore, or the
 printed key card labelled %[2]s).
 
 1) VERIFY / REPAIR (no passphrase needed):

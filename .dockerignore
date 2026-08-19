@@ -6,5 +6,5 @@ dist/
 _*/
 *.exe
 *.exe~
-mnemosyne
+obelisk
 docs/img/

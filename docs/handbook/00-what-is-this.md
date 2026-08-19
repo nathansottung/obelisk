@@ -1,6 +1,6 @@
 # What is this? (start here)
 
-Mnemosyne (say it "neh-MOSS-uh-nee") is a program that helps you **back up files
+Obelisk (say it "neh-MOSS-uh-nee") is a program that helps you **back up files
 you never want to lose** — photos, videos, scans, a lifetime of work — and prove,
 years from now, that every copy is still perfect.
 
@@ -40,7 +40,7 @@ this app disappears.**
 Every package the app writes includes a plain-text file called `RESTORE.txt` that
 explains, in ordinary language, how to get your files back using three free,
 standard tools — `par2`, `gpg`, and `tar` — that run on Windows, Mac, and Linux.
-So you are **never locked in**. Even if Mnemosyne vanished tomorrow, and even
+So you are **never locked in**. Even if Obelisk vanished tomorrow, and even
 decades from now, anyone technical could follow that page and recover your files
 straight from the media.
 

@@ -32,9 +32,13 @@ import (
 )
 
 const (
-	appBackupFormat  = "mnemosyne-appbackup"
-	appBackupVersion = 1
-	appBackupName    = "mnemosyne" // filename stem: <appname>-appbackup-<date>.tar
+	appBackupFormat = "obelisk-appbackup"
+	// appBackupFormatLegacy is the pre-rename marker. Bundles created as Mnemosyne
+	// carry it and must import/restore forever — see verifyAppBackup and the "Name
+	// compatibility" section in ARCHITECTURE.md.
+	appBackupFormatLegacy = "mnemosyne-appbackup"
+	appBackupVersion      = 1
+	appBackupName         = "obelisk" // filename stem: <appname>-appbackup-<date>.tar
 )
 
 // appBackupMember is one file inside the bundle, with its SHA-256 for the manifest.
@@ -314,18 +318,18 @@ func verifyAppBackup(tarPath string) (appBackupManifest, map[string][]byte, erro
 	}
 	manBytes, ok := members["MANIFEST.json"]
 	if !ok {
-		return man, nil, fmt.Errorf("this is not a Mnemosyne app backup (no MANIFEST.json)")
+		return man, nil, fmt.Errorf("this is not an Obelisk app backup (no MANIFEST.json)")
 	}
 	if err := json.Unmarshal(manBytes, &man); err != nil {
 		return man, nil, fmt.Errorf("MANIFEST.json is unreadable: %w", err)
 	}
-	if man.Format != appBackupFormat {
-		return man, nil, fmt.Errorf("this is not a Mnemosyne app backup (format %q)", man.Format)
+	if man.Format != appBackupFormat && man.Format != appBackupFormatLegacy {
+		return man, nil, fmt.Errorf("this is not an Obelisk app backup (format %q)", man.Format)
 	}
 	// Schema gate — same rule as OpenStore: refuse a bundle a newer app created rather
 	// than silently dropping fields we don't understand.
 	if man.SchemaVersion > currentSchemaVersion {
-		return man, nil, fmt.Errorf("this backup was created by a newer version of Mnemosyne "+
+		return man, nil, fmt.Errorf("this backup was created by a newer version of Obelisk "+
 			"(catalog schema v%d; this build understands v%d). Update the app first, then restore.",
 			man.SchemaVersion, currentSchemaVersion)
 	}

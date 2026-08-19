@@ -1,13 +1,13 @@
 # Troubleshooting
 
-This page lists the small snags people hit, in plain language. Each entry has three parts: **Symptom** (what you see), **Why** (what is really going on), and **Fix** (what to do). None of these problems put your original files at risk — Mnemosyne only ever reads your originals, never changes or deletes them, and never sends anything over the internet.
+This page lists the small snags people hit, in plain language. Each entry has three parts: **Symptom** (what you see), **Why** (what is really going on), and **Fix** (what to do). None of these problems put your original files at risk — Obelisk only ever reads your originals, never changes or deletes them, and never sends anything over the internet.
 
 A couple of words used below:
 
-- A **"tool"** here means one of the three free helper programs Mnemosyne relies on: **tar** (packs files together), **gpg** (encrypts and decrypts), and **par2** (makes and uses repair data).
+- A **"tool"** here means one of the three free helper programs Obelisk relies on: **tar** (packs files together), **gpg** (encrypts and decrypts), and **par2** (makes and uses repair data).
 - The **"status lamp"** is the small indicator at the bottom-left that tells you if the app is ready.
 - A **"staging folder"** is the temporary scratch workspace where the app builds one package at a time.
-- A **"source root" / "source folder"** is a folder you told Mnemosyne to back up. The app refuses to **write** anything into these, so your originals are never at risk.
+- A **"source root" / "source folder"** is a folder you told Obelisk to back up. The app refuses to **write** anything into these, so your originals are never at risk.
 
 ---
 
@@ -70,5 +70,5 @@ A couple of words used below:
 **Fix:** Re-check that the **Source** path points at the real package folder on the medium. If a drive is badly failing, restore from another copy of the same package on a different medium.
 
 **Symptom:** You are hunting for an **"import my catalog"** or **"rebuild"** button after losing your computer, and cannot find one.
-**Why:** There isn't one — by design. Mnemosyne has no automatic catalog-import feature.
-**Fix:** Rebuild your catalog by re-adopting your media instead: install Mnemosyne fresh, create an Archive with the same name, then on the **Volumes** tab use **"Adopt existing media"** on each backup drive. Or restore by hand with par2 → gpg → tar per the `RESTORE.txt` on each medium. See guide 08.
+**Why:** There isn't one — by design. Obelisk has no automatic catalog-import feature.
+**Fix:** Rebuild your catalog by re-adopting your media instead: install Obelisk fresh, create an Archive with the same name, then on the **Volumes** tab use **"Adopt existing media"** on each backup drive. Or restore by hand with par2 → gpg → tar per the `RESTORE.txt` on each medium. See guide 08.

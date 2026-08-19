@@ -20,7 +20,10 @@ import (
 )
 
 // sealSidecarDir is the single folder the finalize ceremony writes onto a volume.
-const sealSidecarDir = "MNEMOSYNE_SEAL"
+// New seals are written under the Obelisk name; the legacy Mnemosyne folder is
+// still recognized on read forever (see ARCHITECTURE.md "Name compatibility").
+const sealSidecarDir = "OBELISK_SEAL"
+const sealSidecarDirLegacy = "MNEMOSYNE_SEAL"
 
 // finalizeCheck is one enforced precondition and its verdict.
 type finalizeCheck struct {
@@ -286,14 +289,14 @@ func (a *App) writeFinalizeSidecar(mountPath string, v *Volume, as finalizeAsses
 	// note rather than failing the seal.
 	escrowNote := a.writeSidecarEscrow(dir, census, as.FreeBytes, cfg)
 
-	frec := map[string]any{"mnemosyne_finalization": 1, "generated_utc": now.Format(time.RFC3339),
+	frec := map[string]any{"obelisk_finalization": 1, "generated_utc": now.Format(time.RFC3339),
 		"volume": v, "finalization": fin, "checks": as.Checks}
 	if b, err := json.MarshalIndent(frec, "", "  "); err == nil {
 		if err := os.WriteFile(filepath.Join(dir, "FINALIZATION.json"), b, 0o644); err != nil {
 			return dir, err
 		}
 	}
-	snap := map[string]any{"mnemosyne_seal_snapshot": 1, "generated_utc": now.Format(time.RFC3339),
+	snap := map[string]any{"obelisk_seal_snapshot": 1, "generated_utc": now.Format(time.RFC3339),
 		"volume": v, "package_count": len(pkgs), "packages": pkgs, "formats": census}
 	sb, _ := json.MarshalIndent(snap, "", "  ")
 	if err := os.WriteFile(filepath.Join(dir, "catalog_snapshot.json"), sb, 0o644); err != nil {
@@ -301,7 +304,7 @@ func (a *App) writeFinalizeSidecar(mountPath string, v *Volume, as finalizeAsses
 	}
 
 	var b strings.Builder
-	b.WriteString("# Mnemosyne — sealed volume inventory\n\n")
+	b.WriteString("# Obelisk — sealed volume inventory\n\n")
 	b.WriteString(fmt.Sprintf("**%s** sealed %s by %s.\n\n", v.Label, now.Format("2006-01-02 15:04 MST"), fin.By))
 	b.WriteString(fmt.Sprintf("- **Barcode:** `%s`\n", nonEmpty(v.Barcode, "—")))
 	if v.Serial != "" {
@@ -376,7 +379,7 @@ func (a *App) writeSidecarEscrow(sidecarDir string, census Census, freeBytes int
 		return "Skipped (error): " + err.Error() + " — the full Escrow Bundle lives in the Recovery Kit."
 	}
 	wrote, _ := sum["bytes"].(int64)
-	note := fmt.Sprintf("Wrote the `%s` bundle to `%s/%s/` — %s across %v component(s). It preserves Mnemosyne's own reader (binaries%s) so this medium's software travels with it; the three-tool restore never needs it. See its `ESCROW_README.md`.",
+	note := fmt.Sprintf("Wrote the `%s` bundle to `%s/%s/` — %s across %v component(s). It preserves Obelisk's own reader (binaries%s) so this medium's software travels with it; the three-tool restore never needs it. See its `ESCROW_README.md`.",
 		mode, sealSidecarDir, escrowBundleDir, humanBytes(wrote), sum["components"], map[string]string{EscrowFull: " + source", EscrowBinariesOnly: ""}[mode])
 	if plan.MissingCount > 0 {
 		note += fmt.Sprintf(" Note: %d component(s) were not cached and omitted (%s).", plan.MissingCount, strings.Join(plan.MissingNames, ", "))

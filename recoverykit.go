@@ -27,7 +27,7 @@ var restoreRunbook []byte
 const recoveryKitWarning = "This kit contains key QR codes whose payloads ARE the package passphrases in the clear. " +
 	"Anyone holding this folder can decrypt every encrypted package. Store and transport it as securely as your keystores."
 
-// BuildRecoveryKit writes the kit into outputDir/mnemosyne-recovery-kit and
+// BuildRecoveryKit writes the kit into outputDir/obelisk-recovery-kit and
 // returns a summary. It never fails the whole job over one unreachable key —
 // those are recorded as warnings so the rest of the kit still gets written.
 func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string)) (map[string]any, error) {
@@ -38,7 +38,7 @@ func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string))
 	if err := a.Store.AssertOutsideSources(outputDir); err != nil {
 		return nil, err
 	}
-	kit := filepath.Join(outputDir, "mnemosyne-recovery-kit")
+	kit := filepath.Join(outputDir, "obelisk-recovery-kit")
 	keysDir := filepath.Join(kit, "keys")
 	if err := os.MkdirAll(keysDir, 0o755); err != nil {
 		return nil, err
@@ -129,7 +129,7 @@ func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string))
 		// The .txt card never carries the passphrase — only ref + fingerprint. The
 		// secret lives in the QR (.png), the typable key sheet (.sheet.txt), and the
 		// printable page (KEYS.html) — all the SAME secret, in scan- and type-able form.
-		card := fmt.Sprintf("Mnemosyne key card\nkey_ref:      %s\nfingerprint:  %s (SHA-256 of the passphrase)\nnote:         %s\n\n"+
+		card := fmt.Sprintf("Obelisk key card\nkey_ref:      %s\nfingerprint:  %s (SHA-256 of the passphrase)\nnote:         %s\n\n"+
 			"The passphrase itself is NOT written here in plaintext. It lives inside\n"+
 			"%[4]s.png (QR payload  MNEMO1|<key_ref>|<passphrase>), the typable\n"+
 			"%[4]s.sheet.txt (retype it — each line self-checks with CRC-16), the printable\n"+
@@ -183,7 +183,7 @@ func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string))
 func mediaInventoryMD(chunks []*Chunk, volm map[int]*Volume) string {
 	var b strings.Builder
 	b.WriteString("# Media Inventory\n\n")
-	b.WriteString("Generated " + time.Now().UTC().Format(time.RFC3339) + " — every package Mnemosyne has cataloged.\n\n")
+	b.WriteString("Generated " + time.Now().UTC().Format(time.RFC3339) + " — every package Obelisk has cataloged.\n\n")
 	b.WriteString("`Payload SHA-256` is the hash of the file as written to the medium: the ciphertext ")
 	b.WriteString("`<name>.tar.gpg` for encrypted packages, the plain tar `<name>.tar` for unencrypted ones ")
 	b.WriteString("(the `Payload` column gives each package's exact filename). It is what you check with `sha256sum` before restoring.\n\n")
@@ -426,12 +426,12 @@ func mdCell(s string) string {
 }
 
 func recoveryReadmeMD(nChunks, nKeys int) string {
-	return fmt.Sprintf(`# Mnemosyne Recovery Kit
+	return fmt.Sprintf(`# Obelisk Recovery Kit
 
-**Audience: anyone, decades from now, with no Mnemosyne software installed.**
+**Audience: anyone, decades from now, with no Obelisk software installed.**
 
 This folder is everything a stranger needs to read the archive back off its
-media by hand. Mnemosyne is a convenience; it is never required. Restoration
+media by hand. Obelisk is a convenience; it is never required. Restoration
 needs only widely-implemented, standardized, open-source tools — and for every
 step below there are **several independent programs** to choose from, so no
 single project going dark can strand your data.
@@ -451,7 +451,7 @@ single project going dark can strand your data.
 This kit describes %d package(s) and %d key(s). See `+"`MEDIA_INVENTORY.md`"+` for
 the full per-package table and `+"`RESTORE_RUNBOOK.md`"+` for the deep-dive.
 
-The `+"`escrow-bundle/`"+` folder is **software escrow** — Mnemosyne's own static
+The `+"`escrow-bundle/`"+` folder is **software escrow** — Obelisk's own static
 binaries and source, plus the source of the restore tools (par2cmdline, GnuPG),
 so the software that wrote these media travels with them. It is belt-and-suspenders,
 never required: read `+"`escrow-bundle/ESCROW_README.md`"+`. The three-tool restore
@@ -487,7 +487,7 @@ Open `+"`NAME.manifest.json`"+` (any text editor) and read the `+"`\"encrypted\"
   passphrase for its `+"`key_ref`"+` (scan the matching QR in `+"`keys/`"+`, or read it from a keystore).
 - **encrypted: false** — the payload is `+"`NAME.tar`"+`, a *plain tar* (no `+"`.gpg`"+`
   suffix, nothing to decrypt). **Skip decryption entirely.** Do two steps:
-  **repair → extract**. No key, no passphrase. (Media written by older Mnemosyne
+  **repair → extract**. No key, no passphrase. (Media written by older Obelisk
   versions may still name a plaintext payload `+"`NAME.tar.gpg`"+`; it is likewise a
   plain tar — extract it directly.)
 

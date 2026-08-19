@@ -1,8 +1,8 @@
 # Keeping a backup current (the weekly ritual)
 
-Your first backup is a snapshot in time. But you keep working — new shoots land, edits happen, projects grow. **Keeping a backup current** means topping it up with just what's new, without re-copying everything. Mnemosyne makes this a five-minute ritual you can do weekly.
+Your first backup is a snapshot in time. But you keep working — new shoots land, edits happen, projects grow. **Keeping a backup current** means topping it up with just what's new, without re-copying everything. Obelisk makes this a five-minute ritual you can do weekly.
 
-The good news up front: **you never have to think about "full vs. incremental" backups.** Old backup tools make you schedule a slow "full" backup now and then, with faster "incrementals" in between, and pray the chain stays intact. Mnemosyne doesn't work that way. It tracks **every file individually** — so it always knows, file by file, what's already safe and what isn't. "Back up changes" just copies the difference. There's no chain to break, and nothing to remember.
+The good news up front: **you never have to think about "full vs. incremental" backups.** Old backup tools make you schedule a slow "full" backup now and then, with faster "incrementals" in between, and pray the chain stays intact. Obelisk doesn't work that way. It tracks **every file individually** — so it always knows, file by file, what's already safe and what isn't. "Back up changes" just copies the difference. There's no chain to break, and nothing to remember.
 
 Some words you'll see:
 
@@ -47,8 +47,8 @@ Because every run **recomputes the delta from scratch**, there is nothing to cor
 
 The output follows the destination:
 
-- **Drives (the default): plain-file mirrors.** Your files land in their normal folder structure. You can browse or restore them with any file manager — no Mnemosyne, no key, no unpack step. Each drive also carries a refreshed inventory sidecar describing what's on it.
-- **Tape or optical: packages.** Mnemosyne plans the delta into media-sized packages, which you then build and write from the **Packages** tab (each write records a verified copy). Tape and disc can't be browsed like a folder, so sealed packages are the right shape for them.
+- **Drives (the default): plain-file mirrors.** Your files land in their normal folder structure. You can browse or restore them with any file manager — no Obelisk, no key, no unpack step. Each drive also carries a refreshed inventory sidecar describing what's on it.
+- **Tape or optical: packages.** Obelisk plans the delta into media-sized packages, which you then build and write from the **Packages** tab (each write records a verified copy). Tape and disc can't be browsed like a folder, so sealed packages are the right shape for them.
 
 ---
 

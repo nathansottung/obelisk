@@ -1,11 +1,11 @@
 # The Recovery Kit (your break-glass box)
 
-Think of the Recovery Kit as the sealed "break glass in emergency" box for your whole archive. It is a small folder you create once, print or copy, and tuck away somewhere safe. If your computer, your app, and even Mnemosyne itself all vanish, the Recovery Kit — together with your media — is everything a careful person needs to get your files back.
+Think of the Recovery Kit as the sealed "break glass in emergency" box for your whole archive. It is a small folder you create once, print or copy, and tuck away somewhere safe. If your computer, your app, and even Obelisk itself all vanish, the Recovery Kit — together with your media — is everything a careful person needs to get your files back.
 
 A few words first:
 
 - A **"passphrase"** is the long secret password that unlocks an encrypted (scrambled) package.
-- A **"QR code"** is that square, phone-scannable barcode. Mnemosyne puts one QR code per encryption key into the kit.
+- A **"QR code"** is that square, phone-scannable barcode. Obelisk puts one QR code per encryption key into the kit.
 - A **"keystore"** is the small file that normally holds your passphrases. The Recovery Kit is a **separate** paper-and-file backup of those secrets, meant for the day your keystores are gone.
 
 Big reassurance: making a Recovery Kit only **reads** from your archive and **writes** the kit into a folder you choose. It never touches your originals, never deletes anything, and never sends anything over the internet.
@@ -31,13 +31,13 @@ Big reassurance: making a Recovery Kit only **reads** from your archive and **wr
    You should now see a job begin — check the **Jobs** tab for progress.
 
 6. When it finishes, open your chosen folder.
-   You should now see a new folder named **`mnemosyne-recovery-kit`** inside it.
+   You should now see a new folder named **`obelisk-recovery-kit`** inside it.
 
 ---
 
 ## Part 2: What's inside
 
-Open the `mnemosyne-recovery-kit` folder. You should now see:
+Open the `obelisk-recovery-kit` folder. You should now see:
 
 - **`MEDIA_INVENTORY.md`** — a plain list of every package and which volume (drive, disc, or tape) holds it. This is your map: "the 2019 photos are on the blue drive."
 - **`README_RECOVERY.md`** — a short "start here" note explaining what the kit is and what to do first.
@@ -70,7 +70,7 @@ Nothing in the app forces this on you — it is your responsibility. The reward 
 The whole point is that the kit survives disasters your computer will not. So:
 
 1. **Print** the kit (at least `README_RECOVERY.md`, `RESTORE_RUNBOOK.md`, `MEDIA_INVENTORY.md`, and the QR cards) and keep the paper in a fireproof box or safe-deposit box.
-2. **Also copy** the `mnemosyne-recovery-kit` folder onto a **couple of USB sticks**.
+2. **Also copy** the `obelisk-recovery-kit` folder onto a **couple of USB sticks**.
 3. Keep those copies in **separate physical locations** — for example, one at home and one at a trusted family member's house or a safe-deposit box. A fire or flood in one place should never take out every copy.
 
 You should now have the kit in at least two places that would not be destroyed by the same accident.
@@ -79,7 +79,7 @@ You should now have the kit in at least two places that would not be destroyed b
 
 ## Part 5: "Hand this to a stranger in 2040"
 
-Here is the idea that should let you sleep at night. Imagine it is the year 2040. Mnemosyne the app no longer exists. You are not around to help. Someone technical — a grown child, an archivist, a helpful IT person — is handed **your backup media and this Recovery Kit**.
+Here is the idea that should let you sleep at night. Imagine it is the year 2040. Obelisk the app no longer exists. You are not around to help. Someone technical — a grown child, an archivist, a helpful IT person — is handed **your backup media and this Recovery Kit**.
 
 Can they get the files back? **Yes.** Because:
 
@@ -87,13 +87,13 @@ Can they get the files back? **Yes.** Because:
 - Those steps use only **three free tools** that have existed for decades and run on Windows, Mac, and Linux: **`par2`** (checks and repairs damage), **`gpg`** (decrypts, if the data was encrypted), and **`tar`** (unpacks the files).
 - For any **encrypted** data, the **QR card** in the `keys/` folder hands over the passphrase `gpg` will ask for.
 
-No special software, no account, no company that has to still be in business. Just the media, the kit, and three tools anyone can download. That is what "future-proof" really means, and it is why the Recovery Kit is the most important thing you will ever make with Mnemosyne.
+No special software, no account, no company that has to still be in business. Just the media, the kit, and three tools anyone can download. That is what "future-proof" really means, and it is why the Recovery Kit is the most important thing you will ever make with Obelisk.
 
 ---
 
 ## How to know it worked
 
-- Your chosen output folder now contains a **`mnemosyne-recovery-kit`** folder.
+- Your chosen output folder now contains a **`obelisk-recovery-kit`** folder.
 - Inside it you can see `MEDIA_INVENTORY.md`, `README_RECOVERY.md`, `RESTORE_RUNBOOK.md`, and a `keys/` folder.
 - If you use encryption, the `keys/` folder holds one QR `.png` and one `.txt` card per key.
 - You have decided where the printed copy and the USB copies will physically live, in at least two separate places.
@@ -108,5 +108,5 @@ No special software, no account, no company that has to still be in business. Ju
 ## Screenshots to capture
 
 - `../img/09-keys-export.png` — The Keys tab with the Export Recovery Kit button.
-- `../img/09-kit-contents.png` — The `mnemosyne-recovery-kit` folder open, showing its files and the `keys/` folder.
+- `../img/09-kit-contents.png` — The `obelisk-recovery-kit` folder open, showing its files and the `keys/` folder.
 - `../img/09-qr-card.png` — One QR card image and its matching text card.

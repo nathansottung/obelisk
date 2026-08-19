@@ -2,7 +2,7 @@ package main
 
 // adopt_test.go — bringing pre-existing media into the catalog. Covers a
 // hand-made tar+par2 folder (no manifest), the "deep adopt" TOC enumeration,
-// idempotency, and — the key safety property — that adopting one of Mnemosyne's
+// idempotency, and — the key safety property — that adopting one of Obelisk's
 // OWN written chunks (copied elsewhere) is detected as a duplicate, not
 // re-cataloged.
 
@@ -155,7 +155,7 @@ func TestIntegration_DeepAdoptEnumeratesContents(t *testing.T) {
 func TestIntegration_AdoptOwnChunkIsDuplicate(t *testing.T) {
 	s := newIT(t)
 	s.setConfig(nil)
-	// Build + write one of Mnemosyne's own plaintext packages via the real API.
+	// Build + write one of Obelisk's own plaintext packages via the real API.
 	src := s.makeSource(map[string][]byte{"work/report.txt": []byte("native package content\n")})
 	c := s.scanPlanBuild(src, 1, false, 10)
 	pid := int(c["id"].(float64))

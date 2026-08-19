@@ -26,18 +26,18 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
-          echo "Building Mnemosyne ${TAG}"
+          echo "Building Obelisk ${TAG}"
           mkdir -p dist
           # Software escrow: embed this exact tagged source so every built binary
           # can emit its own source tarball into an Escrow Bundle (escrow.go). This
           # OVERWRITES the committed dev placeholder before the build compiles it in.
-          git archive --format=tar.gz --prefix="mnemosyne-${TAG}/" -o escrow/mnemosyne-src.tar.gz HEAD
-          cp "escrow/mnemosyne-src.tar.gz" "dist/mnemosyne-src-${TAG}.tar.gz"
+          git archive --format=tar.gz --prefix="obelisk-${TAG}/" -o escrow/obelisk-src.tar.gz HEAD
+          cp "escrow/obelisk-src.tar.gz" "dist/obelisk-src-${TAG}.tar.gz"
           # Pure-Go, static (CGO disabled) binaries for every supported target:
           # Windows (x64, ARM), Linux (x64, ARM), macOS (Intel, Apple Silicon).
           for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
             goos="${target%/*}"; goarch="${target#*/}"
-            bin="mnemosyne-${goos}-${goarch}"
+            bin="obelisk-${goos}-${goarch}"
             [ "$goos" = "windows" ] && bin="${bin}.exe"
             stage="staging/${goos}-${goarch}"
             mkdir -p "$stage"
@@ -46,7 +46,7 @@ jobs:
               go build -trimpath -ldflags "-s -w -X main.appVersion=${TAG}" -o "$stage/$bin" .
             # Every download is self-documenting: the binary plus the hand-restore docs.
             cp README.md LICENSE docs/RESTORE_RUNBOOK.md "$stage/"
-            ( cd "$stage" && zip -q -r "../../dist/mnemosyne-${goos}-${goarch}.zip" . )
+            ( cd "$stage" && zip -q -r "../../dist/obelisk-${goos}-${goarch}.zip" . )
           done
           # One checksum file over all release artifacts (zips + the source tarball).
           ( cd dist && sha256sum *.zip *.tar.gz > SHA-256SUMS.txt )

@@ -334,7 +334,7 @@ func mirrorFolderLabels(used map[int]bool, folderPath map[int]string) map[int]st
 	return out
 }
 
-// writeVolumeInventory refreshes the MNEMOSYNE_DOCK sidecar at destDir describing
+// writeVolumeInventory refreshes the OBELISK_DOCK sidecar at destDir describing
 // everything the catalog says this volume holds — a self-documenting inventory
 // that survives the catalog. Guarded against writing into a source.
 func (a *App) writeVolumeInventory(destDir string, vol *Volume) (string, error) {
@@ -392,7 +392,7 @@ func (a *App) writeVolumeInventory(destDir string, vol *Volume) (string, error) 
 
 	census := a.censusFromTally(tally)
 	snap := map[string]any{
-		"mnemosyne_volume_inventory": 1, "generated_utc": now.Format(time.RFC3339),
+		"obelisk_volume_inventory": 1, "generated_utc": now.Format(time.RFC3339),
 		"volume": vol, "total_files": totalFiles, "total_bytes": totalBytes, "archives": archives,
 		"formats": census,
 	}
@@ -402,14 +402,14 @@ func (a *App) writeVolumeInventory(destDir string, vol *Volume) (string, error) 
 	}
 
 	var b strings.Builder
-	b.WriteString("# Mnemosyne — volume inventory\n\n")
+	b.WriteString("# Obelisk — volume inventory\n\n")
 	b.WriteString(fmt.Sprintf("Generated %s. This medium holds **%d file(s)** (%s) across %d archive(s).\n\n",
 		now.Format(time.RFC3339), totalFiles, humanBytes(totalBytes), len(archives)))
 	b.WriteString(fmt.Sprintf("- **Volume:** %s\n", vol.Label))
 	if vol.Serial != "" {
 		b.WriteString(fmt.Sprintf("- **Serial:** `%s`\n", vol.Serial))
 	}
-	b.WriteString("\nMirror files are stored as **plain files** — browse or copy them with any tool; no Mnemosyne, key, or unpack step is needed. Each was copy-then-verified (SHA-256) against its source.\n")
+	b.WriteString("\nMirror files are stored as **plain files** — browse or copy them with any tool; no Obelisk, key, or unpack step is needed. Each was copy-then-verified (SHA-256) against its source.\n")
 	for _, ar := range archives {
 		kind := "package"
 		if ar.Mirror {
