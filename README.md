@@ -1,13 +1,15 @@
-# Mnemosyne — Archival Vault
+# Obelisk — an instrument of negentropy
 
-[![CI](https://github.com/nathansottung/mnemosyne/actions/workflows/ci.yml/badge.svg)](https://github.com/nathansottung/mnemosyne/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/nathansottung/mnemosyne?logo=github&color=2e5e4e)](https://github.com/nathansottung/mnemosyne/releases/latest)
+**Back up your data, verify it forever.** &nbsp;*(formerly Mnemosyne)*
+
+[![CI](https://github.com/nathansottung/obelisk/actions/workflows/ci.yml/badge.svg)](https://github.com/nathansottung/obelisk/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/nathansottung/obelisk?logo=github&color=2e5e4e)](https://github.com/nathansottung/obelisk/releases/latest)
 [![Go](https://img.shields.io/badge/Go-1.22-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Single binary](https://img.shields.io/badge/deploy-single%20binary-2e5e4e)](#quickstart)
 [![Restore: par2 · gpg · tar](https://img.shields.io/badge/restore-par2%20%C2%B7%20gpg%20%C2%B7%20tar-informational)](docs/RESTORE_RUNBOOK.md)
 
-**Mnemosyne turns folders of files into self-contained archival *packages* and
+**Obelisk turns folders of files into self-contained archival *packages* and
 writes them onto LTO tape, hard drives, or optical discs — each package
 restorable decades from now with three stock, open-source tools (`par2`,
 `gpg`, `tar`) even if this program no longer exists.** It is one small Go
@@ -18,7 +20,7 @@ copy through a memory buffer and immediately reads it back to confirm it landed
 intact — then remembers exactly which physical volume, in which drawer and which
 house, each verified copy lives on.
 
-> Not another sync tool. Mnemosyne is for **cold, offline, decades-long
+> Not another sync tool. Obelisk is for **cold, offline, decades-long
 > preservation**: the stuff you write once, put on a shelf, and need to trust
 > you can still read at your kid's wedding.
 
@@ -43,16 +45,16 @@ musician, filmmaker, or family archivist). It walks you through
 the technical/maintainer reference.
 
 > **Why not restic / borg / Bacula / dar / Canister?** — the honest,
-> one-paragraph-each answer (plus how Mnemosyne relates to git-annex, LTFS, BagIt /
+> one-paragraph-each answer (plus how Obelisk relates to git-annex, LTFS, BagIt /
 > Archivematica, the commercial media-archive tools, and complements like
 > dvdisaster and rclone) lives in **[docs/COMPARISON.md](docs/COMPARISON.md)**.
 
 ### No NAS? Start here
 
-Mnemosyne doesn't need a server or a single "source of truth" folder. If your
+Obelisk doesn't need a server or a single "source of truth" folder. If your
 stuff is **scattered across a pile of external drives** with overlapping copies and
 no master, make a **sourceless archive**: at create time, pick *"scattered across
-drives."* Then **adopt each drive** — Mnemosyne fingerprints its loose files and folds
+drives."* Then **adopt each drive** — Obelisk fingerprints its loose files and folds
 them into one combined list for the archive, counting identical files that appear
 on several drives only once. That combined list *is* the archive: there is no
 separate "master" folder to keep it in sync with.
@@ -69,7 +71,7 @@ and every drive there re-counts at a stroke — no per-drive bookkeeping. So eve
 
 ## Source safety guarantee
 
-**Mnemosyne never modifies your source data. This is an enforced invariant, not a
+**Obelisk never modifies your source data. This is an enforced invariant, not a
 promise you have to trust.**
 
 - **Sources are only ever opened for reading.** Scanning, hashing, the `tar`
@@ -79,18 +81,18 @@ promise you have to trust.**
   never the originals. Each such read path carries a `SOURCE READ-ONLY:` audit
   comment in the code.
 - **Every writable destination is validated against your source roots.** Before
-  Mnemosyne writes anything, the target is checked by a single central guard
+  Obelisk writes anything, the target is checked by a single central guard
   (`AssertOutsideSources`). If a destination resolves to a path *inside* any
   registered Archive source folder, the operation is refused with:
 
-  > `refusing: <path> is inside source root <root>; Mnemosyne never writes into source data`
+  > `refusing: <path> is inside source root <root>; Obelisk never writes into source data`
 
   This covers the **staging folder** (set-time and build-time), **write / span /
   burn destinations**, **restore output**, the **recovery-kit output**, and even
   **keystore paths** (keystores get rewritten, so they must stay out of source
   data too).
 - **The only thing that ever changes your originals is you.** Delete or move a
-  source file yourself and drift will report it — but Mnemosyne's own code has no
+  source file yourself and drift will report it — but Obelisk's own code has no
   path that writes into a source root.
 
 ---
@@ -98,19 +100,19 @@ promise you have to trust.**
 ## Download
 
 Prebuilt, self-contained binaries for every release are on the
-**[Releases page](https://github.com/nathansottung/mnemosyne/releases/latest)** —
+**[Releases page](https://github.com/nathansottung/obelisk/releases/latest)** —
 pick the zip for your OS/architecture.
 
 **Supported platforms:** Windows (x64, ARM), Linux (x64, ARM — Raspberry Pi), macOS (Intel, Apple Silicon).
 
 | Zip | Platform |
 |-----|----------|
-| `mnemosyne-windows-amd64.zip` | Windows (x64) |
-| `mnemosyne-windows-arm64.zip` | Windows on ARM |
-| `mnemosyne-linux-amd64.zip`   | Linux server / NAS (x64) |
-| `mnemosyne-linux-arm64.zip`   | Raspberry Pi / ARM Linux |
-| `mnemosyne-darwin-arm64.zip`  | Apple Silicon macOS |
-| `mnemosyne-darwin-amd64.zip`  | Intel macOS |
+| `obelisk-windows-amd64.zip` | Windows (x64) |
+| `obelisk-windows-arm64.zip` | Windows on ARM |
+| `obelisk-linux-amd64.zip`   | Linux server / NAS (x64) |
+| `obelisk-linux-arm64.zip`   | Raspberry Pi / ARM Linux |
+| `obelisk-darwin-arm64.zip`  | Apple Silicon macOS |
+| `obelisk-darwin-amd64.zip`  | Intel macOS |
 
 Each zip contains the binary plus `README.md`, `LICENSE`, and the
 `RESTORE_RUNBOOK.md` so the archive stays hand-restorable even offline. Verify
@@ -119,7 +121,7 @@ your download against **`SHA-256SUMS.txt`** (attached to every release):
 ```
 sha256sum -c SHA-256SUMS.txt          # Linux / macOS / Git Bash
 # or on Windows PowerShell:
-(Get-FileHash mnemosyne-windows-amd64.zip -Algorithm SHA256).Hash
+(Get-FileHash obelisk-windows-amd64.zip -Algorithm SHA256).Hash
 ```
 
 Builds are produced by the tag-triggered [release workflow](.github/workflows/release.yml)
@@ -127,11 +129,11 @@ Builds are produced by the tag-triggered [release workflow](.github/workflows/re
 
 ## Docker — the NAS-side brain
 
-Mnemosyne also ships as a small multi-arch container image on GHCR, built by the
+Obelisk also ships as a small multi-arch container image on GHCR, built by the
 same release tag:
 
 ```
-ghcr.io/nathansottung/mnemosyne:latest   # or pin a release tag from the Releases page
+ghcr.io/nathansottung/obelisk:latest   # or pin a release tag from the Releases page
 ```
 
 The image is multi-stage: a static, CGO-free binary on top of Alpine with the
@@ -158,26 +160,26 @@ lives at the metal; the container does the thinking.*
 
 Binding anything other than localhost (which a container must, to be reachable)
 **requires a bearer token** — the binary refuses to start otherwise. Set a strong
-secret via **`MNEMO_AUTH_TOKEN`** (env, recommended) or **`auth_token`** in
+secret via **`OBELISK_AUTH_TOKEN`** (env, recommended) or **`auth_token`** in
 `config.json`; then every `/api` request needs `Authorization: Bearer <token>`.
 The web UI prompts once and remembers it for the browser session. The static UI
 itself is public (so it can load and prompt); only `/api` is gated.
 
 ```bash
 # Quick run (creates a token, persists /data, mirrors a read-only source):
-docker run -d --name mnemosyne -p 7821:7821 \
-  -e MNEMO_AUTH_TOKEN="$(openssl rand -hex 32)" \
+docker run -d --name obelisk -p 7821:7821 \
+  -e OBELISK_AUTH_TOKEN="$(openssl rand -hex 32)" \
   -v mnemo-data:/data -v mnemo-staging:/staging \
   -v /mnt/tank/photos:/sources/photos:ro \
-  ghcr.io/nathansottung/mnemosyne:latest
+  ghcr.io/nathansottung/obelisk:latest
 ```
 
 Or use the committed **[`docker-compose.yml`](docker-compose.yml)** (put the token
-in a `.env` as `MNEMO_AUTH_TOKEN=…`).
+in a `.env` as `OBELISK_AUTH_TOKEN=…`).
 
 ### Source datasets: always mount `:ro`
 
-Mount every source dataset **read-only** (`:ro`). Mnemosyne is already read-only
+Mount every source dataset **read-only** (`:ro`). Obelisk is already read-only
 toward sources by design (its `AssertOutsideSources` guard refuses any write into
 a registered source root), but `:ro` enforces that in the **kernel** — even a bug
 or a crafted request physically cannot write to your originals, because the write
@@ -196,8 +198,8 @@ brain:
 
 1. **Apps → Discover Apps → Custom App** (or *Install via YAML* and paste the
    compose above).
-2. **Image:** `ghcr.io/nathansottung/mnemosyne:latest`.
-3. **Environment:** add `MNEMO_AUTH_TOKEN` = a long random secret.
+2. **Image:** `ghcr.io/nathansottung/obelisk:latest`.
+3. **Environment:** add `OBELISK_AUTH_TOKEN` = a long random secret.
 4. **Storage / host-path volumes:**
    - a dataset → **`/data`** (read-write; this is your catalog — snapshot it),
    - a scratch dataset → **`/staging`** (read-write),
@@ -220,11 +222,11 @@ passed through) — the build/catalog it shares with the app is the same
 it's self-contained.
 
 ```
-mnemosyne.exe                # Windows — then open http://127.0.0.1:7821
-./mnemosyne-linux-amd64      # Linux (server / NAS / Pi)
-./mnemosyne-darwin-arm64     # Apple Silicon
+obelisk.exe                # Windows — then open http://127.0.0.1:7821
+./obelisk-linux-amd64      # Linux (server / NAS / Pi)
+./obelisk-darwin-arm64     # Apple Silicon
 ```
-Flags: `-port 7821 -data ~/.mnemo`. Open the printed URL; the **Preflight**
+Flags: `-port 7821 -data ~/.obelisk`. Open the printed URL; the **Preflight**
 panel (Settings) checks that `tar`/`gpg`/`par2` are installed and tells you
 how to get any that are missing.
 
@@ -250,7 +252,7 @@ different location and the package is fully protected.
 
 ## The journey — features, and *why*
 
-Mnemosyne follows the life of your data. Each step earns its place:
+Obelisk follows the life of your data. Each step earns its place:
 
 ### Catalog
 - **Scan** SHA-256-hashes every file at the source — *because a backup you
@@ -293,7 +295,7 @@ Mnemosyne follows the life of your data. Each step earns its place:
 
 ### Mirror — the browsable complement to packages
 
-Mnemosyne backs up two ways, and they are peers — every archive can have both:
+Obelisk backs up two ways, and they are peers — every archive can have both:
 
 |                | **Packages** | **Mirrors** |
 |----------------|--------------|-------------|
@@ -307,7 +309,7 @@ Mnemosyne backs up two ways, and they are peers — every archive can have both:
 - **Mirror backup** copies an archive's folders to one (or several) target
   Volumes as **plain files that preserve the source tree** — so you, or anyone,
   can browse and restore them decades from now with nothing but a file manager,
-  *no Mnemosyne, no key, no unpack step.* Each file is copied with v1's
+  *no Obelisk, no key, no unpack step.* Each file is copied with v1's
   **copy-then-verify** discipline: staged to `<name>.mnemo_tmp`, hashed, read
   back off the destination, and only then **atomically renamed** into place — so
   a half-written or corrupted file never appears under its real name.
@@ -367,7 +369,7 @@ source → [contents-verified] tar → [roundtrip-verified] ciphertext
 
 ### How much integrity do I need?
 
-Mnemosyne has many independent integrity knobs — build-verify depth, par2
+Obelisk has many independent integrity knobs — build-verify depth, par2
 redundancy, routine verify level, the re-verify window, read-back. Rather than
 make you reason about each one, three **presets** bundle them into a single
 comprehensible choice (and every knob stays individually editable — edit one and
@@ -526,7 +528,7 @@ record. No silent force.
 On success the ceremony:
 
 1. writes a **finalization record** (who, when, package count, bytes) to the
-   catalog **and** to a `MNEMOSYNE_SEAL/` sidecar on the volume itself;
+   catalog **and** to a `OBELISK_SEAL/` sidecar on the volume itself;
 2. regenerates the volume's **inventory + catalog snapshot** onto that sidecar,
    so the medium self-documents for whoever finds it decades later;
 3. marks the volume **SEALED** — the catalog now refuses every write to it
@@ -542,7 +544,7 @@ reason, and is logged — because re-opening a sealed box should leave a mark.
 ### Format sustainability — will you still open these in 2050?
 
 A perfectly-verified copy is worthless if nothing can *read* the file. So
-Mnemosyne keeps an **editable format registry** and shows a **per-archive
+Obelisk keeps an **editable format registry** and shows a **per-archive
 census**: every file extension tagged with a longevity **tier**, a one-line
 rationale, the open-source **reader projects** that decode it, and — where one
 exists — a **migration** suggestion.
@@ -570,7 +572,7 @@ all decode it well, so it is not endangered. Adobe's `.DNG` is **OPEN**: it is
 publicly documented, TIFF/EP-based, and read by many independent tools. So the
 registry's suggestion for NEF is *"retain the original NEF **and** consider
 archiving a DNG sibling for extra longevity."* Note what it does **not** say: it
-never suggests deleting the NEF. **Tiers are advisory. Mnemosyne never proposes
+never suggests deleting the NEF. **Tiers are advisory. Obelisk never proposes
 deleting an original — ever.** The census is a "keep an eye on this" signal, not
 an alarm.
 
@@ -621,7 +623,7 @@ date the way a photographer's does; absent, those fields are simply empty and in
 never fails.
 
 ### Find & track
-- **Adopt existing media** — catalog archives written *before* Mnemosyne (or by
+- **Adopt existing media** — catalog archives written *before* Obelisk (or by
   hand with `tar`+`par2`) without rewriting a byte. Point **Volumes → Adopt
   media…** at a mount; every `*.tar` / `*.tar.gpg` payload is hashed and recorded
   as an `ADOPTED-VERIFIED` package with a verified copy on the volume. Adoption
@@ -639,7 +641,7 @@ never fails.
   Captured at register and adopt time, or on demand with **Detect drive
   identity…**. It surfaces on the volume cards, the Recovery Kit inventory, and
   the label. *Caveat:* external docks and USB-SATA bridges frequently report the
-  **enclosure's** serial (or none) rather than the drive's — Mnemosyne records
+  **enclosure's** serial (or none) rather than the drive's — Obelisk records
   whatever the bridge reports and flags it, so treat a bridged serial as a hint,
   not a fingerprint. Resolution failure is never fatal; the field just stays
   blank.
@@ -658,7 +660,7 @@ never fails.
   > an *integrity* one. It estimates how likely a drive is to **die**; it says
   > nothing about whether the bytes already written are **intact**. A drive that
   > reports "PASSED" can still hand back a bit-rotted file, and a drive flagged
-  > "FAILING" may still read its verified copies perfectly. So Mnemosyne treats
+  > "FAILING" may still read its verified copies perfectly. So Obelisk treats
   > SMART strictly as an early-warning nudge to move copies *before* a drive
   > dies — it never marks data good or bad. Only the custody-chain hashes
   > (read-back, verify, restore) prove your bytes are still your bytes. Health is
@@ -721,7 +723,7 @@ my risk?"* at a glance.
 
 ### Dock — inventory a stack of legacy drives
 - **Guided, resumable, hands-off.** Pick the Archive(s) to compare against,
-  then dock old backup drives one at a time. Mnemosyne **watches** for each
+  then dock old backup drives one at a time. Obelisk **watches** for each
   newly-inserted drive (polling mounts, diffed against session start) and, on one
   click, does everything: identifies the drive by **serial**, hashes every file
   and **matches it by content** against your archives, records the matches as
@@ -733,7 +735,7 @@ my risk?"* at a glance.
   Each drive reports *matched / historical (older versions) / unrecognized /
   unreadable*.
 - **Recognized by serial** — re-insert a drive you already processed and
-  Mnemosyne knows it (even on a different letter) and offers **re-verify**, not a
+  Obelisk knows it (even on a different letter) and offers **re-verify**, not a
   duplicate adopt. Idempotent across sessions.
 - **Resumable across days** — the session persists; close the app and reopen it
   to exactly where you were, coverage and all.
@@ -748,7 +750,7 @@ my risk?"* at a glance.
 ### Restore
 - **Three-command restore**, documented on every medium in `RESTORE.txt` —
   *because the whole point is that you (or a stranger) can get the data back
-  with `par2`/`gpg`/`tar` alone, no Mnemosyne required.*
+  with `par2`/`gpg`/`tar` alone, no Obelisk required.*
 - **Restore drill** rejoins spanned tapes and runs the full repair → decrypt →
   extract → compare against source hashes — *because the only real proof is
   bytes back out, matching the bytes that went in.*
@@ -760,7 +762,7 @@ my risk?"* at a glance.
 
 ### Version retention
 
-Mnemosyne **never had the power to delete an old version of a file.** Once bytes
+Obelisk **never had the power to delete an old version of a file.** Once bytes
 are sealed into a package on a tape or disc, they are there for good — that is the
 whole promise of write-once archival media. Yet until now a rescan would quietly
 *overwrite* a file's hash in the catalog: the medium still held the old bytes, but
@@ -786,14 +788,14 @@ pretending otherwise.
   click, not a hunt.
 - **Capped only if you ask.** `versions_retained` (Settings) defaults to
   *unlimited*. Setting a cap forgets only the catalog's *pointer* to the oldest
-  versions — it never deletes anything from media, because Mnemosyne can't and
+  versions — it never deletes anything from media, because Obelisk can't and
   never could.
 
 ---
 
 ### Quarantine — never delete, made usable
 
-Mnemosyne has no delete button and never will — but "you can't remove anything" is
+Obelisk has no delete button and never will — but "you can't remove anything" is
 only livable if there's *some* way to get a stray or superseded file out of the way.
 Quarantine is that pressure valve, built to be **regret-proof**: the strongest action
 the tool offers isn't deletion, it's a reversible **move**. Marking a file or folder
@@ -804,7 +806,7 @@ toward protection — and it shows you that protection **consequence before you 
 (*"this drops Smith Wedding originals to 1 copy — proceed?"*). Because the original path
 is preserved verbatim under `_deleted`, **un-quarantine is a plain reverse move** that
 also re-credits the copy. Crucially, quarantine exists **only inside managed territory**
-— the destination roots Mnemosyne itself populated via Plans — enforced by the very same
+— the destination roots Obelisk itself populated via Plans — enforced by the very same
 read-only guard that keeps the tool out of your source data: on adopted media and source
 roots the action simply does not appear, because there is nothing there the tool created.
 The Quarantine view lists everything staged (contents, age, total bytes) under one
@@ -817,7 +819,7 @@ entries *human-removed* while keeping their history.
 
 ## Adopting existing media
 
-You almost certainly have data on disks and tapes from before Mnemosyne. The
+You almost certainly have data on disks and tapes from before Obelisk. The
 **Adopt media…** action (Volumes view) brings it into the catalog *in place* —
 nothing is copied, re-tarred, or re-encrypted. Point it at a mount and pick the
 archive + volume; it scans for payloads (`*.tar` / `*.tar.gpg`, flat or one
@@ -849,7 +851,7 @@ folder deep), and for each one hashes the payload and records an
 
 **Idempotent by design:** a payload whose hash is already in the catalog is
 reported as *skipped-duplicate*, never double-cataloged — so re-running adoption,
-or accidentally adopting a Mnemosyne-written chunk, changes nothing. Adopted
+or accidentally adopting an Obelisk-written chunk, changes nothing. Adopted
 packages behave like native ones everywhere else: they count toward redundancy,
 show in search and on volumes, and can be verified and restored with the same
 `par2`/`gpg`/`tar` doctrine.
@@ -858,7 +860,7 @@ show in search and on volumes, and can be verified and restored with the same
 
 ## BagIt compatibility
 
-Mnemosyne speaks [BagIt](https://datatracker.ietf.org/doc/html/rfc8493) for
+Obelisk speaks [BagIt](https://datatracker.ietf.org/doc/html/rfc8493) for
 institutional legibility **without adopting BagIt's storage layout** — because the
 doctrine is immovable: *extraction always yields your original tree*. The split is
 deliberate and exact:
@@ -869,10 +871,10 @@ deliberate and exact:
   first member inside the package's `tar`** — so a reader can stream-verify each
   file as it extracts — **and as a sidecar on the media**. A
   `bag-info.txt`-style metadata sidecar rides along too (source organization,
-  bagging date, package name, byte/file counts, Mnemosyne version). These are a
+  bagging date, package name, byte/file counts, Obelisk version). These are a
   **description layer**: the payload is still a plain `tar` that extracts to your
   original folders, no bag tooling required.
-- **The storage format is never a bag.** Mnemosyne does **not** restructure
+- **The storage format is never a bag.** Obelisk does **not** restructure
   packages into a BagIt `data/` tree. The manifest describes the tree; it doesn't
   relocate it. Extraction yields exactly your files (plus that one manifest file at
   the root), forever readable with plain `tar`.
@@ -915,7 +917,7 @@ where a move would put them — travels as small, hash-keyed documents:
 
 ## Terminology
 
-Mnemosyne uses professional archival vocabulary aligned with the **OAIS
+Obelisk uses professional archival vocabulary aligned with the **OAIS
 reference model (ISO 14721)**:
 
 - **Archive** — a body of work you keep together (e.g. *Photography Business*,
@@ -933,7 +935,7 @@ reference model (ISO 14721)**:
 ## Prerequisites
 
 **Three ubiquitous tools do the actual work** — they are the entire restore
-story, so Mnemosyne shells out to them rather than reimplementing them:
+story, so Obelisk shells out to them rather than reimplementing them:
 
 | Tool | Purpose | Windows | Linux | macOS |
 |------|---------|---------|-------|-------|
@@ -979,7 +981,7 @@ reconstructed from its Reed–Solomon parity. But a scratch or a bad patch of dy
 kills a whole *run of neighbouring sectors* at once, damage tied to the disc's
 physical geometry rather than to any one file. That is what the **optional**
 [dvdisaster](https://dvdisaster.jcea.es/) layer covers: set `burn_ecc` to `rs02`
-or `rs03` in Settings and, after each disc *verifies*, Mnemosyne reads it back and
+or `rs03` in Settings and, after each disc *verifies*, Obelisk reads it back and
 writes a `<name>.ecc` error-correction file over the disc geometry — the layer par2
 cannot provide, because par2 protects the payload *file*, not the sectors under it.
 The `.ecc` is computed after the disc is finished, so it rides onto the next disc
@@ -1018,7 +1020,7 @@ and links each unchecked step to the exact spot.
 
 - **Parallel scan** — hashing runs on a worker pool (`min(8, CPU cores)`), so
   cataloging is disk-bound, not single-core.
-- **par2 is usually the slowest stage.** Mnemosyne passes `par2_extra_args`
+- **par2 is usually the slowest stage.** Obelisk passes `par2_extra_args`
   (default `-t0` = all threads) and silently retries without it if your `par2`
   rejects the flag. For a big speedup, point the `tools.par2` override at
   [**par2cmdline-turbo**](https://github.com/animetosho/par2cmdline-turbo) — a
@@ -1076,14 +1078,14 @@ and links each unchecked step to the exact spot.
 
 Some tape operators run their **drive's built-in AES** (LTO hardware encryption,
 managed on Linux with [`stenc`](https://github.com/scsitape/stenc)) *alongside*
-Mnemosyne's application-layer gpg. Mnemosyne **supports awareness of this layer,
+Obelisk's application-layer gpg. Obelisk **supports awareness of this layer,
 not dependence on it** — and the distinction is the whole point:
 
 | | **gpg (application layer)** | **Drive-level AES (hardware layer)** |
 |---|---|---|
 | Where the ciphertext is | the `.tar.gpg` **file** on the medium | the **raw bytes** the drive records |
 | What reads it back | *any* drive + `gpg` + the passphrase | *only* a compatible drive with the **drive key** loaded |
-| In the restore story? | **yes** — QR card, paper key, keystore all carry it | **no** — the drive key lives entirely outside Mnemosyne |
+| In the restore story? | **yes** — QR card, paper key, keystore all carry it | **no** — the drive key lives entirely outside Obelisk |
 | If the key is lost | the package is one of *N* verified copies; other layers stand | the tape is **scrap** — `gpg`, `tar`, and `par2` all fail; par2 can't even see the data to repair it |
 
 gpg is the **portable** layer: the ciphertext is an ordinary file, and multiple
@@ -1091,7 +1093,7 @@ independent implementations (GnuPG, Sequoia) can open it on any machine, forever
 Drive-level AES is a hardware property of one key in one drive family — powerful,
 but a decade-scale single point of failure that no amount of par2 or gpg can undo.
 
-So Mnemosyne treats the hardware layer as **awareness, never dependence**:
+So Obelisk treats the hardware layer as **awareness, never dependence**:
 
 - **stenc is optional and detected** (Linux; on Windows/macOS the drive key is a
   vendor-tool concern). When present with a drive attached, the **Tape Drive**
@@ -1114,7 +1116,7 @@ tar, and gpg is the layer that travels.
 ## FAQ
 
 **Is my data locked into this tool?**
-No — and you can prove it in three commands without Mnemosyne installed. Every
+No — and you can prove it in three commands without Obelisk installed. Every
 medium carries a `RESTORE.txt`:
 ```
 par2 verify  NAME.tar.gpg.par2     # repair if the medium rotted (no key needed)
@@ -1124,7 +1126,7 @@ tar  -xf     NAME.tar              # extract the original files
 That's it. See [docs/RESTORE_RUNBOOK.md](docs/RESTORE_RUNBOOK.md).
 
 **What if this project dies / GitHub vanishes?**
-Nothing changes for your archives. Mnemosyne is a convenience layer over
+Nothing changes for your archives. Obelisk is a convenience layer over
 standardized formats (POSIX tar, OpenPGP/AES-256, Parchive 2.0). The three
 restore tools each have multiple independent open-source implementations, and
 the runbook + Recovery Kit are written for a stranger with none of this
@@ -1143,7 +1145,7 @@ devices**, and why you should print the per-key QR cards and store them
 off-site. Plaintext packages have no such risk.
 
 **How much scratch (staging) space do I need?**
-**Not the size of your archive — just enough for one package.** Mnemosyne builds
+**Not the size of your archive — just enough for one package.** Obelisk builds
 packages **one at a time** and frees each one's staging *before* starting the
 next, so scratch space only ever has to hold a single package's build peak, and
 that same space is reused for every package.
@@ -1159,7 +1161,7 @@ Per-package build peak:
 ~12 TB each. You do **not** need 100 TB (let alone 250 TB) of scratch — you need
 room for **one** package: about **~13 TB** for plaintext (or ~24 TB if encrypted),
 **reused for all ~9 packages**. Staging is just a folder — point it at any drive
-with that much free (Settings), including an external drive; Mnemosyne streams
+with that much free (Settings), including an external drive; Obelisk streams
 from it to the destination. The app shows these exact numbers with a
 green/amber/red verdict after planning, before each build, and on the Home view
 (all from one endpoint, `GET /api/space-advice`).
@@ -1173,8 +1175,8 @@ lived option — which is the point.
 
 ## Build from source
 ```
-go build -o mnemosyne .
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o mnemosyne.exe .
+go build -o obelisk .
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o obelisk.exe .
 ```
 One dependency (QR-code generation); everything else is the Go standard
 library. Requires **Go 1.22+**. See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)
@@ -1196,7 +1198,7 @@ disc" shells out to your command template:
 growisofs -Z /dev/sr0 -R -J -udf -V "{LABEL}" "{SRC}"
 ```
 `{SRC}` = the package's staged folder, `{LABEL}` = the package name. If a
-**burn verify mount** is set, Mnemosyne read-back hashes the burned disc
+**burn verify mount** is set, Obelisk read-back hashes the burned disc
 against the package's `enc_hash` before marking it DONE.
 
 ## API notes (backward compatibility)
@@ -1217,6 +1219,10 @@ Suggested **topics** (Settings → Topics): `archival`, `lto`, `tape`, `ltfs`,
 decades from now with three stock open-source tools."*
 
 ## License
-[MIT](LICENSE) © 2026 The Mnemosyne Authors. The three restore tools and any LTFS
+[MIT](LICENSE) © 2026 The Obelisk Authors. The three restore tools and any LTFS
 driver are separate software under their own licenses; this repo references but
 never bundles them.
+
+---
+
+<sub>*OBELISK — **O**pen **B**ackup **E**ngine for **L**ong-term **I**ntegrity, **S**ecure **K**eeping.*</sub>

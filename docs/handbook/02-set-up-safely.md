@@ -1,14 +1,14 @@
 # Set up safely
 
-This guide gets Mnemosyne ready before you make your first backup. Take your time. None of these steps touch your original photos or files. Mnemosyne only ever reads your files, never changes or deletes them, and never sends anything over the internet.
+This guide gets Obelisk ready before you make your first backup. Take your time. None of these steps touch your original photos or files. Obelisk only ever reads your files, never changes or deletes them, and never sends anything over the internet.
 
-Before you start, make sure Mnemosyne is running and open in your web browser at http://127.0.0.1:7821. On the left you will see tabs: Home, Vault, Protection, Integrity, Packages, Burn, Volumes, Dock, Keys, Jobs, and Settings. At the bottom-left there is a small status "lamp" (a little indicator that tells you if the app is ready).
+Before you start, make sure Obelisk is running and open in your web browser at http://127.0.0.1:7821. On the left you will see tabs: Home, Vault, Protection, Integrity, Packages, Burn, Volumes, Dock, Keys, Jobs, and Settings. At the bottom-left there is a small status "lamp" (a little indicator that tells you if the app is ready).
 
 ---
 
 ## Part 1: Choose a staging folder
 
-A "staging folder" (a big scratch work folder) is a temporary workspace on your computer. When Mnemosyne builds a "package" (one media-sized sealed unit of your files), it does the work in the staging folder first, then writes the finished result to your drive.
+A "staging folder" (a big scratch work folder) is a temporary workspace on your computer. When Obelisk builds a "package" (one media-sized sealed unit of your files), it does the work in the staging folder first, then writes the finished result to your drive.
 
 Two good-to-know facts:
 
@@ -23,7 +23,7 @@ Here is how to set it:
 2. Under **Pipeline**, find the box labeled **"Staging folder (big + fast; the NAS itself is ideal)."** Click the **Browse…** button next to it.
    A folder picker window opens.
 
-3. Pick a folder on a big, fast drive with plenty of free space. If you are not sure, make a new folder named something like `Mnemosyne-Staging` on your main drive and choose that.
+3. Pick a folder on a big, fast drive with plenty of free space. If you are not sure, make a new folder named something like `Obelisk-Staging` on your main drive and choose that.
    The folder's path now appears in the box.
 
 4. Click **Save settings** at the bottom of that section.
@@ -45,9 +45,9 @@ If you do want encryption, read on carefully. There is one rule that protects yo
 
 A "keystore" (a small file that holds the secret passphrases for encrypted packages) is what unlocks your encrypted packages later. If you lose the only keystore, your encrypted data is **gone forever** — no one, including you, can recover it.
 
-To protect you from that, Mnemosyne **refuses to build encrypted packages until you have at least TWO keystores registered**. Two keystores means two separate copies of the secret, so losing one is not a disaster. The app also recommends you keep them on **two different devices** — for example, one on your computer and one on a USB stick you store somewhere safe.
+To protect you from that, Obelisk **refuses to build encrypted packages until you have at least TWO keystores registered**. Two keystores means two separate copies of the secret, so losing one is not a disaster. The app also recommends you keep them on **two different devices** — for example, one on your computer and one on a USB stick you store somewhere safe.
 
-Important: Mnemosyne never stores the passphrase itself in its catalog. It only keeps a "fingerprint" (a short code that can confirm a passphrase is correct but cannot reveal it). So you are the only keeper of the real secret. That is exactly why two copies matter.
+Important: Obelisk never stores the passphrase itself in its catalog. It only keeps a "fingerprint" (a short code that can confirm a passphrase is correct but cannot reveal it). So you are the only keeper of the real secret. That is exactly why two copies matter.
 
 ### Register two keystores
 
@@ -71,7 +71,7 @@ Important: Mnemosyne never stores the passphrase itself in its catalog. It only 
 
 ## Part 3: Print QR key cards and store them safely (optional but wise)
 
-A "QR code" is that square barcode you scan with a phone. Mnemosyne can print a QR card for each key, so you have a paper backup of the secret that unlocks your data.
+A "QR code" is that square barcode you scan with a phone. Obelisk can print a QR card for each key, so you have a paper backup of the secret that unlocks your data.
 
 1. On the **Keys** tab, in the **Key registry** list, find the key you want a card for and click **Print QR card**.
    A printable card opens in a new browser tab.
@@ -97,7 +97,7 @@ You can also export a **Recovery Kit** for safekeeping: on the **Keys** tab, cli
 
 - **Lamp still says "setup needed — see Settings".** Open Settings and recheck the paths you typed. A path pointing at a device that is unplugged (like a USB stick that is not connected) will not be found — plug it in and reload.
 - **The app will not build an encrypted package and mentions keystores.** This is the two-keystore rule doing its job. Register a second keystore in Settings, ideally on a second device.
-- **Browse… does not open a picker.** Make sure Mnemosyne is still running and refresh the page in your browser (press F5).
+- **Browse… does not open a picker.** Make sure Obelisk is still running and refresh the page in your browser (press F5).
 - **Not enough space when building later.** Your staging folder's drive may be too full. Free up space, or choose a staging folder on a drive with more room. Remember it only needs room for your single biggest package.
 - Need a reminder on any screen? Click the small **i** help button on that screen.
 

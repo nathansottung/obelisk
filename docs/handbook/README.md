@@ -1,4 +1,4 @@
-# Mnemosyne — User Handbook
+# Obelisk — User Handbook
 
 A plain-language, task-based guide for a **careful novice** (a photographer or
 family archivist, **not** a developer). If you're comfortable with code, the

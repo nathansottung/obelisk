@@ -30,9 +30,9 @@ const defaultBurnCommand = `xorriso -outdev /dev/sr0 -volid "{LABEL}" -blank as_
 
 // dvdisasterAugmentHint documents the ALTERNATIVE manual flow: augment an ISO with
 // an embedded ECC layer BEFORE burning, so the ECC rides inside the disc itself.
-// This differs from Mnemosyne's automatic path (burn_ecc), which computes an
+// This differs from Obelisk's automatic path (burn_ecc), which computes an
 // external <name>.ecc from the disc AFTER it verifies. Kept as reference for
-// operators who prefer the embedded style; Mnemosyne never runs it automatically.
+// operators who prefer the embedded style; Obelisk never runs it automatically.
 const dvdisasterAugmentHint = `xorriso -as mkisofs -V "{LABEL}" -o {LABEL}.iso "{SRC}"  &&  dvdisaster -i {LABEL}.iso -mRS02 -c   # then burn {LABEL}.iso`
 
 // opticalEccParagraph is appended to RESTORE.txt for optical packages. It states

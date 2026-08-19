@@ -18,6 +18,6 @@ Optional extras worth having: `burn.png` (burn queue disc squares),
 `recoverykit.png` (Settings/Keys → recovery kit warning), `settings.png`
 (Preflight tool checks + LTFS row).
 
-To grab them: run the binary (`mnemosyne -port 7821`), open
+To grab them: run the binary (`obelisk -port 7821`), open
 <http://127.0.0.1:7821>, and screenshot each tab. A throwaway `-data` dir with
 a small sample archive makes for clean, representative shots.

@@ -1,16 +1,16 @@
 # Your first backup
 
-This guide walks you all the way through making your first real backup, one step at a time. It is written for a complete beginner. Nothing here changes or deletes your original files — Mnemosyne only reads them. And it never sends anything over the internet.
+This guide walks you all the way through making your first real backup, one step at a time. It is written for a complete beginner. Nothing here changes or deletes your original files — Obelisk only reads them. And it never sends anything over the internet.
 
 We will do five things:
 
 1. Create an **Archive** (a body of work you keep together, like "Family Photos").
-2. **Scan** a folder into it, so Mnemosyne learns what you have.
+2. **Scan** a folder into it, so Obelisk learns what you have.
 3. **Plan packages** — group your files into media-sized units.
 4. **Build** one package.
 5. **Write** that package to an external hard drive and let the app verify it.
 
-Before you start, open Mnemosyne in your browser at http://127.0.0.1:7821 and check the status **lamp** at the bottom-left reads **"tar · gpg · par2 · keys ready"**. If it says **"setup needed — see Settings"**, do the "Set up safely" guide first.
+Before you start, open Obelisk in your browser at http://127.0.0.1:7821 and check the status **lamp** at the bottom-left reads **"tar · gpg · par2 · keys ready"**. If it says **"setup needed — see Settings"**, do the "Set up safely" guide first.
 
 Have your external hard drive plugged in. A "mounted" drive means it shows up with a drive letter like `E:\` that you can open. Make sure yours is mounted before the writing step.
 
@@ -32,7 +32,7 @@ Each archive row has buttons: **Scan folder…**, **Plan packages…**, **Mirror
 
 ## Step 2: Scan a folder into the Archive
 
-Scanning reads your files and records a "hash" for each one. A "hash" is a short fingerprint of a file's exact contents — if even one byte changes, the fingerprint changes. This lets Mnemosyne later prove your backup is a perfect copy. Scanning **only reads** your files. It never changes them.
+Scanning reads your files and records a "hash" for each one. A "hash" is a short fingerprint of a file's exact contents — if even one byte changes, the fingerprint changes. This lets Obelisk later prove your backup is a perfect copy. Scanning **only reads** your files. It never changes them.
 
 1. On the `Family Photos` row, click **Scan folder…**.
    A dialog opens asking for a **"Folder to catalog (walked recursively; every file SHA-256 hashed)"**. "Walked recursively" just means it looks inside every subfolder too. "SHA-256" is the type of fingerprint it uses.
@@ -55,7 +55,7 @@ Scanning reads your files and records a "hash" for each one. A "hash" is a short
 
 ## Step 3: Plan packages
 
-Now Mnemosyne groups your files into "packages" — media-sized sealed units, each one sized to fit the kind of media you plan to store it on.
+Now Obelisk groups your files into "packages" — media-sized sealed units, each one sized to fit the kind of media you plan to store it on.
 
 1. On the `Family Photos` row, click **Plan packages…**.
    A dialog opens.
@@ -99,7 +99,7 @@ You can watch detailed progress on the **Jobs** tab at any time.
 
 ## Step 5: Write the package to your external drive
 
-Writing copies the built package onto your physical drive. A "Copy" is one package sitting on one "Volume" (a physical thing you can hold, like this external drive). After writing, Mnemosyne **automatically re-reads the drive and checks the fingerprint** to prove the copy is perfect. This "read-back verify" is always on and cannot be turned off — it is what makes a copy trustworthy.
+Writing copies the built package onto your physical drive. A "Copy" is one package sitting on one "Volume" (a physical thing you can hold, like this external drive). After writing, Obelisk **automatically re-reads the drive and checks the fingerprint** to prove the copy is perfect. This "read-back verify" is always on and cannot be turned off — it is what makes a copy trustworthy.
 
 1. Make sure your external drive is plugged in and mounted (showing a drive letter like `E:\`).
 
@@ -122,7 +122,7 @@ Writing copies the built package onto your physical drive. A "Copy" is one packa
    You should see live **MB/s** (megabytes per second — how fast it is writing) and an **ETA** (estimated time left).
 
 7. Wait for the lifecycle rail to reach **VERIFIED**.
-   When it says **VERIFIED**, the copy is trusted — Mnemosyne confirmed it is a perfect match.
+   When it says **VERIFIED**, the copy is trusted — Obelisk confirmed it is a perfect match.
 
 ![The Jobs tab showing MB/s and ETA during a write](../img/03-write-verify.png)
 
@@ -130,7 +130,7 @@ Writing copies the built package onto your physical drive. A "Copy" is one packa
 
 ## Step 6: See your backup and read the RESTORE.txt
 
-This last step is the reassuring part. Let's open the drive and look at what Mnemosyne made.
+This last step is the reassuring part. Let's open the drive and look at what Obelisk made.
 
 1. Open your external drive in your computer's file manager (File Explorer on Windows, Finder on Mac).
    You should see a folder for your package.
@@ -143,7 +143,7 @@ This last step is the reassuring part. Let's open the drive and look at what Mne
    - `RESTORE.txt` — plain-English instructions.
 
 3. Open **RESTORE.txt** in any text editor and read it together.
-   It explains, in plain English, how to get your files back using **three free tools** (par2, gpg, and tar) — **even if Mnemosyne no longer exists**.
+   It explains, in plain English, how to get your files back using **three free tools** (par2, gpg, and tar) — **even if Obelisk no longer exists**.
 
 ![The package folder open, showing RESTORE.txt and the other files](../img/03-restore-txt.png)
 

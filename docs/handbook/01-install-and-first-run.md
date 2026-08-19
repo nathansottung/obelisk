@@ -1,6 +1,6 @@
 # Install it and take the first run
 
-Mnemosyne is a **single program** — one file. There is nothing to install in the
+Obelisk is a **single program** — one file. There is nothing to install in the
 usual sense, no setup wizard, and no account to create. You download it, run it,
 and it opens a page in your web browser.
 
@@ -10,12 +10,12 @@ This guide gets you from "nothing" to "the app is open and ready."
 
 1. Go to the project's **Releases** page (the download page on its code site).
 2. Download the file that matches your computer:
-   - **Windows** — the file ending in `.exe` (for example `mnemosyne.exe`).
+   - **Windows** — the file ending in `.exe` (for example `obelisk.exe`).
    - **Mac** — the file with `macos` in its name.
    - **Linux** — the file with `linux` in its name.
 
 You should now have one downloaded file. Put it somewhere you can find it, like a
-new folder called `Mnemosyne` in your Documents.
+new folder called `Obelisk` in your Documents.
 
 ![The Releases download page with the three files](../img/01-download.png)
 
@@ -24,10 +24,10 @@ new folder called `Mnemosyne` in your Documents.
 Running it starts a small **local web server** — a program on your own computer
 that serves a web page only to you. Nothing is exposed to the internet.
 
-- **Windows:** double-click `mnemosyne.exe`. If Windows shows a blue "Windows
+- **Windows:** double-click `obelisk.exe`. If Windows shows a blue "Windows
   protected your PC" box (because the file is new and unsigned), click **More
   info → Run anyway**. You should now see a small black window with a line like:
-  `Mnemosyne <version> — http://127.0.0.1:7821`. Leave that window open — it *is* the
+  `Obelisk <version> — http://127.0.0.1:7821`. Leave that window open — it *is* the
   app. Closing it stops the app.
 - **Mac / Linux:** it is usually easiest to run it from the **Terminal** (the text
   window where you type commands — on Mac, open the app called "Terminal"). Type
@@ -43,7 +43,7 @@ That web address — `http://127.0.0.1:7821` — always means "this same compute
 1. Open your web browser (Chrome, Edge, Firefox, or Safari).
 2. In the address bar, type `http://127.0.0.1:7821` and press Enter.
 
-You should now see the Mnemosyne page: a column of tabs on the left (Home, Vault,
+You should now see the Obelisk page: a column of tabs on the left (Home, Vault,
 Protection, and more) and, because nothing is set up yet, a **"Getting started"**
 checklist in the middle.
 
@@ -51,7 +51,7 @@ checklist in the middle.
 
 ## 4. Install the three helper tools
 
-Mnemosyne leans on three small, free, standard tools to do its work. They are the
+Obelisk leans on three small, free, standard tools to do its work. They are the
 same tools that make your backups restorable by hand later, so they matter:
 
 - **tar** — bundles many files into one file.

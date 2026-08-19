@@ -1,6 +1,6 @@
 # Architecture
 
-Mnemosyne is deliberately small and boring: one Go binary, the standard
+Obelisk is deliberately small and boring: one Go binary, the standard
 library plus a single dependency (QR generation), and a **flat-file catalog**
 you can read with a text editor in 30 years. There is no database service, no
 CGO, no background daemon. The whole thing is ~4k lines of Go plus one HTML
@@ -158,7 +158,7 @@ Two hashes, one read pass, strict roles — and one rule that never bends:
 custody chain and appears in every manifest, sidecar, BagIt file, per-line key
 sheet, and Recovery-Kit inventory — because it is the hash a stranger in 2050 can
 recompute *anywhere* (`sha256sum`, `certutil -hashfile`, `Get-FileHash`) with no
-Mnemosyne and no exotic tooling. Coupling the archive's legibility to a younger,
+Obelisk and no exotic tooling. Coupling the archive's legibility to a younger,
 less-ubiquitous hash would be a bet against the future; we don't make it.
 
 **BLAKE3 lives purely in the hot loops** — scans, drift/scrub comparisons, and
@@ -261,7 +261,7 @@ Both are now **proven at build time**, before a package can ever reach media:
 
 ## Adoption — entering the chain partway
 
-`adopt.go` catalogs media that Mnemosyne did **not** build, so it joins the
+`adopt.go` catalogs media that Obelisk did **not** build, so it joins the
 custody chain at whatever link the medium can prove — no more, no less:
 
 ```
@@ -283,7 +283,7 @@ custody chain at whatever link the medium can prove — no more, no less:
   links it cannot prove.
 - **Idempotent by payload hash.** `AdoptMedia` indexes every existing chunk's
   `EncHash`; a match is reported as skipped-duplicate. This makes adoption safe to
-  re-run and makes re-discovering a Mnemosyne-written chunk a no-op.
+  re-run and makes re-discovering an Obelisk-written chunk a no-op.
 - **Everything downstream is unchanged.** An adopted chunk is an ordinary
   `Chunk` with a `Copy`, so volumes, search, redundancy accounting, verify, and
   restore treat it identically. Drift skips adopted file listings that have no
@@ -294,7 +294,7 @@ custody chain at whatever link the medium can prove — no more, no less:
 Long operations run as in-memory **Jobs** (they vanish on restart — the catalog
 is the truth). So the only trace of an operation interrupted by a crash or power
 loss is a **transient status persisted on a catalog object**. On `OpenStore`,
-Mnemosyne heals every transient state back to its last stable value, mirroring
+Obelisk heals every transient state back to its last stable value, mirroring
 the same idea across subsystems:
 
 | Object | Transient (mid-op) | Reset on open → | Note |
@@ -330,8 +330,8 @@ burner, or the API. The `Store` method surface *is* the seam.
 ### Measured: the catalog at 1M files (the scalability pass)
 
 `catalog_scale_test.go` is a synthetic benchmark — skipped by default; run with
-`MNEMO_SCALE=1 go test -run TestCatalogScale -v -timeout 20m` (override sizes with
-`MNEMO_FILES` / `MNEMO_MIRROR`). It builds **1,000,000 file records + 500,000
+`OBELISK_SCALE=1 go test -run TestCatalogScale -v -timeout 20m` (override sizes with
+`OBELISK_FILES` / `OBELISK_MIRROR`). It builds **1,000,000 file records + 500,000
 mirror-copy records** (~315 MB catalog) and measures load, save, insert
 throughput, memory, and search. Numbers on a Windows dev box (SSD):
 
@@ -501,11 +501,11 @@ against one or more Archives and remembers every drive it processed.
 - **Read-only, both ways — the sidecar asymmetry.** The NAS archive folders are
   only ever *hashed*. And unlike everywhere else, the dock writes **nothing onto
   the drive**: adopted media are treated as read-only originals, so a drive's
-  inventory lives in the **catalog snapshot alone** — there is no `MNEMOSYNE_DOCK/`
+  inventory lives in the **catalog snapshot alone** — there is no `OBELISK_DOCK/`
   sidecar. This is deliberately *asymmetric* with **tool-written** media (packages
-  and sealed volumes), which still carry their `manifest.json` / `MNEMOSYNE_SEAL/`
+  and sealed volumes), which still carry their `manifest.json` / `OBELISK_SEAL/`
   sidecar at write/seal time so the medium self-documents. The rule of thumb:
-  *media Mnemosyne wrote get a sidecar; media Mnemosyne merely adopted do not —
+  *median Obelisk wrote get a sidecar; median Obelisk merely adopted do not —
   we don't modify someone's existing drive to describe it.*
 - **Coverage & report:** `archiveCoverage` computes, across all chunks with a
   verified copy, how many of the selected archives' files now have ≥1 copy.
@@ -687,7 +687,7 @@ Two tiny, pure-Go, CGO-free libraries — each earns its place against the
 
 Everything else — tar, gpg, par2 — is an **external tool** shelled out to, on
 purpose (see the custody chain and Recovery Kit): the restore story must not
-depend on Mnemosyne's Go code existing.
+depend on Obelisk's Go code existing.
 
 ## Request/job lifecycle
 
@@ -705,3 +705,31 @@ browser <--poll GET /api/jobs-- Job status (RUNNING/COMPLETED/FAILED)
 Read-only calls (config, search, volume/drift reads) return synchronously;
 anything long (scan, build, write, span-write, verify campaign, reconcile,
 recovery kit) is a Job so the UI stays responsive and survives navigation.
+
+## Name compatibility (Mnemosyne → Obelisk)
+
+The project was renamed from **Mnemosyne** to **Obelisk**. The core promise is that
+Obelisk reads every byte Mnemosyne ever wrote, forever. New writes use the Obelisk
+name; the pre-rename markers below are **accepted on read permanently**. They are
+load-bearing compatibility, not dead code — **do not "clean them up."** Each has an
+integration test in `rename_compat_test.go` that pins the behavior.
+
+| What | New (written now) | Legacy (accepted on read forever) | Where |
+|---|---|---|---|
+| Data directory | `~/.obelisk` | `~/.mnemo` (silent read fallback; one-time verified **copy** offered, never a move) | `defaultDataDir`, `migrate.go` |
+| Keystore marker | `"obelisk_keystore": 1` | `"mnemosyne_keystore": 1` | `keystoreFile` (pipeline.go) |
+| Package manifest marker | `"obelisk_package": 1` | `"mnemosyne_chunk": 1` (never validated on read — extra keys ignored) | `writeManifest` (pipeline.go) |
+| Media sidecar folders | `OBELISK_DOCK/`, `OBELISK_SEAL/` | `MNEMOSYNE_DOCK/`, `MNEMOSYNE_SEAL/` (regenerated under the new name only when the tool next WRITES that medium; adopted/read-only media keep theirs, valid forever) | `dockSidecarDir(Legacy)`, `sealSidecarDir(Legacy)` |
+| App-backup format | `"obelisk-appbackup"` | `"mnemosyne-appbackup"` | `verifyAppBackup` (appbackup.go) |
+| Structure export format | `"obelisk-structure"` | `"mnemosyne-structure"` | `importStructure` (exports.go) |
+| Plan export format | `"obelisk-plan"` | `"mnemosyne-plan"` | `importPlan` (exports.go) |
+| Export version field | `"mnemosyne_version"` JSON tag kept as-is (a persisted contract field; renaming it would break round-trips) | same | `StructureExport` / `PlanExport` |
+| UI CSRF handshake header | `X-Requested-By: obelisk-ui` | `X-Requested-By: mnemosyne-ui` (so a stale cached UI can't lock itself out) | `apiGuard` (main.go) |
+| Auth-token env var | `OBELISK_AUTH_TOKEN` | `MNEMO_AUTH_TOKEN` | `main()` |
+
+Historical documents are never rewritten and never required to change: already-written
+`RESTORE.txt` files, escrow bundles, and typable key sheets carry whatever name was
+current when they were made, and remain valid forever. Legacy plaintext `*.tar.gpg`
+payloads keep verifying and restoring through the existing fallback. Persisted
+**catalog** JSON field names were **not** renamed at all; `schema_version` and the
+migration registry are untouched by the rename.

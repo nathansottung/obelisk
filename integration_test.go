@@ -475,7 +475,7 @@ func TestIntegration_SourceSafetyRefusals(t *testing.T) {
 	c := s.scanPlanBuild(src, 1, false, 5)
 	pid := int(c["id"].(float64))
 	insideSrc := filepath.Join(src, "danger", "dest")
-	const msg = "Mnemosyne never writes into source data"
+	const msg = "Obelisk never writes into source data"
 
 	refused := func(label string, err error) {
 		t.Helper()

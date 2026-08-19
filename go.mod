@@ -1,4 +1,4 @@
-module github.com/nathansottung/mnemosyne
+module github.com/nathansottung/obelisk
 
 go 1.22.2
 

@@ -1,9 +1,9 @@
-# Mnemosyne Restore Runbook
+# Obelisk Restore Runbook
 
-**Audience: anyone, decades from now, with no Mnemosyne installed.**
+**Audience: anyone, decades from now, with no Obelisk installed.**
 
 Every package on every medium carries this same information in its own
-`RESTORE.txt` and `*.manifest.json`. Mnemosyne is a convenience, never a
+`RESTORE.txt` and `*.manifest.json`. Obelisk is a convenience, never a
 requirement — restoration depends on exactly three ubiquitous,
 open-source, standardized programs:
 

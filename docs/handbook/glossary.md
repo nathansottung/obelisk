@@ -45,14 +45,14 @@ until you deliberately **unseal** it (which is logged). Found on a volume's deta
 page.
 
 ### gpg
-A free, standard tool that encrypts and decrypts files. Mnemosyne uses it only if
+A free, standard tool that encrypts and decrypts files. Obelisk uses it only if
 you choose encryption. It is one of the three tools that make your backups
 restorable by hand.
 
 ### Hash
 A short **fingerprint of a file's exact contents**. If even one byte of the file
 changes, the fingerprint changes completely. This is how the app can later tell
-whether a stored file is still perfect or has quietly gone bad. Mnemosyne uses a
+whether a stored file is still perfect or has quietly gone bad. Obelisk uses a
 kind called SHA-256.
 
 ### Integrity preset
@@ -74,7 +74,7 @@ tape drive and an **LTFS** driver.
 
 ### LTFS
 A free driver that makes an LTO tape show up like an ordinary drive letter you can
-copy files to. Mnemosyne does not include it; you install it separately. See
+copy files to. Obelisk does not include it; you install it separately. See
 [the tape guide](05-tape.md).
 
 ### Manifest

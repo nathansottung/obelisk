@@ -4,7 +4,7 @@ package main
 // "where does this tool put things, and what does it promise never to touch?" Nothing
 // here changes behavior; it only reports paths and invariants that already hold:
 //
-//   - everything Mnemosyne WRITES (catalog + daily backups, config, keystores, staging,
+//   - everything Obelisk WRITES (catalog + daily backups, config, keystores, staging,
 //     the destinations you pick, the small inventory/seal sidecars it puts ONLY on media
 //     it writes itself, and the reversible "_deleted" quarantine folders); and
 //   - everything it NEVER writes to (your source folders, drives you adopt), with the one

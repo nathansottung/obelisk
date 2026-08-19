@@ -1,8 +1,8 @@
 # The 3-2-1 setup (make it bulletproof)
 
-One backup is good. But a single copy on a single drive can still be lost — drives die, houses flood, things get stolen. The "3-2-1 rule" is the trusted way archivists and photographers make backups truly safe. This guide explains it in plain language and shows you how to reach it in Mnemosyne.
+One backup is good. But a single copy on a single drive can still be lost — drives die, houses flood, things get stolen. The "3-2-1 rule" is the trusted way archivists and photographers make backups truly safe. This guide explains it in plain language and shows you how to reach it in Obelisk.
 
-As always: Mnemosyne only reads your originals, never changes or deletes them, and never sends anything over the internet.
+As always: Obelisk only reads your originals, never changes or deletes them, and never sends anything over the internet.
 
 Before you start, you should already have done "Your first backup" — that is, you have an Archive that is scanned, and at least one package written and **VERIFIED** on one drive.
 
@@ -21,7 +21,7 @@ Before you start, you should already have done "Your first backup" — that is, 
 - **1 copy kept offsite.**
   "Offsite" means physically somewhere else — a relative's house, a safe deposit box, an office. Why: a fire, flood, or burglary at your home could destroy every copy in the building at once. A copy stored elsewhere survives that.
 
-Mnemosyne has a built-in profile for exactly this, called **3-2-1 Standard**. When you assign it to an archive, the app tracks all three parts for you and tells you clearly when you have met the goal.
+Obelisk has a built-in profile for exactly this, called **3-2-1 Standard**. When you assign it to an archive, the app tracks all three parts for you and tells you clearly when you have met the goal.
 
 Important promise: **only a fully verified copy counts** toward the goal. A half-written or unverified copy will not fool the app into saying you are safe.
 

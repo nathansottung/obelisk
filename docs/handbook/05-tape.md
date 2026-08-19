@@ -1,11 +1,11 @@
 # Backing up to LTO tape
 
-This guide shows you how to back up your work onto LTO tape. Take it slow. You cannot hurt your originals — Mnemosyne only ever reads your source folders. It never changes, moves, or deletes them, and it never sends anything over the internet.
+This guide shows you how to back up your work onto LTO tape. Take it slow. You cannot hurt your originals — Obelisk only ever reads your source folders. It never changes, moves, or deletes them, and it never sends anything over the internet.
 
 Some words you'll see:
 
 - **LTO** = a kind of magnetic tape cartridge made for long-term backup. One cartridge holds a lot and lasts for decades.
-- **Package** = one media-sized sealed unit that Mnemosyne makes. Inside it are your files (bundled into one big file), extra "recovery" data to repair damage, a list of what's inside, and a plain-text restore guide.
+- **Package** = one media-sized sealed unit that Obelisk makes. Inside it are your files (bundled into one big file), extra "recovery" data to repair damage, a list of what's inside, and a plain-text restore guide.
 - **Mount / mounted** = when a drive or tape shows up on your computer as a drive letter (like `E:\`) or a folder you can open.
 - **Hash** = a short fingerprint of a file's exact contents. Change one single byte and the fingerprint changes. This is how the app checks that a file is still perfect.
 - **Verify** = the app re-reads what it wrote and re-checks the fingerprint, to prove the copy is good.
@@ -32,9 +32,9 @@ The catch: tape needs a special tape drive, and those are expensive. One LTO-8 c
 
 ## Step 1: Install an LTFS driver
 
-Before Mnemosyne can write to tape, your computer needs to see the tape as a normal drive letter you can drop files onto. That is the job of an **LTFS driver** (LTFS = a free piece of software that makes an LTO tape act like an ordinary drive, so `E:\` might become your tape).
+Before Obelisk can write to tape, your computer needs to see the tape as a normal drive letter you can drop files onto. That is the job of an **LTFS driver** (LTFS = a free piece of software that makes an LTO tape act like an ordinary drive, so `E:\` might become your tape).
 
-**Mnemosyne does NOT include an LTFS driver.** You install one yourself, separately, one time. This is normal and expected.
+**Obelisk does NOT include an LTFS driver.** You install one yourself, separately, one time. This is normal and expected.
 
 1. Pick one LTFS driver and install it. Common choices are IBM Storage Archive (also called Spectrum Archive Single Drive Edition), HPE StoreOpen, and the open-source LTFS project. See the README's LTFS links for where to download these.
 2. Follow that driver's own installer. It is separate software, so it has its own steps.
@@ -42,9 +42,9 @@ Before Mnemosyne can write to tape, your computer needs to see the tape as a nor
 
 You should now see the tape appear on your computer as a drive letter, the same way a USB stick does.
 
-## Step 2: Confirm Mnemosyne sees the tape
+## Step 2: Confirm Obelisk sees the tape
 
-1. In Mnemosyne, open the **Settings** tab on the left.
+1. In Obelisk, open the **Settings** tab on the left.
 2. Look for the line that reports whether an LTFS tape is detected.
 
 ![Settings showing a detected LTFS tape](../img/05-tape-settings.png)
@@ -87,7 +87,7 @@ You should now see the job finish, then automatically verify (re-read and re-che
 
 ## Step 5: Spanning a big package across several tapes
 
-Sometimes one Package is bigger than one tape. Mnemosyne handles this by **spanning** — splitting the package across several tapes. You do them one at a time in a simple rhythm. Each tape is checked on its own, so you are never trusting the whole set to a single unchecked cartridge.
+Sometimes one Package is bigger than one tape. Obelisk handles this by **spanning** — splitting the package across several tapes. You do them one at a time in a simple rhythm. Each tape is checked on its own, so you are never trusting the whole set to a single unchecked cartridge.
 
 A spanned package shows a **Write next segment →** button. Here is the rhythm:
 

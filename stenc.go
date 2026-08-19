@@ -3,11 +3,11 @@ package main
 // stenc.go — drive-level (hardware) tape AES, handled with appropriate fear.
 //
 // Some operators enable an LTO drive's built-in AES encryption with `stenc`
-// (SCSI SPIN/SPOUT key management). Mnemosyne neither sets nor manages it — but it
+// (SCSI SPIN/SPOUT key management). Obelisk neither sets nor manages it — but it
 // MUST be aware of it, because a drive-encrypted tape is a different, far more
-// dangerous animal than a Mnemosyne-encrypted package:
+// dangerous animal than an Obelisk-encrypted package:
 //
-//   - Mnemosyne encryption (gpg) is IN the restore story: the ciphertext is a
+//   - Obelisk encryption (gpg) is IN the restore story: the ciphertext is a
 //     `.tar.gpg` file, and anyone with the passphrase and `gpg` reads it. The QR
 //     card, the paper key sheet, and the keystore all carry that passphrase.
 //
@@ -23,7 +23,7 @@ package main
 // tape is unrecoverable.
 //
 // stenc itself is an OPTIONAL, detected tool (Linux only; on Windows/macOS the
-// drive key is managed by vendor tools). When present it lets Mnemosyne READ the
+// drive key is managed by vendor tools). When present it lets Obelisk READ the
 // drive's current encryption status (SPIN — read-only) for the Tape Drive panel,
 // and — behind an explicit warning — SET/CLEAR the drive key (SPOUT). Neither is
 // on the restore path; gpg remains the portable layer, and the drive key is never
@@ -43,7 +43,7 @@ import (
 const driveEncWarning = "DRIVE-LEVEL AES (e.g. stenc/LTO hardware encryption) — this medium's bytes are " +
 	"hardware ciphertext that ONLY a compatible drive holding the drive key can read. It is OUTSIDE the " +
 	"par2→gpg→tar restore story: gpg cannot help, par2 cannot repair what it cannot read. If the drive key " +
-	"is lost, this medium is UNRECOVERABLE by any tool. Preserve the drive key separately from Mnemosyne's keystores."
+	"is lost, this medium is UNRECOVERABLE by any tool. Preserve the drive key separately from Obelisk's keystores."
 
 // driveEncShort is the compact inventory-cell flag.
 const driveEncShort = "DRIVE-ENCRYPTED (stenc/LTO hardware; drive key required — outside gpg)"
@@ -65,11 +65,11 @@ func anyDriveEncrypted(volm map[int]*Volume) bool {
 func stencInstallHint() string {
 	switch runtime.GOOS {
 	case "windows":
-		return "stenc is not available on Windows — drive-level tape encryption is managed via your drive vendor's tools (e.g. IBM/HPE key managers). Mnemosyne's gpg layer is the portable one and remains in force regardless."
+		return "stenc is not available on Windows — drive-level tape encryption is managed via your drive vendor's tools (e.g. IBM/HPE key managers). Obelisk's gpg layer is the portable one and remains in force regardless."
 	case "linux":
-		return "stenc (SCSI tape encryption manager) not found — drive-level AES status is hidden. Install it: `apt install stenc` (Debian/Ubuntu) or build from github.com/scsitape/stenc. It manages the DRIVE key, which is OUTSIDE Mnemosyne's par2→gpg→tar restore story; most users should leave it off."
+		return "stenc (SCSI tape encryption manager) not found — drive-level AES status is hidden. Install it: `apt install stenc` (Debian/Ubuntu) or build from github.com/scsitape/stenc. It manages the DRIVE key, which is OUTSIDE Obelisk's par2→gpg→tar restore story; most users should leave it off."
 	default:
-		return "stenc (drive-level tape AES) is a Linux tool — on this platform, drive-level encryption is managed via vendor tools. Mnemosyne's gpg layer is the portable one and remains in force regardless."
+		return "stenc (drive-level tape AES) is a Linux tool — on this platform, drive-level encryption is managed via vendor tools. Obelisk's gpg layer is the portable one and remains in force regardless."
 	}
 }
 
@@ -239,7 +239,7 @@ func (a *App) DriveEncryptionStatus(deviceOverride string) (*DriveEncStatus, err
 // SetDriveKey turns the drive's hardware AES ON with the key read from keyFile
 // (SPOUT — a control command, never tape movement). This is the explicit, opt-in
 // advanced action; callers MUST have shown the operator the warning first. The key
-// itself is never logged, and Mnemosyne never stores it — where the key lives is
+// itself is never logged, and Obelisk never stores it — where the key lives is
 // the operator's responsibility (recorded as the volume's DriveEncNote).
 func (a *App) SetDriveKey(deviceOverride, keyFile string, algorithmIndex int) error {
 	bin, err := a.stencBin()
@@ -323,7 +323,7 @@ func (a *App) noteTapeDriveEncryption(volumeID int) {
 	}
 	v.DriveEncrypted = true
 	if strings.TrimSpace(v.DriveEncNote) == "" {
-		v.DriveEncNote = "detected active at write time via stenc on " + st.Device + " — RECORD where the drive key lives (it is outside Mnemosyne)"
+		v.DriveEncNote = "detected active at write time via stenc on " + st.Device + " — RECORD where the drive key lives (it is outside Obelisk)"
 	}
 	a.Store.UpdateVolume(v)
 	a.Store.Log("volume", v.Label+": auto-flagged DRIVE-ENCRYPTED — stenc reported the drive encrypting during a write. The drive key is OUTSIDE the gpg restore story; preserve it separately or this tape is unrecoverable.")

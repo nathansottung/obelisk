@@ -1,7 +1,7 @@
 package main
 
 // tools.go — the External Tools catalog the Settings panel renders: every optional
-// helper Mnemosyne can use, each with a plain "what it adds" line, a live detected
+// helper Obelisk can use, each with a plain "what it adds" line, a live detected
 // status, the config key a manually-browsed binary path saves into, and a direct
 // link to the official free download page for the user's OS. Required tools (tar,
 // gpg, par2 — the whole restore story) are marked so the UI can separate them from

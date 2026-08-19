@@ -8,7 +8,7 @@ package main
 // surest input device is still a keyboard and a pair of eyes. So beside every QR
 // we print the passphrase itself, split into short groups, each LINE carrying a
 // CRC-16 check value over that line's characters. A curator retypes the sheet;
-// Mnemosyne checks each line's CRC and catches the one transposed character before
+// Obelisk checks each line's CRC and catches the one transposed character before
 // it silently corrupts the key. The tool-free FINAL proof is the whole-passphrase
 // fingerprint (SHA-256), the same one printed on the key card — retype the lot,
 // hash it with `sha256sum`, and if it equals the fingerprint you typed it right.
@@ -105,7 +105,7 @@ func keyLines(pass string) []keyLine {
 // the key metadata; pass is the secret (identical to the QR payload's tail).
 func keySheet(ref, note, fingerprint, pass string) string {
 	var b strings.Builder
-	b.WriteString("MNEMOSYNE KEY SHEET — TYPABLE BACKUP OF A PASSPHRASE\n")
+	b.WriteString("OBELISK KEY SHEET — TYPABLE BACKUP OF A PASSPHRASE\n")
 	b.WriteString("===================================================\n\n")
 	b.WriteString("key_ref:      " + ref + "\n")
 	if note != "" {
@@ -119,7 +119,7 @@ func keySheet(ref, note, fingerprint, pass string) string {
 	b.WriteString("  • Retype every GROUP left-to-right, top-to-bottom, with NO spaces. That\n")
 	b.WriteString("    exact string is the passphrase.\n")
 	b.WriteString("  • The [XXXX] code after each line is that line's CRC-16 (CCITT) check —\n")
-	b.WriteString("    Mnemosyne -> Keys -> \"Enter key from sheet\" checks every line and pinpoints\n")
+	b.WriteString("    Obelisk -> Keys -> \"Enter key from sheet\" checks every line and pinpoints\n")
 	b.WriteString("    the exact line to fix if a single character is wrong.\n")
 	b.WriteString("  • Tool-free FINAL proof: the SHA-256 of the whole passphrase equals the\n")
 	b.WriteString("    fingerprint above. Retype it all, then check by hand with:\n")
@@ -192,7 +192,7 @@ func parseKeySheet(text string) (pass string, res KeySheetResult) {
 func keyPageHTML(ref, note, fingerprint, pass, qrDataURI string) string {
 	var b strings.Builder
 	b.WriteString(`<section class="keypage">`)
-	b.WriteString(`<h1>Mnemosyne key — <span class="mono">` + html.EscapeString(ref) + `</span></h1>`)
+	b.WriteString(`<h1>Obelisk key — <span class="mono">` + html.EscapeString(ref) + `</span></h1>`)
 	b.WriteString(`<p class="standing">Store this page as securely as the keystores — <strong>this page IS the key.</strong> The QR and the characters below are the <em>same secret</em>; either one decrypts every package sealed with <span class="mono">` + html.EscapeString(ref) + `</span>.</p>`)
 	b.WriteString(`<div class="top">`)
 	if qrDataURI != "" {
@@ -223,7 +223,7 @@ func keyPageHTML(ref, note, fingerprint, pass, qrDataURI string) string {
 func keyPagesDocument(sections string) string {
 	return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<title>Mnemosyne key pages — retypable backups</title>
+<title>Obelisk key pages — retypable backups</title>
 <style>
   :root{ --ink:#111; --line:#bbb; --muted:#555; }
   body{ font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; color:var(--ink); margin:0; padding:24px; }
@@ -249,7 +249,7 @@ func keyPagesDocument(sections string) string {
   }
 </style></head><body>
 <div class="intro">
-  <h1>Mnemosyne key pages</h1>
+  <h1>Obelisk key pages</h1>
   <p>One page per key. Each page carries the passphrase <strong>twice as the same secret</strong>: a QR code (scan it) and the typable characters below it (retype them if no scanner survives). <strong>Print this, then store it as securely as your keystores — these pages ARE the keys.</strong></p>
   <p class="howto">These are symmetric AES-256 passphrases, not GPG keypairs, so the <code>paperkey</code> tool does not apply — the printable backup here is the passphrase itself, checksummed for safe retyping.</p>
 </div>

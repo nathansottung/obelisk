@@ -44,9 +44,9 @@ PY
 Cross-compile the release targets (all pure Go, `CGO_ENABLED=0`):
 
 ```bash
-GOOS=windows GOARCH=amd64 go build -o mnemosyne.exe .
-GOOS=linux   GOARCH=amd64 go build -o mnemosyne-linux-amd64 .
-GOOS=darwin  GOARCH=arm64 go build -o mnemosyne-macos-arm64 .
+GOOS=windows GOARCH=amd64 go build -o obelisk.exe .
+GOOS=linux   GOARCH=amd64 go build -o obelisk-linux-amd64 .
+GOOS=darwin  GOARCH=arm64 go build -o obelisk-macos-arm64 .
 ```
 
 **Every PR must build, vet, and gofmt cleanly on all three OSes.** Platform
@@ -324,7 +324,7 @@ to the source.** For encryption/spanning/privacy changes, also exercise those
 paths (register two keystores; use a small `target_gb` to force ≥3 segments;
 toggle `private_media` and confirm no plaintext `manifest.json` on the medium).
 
-You can also verify the doctrine holds *without Mnemosyne* — that's the real
+You can also verify the doctrine holds *without Obelisk* — that's the real
 test: `par2 verify` → `gpg -d` → `tar -xf` by hand on the written folder, per
 [`RESTORE_RUNBOOK.md`](RESTORE_RUNBOOK.md).
 

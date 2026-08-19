@@ -2,7 +2,7 @@ package main
 
 // space.go — the single source of truth for "how much scratch space does this
 // need?" The whole point is to kill the common misconception that you need free
-// space equal to your entire archive. You don't: Mnemosyne builds ONE package at
+// space equal to your entire archive. You don't: Obelisk builds ONE package at
 // a time and frees its staging before the next, so scratch only ever has to hold
 // one package's build peak. All the math lives here so the UI never duplicates it
 // (it just renders the verdict + numbers this returns via GET /api/space-advice).

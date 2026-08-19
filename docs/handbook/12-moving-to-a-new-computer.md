@@ -1,6 +1,6 @@
 # Moving to a new computer
 
-Your files live on your drives, tapes, and discs — but everything Mnemosyne *knows*
+Your files live on your drives, tapes, and discs — but everything Obelisk *knows*
 about them (every hash, every verification, which copy sits on which volume, your
 whole history) lives in its records on this computer. When you move to a new machine
 or reinstall your operating system, you want that knowledge to come along, exactly as
@@ -14,17 +14,17 @@ Some words you'll see:
 - **App backup** = one file holding everything the app knows — the catalog, your
   settings, and your job history. It is *not* your photos or documents; it's the
   record *about* them.
-- **Catalog** = Mnemosyne's own record of what your backups contain.
+- **Catalog** = Obelisk's own record of what your backups contain.
 - **Keystore** = the file holding the passphrases that unlock your *encrypted*
   backups. These are secrets, kept separate on purpose.
-- **Serial** = a drive's built-in ID number. Mnemosyne recognizes a drive by its
+- **Serial** = a drive's built-in ID number. Obelisk recognizes a drive by its
   serial, so it knows a drive it has seen before.
 
 ---
 
 ## The three lifeboats (which one is this?)
 
-Mnemosyne can hand you three different "lifeboats," and it's worth knowing them apart:
+Obelisk can hand you three different "lifeboats," and it's worth knowing them apart:
 
 - **App backup** — *for moving.* One file that carries the whole brain to a new
   computer. This guide. It assumes your media still exist and you just need the app to
@@ -47,7 +47,7 @@ On the machine you're leaving, open **Settings → Back up this app's records**,
 the **Back up this app's records** link at the bottom of Home. Choose a destination
 folder — a USB stick or a NAS folder is ideal — and click **Create backup**.
 
-The app writes **one `.tar` file** (named like `mnemosyne-appbackup-20260714-120000.tar`)
+The app writes **one `.tar` file** (named like `obelisk-appbackup-20260714-120000.tar`)
 plus a small `.sha256` checksum file beside it. The `.tar` is a plain, uncompressed
 archive you could open with any standard `tar` tool; the `.sha256` lets a restore
 prove the file arrived intact.
@@ -57,7 +57,7 @@ they're secrets you may keep on separate devices on purpose. Copy your keystore 
 to the new machine yourself, **or** tick *"include them"* in the backup dialog (behind
 a confirmation) to bundle them in. Only include them in a backup you'll keep private.
 
-## Step 2 — Install Mnemosyne on the new computer
+## Step 2 — Install Obelisk on the new computer
 
 Install the app on the new machine and start it once (see
 [Install it and take the first run](01-install-and-first-run.md)). You don't need to
@@ -90,7 +90,7 @@ them. Do that now if you use encrypted backups.
 
 ## Step 5 — Plug in a drive
 
-Plug in any of your backup drives. Mnemosyne recognizes each one by its **serial**, so
+Plug in any of your backup drives. Obelisk recognizes each one by its **serial**, so
 a drive it knew on the old computer is known again here — no re-adopting, no
 re-scanning. The same is true the next time you insert each tape or drive.
 
@@ -108,7 +108,7 @@ re-scanning. The same is true the next time you insert each tape or drive.
 ## If something went wrong
 
 - **"This backup was created by a newer version."** Your new machine is running an
-  older app than the one that made the backup. Update Mnemosyne on the new machine,
+  older app than the one that made the backup. Update Obelisk on the new machine,
   then restore again.
 - **"Integrity check failed" / "the backup is corrupted or was altered."** The `.tar`
   didn't arrive intact. Copy it again from the source (keep the `.sha256` file next to

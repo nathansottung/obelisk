@@ -1,6 +1,6 @@
-# Mnemosyne — the NAS-side brain (catalog / plan / build packages / mirror).
+# Obelisk — the NAS-side brain (catalog / plan / build packages / mirror).
 #
-#   1. Put a strong secret in .env:   MNEMO_AUTH_TOKEN=$(openssl rand -hex 32)
+#   1. Put a strong secret in .env:   OBELISK_AUTH_TOKEN=$(openssl rand -hex 32)
 #   2. docker compose up -d
 #   3. Open http://<nas-ip>:7821 and paste the token when prompted.
 #
@@ -8,12 +8,12 @@
 # belong on a NATIVE binary next to the drive — see the README.
 
 services:
-  mnemosyne:
+  obelisk:
     # Pull the released multi-arch image…
-    image: ghcr.io/nathansottung/mnemosyne:latest
+    image: ghcr.io/nathansottung/obelisk:latest
     # …or build locally instead:
     # build: .
-    container_name: mnemosyne
+    container_name: obelisk
     restart: unless-stopped
     command: ["-listen", "0.0.0.0:7821", "-data", "/data"]
     ports:
@@ -21,7 +21,7 @@ services:
     environment:
       # REQUIRED for the 0.0.0.0 bind above — the binary refuses to serve off-box
       # without it. Keep it in a .env file, not in this committed compose.
-      MNEMO_AUTH_TOKEN: "${MNEMO_AUTH_TOKEN:?set MNEMO_AUTH_TOKEN in .env to a long random secret}"
+      OBELISK_AUTH_TOKEN: "${OBELISK_AUTH_TOKEN:?set OBELISK_AUTH_TOKEN in .env to a long random secret}"
     volumes:
       # Persistent catalog + config + daily backups. Back THIS up.
       - ./data:/data
@@ -31,8 +31,8 @@ services:
       # --- SOURCE DATASETS: ALWAYS mount :ro -----------------------------------
       # The ":ro" makes the mount read-only at the KERNEL level: even a bug (or a
       # malicious request) physically cannot write to your originals — the syscall
-      # fails in the kernel, not just in Mnemosyne's own AssertOutsideSources guard.
-      # Mnemosyne is read-only toward sources by design; ":ro" enforces it in the
+      # fails in the kernel, not just in Obelisk's own AssertOutsideSources guard.
+      # Obelisk is read-only toward sources by design; ":ro" enforces it in the
       # one place software can't override. Add one line per dataset you catalog,
       # then point Scan at the /sources/... path.
       - /mnt/tank/photos:/sources/photos:ro

@@ -2,8 +2,8 @@ package main
 
 // main.go — HTTP server + REST API + embedded UI. One binary, no installs.
 //
-//   go build -o mnemosyne .          (current OS)
-//   CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o mnemosyne.exe .
+//   go build -o obelisk .          (current OS)
+//   CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o obelisk.exe .
 
 import (
 	"crypto/subtle"
@@ -46,7 +46,11 @@ var appVersion = "0.9.0-dev"
 // grant, so its presence proves a same-origin caller.
 const (
 	requestedByHeader = "X-Requested-By"
-	requestedByValue  = "mnemosyne-ui"
+	requestedByValue  = "obelisk-ui"
+	// requestedByLegacy is the pre-rename handshake value. Accept it forever so a
+	// stale Mnemosyne-era UI cached in a browser tab can't lock itself out after the
+	// rename (see ARCHITECTURE.md "Name compatibility").
+	requestedByLegacy = "mnemosyne-ui"
 )
 
 func main() {
@@ -85,10 +89,14 @@ func main() {
 		log.Printf("READ-ONLY: %s", why)
 	}
 
-	// The bearer token: env MNEMO_AUTH_TOKEN wins (container-friendly), else the
-	// config's auth_token. A non-localhost bind without a token is REFUSED — the
-	// tool must never be reachable off-box unauthenticated.
-	token := strings.TrimSpace(os.Getenv("MNEMO_AUTH_TOKEN"))
+	// The bearer token: env OBELISK_AUTH_TOKEN wins (container-friendly), with the
+	// pre-rename MNEMO_AUTH_TOKEN still accepted so existing deployments keep working;
+	// else the config's auth_token. A non-localhost bind without a token is REFUSED —
+	// the tool must never be reachable off-box unauthenticated.
+	token := strings.TrimSpace(os.Getenv("OBELISK_AUTH_TOKEN"))
+	if token == "" {
+		token = strings.TrimSpace(os.Getenv("MNEMO_AUTH_TOKEN"))
+	}
 	if token == "" {
 		token = strings.TrimSpace(app.LoadConfig().AuthToken)
 	}
@@ -110,7 +118,7 @@ func main() {
 	if token != "" {
 		auth = "ON — Authorization: Bearer <token> required for /api"
 	}
-	log.Printf("Mnemosyne %s — http://%s  (data: %s · auth: %s)", appVersion, addr, *dataDir, auth)
+	log.Printf("Obelisk %s — http://%s  (data: %s · auth: %s)", appVersion, addr, *dataDir, auth)
 	log.Fatal(http.ListenAndServe(addr, apiGuard(authMiddleware(mux, token))))
 }
 
@@ -151,7 +159,7 @@ func authMiddleware(next http.Handler, token string) http.Handler {
 				}
 			}
 			if !ok {
-				w.Header().Set("WWW-Authenticate", `Bearer realm="mnemosyne"`)
+				w.Header().Set("WWW-Authenticate", `Bearer realm="obelisk"`)
 				jsonErr(w, http.StatusUnauthorized, fmt.Errorf("authorization required — send Authorization: Bearer <token>"))
 				return
 			}
@@ -194,7 +202,8 @@ func apiGuard(next http.Handler) http.Handler {
 			return
 		}
 		// The custom-header handshake proves a same-origin caller (our fetch wrapper).
-		if r.Header.Get(requestedByHeader) == requestedByValue {
+		// Both the current and the legacy (pre-rename) values are accepted.
+		if v := r.Header.Get(requestedByHeader); v == requestedByValue || v == requestedByLegacy {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -204,7 +213,7 @@ func apiGuard(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		forbidCSRF(w, "missing or invalid "+requestedByHeader+" header — /api is for the Mnemosyne UI only")
+		forbidCSRF(w, "missing or invalid "+requestedByHeader+" header — /api is for the Obelisk UI only")
 	})
 }
 
@@ -243,12 +252,37 @@ func forbidCSRF(w http.ResponseWriter, msg string) {
 	_, _ = io.WriteString(w, msg+"\n")
 }
 
+// defaultDataDir returns the data directory to use when -data is not given. It
+// prefers ~/.obelisk, and silently falls back to a pre-rename ~/.mnemo ONLY when
+// ~/.obelisk has no catalog yet but ~/.mnemo does — so a Mnemosyne user who upgrades
+// keeps reading their records with no flags and no data movement, while a fresh
+// install starts in ~/.obelisk. A one-time "migrate my records" (migrate.go) can
+// COPY ~/.mnemo into ~/.obelisk when the user chooses; nothing is ever moved or
+// deleted automatically. See ARCHITECTURE.md "Name compatibility".
 func defaultDataDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ".mnemo"
+		return ".obelisk"
 	}
-	return filepath.Join(home, ".mnemo")
+	return resolveDataDir(home)
+}
+
+// resolveDataDir picks the default data dir under home: ~/.obelisk, or the pre-rename
+// ~/.mnemo when only it holds a catalog. Split out from defaultDataDir so the
+// fallback logic is testable with an explicit home.
+func resolveDataDir(home string) string {
+	obelisk := filepath.Join(home, ".obelisk")
+	legacy := filepath.Join(home, ".mnemo")
+	if !fileExists(filepath.Join(obelisk, "catalog.json")) && fileExists(filepath.Join(legacy, "catalog.json")) {
+		return legacy
+	}
+	return obelisk
+}
+
+// fileExists reports whether path names an existing regular file.
+func fileExists(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && !fi.IsDir()
 }
 
 // ---- helpers ------------------------------------------------------------
@@ -693,6 +727,21 @@ func api(mux *http.ServeMux, app *App) {
 		}
 		app.Store.Log("restore", fmt.Sprintf("app backup restored: %d archives, %d files, %d volumes, %d packages, %d jobs",
 			res.Archives, res.Files, res.Volumes, res.Packages, res.Jobs))
+		jsonOut(w, res)
+	})
+	// Data-dir migration (see migrate.go): a Mnemosyne user whose records live in the
+	// pre-rename ~/.mnemo is running out of it via the silent fallback. Offer a
+	// one-time COPY (never move) into ~/.obelisk, verified by hash before switching.
+	mux.HandleFunc("GET /api/data-migration", func(w http.ResponseWriter, r *http.Request) {
+		legacy, target := legacyAndTargetDataDirs()
+		jsonOut(w, map[string]any{"available": app.LegacyDataDirMigrationAvailable(), "from": legacy, "to": target})
+	})
+	mux.HandleFunc("POST /api/data-migration", func(w http.ResponseWriter, r *http.Request) {
+		res, err := app.MigrateLegacyDataDir()
+		if err != nil {
+			jsonErr(w, 400, err)
+			return
+		}
 		jsonOut(w, res)
 	})
 	// Integrity presets — unify the assurance knobs into ARCHIVAL/BALANCED/FAST,
@@ -2087,7 +2136,7 @@ func api(mux *http.ServeMux, app *App) {
 		jsonOut(w, map[string]any{"volume": v, "detected": id, "changed": changed})
 	})
 	// Mark (or clear) a volume as drive-encrypted (stenc/LTO hardware AES). This is
-	// AWARENESS only — Mnemosyne never sets drive encryption; it records that the
+	// AWARENESS only — Obelisk never sets drive encryption; it records that the
 	// operator did, so inventories and the Recovery Kit can warn loudly.
 	mux.HandleFunc("POST /api/volumes/{id}/drive-encryption", func(w http.ResponseWriter, r *http.Request) {
 		v := app.Store.Volume(pathID(r))

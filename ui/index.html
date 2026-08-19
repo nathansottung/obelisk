@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mnemosyne</title>
+<title>Obelisk</title>
 <style>
 :root{
   --ink:#1c241f; --ink-2:#4a544e; --ink-3:#7d857f;
@@ -305,8 +305,8 @@ button.help:hover{border-color:var(--act);color:var(--act)}
 </head>
 <body>
 <nav>
-  <div class="wordmark">MNEMOSYNE</div>
-  <div class="wordsub" id="wordsub">archival vault</div>
+  <div class="wordmark">OBELISK</div>
+  <div class="wordsub" id="wordsub">back up your data, verify it forever</div>
   <div id="navgroups"></div>
   <div class="lamp" id="lamp" role="status" aria-live="polite"><b></b><span>checking tools…</span></div>
 </nav>
@@ -322,7 +322,7 @@ const $=q=>document.querySelector(q);
 let _tok=sessionStorage.getItem('mnemo_token')||'';let _tokPrompt=null;
 function setToken(t){_tok=(t||'').trim();if(_tok)sessionStorage.setItem('mnemo_token',_tok);else sessionStorage.removeItem('mnemo_token');}
 function askToken(){if(_tokPrompt)return _tokPrompt;
-  _tokPrompt=new Promise(res=>{const t=window.prompt('This Mnemosyne server requires an access token.\nPaste the Authorization Bearer token (config auth_token / MNEMO_AUTH_TOKEN):','');setToken(t);_tokPrompt=null;res(_tok);});
+  _tokPrompt=new Promise(res=>{const t=window.prompt('This Obelisk server requires an access token.\nPaste the Authorization Bearer token (config auth_token / MNEMO_AUTH_TOKEN):','');setToken(t);_tokPrompt=null;res(_tok);});
   return _tokPrompt;}
 /* mediaURL appends the token as a query param for browser-native GETs (opening a
    label/QR/report in a new tab can't set an Authorization header). */
@@ -331,7 +331,7 @@ const api=async(m,u,b)=>{
   // X-Requested-By is the same-origin handshake the server requires on every /api
   // call: a cross-origin page can't set a custom header without a CORS preflight we
   // never grant, so this closes CSRF / DNS-rebinding. Set globally on every request.
-  const go=()=>{const h={'Content-Type':'application/json','X-Requested-By':'mnemosyne-ui'};if(_tok)h['Authorization']='Bearer '+_tok;
+  const go=()=>{const h={'Content-Type':'application/json','X-Requested-By':'obelisk-ui'};if(_tok)h['Authorization']='Bearer '+_tok;
     return fetch(u,{method:m,headers:h,body:b?JSON.stringify(b):undefined});};
   let r=await go();
   if(r.status===401){await askToken();r=await go();}
@@ -363,18 +363,18 @@ const HELP={
   packages:['Packages — the archival units','A Package is one self-contained, media-sized unit: a tar of files + par2 parity + manifest + RESTORE.txt (a self-describing archival bundle — an OAIS AIP, in plain English). The lifecycle rail reads PLANNED → BUILDING → STAGED → WRITING → WRITTEN → VERIFIED; red means FAILED. Build a package, then Write it to a volume with read-back verification. Packages too big for one medium are spanned across several, one tape at a time.'],
   burn:['Burn — the optical disc queue','Optical media can\'t stream continuously, so discs are fed one at a time. A burn queue holds one disc per package and survives reboots (a disc caught mid-burn resets to pending — it may be a coaster). Click "Burn next disc", wait, then write the package name on the physical disc. Square colours: green = done, red = failed, amber = in progress, grey = pending.'],
   volumes:['Volumes — where the bytes physically live','A Volume is a physical medium you can hold: a tape, drive, or disc, with a barcode, kind, an Onsite/Offsite flag (the "1" in 3-2-1), and free-text location ("office safe"). Each Copy records which package sits on which volume and when it last verified. Scan a barcode into the lookup box to jump straight to a medium\'s contents — no mounting needed. When a volume is done, Finalize seals it: it enforces preconditions (recent verify, free-space buffer, SMART), writes a seal record + inventory onto the medium, marks it SEALED (further writes need an audit-logged unseal), and opens the printable label — the "close the box and label it" moment.'],
-  cardcheck:['Check a card — is it already backed up?','Plug in an SD/CF card or a drive and Mnemosyne reads it (never writes, never adds it as a source) and checks every file BY CONTENT against your entire inventory — archives, packaged copies, and every drive you have inventoried. You get the answer that matters before a reformat: which frames are already safe (and where they live), and which are new and still need copying off. Matching is by SHA-256, so a file counts as backed up the moment its content is found anywhere, no matter its name or folder on the card.'],
-  dock:['Dock — inventory a stack of legacy drives, one at a time','Pick the Archive(s) to compare against, then dock drives one by one. Mnemosyne watches for each newly-inserted drive, and on one click does everything hands-off: identifies the drive by serial, hashes every file and matches it by CONTENT against your archives, records the matches as verified copies, and writes an inventory sidecar onto the drive itself. It is strictly read-only toward your sources — NAS folders are only ever hashed. A re-inserted drive is recognized by serial and re-verified, not re-adopted. The session survives closing the app; resume it days later.'],
+  cardcheck:['Check a card — is it already backed up?','Plug in an SD/CF card or a drive and Obelisk reads it (never writes, never adds it as a source) and checks every file BY CONTENT against your entire inventory — archives, packaged copies, and every drive you have inventoried. You get the answer that matters before a reformat: which frames are already safe (and where they live), and which are new and still need copying off. Matching is by SHA-256, so a file counts as backed up the moment its content is found anywhere, no matter its name or folder on the card.'],
+  dock:['Dock — inventory a stack of legacy drives, one at a time','Pick the Archive(s) to compare against, then dock drives one by one. Obelisk watches for each newly-inserted drive, and on one click does everything hands-off: identifies the drive by serial, hashes every file and matches it by CONTENT against your archives, records the matches as verified copies, and writes an inventory sidecar onto the drive itself. It is strictly read-only toward your sources — NAS folders are only ever hashed. A re-inserted drive is recognized by serial and re-verified, not re-adopted. The session survives closing the app; resume it days later.'],
   keys:['Keys — encryption secrets','Encrypted packages use per-package random ~288-bit passphrases that live ONLY in keystore files — the catalog stores fingerprints, never the secret. Encrypted builds refuse to run until ≥2 keystores on different devices are registered and in sync. Print a QR card per key, and export a Recovery Kit for the fireproof box.'],
   jobs:['Jobs — background work','Long operations (scan, build, write, verify, compare, recovery kit) run in the background so the UI stays responsive. It is safe to navigate away; this list refreshes automatically while anything is still running. Click any job — running or finished — to open its detail: a plain summary, live counters, and an Artifacts list where every output has a Show action that opens the thing itself. Jobs persist across restarts; one interrupted by a shutdown shows as INTERRUPTED so you can re-run it.'],
   explore:['Explore data — structure, sizes & what’s verified','One screen to browse any archive or inventoried drive the same way: a size-weighted treemap (area = bytes) plus a breakdown panel (totals, largest folders, roles, per-extension counts). Colour the map by Protection, Drift, or Validation — verified ✓ (a proven copy exists), hashed-but-unverified, or failed ✗ — always shown as colour + text. Reachable on its own, or opened scoped from a scan/verify job’s "View results".'],
   settings:['Settings — one config file','Everything lives in one config.json in the data folder: paths to the external tools, the staging folder, keystore locations, redundancy goal, re-verify window, write throttle, and the optical burn command. Preflight at the top shows whether tar/gpg/par2 (and any LTFS tape) are ready.'],
-  where:['Where your data lives — the honesty map','One screen listing everything Mnemosyne ever writes — the catalog and its daily backups, config, keystores, staging, the destinations you pick, the small inventory/seal sidecars it puts ONLY on media it writes itself, and the reversible quarantine folders — followed by the equally prominent inverse: what it NEVER writes to (your source folders and drives you adopt). Every path is read from your live settings. The one enforcement rule (every write destination is checked against your sources and refused if it lands inside one) is backed by named tests you can run yourself.'],
+  where:['Where your data lives — the honesty map','One screen listing everything Obelisk ever writes — the catalog and its daily backups, config, keystores, staging, the destinations you pick, the small inventory/seal sidecars it puts ONLY on media it writes itself, and the reversible quarantine folders — followed by the equally prominent inverse: what it NEVER writes to (your source folders and drives you adopt). Every path is read from your live settings. The one enforcement rule (every write destination is checked against your sources and refused if it lands inside one) is backed by named tests you can run yourself.'],
 };
 function helpBtn(k){return `<button class="help" aria-label="Help: what the ${esc(k)} view is for" title="What is this view for?" onclick="showHelp('${k}')">i</button>`}
 // Each help panel links to the matching plain-language Handbook guide (opens on
 // the project's docs site). Handbook lives in docs/handbook/ in the repo.
-const HANDBOOK='https://github.com/nathansottung/mnemosyne/blob/main/docs/handbook/';
+const HANDBOOK='https://github.com/nathansottung/obelisk/blob/main/docs/handbook/';
 const HELP_GUIDE={home:['00-what-is-this.md','What is this? & first run'],vault:['03-your-first-backup.md','Your first backup'],
   protection:['04-the-3-2-1-setup.md','The 3-2-1 setup'],integrity:['04-the-3-2-1-setup.md','Protection & integrity'],
   packages:['03-your-first-backup.md','Your first backup'],burn:['06-discs-and-drives.md','Discs, mirrors & old drives'],
@@ -994,6 +994,12 @@ async function censusDlg(cid,name){
 
 /* ---------------- Home / Dashboard ---------------- */
 function homeBytes(n){const gb=(n||0)/1e9;if(gb>=1000)return (gb/1000).toFixed(2)+' TB';if(gb>=10)return gb.toFixed(0)+' GB';return gb.toFixed(1)+' GB'}
+async function doMigrate(){
+  if(!confirm('Copy your records to the new ~/.obelisk location? Nothing is moved or deleted — your existing records stay exactly where they are, and every copied file is verified against the original.'))return;
+  try{const r=await api('POST','/api/data-migration');
+    toast('Migrated '+r.files+' verified file(s) to '+r.to);loc('home');
+  }catch(e){toast(e.message,1);}
+}
 async function vHome(){
   const home=await api('GET','/api/home');
   if(_navStart!==!!home.empty){_navStart=!!home.empty;renderNav();} // keep the "start here" cue in sync
@@ -1007,6 +1013,16 @@ async function vHome(){
   }
   const t=home.totals||{}, arcs=home.archives||[], ung=home.ungrouped, hl=home.health||{}, inc=home.incremental||[];
   let h=hdr('Home','what this tool knows about all your data','home');
+
+  // One-time offer: if the records still live in the pre-rename ~/.mnemo location,
+  // offer to copy (never move) them into ~/.obelisk, verified before switching.
+  try{const mig=await api('GET','/api/data-migration');
+    if(mig&&mig.available){
+      h+=`<div class="panel" style="border-left:3px solid var(--act)">
+        <div style="font-size:13px"><b>Your records are still in the old location.</b> Obelisk is reading the records it inherited from Mnemosyne at <span class="mono">${esc(mig.from)}</span>. You can copy them to the new home at <span class="mono">${esc(mig.to)}</span> — every file is verified as it copies, and your originals are left untouched.</div>
+        <div class="row" style="margin-top:10px"><button class="btn" onclick="doMigrate()">Migrate my records</button></div></div>`;
+    }
+  }catch(e){}
 
   // (1) Totals strip.
   const tile=(k,v,u)=>`<div class="htile"><div class="hk">${esc(k)}</div><div class="hv">${v}</div>${u?`<div class="hu">${esc(u)}</div>`:''}</div>`;
@@ -1107,7 +1123,7 @@ function gettingStarted(cfg,pre,archives,pkgs,st){
       ? ['Create your first archive','A scattered-drives archive — it has no source folder; its files come from the drives you adopt into it.',hasArchive,'vault','Go to Vault →']
       : ['Create your first archive','A body of work you keep together — e.g. "Personal" or "Client Work". It has a source folder you scan.',hasArchive,'vault','Go to Vault →'],
     sourceless
-      ? ['Adopt a drive into it','Plug in a drive; Mnemosyne hashes every file and records what it holds — no source folder needed.',hasScan,'dock','Inventory drives →']
+      ? ['Adopt a drive into it','Plug in a drive; Obelisk hashes every file and records what it holds — no source folder needed.',hasScan,'dock','Inventory drives →']
       : ['Scan a folder into it','Reads every file in the folder and records a unique fingerprint of each — the start of the safety trail.',hasScan,'vault','Go to Vault →'],
     ['Plan & build a package','Group files into a disc- or tape-sized set, then build it into one sealed, repairable, encrypted bundle.',built,p6[0],p6[1]]
   );
@@ -1222,7 +1238,7 @@ function renderSetup(){
   if(step===0){
     const kd0=`onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}"`;
     $('#view').innerHTML=`<div class="setup">
-      <div class="step">Welcome to Mnemosyne</div>
+      <div class="step">Welcome to Obelisk</div>
       <h1 style="margin-top:6px">Setting up — fresh, or from a backup?</h1>
       <div class="q">If you're moving from another computer, restore your app backup and everything comes back exactly as it was. Otherwise, five short questions get you started.</div>
       <div class="opts">
@@ -1557,7 +1573,7 @@ function addColl(){const n=($('#newname').value||'').trim();
   dlg(`<h1>New archive${n?' — “'+esc(n)+'”':''}</h1>
     ${n?'':'<label>Name</label><input id="acname" class="full" placeholder="e.g. Family Archive">'}
     <label style="margin-top:12px">Do these files live in one main place, or are they scattered across drives?</label>
-    <label class="row" style="gap:8px;align-items:flex-start;margin-top:6px"><input type="radio" name="ackind" value="SOURCED" checked style="width:auto;margin-top:3px"> <span><b>One main place (like a NAS)</b> — a folder I can point Mnemosyne at. It scans that source, watches for changes, and builds copies from it.</span></label>
+    <label class="row" style="gap:8px;align-items:flex-start;margin-top:6px"><input type="radio" name="ackind" value="SOURCED" checked style="width:auto;margin-top:3px"> <span><b>One main place (like a NAS)</b> — a folder I can point Obelisk at. It scans that source, watches for changes, and builds copies from it.</span></label>
     <label class="row" style="gap:8px;align-items:flex-start;margin-top:8px"><input type="radio" name="ackind" value="SOURCELESS" style="width:auto;margin-top:3px"> <span><b>Scattered across drives</b> — no single source folder. The archive is simply whatever I find on the drives I adopt into it (no scan, no NAS needed).</span></label>
     <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Create archive</button></div>`,
   async()=>{const name=n||(($('#acname')||{}).value||'').trim();
@@ -1605,7 +1621,7 @@ async function adoptFolderDlg(id,name){
   const [volsRaw,locs]=await Promise.all([api('GET','/api/volumes'),api('GET','/api/locations')]);
   const V=(volsRaw||[]).map(r=>r.volume||r).filter(v=>v.label!=='(unregistered)');
   dlg(`<h1>Adopt a drive into “${esc(name)}”</h1>
-    <div class="dim" style="font-size:11.5px;margin-bottom:8px">Point Mnemosyne at a folder of loose files (a drive). It hashes every file, folds them into this archive’s <b>union</b> (identical content across drives counts once), and records a verified copy on the drive you choose — so a file on two drives shows two copies across two locations. <b>Read-only:</b> your files are only hashed, never changed.</div>
+    <div class="dim" style="font-size:11.5px;margin-bottom:8px">Point Obelisk at a folder of loose files (a drive). It hashes every file, folds them into this archive’s <b>union</b> (identical content across drives counts once), and records a verified copy on the drive you choose — so a file on two drives shows two copies across two locations. <b>Read-only:</b> your files are only hashed, never changed.</div>
     <label>Folder to adopt (the drive)</label>
     <input id="afpath" class="full" placeholder="D:\\ or /mnt/olddrive">${browseBtn('afpath')}
     <label style="margin-top:10px">Which drive is this? (records where the copy lives)</label>
@@ -1672,7 +1688,7 @@ async function showFileVersions(fileId){
     </tr>`;
   }).join('');
   dlg(`<h1>Versions — ${esc(f.rel_path||'')}</h1>
-    <div class="dim" style="font-size:11.5px;margin-bottom:8px">${vs.length} retained content version(s). Mnemosyne never deleted old bytes — each version below is still sealed in the package(s) shown and can be restored independently. Newest is “current”.</div>
+    <div class="dim" style="font-size:11.5px;margin-bottom:8px">${vs.length} retained content version(s). Obelisk never deleted old bytes — each version below is still sealed in the package(s) shown and can be restored independently. Newest is “current”.</div>
     <div style="max-height:60vh;overflow:auto"><table>
       <tr><th>Version</th><th>Seen</th><th class="num">Size</th><th>Hash</th><th>Where it lives</th><th></th></tr>
       ${rows}</table></div>`,async()=>{});
@@ -1973,7 +1989,7 @@ async function vVolumes(){
     <button class="btn ghost" onclick="volLookup()">Look up</button>
     <button class="btn ghost" onclick="adoptDlg()">Adopt media…</button>
     <button class="btn" onclick="newVolumeDlg()">Register volume…</button></div>
-    <div class="dim" style="font-size:11.5px;margin-top:6px">Have archives written before Mnemosyne (or by hand with tar+par2)? <b>Adopt media…</b> catalogs them in place — no rewriting.</div></div>
+    <div class="dim" style="font-size:11.5px;margin-top:6px">Have archives written before Obelisk (or by hand with tar+par2)? <b>Adopt media…</b> catalogs them in place — no rewriting.</div></div>
   ${tapePanel(tape)}
   <div class="panel"><h2>Registered media (${vols.length})</h2>`;
   if(!vols.length)h+='<div class="empty">No volumes yet — a volume is a physical tape/drive/disc with a barcode and location.<div class="row" style="justify-content:center;margin-top:12px"><button class="btn" onclick="newVolumeDlg()">Register volume…</button></div></div>';
@@ -2008,7 +2024,7 @@ function tapeHealthBody(th){
   if(th.bytes_read)stats.push('read '+tapeBytes(th.bytes_read));
   if(stats.length)h+=`<div class="dim mono" style="font-size:11.5px;margin-top:8px">${esc(stats.join(' · '))}</div>`;
   h+=tapeAlertsHtml(th.alerts);
-  h+=`<div class="dim" style="font-size:11px;margin-top:10px">Read ${esc((th.at||'').replace('T',' ').slice(0,16))} via ${esc(th.tool||'')} on ${esc(th.device||'')}. Diagnostics only — Mnemosyne never issues movement or write commands. A drive signal, not a data-integrity guarantee: only the custody-chain hashes prove your bytes intact.</div>`;
+  h+=`<div class="dim" style="font-size:11px;margin-top:10px">Read ${esc((th.at||'').replace('T',' ').slice(0,16))} via ${esc(th.tool||'')} on ${esc(th.device||'')}. Diagnostics only — Obelisk never issues movement or write commands. A drive signal, not a data-integrity guarantee: only the custody-chain hashes prove your bytes intact.</div>`;
   return h;
 }
 function tapePanel(tape){
@@ -2038,7 +2054,7 @@ function driveEncStatusHtml(st){
   const on=st.encrypting, key=st.key_loaded;
   const badge=on?`<span class="stamp FAILED">ENCRYPTING</span>`:`<span class="stamp VERIFIED">off</span>`;
   let s=`${badge} drive encryption <b>${on?'ON':'off'}</b> · key ${key?'<b>loaded</b>':'not loaded'}${st.method?' · '+esc(st.method):''}`;
-  if(on)s+=`<div class="err" style="margin-top:6px;font-size:11.5px">Tapes written now carry <b>hardware ciphertext</b>. Without this <b>drive key</b>, no tool reads them — gpg included. Mnemosyne records the drive-key requirement on any volume written while this is on; <b>preserve the drive key separately.</b></div>`;
+  if(on)s+=`<div class="err" style="margin-top:6px;font-size:11.5px">Tapes written now carry <b>hardware ciphertext</b>. Without this <b>drive key</b>, no tool reads them — gpg included. Obelisk records the drive-key requirement on any volume written while this is on; <b>preserve the drive key separately.</b></div>`;
   return s;
 }
 async function checkDriveEnc(){
@@ -2051,14 +2067,14 @@ async function checkDriveEnc(){
 }
 /* Advanced, explicitly-warned set/clear of the DRIVE key. Never silent. */
 function driveKeyDlg(){dlg(`<h1>Warning: Drive-level encryption key (advanced)</h1>
-  <div class="err" style="font-size:12px;margin-bottom:12px"><b>Drive-level encryption is OUTSIDE Mnemosyne's restore story.</b> A tape written with it <b>cannot be read by ANY drive</b> without this key configured — not gpg, not tar, and par2 cannot repair what it cannot read. Your packages remain <b>gpg-protected regardless</b>; <b>most users should leave this off.</b> Mnemosyne never stores this key — you are responsible for preserving it separately.</div>
+  <div class="err" style="font-size:12px;margin-bottom:12px"><b>Drive-level encryption is OUTSIDE Obelisk's restore story.</b> A tape written with it <b>cannot be read by ANY drive</b> without this key configured — not gpg, not tar, and par2 cannot repair what it cannot read. Your packages remain <b>gpg-protected regardless</b>; <b>most users should leave this off.</b> Obelisk never stores this key — you are responsible for preserving it separately.</div>
   <label>Action</label>
   <select id="dkact" class="full" onchange="document.getElementById('dksetrow').style.display=this.value==='set'?'block':'none'">
     <option value="set">Set key ON — start encrypting future writes</option>
     <option value="clear">Clear key — stop encrypting future writes</option>
   </select>
   <div id="dksetrow" style="margin-top:10px">
-    <label>Key file (a file containing the raw drive key — kept OUTSIDE Mnemosyne)</label>
+    <label>Key file (a file containing the raw drive key — kept OUTSIDE Obelisk)</label>
     <input id="dkfile" class="full" style="font:12px var(--mono)" placeholder="/secure/offline/drive.key">
     <label style="margin-top:8px">Algorithm index (stenc <span class="mono">-a</span>; blank = 1 / AES-256-GCM)</label>
     <input id="dkalg" class="full" type="number" min="1" step="1" placeholder="1">
@@ -2170,12 +2186,12 @@ async function snapTree(id,path){
   el.innerHTML=h;
 }
 function commaN(n){return (n==null?0:n).toLocaleString('en-US')}
-/* Drive-level (hardware) tape AES — awareness + loud warning. Mnemosyne never
+/* Drive-level (hardware) tape AES — awareness + loud warning. Obelisk never
    sets it; this only records that the operator did, so kits/inventories warn. */
 function driveEncDlg(id,on,note){dlg(`<h1>Drive-level encryption (stenc / LTO hardware)</h1>
-  <div class="err" style="font-size:12px;margin-bottom:10px">This is <b>NOT</b> Mnemosyne/gpg encryption. Drive-level AES writes hardware ciphertext to the tape: without the <b>drive key</b> loaded into a compatible drive, <b>nothing</b> can read it — not gpg, not tar, and par2 can't repair what it can't read. A lost drive key means the tape is scrap. Mnemosyne does not manage this key; record where it lives.</div>
+  <div class="err" style="font-size:12px;margin-bottom:10px">This is <b>NOT</b> Obelisk/gpg encryption. Drive-level AES writes hardware ciphertext to the tape: without the <b>drive key</b> loaded into a compatible drive, <b>nothing</b> can read it — not gpg, not tar, and par2 can't repair what it can't read. A lost drive key means the tape is scrap. Obelisk does not manage this key; record where it lives.</div>
   <label class="row" style="gap:8px;align-items:center"><input id="dech" type="checkbox" ${on?'checked':''}> This medium was written with drive-level AES (stenc/LTO hardware)</label>
-  <label style="margin-top:10px">Where the <b>drive key</b> is stored (kept SEPARATELY from Mnemosyne keystores)</label>
+  <label style="margin-top:10px">Where the <b>drive key</b> is stored (kept SEPARATELY from Obelisk keystores)</label>
   <input id="decn" class="full" value="${esc(note||'')}" placeholder="e.g. IBM SKLM server 'vault-01', or offline HSM in the safe">
   <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Save</button></div>`,
   async()=>{await api('POST','/api/volumes/'+id+'/drive-encryption',{drive_encrypted:$('#dech').checked,drive_enc_note:$('#decn').value.trim()});
@@ -2321,7 +2337,7 @@ function healthDlg(id){dlg(`<h1>Check media health (SMART)</h1>
     else if(r.snapshot)toast(r.snapshot.advisory?'Warning: Advisory — migrate copies off this volume':'Health recorded');
     volDetail(id)})}
 function identifyDlg(id){dlg(`<h1>Detect drive identity</h1>
-  <div class="dim" style="margin-bottom:8px">Point at where this drive is mounted; Mnemosyne reads the physical serial, model, and capacity from the OS (Get-Disk on Windows, lsblk/diskutil on Unix). External docks and USB bridges sometimes mask the true serial — that's recorded as a caveat, not an error.</div>
+  <div class="dim" style="margin-bottom:8px">Point at where this drive is mounted; Obelisk reads the physical serial, model, and capacity from the OS (Get-Disk on Windows, lsblk/diskutil on Unix). External docks and USB bridges sometimes mask the true serial — that's recorded as a caveat, not an error.</div>
   <label>Mounted path (drive letter or folder on the drive)</label><input id="d1" class="full" placeholder="E:\\  or  /mnt/disk">
   <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Detect</button></div>`,
   async()=>{const mp=$('#d1').value.trim();if(!mp)return;
@@ -2425,7 +2441,7 @@ async function keySheetCheck(){
 }
 function recoveryKitDlg(){dlg(`<h1>Export Recovery Kit</h1>
   <div class="err" style="margin-bottom:10px">Warning: The kit includes one QR code per key — each encodes a passphrase in the clear. Store the folder as securely as your keystores.</div>
-  <label>Output folder (a “mnemosyne-recovery-kit” subfolder is created here)</label>
+  <label>Output folder (a “obelisk-recovery-kit” subfolder is created here)</label>
   <input id="d1" class="full" placeholder="E:\\safe or /mnt/vault/recovery">${browseBtn('d1')}
   <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Generate</button></div>`,
   async()=>{const d=$('#d1').value.trim();if(!d)return;
@@ -2504,7 +2520,7 @@ const JOB_WRITES={
   span:{writes:'the package across the destination media you chose, one at a time, each re-read to verify'},
   mirror:{reads:'your source folders (never changed)',writes:'plain files to the destination you chose, plus one inventory sidecar on that media'},
   dock:{reads:'the drive (never changed)',writes:'an inventory snapshot to the catalog only'},
-  finalize:{writes:'a seal sidecar (MNEMOSYNE_SEAL) onto the volume being sealed'},
+  finalize:{writes:'a seal sidecar (OBELISK_SEAL) onto the volume being sealed'},
   recoverykit:{writes:'the Recovery Kit to the output folder you chose'},
   recompute:{writes:'protection status in the catalog only'},
   verify:{reads:'the media',writes:'verify records in the catalog only'},
@@ -2613,7 +2629,7 @@ function escrowKitLine(r){
   let s='Escrow bundle: '+(e.components||0)+' component(s)';
   if(e.bytes)s+=' · '+(e.bytes/1e6).toFixed(1)+' MB';
   if(e.missing_count)s+=' · <span style="color:var(--warn,#c90)">'+e.missing_count+' not cached</span> — Settings → Fetch escrow cache, then regenerate';
-  s+=' — Mnemosyne’s own reader travels with the archive (see escrow-bundle/ESCROW_README.md).';
+  s+=' — Obelisk’s own reader travels with the archive (see escrow-bundle/ESCROW_README.md).';
   return '<div class="dim" style="font-size:11.5px;margin-top:8px">'+s+'</div>';
 }
 function showKitResult(r){dlg(`<h1>Recovery Kit ready</h1>
@@ -2644,7 +2660,7 @@ async function vDock(){
 async function dockStart(){
   const colls=await api('GET','/api/collections')||[];
   let h=`${hdr('Inventory drives','plug in a drive, get a complete record of what is on it','dock')}
-  <div class="panel"><div class="dim" style="margin-bottom:8px"><b>Read-only, both ways.</b> Mnemosyne only ever <b>hashes</b> the NAS archive folders to match drive contents, and it never writes to a docked drive either — adopted media stay untouched. The full inventory of each drive is recorded in the <b>catalog snapshot</b>, browsable later with the drive unplugged.</div>
+  <div class="panel"><div class="dim" style="margin-bottom:8px"><b>Read-only, both ways.</b> Obelisk only ever <b>hashes</b> the NAS archive folders to match drive contents, and it never writes to a docked drive either — adopted media stay untouched. The full inventory of each drive is recorded in the <b>catalog snapshot</b>, browsable later with the drive unplugged.</div>
     <h2>Start a session</h2>
     <div class="dim" style="font-size:12px;margin-bottom:6px">Choose the Archive(s) these drives should be compared against (e.g. both a business and a personal archive that live on the NAS).</div>`;
   if(!colls.length)h+='<div class="empty">Create an Archive first (Vault → Create archive), then start a dock session.</div>';
@@ -2681,7 +2697,7 @@ function renderDock(d){
 
   // Newly-docked drives (watcher) + manual path
   h+=`<div class="panel"><h2>Insert a drive</h2>
-    <div class="dim" style="font-size:12px;margin-bottom:6px">Dock a drive — it appears below within ~5s. Click <b>Inventory</b> and Mnemosyne does the rest, then tells you when it's safe to eject.</div>
+    <div class="dim" style="font-size:12px;margin-bottom:6px">Dock a drive — it appears below within ~5s. Click <b>Inventory</b> and Obelisk does the rest, then tells you when it's safe to eject.</div>
     <div id="dockcands"><div class="dim">Watching for a newly-inserted drive…</div></div>
     <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
       <label>…or inventory a specific mounted path / folder</label>
@@ -2769,7 +2785,7 @@ function advClose(){return _uiMode==='complete'?'':'</details>'}
 async function vWhere(){
   let dm;try{dm=await api('GET','/api/data-map');}catch(e){$('#view').innerHTML=hdr('Where your data lives','','settings')+`<div class="panel"><div class="err">${esc(e.message)}</div></div>`;return;}
   let h=hdr('Where your data lives','what this app reads, and what it writes','where');
-  h+=`<div class="purpose">The whole truth about where Mnemosyne puts things — and what it only ever reads. Nothing is hidden and nothing here is guesswork; every path is read straight from your live settings.</div>`;
+  h+=`<div class="purpose">The whole truth about where Obelisk puts things — and what it only ever reads. Nothing is hidden and nothing here is guesswork; every path is read straight from your live settings.</div>`;
   // Two plainly-headed lists — each row states ONE thing.
   h+='<div class="panel" style="border-left:3px solid var(--ok)"><h2>What this app reads</h2>';
   h+='<div class="help" style="margin-top:0">Read-only, always. The app opens these only to read and check them — it never changes a single byte.</div>';
@@ -2801,7 +2817,7 @@ async function vCardCheck(){
   let mounts=[];try{mounts=await api('GET','/api/mounts')||[];}catch(e){}
   window._ccmounts=mounts;
   let h=hdr('Check a card','is it already backed up? — read-only, nothing is ever written','cardcheck');
-  h+=`<div class="purpose">Plug in an SD/CF card or a drive. Mnemosyne <b>reads it (never writes)</b> and checks every file <b>by content</b> against everything it knows — your archives, packages, and backup drives — so you can see what's already safe and what's new <b>before you reformat</b>.</div>`;
+  h+=`<div class="purpose">Plug in an SD/CF card or a drive. Obelisk <b>reads it (never writes)</b> and checks every file <b>by content</b> against everything it knows — your archives, packages, and backup drives — so you can see what's already safe and what's new <b>before you reformat</b>.</div>`;
   h+=`<div class="panel"><h2>Choose the card or drive</h2>`;
   if(mounts.length)h+=`<div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:10px">${mounts.map((m,i)=>`<button class="btn ghost" onclick="ccStart(window._ccmounts[${i}].path)">${esc(m.label||m.path)}${m.size_bytes?` <span class="dim">· ${GB(m.size_bytes)} GB</span>`:''}</button>`).join('')}</div>`;
   else h+=`<div class="dim" style="font-size:11.5px;margin-bottom:8px">No removable drives detected right now — plug one in and reload, or type its path below.</div>`;
@@ -2875,13 +2891,20 @@ async function vSettings(){
   const curLsz=cfg.label_size||'2.25in 1.25in';
   let h=hdr('Settings','how the app behaves — the tools, folders, and options it uses (saved to config.json in the data folder)','settings');
 
+  // ---- 0. About ----
+  h+=`<div class="panel">
+    <div style="font:700 16px/1 var(--mono);letter-spacing:.42em">OBELISK</div>
+    <div style="margin-top:10px;font-size:13.5px"><b>Obelisk — an instrument of negentropy.</b></div>
+    <div class="dim" style="font-size:12px;margin-top:4px">Back up your data, verify it forever. <span style="opacity:.8">(formerly Mnemosyne)</span></div>
+  </div>`;
+
   // ---- 1. General ----
   h+=`<div class="panel"><h2>General</h2>
     <label>How much do you want to see?</label>
     ${modeControl()}
     <label style="margin-top:14px">Language</label>
     <div class="setinfo">English</div>
-    <div class="help">Mnemosyne currently ships in English only. This row is here so it's obvious there's nothing hidden to set.</div>
+    <div class="help">Obelisk currently ships in English only. This row is here so it's obvious there's nothing hidden to set.</div>
     <label style="margin-top:14px">First-run setup</label>
     <div class="row" style="align-items:center;gap:12px">
       <div class="help" style="flex:1;margin:0">${cfg.setup_complete?`Configured for <b>${esc(cfg.data_kind||'mixed')}</b> · backing up to <b>${esc((cfg.backup_targets||['drives']).join(', '))}</b>.`:'Not run yet.'} Re-run to change your template, locations, targets, guidance, or checking level — nothing you've made is touched.</div>
@@ -2893,7 +2916,7 @@ async function vSettings(){
     <div style="margin:-2px 0 12px"><a href="#where" class="wherelink">Where your data lives → the full map of everything this tool writes, and what it never touches</a></div>
     <label>Data folder</label>
     <div class="setinfo" id="datadir">…</div>
-    <div class="help">Where Mnemosyne keeps its catalog and settings (catalog.json, config.json). Shown read-only — it's chosen with the <span class="mono">-data</span> flag at startup. <b>Everything the app knows lives here; include it in your own backups.</b></div>
+    <div class="help">Where Obelisk keeps its catalog and settings (catalog.json, config.json). Shown read-only — it's chosen with the <span class="mono">-data</span> flag at startup. <b>Everything the app knows lives here; include it in your own backups.</b></div>
     <label style="margin-top:14px">Work folder for building backups (staging)</label>
     <input id="st" class="full" value="${esc(cfg.staging_dir||'')}" placeholder="D:\\mnemo-staging or /mnt/pool/staging" onchange="stagingSpace()">${browseBtn('st')}
     <div id="stginfo" class="memline dim">Checking free space…</div>
@@ -2965,7 +2988,7 @@ async function vSettings(){
 
   // ---- 6. External Tools ----
   h+=`<div class="panel"><h2>External tools</h2>
-    <div class="help">The free command-line programs Mnemosyne can use. The first three are <b>required</b> for the core backup/restore story; the rest are optional and each adds exactly one capability. If a tool is installed somewhere unusual, use <b>Browse…</b> to point the app straight at its binary.</div>
+    <div class="help">The free command-line programs Obelisk can use. The first three are <b>required</b> for the core backup/restore story; the rest are optional and each adds exactly one capability. If a tool is installed somewhere unusual, use <b>Browse…</b> to point the app straight at its binary.</div>
     <div id="toolsbox"><div class="dim" style="margin-top:8px">Detecting tools…</div></div>
   </div>`;
 
@@ -3026,10 +3049,10 @@ async function vSettings(){
       <div class="help" style="margin-top:2px">${wants('optical')?'You chose Blu-ray/DVD as a backup target — configure your burner here.':'You didn\'t pick discs in setup; fill this in only if you write to Blu-ray/DVD. Tape and drive users can ignore it.'}</div>
       <label style="margin-top:8px">Disc-burning command</label>
       <input id="bc" class="full" style="font:12px var(--mono)" value="${esc(cfg.burn_command||'')}" placeholder='xorriso -outdev /dev/sr0 -volid "{LABEL}" -blank as_needed -map "{SRC}" / -commit -eject'>
-      <div class="help">The command Mnemosyne runs to burn a disc. <span class="mono dim">{SRC}</span> is the folder to burn and <span class="mono dim">{LABEL}</span> is the disc name. <b>xorriso</b> is the recommended free burner (point at it in External Tools). <button class="btn ghost" style="font-size:10px;padding:1px 7px" onclick="document.getElementById('bc').value='xorriso -outdev /dev/sr0 -volid \\'{LABEL}\\' -blank as_needed -map \\'{SRC}\\' / -commit -eject'">Use xorriso default</button></div>
+      <div class="help">The command Obelisk runs to burn a disc. <span class="mono dim">{SRC}</span> is the folder to burn and <span class="mono dim">{LABEL}</span> is the disc name. <b>xorriso</b> is the recommended free burner (point at it in External Tools). <button class="btn ghost" style="font-size:10px;padding:1px 7px" onclick="document.getElementById('bc').value='xorriso -outdev /dev/sr0 -volid \\'{LABEL}\\' -blank as_needed -map \\'{SRC}\\' / -commit -eject'">Use xorriso default</button></div>
       <label style="margin-top:8px">Folder to re-read a burned disc from (optional)</label>
       <input id="bv" class="full" style="font:12px var(--mono)" value="${esc(cfg.burn_verify_mount||'')}" placeholder="E:\\ or /mnt/optical">
-      <div class="help">After burning, Mnemosyne re-reads the disc here and confirms it matches what it wrote. Leave blank to skip.</div>
+      <div class="help">After burning, Obelisk re-reads the disc here and confirms it matches what it wrote. Leave blank to skip.</div>
       <label style="margin-top:8px">Extra scratch-repair for discs (optional)</label>
       <select id="becc" class="full">
         <option value="off" ${(!cfg.burn_ecc||cfg.burn_ecc==='off')?'selected':''}>Off — no extra repair file (your backup's built-in repair data still protects it)</option>
@@ -3238,7 +3261,7 @@ async function escrowStatus(){
     if(miss.length){s+=`<span style="color:var(--warn,#c90)">${miss.length} component(s) not cached</span> (${miss.map(esc).join(', ')}).`;}
     else{s+=`All components cached ✓`;}
     if(e.fetchable){s+=`<div class="row" style="margin-top:8px"><button class="btn ghost" style="font-size:11px;padding:2px 10px" onclick="escrowFetch()">Fetch / refresh escrow cache…</button></div>`;}
-    else{s+=`<div class="dim" style="margin-top:6px">This is a dev build (version is not a <span class="mono">vX.Y.Z</span> release tag) — release binaries can't be downloaded. The bundle ships whatever is cached; the Mnemosyne source is regenerated from the working tree.</div>`;}
+    else{s+=`<div class="dim" style="margin-top:6px">This is a dev build (version is not a <span class="mono">vX.Y.Z</span> release tag) — release binaries can't be downloaded. The bundle ships whatever is cached; the Obelisk source is regenerated from the working tree.</div>`;}
     el.innerHTML=s;
   }catch(err){el.textContent='Escrow status unavailable: '+err.message;}
 }
@@ -3344,7 +3367,7 @@ function appRestoreDlg(){
   dlg(`<h1>Restore from an app backup</h1>
     <div class="err" style="margin-bottom:10px">This <b>replaces</b> the app's current records with the backup's. Your current catalog, settings, and job history are automatically backed up first (to a <span class="mono">pre-restore-…</span> folder), so it's reversible.</div>
     <label>Backup file (.tar)</label>
-    <input id="arpath" class="full" placeholder="path to mnemosyne-appbackup-….tar">${pickFileBtn('arpath','.tar')}
+    <input id="arpath" class="full" placeholder="path to obelisk-appbackup-….tar">${pickFileBtn('arpath','.tar')}
     <div class="row" style="margin-top:10px"><button class="btn ghost" onclick="appRestoreInspect()">Check this backup</button></div>
     <div id="arinfo" class="dim" style="font-size:12px;margin-top:8px"></div>
     <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Restore (replace current records)</button></div>`,
@@ -3597,7 +3620,7 @@ async function vQuarantine(){
   let h=hdr('Quarantine','never delete, made usable — staged, reversible, never emptied by the tool','quarantine');
   h+=`<div class="panel" style="border-left:3px solid var(--act)">
     <div style="font-size:12.5px"><b>${esc(d.standing_note)}</b></div>
-    <div class="dim" style="font-size:11.5px;margin-top:6px">Quarantine only exists inside <b>managed territory</b> — the destinations Mnemosyne itself populated. Marking a file or folder "quarantine" moves it (bytes intact, structure preserved) into <span class="mono">${esc('_deleted')}</span> under its destination root and stops counting it toward protection. Un-quarantine is a straight reverse move. On adopted media and source drives the action does not exist.</div>
+    <div class="dim" style="font-size:11.5px;margin-top:6px">Quarantine only exists inside <b>managed territory</b> — the destinations Obelisk itself populated. Marking a file or folder "quarantine" moves it (bytes intact, structure preserved) into <span class="mono">${esc('_deleted')}</span> under its destination root and stops counting it toward protection. Un-quarantine is a straight reverse move. On adopted media and source drives the action does not exist.</div>
     ${(d.roots||[]).length?`<div class="dim" style="font-size:11px;margin-top:6px">Managed roots: ${(d.roots||[]).map(r=>`<span class="mono">${esc(r)}</span>`).join(' · ')}</div>`:`<div class="dim" style="font-size:11px;margin-top:6px">No managed territory yet — execute a plan to populate a destination, and its files become quarantine-eligible.</div>`}
     <div class="row" style="margin-top:10px"><button class="btn" onclick="quarantineDlg()">Quarantine a path…</button></div></div>`;
   const active=es.filter(e=>e.status==='QUARANTINED');
@@ -3621,7 +3644,7 @@ async function vQuarantine(){
 }
 function quarantineDlg(){dlg(`<h1>Quarantine a path</h1>
   <div class="dim" style="font-size:11.5px;margin-bottom:8px">Give a file or folder inside managed territory. The tool previews the protection consequence <b>before</b> anything moves — you confirm only after seeing it. Nothing is ever deleted; this only stages into <span class="mono">${esc('_deleted')}</span>.</div>
-  <label>Path (inside a destination Mnemosyne populated)</label><input id="q_path" class="full" placeholder="Y:\\NAS\\Media\\2023\\... or /mnt/nas/...">${browseBtn('q_path')}
+  <label>Path (inside a destination Obelisk populated)</label><input id="q_path" class="full" placeholder="Y:\\NAS\\Media\\2023\\... or /mnt/nas/...">${browseBtn('q_path')}
   <label>Reason (optional — recorded in the catalog &amp; audit log)</label><input id="q_reason" class="full" placeholder="duplicate export, superseded, …">
   <div id="q_preview" style="margin-top:10px"></div>
   <div class="row" style="margin-top:14px"><button class="btn ghost" type="button" onclick="quarantinePreview()">Preview consequence</button>
@@ -3747,9 +3770,9 @@ function importDlg(){dlg(`<h1>Import a portable export</h1>
   <div class="row" style="margin-top:14px"><button class="btn" onclick="go()">Import</button></div>`,
   async()=>{const fi=$('#imp_file');if(!fi||!fi.files||!fi.files[0])throw new Error('choose a .json export');
     const txt=await fi.files[0].text();let obj;try{obj=JSON.parse(txt)}catch(e){throw new Error('not valid JSON')}
-    if(obj.format==='mnemosyne-structure'){const r=await api('POST','/api/import/structure',obj);toast('Imported archive “'+r.archive+'” — '+r.files+' file(s)');loc('vault')}
-    else if(obj.format==='mnemosyne-plan'){const r=await api('POST','/api/import/plan',obj);toast('Imported plan “'+r.name+'” — '+r.files+' file(s)');loc('plans')}
-    else throw new Error('unrecognized export (expected a Mnemosyne structure or plan export)')})}
+    if(obj.format==='obelisk-structure'||obj.format==='mnemosyne-structure'){const r=await api('POST','/api/import/structure',obj);toast('Imported archive “'+r.archive+'” — '+r.files+' file(s)');loc('vault')}
+    else if(obj.format==='obelisk-plan'||obj.format==='mnemosyne-plan'){const r=await api('POST','/api/import/plan',obj);toast('Imported plan “'+r.name+'” — '+r.files+' file(s)');loc('plans')}
+    else throw new Error('unrecognized export (expected an Obelisk structure or plan export)')})}
 
 /* ---------------- shell ---------------- */
 let dlgGo=null;
