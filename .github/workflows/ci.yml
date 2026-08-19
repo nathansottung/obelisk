@@ -28,3 +28,9 @@ jobs:
 
       - name: go test
         run: go test ./... -v
+
+      # The race detector needs cgo (a C toolchain), which the Ubuntu runner has but
+      # the CGO_ENABLED=0 release build deliberately does not. Run it here so every
+      # push/PR is checked for data races even though release binaries stay pure-Go.
+      - name: go test -race
+        run: CGO_ENABLED=1 go test -race ./...
