@@ -904,9 +904,12 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 		}
 	}
 
-	setStatus := func(st, msg string) { c.Status, c.Error = st, msg; a.Store.UpdateChunk(c) }
-	setStatus("BUILDING", "")
-	fail := func(err error) error { setStatus("FAILED", err.Error()); return err }
+	setStatus := func(st, msg string) error { c.Status, c.Error = st, msg; return a.Store.UpdateChunkErr(c) }
+	// Interim status writes (BUILDING/FAILED) are best-effort: they're progress
+	// signals, not durability guarantees, and losing one doesn't misrepresent the
+	// medium. Only the terminal STAGED write is gated below.
+	_ = setStatus("BUILDING", "")
+	fail := func(err error) error { _ = setStatus("FAILED", err.Error()); return err }
 
 	list := filepath.Join(work, "filelist.txt")
 	var sb strings.Builder
@@ -1105,7 +1108,12 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	}
 
 	c.StagedDir = work
-	setStatus("STAGED", "")
+	// Durability gate: the package is built on disk, but if the catalog can't record
+	// it as STAGED the next step (write) would never see it — worse, a reopen could
+	// leave it looking un-built. Surface the failure rather than reporting success.
+	if err := setStatus("STAGED", ""); err != nil {
+		return fmt.Errorf("package built but catalog could not record it as staged (%w) — re-run Build once the catalog can save", err)
+	}
 	a.Store.Log("build", c.Name+" staged")
 	progress(1.0, "staged")
 	return nil

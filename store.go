@@ -2235,19 +2235,38 @@ func (s *Store) ChunkedFileIDs(collectionID int) map[int]bool {
 	return m
 }
 
-func (s *Store) UpdateChunk(c *Chunk) { s.mu.Lock(); defer s.mu.Unlock(); _ = s.save() }
+// UpdateChunkErr persists the caller's in-memory edits to c and returns any save
+// error. UpdateChunk is the legacy void wrapper kept so existing call sites compile
+// unchanged; error-aware callers use UpdateChunkErr.
+func (s *Store) UpdateChunkErr(c *Chunk) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.save()
+}
 
-// AppendVerifyEvent records one integrity check and persists. Callers set any
-// status/verified_at fields on c first; this single save captures them too.
-func (s *Store) AppendVerifyEvent(c *Chunk, ev VerifyEvent) {
+func (s *Store) UpdateChunk(c *Chunk) { _ = s.UpdateChunkErr(c) }
+
+// AppendVerifyEventErr records one integrity check and persists. Callers set any
+// status/verified_at fields on c first; this single save captures them too. If the
+// save fails the appended event is rolled back before the error is returned, so a
+// verify result that never reached disk is never left looking recorded in memory.
+func (s *Store) AppendVerifyEventErr(c *Chunk, ev VerifyEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if ev.Level == "" {
 		ev.Level = "B" // legacy/always-full checks record as level B
 	}
 	c.VerifyEvents = append(c.VerifyEvents, ev)
-	_ = s.save()
+	if err := s.save(); err != nil {
+		c.VerifyEvents = c.VerifyEvents[:len(c.VerifyEvents)-1]
+		return err
+	}
+	return nil
 }
+
+// AppendVerifyEvent is the legacy void wrapper kept so existing call sites compile
+// unchanged; error-aware callers use AppendVerifyEventErr.
+func (s *Store) AppendVerifyEvent(c *Chunk, ev VerifyEvent) { _ = s.AppendVerifyEventErr(c, ev) }
 
 // ---- volumes + copies --------------------------------------------------
 
