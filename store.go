@@ -11,6 +11,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1100,11 +1101,17 @@ func (s *Store) buildFileIndexLocked() {
 	s.fileIdx = idx
 }
 
+// openStoreFailSave, when non-nil, seeds the new Store's failSave seam at the top of
+// OpenStore — the only way a test can inject a write failure into the recovery save
+// OpenStore performs before returning. nil in production. See the failSave field.
+var openStoreFailSave func() error
+
 func OpenStore(dataDir string) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, err
 	}
 	s := &Store{path: filepath.Join(dataDir, "catalog.json")}
+	s.failSave = openStoreFailSave
 	s.jobs.path = filepath.Join(dataDir, "jobs.json")
 	s.c.NextID = map[string]int{}
 	existed := false
@@ -1199,7 +1206,13 @@ func OpenStore(dataDir string) (*Store, error) {
 		recovered = true
 	}
 	if recovered {
-		_ = s.save()
+		// Loud non-fatal: recovery/seeding already applied in memory, so a boot that can't
+		// persist it still beats no boot — it re-applies on the next successful save. Warn
+		// the operator rather than refuse to open over a transient write failure.
+		if err := s.save(); err != nil {
+			log.Printf("WARNING: startup recovery could not be persisted (%v) — recovered "+
+				"state may not survive another restart until the next successful save", err)
+		}
 	}
 	// Load the persisted job board (sidecar), reconciling any job left RUNNING —
 	// its goroutine died with the previous process — to INTERRUPTED so it is picked
