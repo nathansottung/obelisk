@@ -120,6 +120,16 @@ Match the surrounding code — it is intentional, not accidental:
   and `*.html`, and `eol=crlf` for `*.bat` (so `cmd.exe` parses batch files
   correctly). Don't commit CRLF into source or docs; if a clone shows spurious
   whole-file diffs, run `git add --renormalize .` once.
+- **Navigation stays lazy: one level at a time, with a payload cap.** The treemap
+  and the Archives folder tree both aggregate a single level server-side (immediate
+  children + worst-status/byte rollups) and never build or ship the whole tree. A
+  wide level is capped (`folderTreeMaxLimit`, 200 rows) and paged, so the JSON for
+  one expansion stays under **50 KB** even at 200k+ files. `TestTreeExpansionBudget`
+  asserts that cap plus a **100 ms** server-compute budget on the widest folder, and
+  it runs in CI on every push (`OBELISK_PERF=1`). Client **render** time can't be
+  measured from Go, so the payload cap is its enforcement proxy: under 50 KB of
+  virtualized rows, render is arithmetic (target < 150 ms). If you add a level-at-a-
+  time view, reuse `levelAggregate` and keep it inside this budget.
 
 ## Writing standard (George Orwell's six rules)
 

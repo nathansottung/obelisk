@@ -112,10 +112,12 @@ func (a *App) hashesOnVolume(volumeID int) map[string]bool {
 }
 
 // incrementalDelta computes the delta file set for a base over a collection, scoped
-// to folderIDs (empty = whole archive). Only files with a resolvable source folder
-// are eligible (they must be locatable on disk to copy). Stateless: recomputed every
-// call, so it self-heals across interrupted/skipped runs.
-func (a *App) incrementalDelta(collectionID int, folderIDs []int, volumeID int, base string) ([]*File, error) {
+// to folderIDs (empty = whole archive) and, optionally, to a folder path prefix
+// (scopePrefix; empty = no prefix filter — the Archives folder-tree scope). Only
+// files with a resolvable source folder are eligible (they must be locatable on disk
+// to copy). Stateless: recomputed every call, so it self-heals across
+// interrupted/skipped runs.
+func (a *App) incrementalDelta(collectionID int, folderIDs []int, volumeID int, base, scopePrefix string) ([]*File, error) {
 	coll := a.Store.Collection(collectionID)
 	if coll == nil {
 		return nil, fmt.Errorf("archive %d not found", collectionID)
@@ -132,7 +134,17 @@ func (a *App) incrementalDelta(collectionID int, folderIDs []int, volumeID int, 
 		if len(want) > 0 && !want[f.FolderID] {
 			return false
 		}
-		return folderPath[f.FolderID] != "" // must be locatable on disk
+		root := folderPath[f.FolderID]
+		if root == "" {
+			return false // must be locatable on disk
+		}
+		if scopePrefix != "" {
+			full := filepath.ToSlash(filepath.Join(root, filepath.FromSlash(f.RelPath)))
+			if !underScopePrefix(full, scopePrefix) {
+				return false
+			}
+		}
+		return true
 	}
 
 	var eligible func(f *File) bool
@@ -190,12 +202,12 @@ func (a *App) roleBreakdown(files []*File) []DeltaRole {
 
 // BackupDeltaPreview computes the "what would this do" summary — counts, bytes,
 // per-role breakdown, resolved mode, and a fit check against destDir's free space.
-func (a *App) BackupDeltaPreview(collectionID int, folderIDs []int, volumeID int, base, mode, destDir string) (*BackupDelta, error) {
+func (a *App) BackupDeltaPreview(collectionID int, folderIDs []int, volumeID int, base, mode, destDir, scopePrefix string) (*BackupDelta, error) {
 	// A not-yet-registered volume (id 0) is a valid preview target: it holds nothing,
 	// so the "volume" base is the whole in-scope set. Mode then defaults to the passed
 	// hint (or mirror), since there's no volume kind to read.
 	vol := a.Store.Volume(volumeID)
-	files, err := a.incrementalDelta(collectionID, folderIDs, volumeID, base)
+	files, err := a.incrementalDelta(collectionID, folderIDs, volumeID, base, scopePrefix)
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +255,7 @@ type BackupChangesResult struct {
 // copies + refreshes the sidecar; package mode plans media-sized packages from the
 // delta for the normal build/write engine. Either way a named BackupSession is
 // recorded (unless the delta was empty).
-func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, base, mode, destDir string, throttleMbps float64, progress func(float64, string)) (*BackupChangesResult, error) {
+func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, base, mode, destDir string, throttleMbps float64, scopePrefix string, progress func(float64, string)) (*BackupChangesResult, error) {
 	coll := a.Store.Collection(collectionID)
 	if coll == nil {
 		return nil, fmt.Errorf("archive %d not found", collectionID)
@@ -254,7 +266,7 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 	}
 	base, mode = normBase(base), normMode(mode, vol)
 
-	files, err := a.incrementalDelta(collectionID, folderIDs, volumeID, base)
+	files, err := a.incrementalDelta(collectionID, folderIDs, volumeID, base, scopePrefix)
 	if err != nil {
 		return nil, err
 	}
@@ -276,7 +288,7 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 			res.Bytes += c.DataBytes
 		}
 		res.Message = fmt.Sprintf("Planned %d package(s) from %d changed file(s) — build & write them from Packages to land verified copies on %s.", len(planned), res.Files, vol.Label)
-		a.recordBackupSession(collectionID, vol, base, mode, res.Files, res.Bytes, folderIDs, "", res)
+		a.recordBackupSession(collectionID, vol, base, mode, res.Files, res.Bytes, folderIDs, scopePrefix, "", res)
 		progress(1.0, res.Message)
 		return res, nil
 	}
@@ -315,6 +327,7 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 		throttleMbps = a.LoadConfig().ThrottleMbps
 	}
 	th := &throttler{bps: throttleMbps * 1e6, start: time.Now()}
+	throttleBps := throttleMbps * 1e6 // fed to the Performance strip's destination row
 	var doneBytes int64
 	lastTick := time.Now()
 	report := func(msg string) {
@@ -327,7 +340,8 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 
 	refs := make([]ChunkFileRef, 0, len(files))
 	for i, f := range files {
-		srcPath := filepath.Join(folderPath[f.FolderID], filepath.FromSlash(f.RelPath))
+		srcRoot := folderPath[f.FolderID]
+		srcPath := filepath.Join(srcRoot, filepath.FromSlash(f.RelPath))
 		mrel := f.RelPath
 		if multi {
 			mrel = label[f.FolderID] + "/" + f.RelPath
@@ -338,8 +352,13 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 		}
 		streamHash, n, cerr := copyVerifyToDest(srcPath, destPath, th, func(d int64) {
 			doneBytes += d
-			if time.Since(lastTick) > 700*time.Millisecond {
-				lastTick = time.Now()
+			now := time.Now()
+			// Feed the Performance strip: the source root and destination volume rows
+			// both advance by the bytes just copied.
+			a.Perf.Observe("src:"+srcRoot, "source", "", srcRoot, 0, d, now)
+			a.Perf.Observe("dst:"+destDir, "dest", vol.Label, destDir, throttleBps, d, now)
+			if now.Sub(lastTick) > 700*time.Millisecond {
+				lastTick = now
 				report(fmt.Sprintf("backing up %d/%d — %s", i+1, len(files), f.RelPath))
 			}
 		})
@@ -364,7 +383,7 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 		res.Sidecar = sc
 	}
 	if res.Files > 0 {
-		a.recordBackupSession(collectionID, vol, base, mode, res.Files, res.Bytes, folderIDs, destDir, res)
+		a.recordBackupSession(collectionID, vol, base, mode, res.Files, res.Bytes, folderIDs, scopePrefix, destDir, res)
 	}
 	a.Store.Log("incremental", fmt.Sprintf("%s → %s (%s, base=%s): %d files (%.1f GB), %d changed, %d failed",
 		coll.Name, vol.Label, destDir, base, res.Files, float64(res.Bytes)/1e9, res.Changed, res.Failed))
@@ -373,9 +392,14 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 }
 
 // recordBackupSession appends the named history record and stamps its name onto res.
-func (a *App) recordBackupSession(collectionID int, vol *Volume, base, mode string, files int, bytes int64, folderIDs []int, dest string, res *BackupChangesResult) {
+// When scopePrefix names a subfolder, the history name carries it so a scoped run is
+// distinguishable from a whole-archive one.
+func (a *App) recordBackupSession(collectionID int, vol *Volume, base, mode string, files int, bytes int64, folderIDs []int, scopePrefix, dest string, res *BackupChangesResult) {
 	now := time.Now().UTC()
 	name := fmt.Sprintf("Incremental to %s — %d file(s), %s, %s", vol.Label, files, humanBytes(bytes), now.Format("2006-01-02"))
+	if scope := a.Store.scopeDisplay(collectionID, scopePrefix); scope != "" {
+		name = fmt.Sprintf("Incremental to %s (%s) — %d file(s), %s, %s", vol.Label, scope, files, humanBytes(bytes), now.Format("2006-01-02"))
+	}
 	s := a.Store.AddBackupSession(&BackupSession{
 		CollectionID: collectionID, VolumeID: vol.ID, VolumeLabel: vol.Label,
 		Base: base, Mode: mode, Files: files, Bytes: bytes, FolderIDs: folderIDs, At: now, Name: name, Dest: dest,

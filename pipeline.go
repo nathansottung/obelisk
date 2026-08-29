@@ -128,6 +128,9 @@ const fastBuildWarning = "FAST build: stage-vs-source and decrypt round-trip ver
 type App struct {
 	DataDir string
 	Store   *Store
+	// Perf is the live transfer meter behind the Performance strip. It has its OWN
+	// mutex and never touches the catalog lock, so /api/perf can't contend with jobs.
+	Perf *PerfMeter
 	// Preflight cache: the tool-version checks shell out to tar/gpg/par2, and a
 	// cold tool (notably gpg spawning its agent on Windows) can take many seconds.
 	// Both the Settings view and the periodic status lamp call Preflight, so a
@@ -607,7 +610,7 @@ type PlanResult struct {
 	Staging   map[string]any   `json:"staging"`
 }
 
-func (a *App) Plan(collectionID int, mediaKind string, targetGB float64, par2 int, encrypted bool) (*PlanResult, error) {
+func (a *App) Plan(collectionID int, mediaKind string, targetGB float64, par2 int, encrypted bool, scopePrefix string) (*PlanResult, error) {
 	cfg := a.LoadConfig()
 	if par2 <= 0 {
 		par2 = a.effectiveIntegrity(collectionID).Par2Redundancy // archive override, else global preset
@@ -641,6 +644,12 @@ func (a *App) Plan(collectionID int, mediaKind string, targetGB float64, par2 in
 	byRoot := map[int][]*File{}
 	var bigFiles []*File // exceed one medium -> each becomes a spanned chunk
 	for _, f := range files {
+		if scopePrefix != "" {
+			full := filepath.ToSlash(filepath.Join(folders[f.FolderID], filepath.FromSlash(f.RelPath)))
+			if !underScopePrefix(full, scopePrefix) {
+				continue // outside the selected folder-tree scope
+			}
+		}
 		if bh, ok := backedHash[f.ID]; ok && (bh == "" || bh == f.Hash) {
 			continue // genuinely backed up (or a legacy chunk with no recorded hash)
 		}

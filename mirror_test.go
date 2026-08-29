@@ -47,7 +47,7 @@ func TestMirror_CopyVerifyTreeAndCoverage(t *testing.T) {
 	vol := app.Store.AddVolume(Volume{Label: "MIR-A", Kind: "HDD"})
 	dest := t.TempDir()
 
-	res, err := app.MirrorToVolume(coll.ID, nil, dest, vol.ID, 0, noProgMirror)
+	res, err := app.MirrorToVolume(coll.ID, nil, dest, vol.ID, 0, "", noProgMirror)
 	if err != nil {
 		t.Fatalf("mirror: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestMirror_RefusesSourceDest(t *testing.T) {
 	}
 	vol := app.Store.AddVolume(Volume{Label: "V", Kind: "HDD"})
 	// Mirroring back into the source root must be refused up front.
-	_, err := app.MirrorToVolume(coll.ID, nil, filepath.Join(src, "mirror"), vol.ID, 0, noProgMirror)
+	_, err := app.MirrorToVolume(coll.ID, nil, filepath.Join(src, "mirror"), vol.ID, 0, "", noProgMirror)
 	if err == nil {
 		t.Fatal("expected refusal to mirror into a source root")
 	}
@@ -142,11 +142,11 @@ func TestMirror_ConcurrentMultiVolume(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, errs[0] = app.MirrorToVolume(coll.ID, nil, destA, volA.ID, 0, noProgMirror)
+		_, errs[0] = app.MirrorToVolume(coll.ID, nil, destA, volA.ID, 0, "", noProgMirror)
 	}()
 	go func() {
 		defer wg.Done()
-		_, errs[1] = app.MirrorToVolume(coll.ID, nil, destB, volB.ID, 0, noProgMirror)
+		_, errs[1] = app.MirrorToVolume(coll.ID, nil, destB, volB.ID, 0, "", noProgMirror)
 	}()
 	wg.Wait()
 	for i, e := range errs {
@@ -189,7 +189,7 @@ func TestMirror_IdempotentAndMultiFolderTree(t *testing.T) {
 	vol := app.Store.AddVolume(Volume{Label: "MF", Kind: "HDD"})
 	dest := t.TempDir()
 
-	res, err := app.MirrorToVolume(coll.ID, nil, dest, vol.ID, 0, noProgMirror)
+	res, err := app.MirrorToVolume(coll.ID, nil, dest, vol.ID, 0, "", noProgMirror)
 	if err != nil || res.Mirrored != 2 {
 		t.Fatalf("mirror multi-folder: mirrored=%d err=%v", res.Mirrored, err)
 	}
@@ -205,7 +205,7 @@ func TestMirror_IdempotentAndMultiFolderTree(t *testing.T) {
 
 	// Re-mirror refreshes the SAME chunk, not a duplicate.
 	before := len(mirrorChunksFor(app, coll.ID, vol.ID))
-	if _, err := app.MirrorToVolume(coll.ID, nil, dest, vol.ID, 500, noProgMirror); err != nil {
+	if _, err := app.MirrorToVolume(coll.ID, nil, dest, vol.ID, 500, "", noProgMirror); err != nil {
 		t.Fatalf("re-mirror: %v", err)
 	}
 	after := len(mirrorChunksFor(app, coll.ID, vol.ID))

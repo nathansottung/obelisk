@@ -39,7 +39,11 @@ type RingStats struct {
 // offset/length select a byte range of src; length <= 0 means "from offset to
 // EOF". This lets a spanned chunk stream one segment's range through the same
 // ring buffer as a whole-file write.
-func ringCopy(src, dst string, offset, length int64, blockMB int, bufferGB, throttleMbps float64, progress func(done, total int64)) (string, RingStats, error) {
+// live, when non-nil, is called each drained block with the current cumulative read
+// (source) and written (destination) byte counts, the buffer fill percentage, and the
+// live stall count — feeding the Performance strip's ring gauge. It must be cheap and
+// non-blocking; pass nil when no live telemetry is wanted.
+func ringCopy(src, dst string, offset, length int64, blockMB int, bufferGB, throttleMbps float64, progress func(done, total int64), live func(read, written int64, fillPct, stalls int)) (string, RingStats, error) {
 	block := blockMB << 20
 	depth := int(bufferGB * float64(1<<30) / float64(block))
 	if depth < 2 {
@@ -94,7 +98,7 @@ func ringCopy(src, dst string, offset, length int64, blockMB int, bufferGB, thro
 			if n > 0 {
 				h.Write(b[:n])
 				ch <- b[:n]
-				readBytes += int64(n)
+				atomic.AddInt64(&readBytes, int64(n)) // atomic: the writer loop reads it live
 				remaining -= int64(n)
 			}
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
@@ -123,12 +127,13 @@ func ringCopy(src, dst string, offset, length int64, blockMB int, bufferGB, thro
 	start := time.Now()
 	var written int64
 	for b := range ch {
+		fill := len(ch)
 		// Sample buffer occupancy only in steady state: skip the first block
 		// (buffer still warming) and everything after the reader has finished
 		// (the tail always drains to empty — counting it would peg min at 0 and
 		// hide whether the writer ever actually starved mid-stream).
 		if written > 0 && atomic.LoadInt32(&readerDone) == 0 {
-			if fill := len(ch); fill < stats.MinFill {
+			if fill < stats.MinFill {
 				stats.MinFill = fill
 				if fill == 0 {
 					stats.StarvedEvents++
@@ -141,6 +146,13 @@ func ringCopy(src, dst string, offset, length int64, blockMB int, bufferGB, thro
 		written += int64(len(b))
 		if total > 0 {
 			progress(written, total)
+		}
+		if live != nil {
+			pct := 0
+			if depth > 0 {
+				pct = fill * 100 / depth
+			}
+			live(atomic.LoadInt64(&readBytes), written, pct, stats.StarvedEvents)
 		}
 		// Writer-side pacing only: sleep until cumulative bytes match the target
 		// rate. Self-correcting against wall clock, so the rate stays smooth.
@@ -160,13 +172,40 @@ func ringCopy(src, dst string, offset, length int64, blockMB int, bufferGB, thro
 	stats.Bytes, stats.Seconds = written, round2(secs)
 	stats.WriteMBps = round1(float64(written) / 1e6 / secs)
 	if readSecs > 0 {
-		stats.ReadMBps = round1(float64(readBytes) / 1e6 / readSecs)
+		stats.ReadMBps = round1(float64(atomic.LoadInt64(&readBytes)) / 1e6 / readSecs)
 	}
 	return hex.EncodeToString(h.Sum(nil)), stats, nil
 }
 
 func round1(f float64) float64 { return float64(int(f*10+0.5)) / 10 }
 func round2(f float64) float64 { return float64(int(f*100+0.5)) / 100 }
+
+// ringPerfLive builds the ringCopy `live` callback that feeds the Performance strip: a
+// source (read) row, a destination (write) row labelled with the volume, and the live
+// buffer fill/stall gauge on the destination. The volume label is resolved ONCE up
+// front (never per block), and byte deltas are diffed from the cumulative counts. The
+// meter's methods are nil-safe, so this is harmless when no strip is watching.
+func (a *App) ringPerfLive(srcPath, destDir string, volumeID int, throttleMbps float64) func(read, written int64, fillPct, stalls int) {
+	destLabel := ""
+	if v := a.Store.Volume(volumeID); v != nil {
+		destLabel = v.Label
+	}
+	srcID, dstID := "src:"+srcPath, "dst:"+destDir
+	throttleBps := throttleMbps * 1e6
+	var lastR, lastW int64
+	return func(read, written int64, fillPct, stalls int) {
+		now := time.Now()
+		if d := read - lastR; d > 0 {
+			a.Perf.Observe(srcID, "source", "", srcPath, 0, d, now)
+			lastR = read
+		}
+		if d := written - lastW; d > 0 {
+			a.Perf.Observe(dstID, "dest", destLabel, destDir, throttleBps, d, now)
+			lastW = written
+		}
+		a.Perf.SetBuffer(dstID, "dest", destLabel, destDir, fillPct, stalls, now)
+	}
+}
 
 // ---- chunk-level operations -------------------------------------------
 
@@ -287,7 +326,8 @@ func (a *App) WriteChunk(id int, destDir string, bufferGB float64, blockMB int, 
 				frac = float64(done) / float64(total)
 			}
 			progress(0.02+frac*0.66, progBytes(done, total, "writing payload"))
-		})
+		},
+		a.ringPerfLive(enc, dest, volumeID, throttleMbps))
 	c.RingStats = &stats // telemetry: proof the buffer decoupled read from a throttled write
 	// A ringCopy read error (including a short/truncated source) must be reported as
 	// the I/O error it is — checked BEFORE the hash comparison, so a read failure is

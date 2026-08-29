@@ -28,6 +28,8 @@ Have your external hard drive plugged in. A "mounted" drive means it shows up wi
 
 Each archive row has buttons: **Scan folder…**, **Plan packages…**, **Mirror backup…**, **Protection…**, and **Rescan & compare**. We will use the first three.
 
+You can also back up one folder at a time: click the triangle at the start of an archive's row to open its folder tree, pick a folder, and the same actions run on just that folder.
+
 ---
 
 ## Step 2: Scan a folder into the Archive

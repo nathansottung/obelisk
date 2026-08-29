@@ -35,7 +35,7 @@ func TestIncremental_VolumeBaseOnlyDelta(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "mirror")
 
 	// First run: everything lands (nothing on the volume yet).
-	r1, err := app.BackupChanges(coll.ID, nil, vol.ID, BaseVolume, ModeMirror, dest, 0, func(float64, string) {})
+	r1, err := app.BackupChanges(coll.ID, nil, vol.ID, BaseVolume, ModeMirror, dest, 0, "", func(float64, string) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestIncremental_VolumeBaseOnlyDelta(t *testing.T) {
 	scanInto(t, app, coll.ID, src)
 
 	// Preview should see exactly the two-file delta.
-	d, err := app.BackupDeltaPreview(coll.ID, nil, vol.ID, BaseVolume, ModeMirror, dest)
+	d, err := app.BackupDeltaPreview(coll.ID, nil, vol.ID, BaseVolume, ModeMirror, dest, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestIncremental_VolumeBaseOnlyDelta(t *testing.T) {
 	}
 
 	// Second run: only the delta copies.
-	r2, err := app.BackupChanges(coll.ID, nil, vol.ID, BaseVolume, ModeMirror, dest, 0, func(float64, string) {})
+	r2, err := app.BackupChanges(coll.ID, nil, vol.ID, BaseVolume, ModeMirror, dest, 0, "", func(float64, string) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestIncremental_VolumeBaseOnlyDelta(t *testing.T) {
 
 	// A third run with no changes is a no-op that records no session.
 	before := len(app.Store.BackupSessions(coll.ID))
-	r3, err := app.BackupChanges(coll.ID, nil, vol.ID, BaseVolume, ModeMirror, dest, 0, func(float64, string) {})
+	r3, err := app.BackupChanges(coll.ID, nil, vol.ID, BaseVolume, ModeMirror, dest, 0, "", func(float64, string) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestIncremental_ProtectionBaseExcludesComplete(t *testing.T) {
 	vol := app.Store.AddVolume(Volume{Label: "ARCH-02", Kind: "HDD"})
 	dest := filepath.Join(t.TempDir(), "mirror")
 
-	if _, err := app.BackupChanges(coll.ID, nil, vol.ID, BaseProtection, ModeMirror, dest, 0, func(float64, string) {}); err != nil {
+	if _, err := app.BackupChanges(coll.ID, nil, vol.ID, BaseProtection, ModeMirror, dest, 0, "", func(float64, string) {}); err != nil {
 		t.Fatal(err)
 	}
 	// Both files now have one verified copy → COMPLETE under single-copy.
@@ -145,14 +145,14 @@ func TestIncremental_ProtectionBaseExcludesComplete(t *testing.T) {
 	scanInto(t, app, coll.ID, src)
 
 	// Protection-base delta must be exactly the one file that isn't COMPLETE.
-	d, err := app.BackupDeltaPreview(coll.ID, nil, vol.ID, BaseProtection, ModeMirror, dest)
+	d, err := app.BackupDeltaPreview(coll.ID, nil, vol.ID, BaseProtection, ModeMirror, dest, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if d.Files != 1 {
 		t.Fatalf("protection delta = %d, want 1 (only the unprotected new file)", d.Files)
 	}
-	r, err := app.BackupChanges(coll.ID, nil, vol.ID, BaseProtection, ModeMirror, dest, 0, func(float64, string) {})
+	r, err := app.BackupChanges(coll.ID, nil, vol.ID, BaseProtection, ModeMirror, dest, 0, "", func(float64, string) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestIncremental_FeedsHomeRecognition(t *testing.T) {
 	scanInto(t, app, coll.ID, src)
 	vol := app.Store.AddVolume(Volume{Label: "ARCH-09", Kind: "HDD"})
 	dest := filepath.Join(t.TempDir(), "m")
-	if _, err := app.BackupChanges(coll.ID, nil, vol.ID, BaseVolume, ModeMirror, dest, 0, func(float64, string) {}); err != nil {
+	if _, err := app.BackupChanges(coll.ID, nil, vol.ID, BaseVolume, ModeMirror, dest, 0, "", func(float64, string) {}); err != nil {
 		t.Fatal(err)
 	}
 	home := app.HomeOverview(nil)

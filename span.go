@@ -190,7 +190,8 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 					frac = float64(done) / float64(total)
 				}
 				progress(0.05+frac*0.6, progBytes(done, total, fmt.Sprintf("writing segment %d/%d", seg.Index, N)))
-			})
+			},
+			a.ringPerfLive(payload, destChunk, volumeID, throttleMbps))
 		c.RingStats = &stats
 		// A ringCopy read error (including a short/truncated source segment) is
 		// reported as the I/O error it is — checked BEFORE the read-back hash

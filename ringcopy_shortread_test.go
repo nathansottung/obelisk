@@ -21,7 +21,7 @@ func TestRingCopy_ShortSourceSurfacesReadError(t *testing.T) {
 	dst := filepath.Join(dir, "dst.bin")
 
 	// Ask for far more bytes than the source holds → truncated read.
-	hash, _, err := ringCopy(src, dst, 0, 1<<20, 1, 0.01, 0, func(done, total int64) {})
+	hash, _, err := ringCopy(src, dst, 0, 1<<20, 1, 0.01, 0, func(done, total int64) {}, nil)
 	if err == nil {
 		t.Fatal("expected a short-read I/O error; got nil (a truncation would otherwise manifest downstream as a hash mismatch)")
 	}
@@ -45,7 +45,7 @@ func TestRingCopy_WholeFileCopyIsClean(t *testing.T) {
 	}
 	dst := filepath.Join(dir, "dst.bin")
 
-	hash, stats, err := ringCopy(src, dst, 0, 0, 1, 0.01, 0, func(done, total int64) {})
+	hash, stats, err := ringCopy(src, dst, 0, 0, 1, 0.01, 0, func(done, total int64) {}, nil)
 	if err != nil {
 		t.Fatalf("whole-file copy should succeed, got %v", err)
 	}

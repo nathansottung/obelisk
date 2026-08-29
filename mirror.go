@@ -119,7 +119,7 @@ type MirrorResult struct {
 // files (copy-then-verify each), records a verified mirror Copy on the volume,
 // and refreshes the volume inventory sidecar. One call == one volume; run several
 // concurrently for multi-volume mirroring.
-func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, volumeID int, throttleMbps float64, progress func(float64, string)) (*MirrorResult, error) {
+func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, volumeID int, throttleMbps float64, scopePrefix string, progress func(float64, string)) (*MirrorResult, error) {
 	coll := a.Store.Collection(collectionID)
 	if coll == nil {
 		return nil, fmt.Errorf("archive %d not found", collectionID)
@@ -160,8 +160,15 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 		if len(want) > 0 && !want[f.FolderID] {
 			continue
 		}
-		if folderPath[f.FolderID] == "" {
+		root := folderPath[f.FolderID]
+		if root == "" {
 			continue // orphan file with no source folder — cannot locate on disk
+		}
+		if scopePrefix != "" {
+			full := filepath.ToSlash(filepath.Join(root, filepath.FromSlash(f.RelPath)))
+			if !underScopePrefix(full, scopePrefix) {
+				continue // outside the selected folder-tree scope
+			}
 		}
 		files = append(files, f)
 		usedFolders[f.FolderID] = true
@@ -187,6 +194,7 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 
 	res := &MirrorResult{VolumeID: vol.ID, Volume: vol.Label, Dest: destDir}
 	th := &throttler{bps: throttleMbps * 1e6, start: time.Now()}
+	throttleBps := throttleMbps * 1e6 // fed to the Performance strip's destination row
 	var doneBytes, doneFiles int64
 	report := func(msg string) {
 		frac := 0.0
@@ -201,7 +209,8 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 	lastTick := time.Now() // paces mid-file progress so live MB/s updates on big files too
 	for i, f := range files {
 		doneFiles = int64(i + 1) // file currently being mirrored (matches the "i+1/len" message)
-		srcPath := filepath.Join(folderPath[f.FolderID], filepath.FromSlash(f.RelPath))
+		srcRoot := folderPath[f.FolderID]
+		srcPath := filepath.Join(srcRoot, filepath.FromSlash(f.RelPath))
 		mrel := f.RelPath
 		if multi {
 			mrel = label[f.FolderID] + "/" + f.RelPath
@@ -217,8 +226,13 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 		}
 		streamHash, n, err := mirrorCopyFile(srcPath, tmp, th, func(d int64) {
 			doneBytes += d
-			if time.Since(lastTick) > 700*time.Millisecond {
-				lastTick = time.Now()
+			now := time.Now()
+			// Feed the Performance strip: a copy reads and writes the same bytes, so the
+			// source root and destination volume rows both advance by d.
+			a.Perf.Observe("src:"+srcRoot, "source", "", srcRoot, 0, d, now)
+			a.Perf.Observe("dst:"+destDir, "dest", vol.Label, destDir, throttleBps, d, now)
+			if now.Sub(lastTick) > 700*time.Millisecond {
+				lastTick = now
 				report(fmt.Sprintf("mirroring %d/%d — %s", i+1, len(files), f.RelPath))
 			}
 		})

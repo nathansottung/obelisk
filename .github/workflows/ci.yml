@@ -29,6 +29,13 @@ jobs:
       - name: go test
         run: go test ./... -v
 
+      # Navigation performance budget for the Archives folder tree: expanding the
+      # widest folder of a ~200k-file catalog must stay under 100ms server compute and
+      # 50KB payload (TestTreeExpansionBudget). The OBELISK_PERF gate only exempts a
+      # quick local `go test`; here it is enforced on every push. NOT continue-on-error.
+      - name: tree-expansion budget
+        run: OBELISK_PERF=1 go test -run TestTreeExpansionBudget -v ./...
+
       # The race detector needs cgo (a C toolchain), which the Ubuntu runner has but
       # the CGO_ENABLED=0 release build deliberately does not. Run it here so every
       # push/PR is checked for data races even though release binaries stay pure-Go.

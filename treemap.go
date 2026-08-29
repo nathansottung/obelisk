@@ -15,6 +15,7 @@ package main
 import (
 	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -101,6 +102,7 @@ type treemapAgg struct {
 	name        string
 	path        string
 	isDir       bool
+	hasSub      bool // holds at least one child DIRECTORY (vs. only files) — used by the folder tree
 	size        int64
 	files       int
 	worst       string
@@ -113,11 +115,16 @@ func (a *treemapAgg) node() TreemapNode {
 		Status: a.worst, HasChildren: a.isDir, StatusBytes: a.statusBytes}
 }
 
-// Treemap computes one zoom level of the risk treemap for an archive. dirPath is
-// the directory to show ("" = archive root, whose children are the scanned
-// folders). colorBy is "protection" (default) or "drift"; drift falls back to
-// protection when no reconcile report exists (DriftAvailable then reports false).
-func (s *Store) Treemap(collectionID int, dirPath, colorBy string) TreemapResult {
+// levelAggregate computes one zoom level: the immediate children of dirPath with a
+// worst-status + byte rollup per child, plus the level totals and breadcrumb. It is
+// the shared core behind both the risk treemap (which folds small children into an
+// "other" block) and the Archives folder tree (which keeps every child folder,
+// name-sorted and paginated). dirPath is "" for the archive root (whose children are
+// the scanned folders). colorBy is "protection" (default), "drift", or "validation";
+// drift falls back to protection when no reconcile report exists. The returned
+// TreemapResult has every field set EXCEPT Children/Folded, which each caller fills;
+// the returned severity ranker matches the active coloring mode.
+func (s *Store) levelAggregate(collectionID int, dirPath, colorBy string) ([]*treemapAgg, TreemapResult, func(string) int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -173,7 +180,9 @@ func (s *Store) Treemap(collectionID int, dirPath, colorBy string) TreemapResult
 	folderPath := map[int]string{}
 	for _, fo := range s.c.Folders {
 		if fo.CollectionID == collectionID {
-			folderPath[fo.ID] = filepath.ToSlash(fo.Path)
+			// Canonical (clean, forward-slashed, no trailing slash) so per-file full paths
+			// can be built by cheap concatenation in the hot loop below.
+			folderPath[fo.ID] = strings.TrimRight(filepath.ToSlash(fo.Path), "/")
 		}
 	}
 
@@ -215,6 +224,7 @@ func (s *Store) Treemap(collectionID int, dirPath, colorBy string) TreemapResult
 	P := strings.TrimRight(filepath.ToSlash(dirPath), "/")
 	nP := normPath(P)
 	archiveRoot := P == ""
+	caseFold := runtime.GOOS == "windows" // case-insensitive path matching, as normPath does
 
 	children := map[string]*treemapAgg{}
 	get := func(key, name, cpath string, isDir bool) *treemapAgg {
@@ -231,19 +241,29 @@ func (s *Store) Treemap(collectionID int, dirPath, colorBy string) TreemapResult
 			continue
 		}
 		root := folderPath[f.FolderID]
-		full := filepath.ToSlash(filepath.Join(root, f.RelPath))
+		// root is canonical (clean, forward-slashed, no trailing slash) and RelPath is
+		// stored forward-slashed, so a plain concat equals ToSlash(Join(...)) without the
+		// per-file filepath.Clean — the difference that keeps a 200k-file expansion under
+		// the navigation budget (see TestTreeExpansionBudget).
+		full := root + "/" + f.RelPath
 
 		// Which immediate child of the current level does this file belong to?
 		var childKey, childName, childPath string
-		var childIsDir bool
+		var childIsDir, childHasSub bool
 		if archiveRoot {
 			// The archive root's children are the scanned folders themselves.
 			childPath = root
 			childName = lastSeg(root)
 			childKey = normPath(root)
 			childIsDir = true
+			childHasSub = strings.IndexByte(f.RelPath, '/') >= 0 // a deeper path → this root has subfolders
 		} else {
-			nFull := normPath(full)
+			// full is already clean+forward-slashed, so folding is just the platform case
+			// rule — skip the redundant Clean that normPath would repeat for every file.
+			nFull := full
+			if caseFold {
+				nFull = strings.ToLower(full)
+			}
 			if nFull != nP && !strings.HasPrefix(nFull, nP+"/") {
 				continue // not under the zoomed directory
 			}
@@ -255,6 +275,7 @@ func (s *Store) Treemap(collectionID int, dirPath, colorBy string) TreemapResult
 				childName = rest[:i]
 				childPath = P + "/" + childName
 				childIsDir = true
+				childHasSub = strings.IndexByte(rest[i+1:], '/') >= 0 // another separator → a sub-subfolder
 			} else {
 				childName = rest
 				childPath = full
@@ -301,6 +322,9 @@ func (s *Store) Treemap(collectionID int, dirPath, colorBy string) TreemapResult
 		a.statusBytes[st] += f.SizeBytes
 		if childIsDir {
 			a.files++
+			if childHasSub {
+				a.hasSub = true
+			}
 		} else {
 			a.files = 1
 		}
@@ -309,11 +333,21 @@ func (s *Store) Treemap(collectionID int, dirPath, colorBy string) TreemapResult
 		}
 	}
 
-	// Materialize, sort by size desc, then fold the small tail into "other".
+	// Materialize the children (unsorted); each caller applies its own ordering.
 	all := make([]*treemapAgg, 0, len(children))
 	for _, a := range children {
 		all = append(all, a)
 	}
+	res.Crumbs = treemapCrumbs(res.Name, P, folderPath)
+	return all, res, severity
+}
+
+// Treemap computes one zoom level of the risk treemap for an archive: the immediate
+// children sorted by size, with the small tail folded into a single synthetic
+// "other" block so a directory with tens of thousands of entries still draws a
+// readable handful. See levelAggregate for dirPath/colorBy semantics.
+func (s *Store) Treemap(collectionID int, dirPath, colorBy string) TreemapResult {
+	all, res, severity := s.levelAggregate(collectionID, dirPath, colorBy)
 	sort.Slice(all, func(i, j int) bool {
 		if all[i].size != all[j].size {
 			return all[i].size > all[j].size
@@ -345,8 +379,84 @@ func (s *Store) Treemap(collectionID int, dirPath, colorBy string) TreemapResult
 		n.Other, n.HasChildren = true, false // the "other" bucket is a summary, not zoomable
 		res.Children = append(res.Children, n)
 	}
+	return res
+}
 
-	res.Crumbs = treemapCrumbs(res.Name, P, folderPath)
+// FolderTreeNode is one row of the Archives folder tree: an immediate child
+// directory of the level being shown, with server-side rollups. The tree's unit is
+// the folder — individual files are never listed — so file counts and bytes are the
+// rollup of everything beneath the folder, and Status is its worst-of-children
+// protection status (color + shape + text in the UI).
+type FolderTreeNode struct {
+	Name        string `json:"name"`
+	Path        string `json:"path"` // canonical stored path; echo back to expand this folder
+	Files       int    `json:"files"`
+	Size        int64  `json:"size"`
+	Status      string `json:"status"`       // worst protection status within this folder
+	HasChildren bool   `json:"has_children"` // holds at least one SUBFOLDER (so the row is expandable)
+}
+
+// FolderTreeResult is one expanded level of the Archives folder tree: the child
+// folders to draw, the breadcrumb from the archive root, and a virtualization window
+// (Offset/Total/Truncated) so a pathological wide folder never ships the whole level.
+type FolderTreeResult struct {
+	CollectionID int              `json:"collection_id"`
+	Name         string           `json:"name"` // archive name
+	Path         string           `json:"path"` // directory being shown ("" = archive root)
+	Crumbs       []TreemapCrumb   `json:"crumbs"`
+	Children     []FolderTreeNode `json:"children"`
+	Offset       int              `json:"offset"`
+	Total        int              `json:"total"`     // total child folders at this level
+	Truncated    bool             `json:"truncated"` // more child folders exist beyond this window
+}
+
+// folderTreeMaxLimit caps rows per expansion. Immediate-subfolder counts are small
+// even at 200k files, but the cap guarantees the navigation payload budget (< 50KB;
+// see TestTreeExpansionBudget) in the pathological wide-folder case.
+const folderTreeMaxLimit = 200
+
+// FolderTree returns one level of the Archives folder tree: the immediate child
+// DIRECTORIES of dirPath, name-sorted (file-manager order) and paginated. It reuses
+// levelAggregate (immediate children + server-side rollups, never the whole tree) and
+// colors by protection status. Files are not listed individually — the tree's unit is
+// the folder, with counts as rollups.
+func (s *Store) FolderTree(collectionID int, dirPath string, offset, limit int) FolderTreeResult {
+	all, agg, _ := s.levelAggregate(collectionID, dirPath, "protection")
+	// Directories only; a file leaf is not an expandable folder row. Filter in place.
+	dirs := all[:0]
+	for _, a := range all {
+		if a.isDir {
+			dirs = append(dirs, a)
+		}
+	}
+	sort.Slice(dirs, func(i, j int) bool {
+		li, lj := strings.ToLower(dirs[i].name), strings.ToLower(dirs[j].name)
+		if li != lj {
+			return li < lj
+		}
+		return dirs[i].name < dirs[j].name
+	})
+	if limit <= 0 || limit > folderTreeMaxLimit {
+		limit = folderTreeMaxLimit
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(dirs) {
+		offset = len(dirs)
+	}
+	end := offset + limit
+	if end > len(dirs) {
+		end = len(dirs)
+	}
+	res := FolderTreeResult{CollectionID: collectionID, Name: agg.Name, Path: agg.Path,
+		Crumbs: agg.Crumbs, Total: len(dirs), Offset: offset, Truncated: end < len(dirs)}
+	for _, a := range dirs[offset:end] {
+		res.Children = append(res.Children, FolderTreeNode{
+			Name: a.name, Path: a.path, Files: a.files, Size: a.size,
+			Status: a.worst, HasChildren: a.hasSub,
+		})
+	}
 	return res
 }
 

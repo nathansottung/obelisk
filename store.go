@@ -47,6 +47,48 @@ func pathRelated(a, b string) bool {
 	return a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
 }
 
+// underScopePrefix reports whether a file's full (folder-joined) path falls within a
+// folder-scope prefix. An empty prefix means "whole archive" — everything matches.
+// Matching is at path-segment boundaries via normPath, so a prefix ".../2019" never
+// captures ".../2019-raw". This is the single membership test behind every
+// folder-scoped action (back up, mirror, plan, rescan): a filter over the catalog,
+// never a change to it.
+func underScopePrefix(full, prefix string) bool {
+	if strings.TrimSpace(prefix) == "" {
+		return true
+	}
+	nf, np := normPath(full), normPath(prefix)
+	return nf == np || strings.HasPrefix(nf, np+"/")
+}
+
+// scopeDisplay renders a folder-scope prefix as a short human path for job labels
+// and history names: the owning scanned folder's leaf name plus the remainder
+// beneath it (e.g. "Personal Photos/2019"). An empty prefix returns "". Must be
+// called without s.mu held (it takes the lock via FoldersOf).
+func (s *Store) scopeDisplay(collectionID int, prefix string) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return ""
+	}
+	P := strings.TrimRight(filepath.ToSlash(prefix), "/")
+	nP := normPath(P)
+	root := ""
+	for _, fo := range s.FoldersOf(collectionID) {
+		fp := filepath.ToSlash(fo.Path)
+		nf := normPath(fp)
+		if (nP == nf || strings.HasPrefix(nP, nf+"/")) && len(fp) > len(root) {
+			root = fp
+		}
+	}
+	if root == "" {
+		return lastSeg(P)
+	}
+	if len(P) > len(root) {
+		return lastSeg(root) + "/" + P[len(root)+1:]
+	}
+	return lastSeg(root)
+}
+
 // pathExt returns a file's lowercased extension (".nef"), for the search filter.
 func pathExt(rel string) string { return strings.ToLower(filepath.Ext(rel)) }
 
@@ -71,11 +113,22 @@ type Collection struct {
 	// Profile: the Profile says how many copies, Integrity says how hard each copy
 	// is proven.
 	Integrity *Integrity `json:"integrity,omitempty"`
+	// Retired hides the archive as an entity from Home, the Archives table, dashboards,
+	// and search defaults — it stops asking for attention. RetireHidden is the firmer
+	// tier that ALSO excludes it from the global Files/Data-known totals. Both are fully
+	// reversible; in both tiers the dedup index still recognizes its files (so a drive
+	// holding them never reads as mystery). Only Remove makes the app truly forget.
+	Retired      bool       `json:"retired,omitempty"`
+	RetireHidden bool       `json:"retire_hidden,omitempty"`
+	RetiredAt    *time.Time `json:"retired_at,omitempty"`
 }
 
 // IsSourceless reports whether this archive is defined by adopted media alone (no
 // source folders; scan/drift disabled).
 func (c *Collection) IsSourceless() bool { return strings.EqualFold(c.Kind, ArchiveSourceless) }
+
+// IsRetired reports whether this archive has been retired (either tier).
+func (c *Collection) IsRetired() bool { return c.Retired }
 
 type Folder struct {
 	ID           int    `json:"id"`
@@ -540,7 +593,8 @@ const (
 type Plan struct {
 	ID              int    `json:"id"`
 	Name            string `json:"name"`
-	ArchiveIDs      []int  `json:"archive_ids,omitempty"` // scope (empty = every snapshot)
+	ArchiveIDs      []int  `json:"archive_ids,omitempty"`  // scope (empty = every snapshot)
+	ScopePrefix     string `json:"scope_prefix,omitempty"` // folder-tree scope: restrict to files under this path prefix (empty = whole archive)
 	TemplateID      int    `json:"template_id"`
 	DestinationRoot string `json:"destination_root"` // may not exist yet — validated only at execution
 	Status          string `json:"status"`
@@ -1424,6 +1478,185 @@ func (s *Store) SetCollectionIntegrity(id int, iv *Integrity) error {
 	return fmt.Errorf("archive %d not found", id)
 }
 
+// SetCollectionRetired retires or unretires an archive. retired=false clears both
+// tiers (unretire). retired=true with hidden=false is the soft tier ("keep counting
+// it"); hidden=true also hides its numbers from the global totals. Reversible; the
+// transition is audit-logged. Never touches files on disk — only what the app shows.
+func (s *Store) SetCollectionRetired(id int, retired, hidden bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, c := range s.c.Collections {
+		if c.ID == id {
+			was := c.Retired
+			c.Retired = retired
+			c.RetireHidden = retired && hidden
+			if retired {
+				if !was {
+					now := time.Now().UTC()
+					c.RetiredAt = &now
+				}
+			} else {
+				c.RetiredAt = nil
+			}
+			action, tier := "retire", "keep counting it"
+			if !retired {
+				action, tier = "unretire", "active"
+			} else if hidden {
+				tier = "hide its numbers"
+			}
+			s.c.Audit = append(s.c.Audit, Audit{At: time.Now().UTC(), Action: action,
+				Detail: fmt.Sprintf("%s (id %d) — %s; files on disk untouched", c.Name, id, tier)})
+			_ = s.save()
+			return nil
+		}
+	}
+	return fmt.Errorf("archive %d not found", id)
+}
+
+// RemoveCollection permanently forgets an archive: it deletes the Collection row and
+// every catalog record keyed to it (files, folders, drift, events, conflicts, profile
+// assignments, protection summaries, backup sessions) and prunes its id out of any
+// plan/dock scope. It deliberately KEEPS volumes, snapshots, keys, and the package /
+// copy rows — a medium still self-describes, so its packages remain on the volume view
+// as "from a removed archive" (their now-dangling CollectionID is that marker). It
+// never deletes anything on disk. Returns what was forgotten vs. kept. The App-layer
+// RemoveArchive enforces the confirm-name / export guards before calling this.
+func (s *Store) RemoveCollection(id int) (RemoveCounts, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var counts RemoveCounts
+	found := false
+	for _, c := range s.c.Collections {
+		if c.ID == id {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return counts, fmt.Errorf("archive %d not found", id)
+	}
+
+	// Files / folders (the records being forgotten).
+	files := s.c.Files[:0]
+	for _, f := range s.c.Files {
+		if f.CollectionID == id {
+			counts.Files++
+		} else {
+			files = append(files, f)
+		}
+	}
+	s.c.Files = files
+	folders := s.c.Folders[:0]
+	for _, fo := range s.c.Folders {
+		if fo.CollectionID == id {
+			counts.Folders++
+		} else {
+			folders = append(folders, fo)
+		}
+	}
+	s.c.Folders = folders
+
+	// Other collection-keyed records — dropped (never resurfaced; the media keeps its
+	// own truth). Packages/copies (Chunks) are KEPT on purpose.
+	drift := s.c.Drift[:0]
+	for _, d := range s.c.Drift {
+		if d.CollectionID != id {
+			drift = append(drift, d)
+		}
+	}
+	s.c.Drift = drift
+	events := s.c.Events[:0]
+	for _, e := range s.c.Events {
+		if e.CollectionID != id {
+			events = append(events, e)
+		}
+	}
+	s.c.Events = events
+	conflicts := s.c.Conflicts[:0]
+	for _, cf := range s.c.Conflicts {
+		if cf.CollectionID != id {
+			conflicts = append(conflicts, cf)
+		}
+	}
+	s.c.Conflicts = conflicts
+	assigns := s.c.Assignments[:0]
+	for _, as := range s.c.Assignments {
+		if as.CollectionID != id {
+			assigns = append(assigns, as)
+		}
+	}
+	s.c.Assignments = assigns
+	prot := s.c.Protection[:0]
+	for _, p := range s.c.Protection {
+		if p.CollectionID != id {
+			prot = append(prot, p)
+		}
+	}
+	s.c.Protection = prot
+	sessions := s.c.BackupSessions[:0]
+	for _, b := range s.c.BackupSessions {
+		if b.CollectionID != id {
+			sessions = append(sessions, b)
+		}
+	}
+	s.c.BackupSessions = sessions
+
+	// Prune the id out of multi-archive scopes (plans, dock sessions) without deleting
+	// those entities.
+	for _, p := range s.c.Plans {
+		p.ArchiveIDs = pruneID(p.ArchiveIDs, id)
+	}
+	for _, ds := range s.c.DockSessions {
+		ds.ArchiveIDs = pruneID(ds.ArchiveIDs, id)
+	}
+
+	// Count kept packages + the distinct volumes they sit on (for the audit line).
+	vols := map[int]bool{}
+	for _, ch := range s.c.Chunks {
+		if ch.CollectionID != id {
+			continue
+		}
+		counts.Packages++
+		for _, cp := range ch.Copies {
+			if !cp.Superseded {
+				vols[cp.VolumeID] = true
+			}
+		}
+		for _, sg := range ch.Segments {
+			if sg.VolumeID != 0 {
+				vols[sg.VolumeID] = true
+			}
+		}
+	}
+	counts.Volumes = len(vols)
+
+	// Finally drop the Collection row and rebuild the file index (stale keys gone).
+	colls := s.c.Collections[:0]
+	for _, c := range s.c.Collections {
+		if c.ID != id {
+			colls = append(colls, c)
+		}
+	}
+	s.c.Collections = colls
+	s.buildFileIndexLocked()
+	_ = s.save()
+	return counts, nil
+}
+
+// pruneID returns ids with every occurrence of drop removed (nil-safe, order-stable).
+func pruneID(ids []int, drop int) []int {
+	if len(ids) == 0 {
+		return ids
+	}
+	out := ids[:0]
+	for _, v := range ids {
+		if v != drop {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 func (s *Store) AddFolder(collectionID int, path string) *Folder {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1780,9 +2013,23 @@ func (s *Store) Search(qr SearchQuery) []map[string]any {
 	for _, fo := range s.c.Folders {
 		folderPath[fo.ID] = filepath.ToSlash(fo.Path)
 	}
+	// By default, retired archives are excluded from search (they've stepped back from
+	// attention). Selecting a specific archive (CollectionID > 0) still searches it,
+	// retired or not — the filter only applies to the "all archives" default.
+	retiredColl := map[int]bool{}
+	if qr.CollectionID <= 0 {
+		for _, c := range s.c.Collections {
+			if c.Retired {
+				retiredColl[c.ID] = true
+			}
+		}
+	}
 	var out []map[string]any
 	for _, f := range s.c.Files {
 		if qr.CollectionID > 0 && f.CollectionID != qr.CollectionID {
+			continue
+		}
+		if retiredColl[f.CollectionID] {
 			continue
 		}
 		if q != "" && !strings.Contains(strings.ToLower(f.RelPath), q) {

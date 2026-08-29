@@ -50,16 +50,23 @@ func chunkVolumes(c *Chunk, volm map[int]*Volume) []string {
 	return out
 }
 
-// ReconcileCollection rescans the source folders and compares against the
-// chunked state, persisting a DriftReport. The rescan refreshes the File table
-// (via the shared parallel pool) so a later Plan naturally re-backs-up NEW and
-// MODIFIED files, while the comparison uses the chunked hashes as the reference.
-func (a *App) ReconcileCollection(collectionID int, progress func(float64, string)) (*DriftReport, error) {
+// ReconcileCollection rescans the source folders and compares against the chunked
+// state. The rescan refreshes the File table (via the shared parallel pool) so a
+// later Plan naturally re-backs-up NEW and MODIFIED files, while the comparison uses
+// the chunked hashes as the reference.
+//
+// scopePrefix confines the whole operation to files under a folder-tree path prefix
+// (empty = whole archive). A whole-archive run PERSISTS the DriftReport (driving the
+// Archives drift badge); a SCOPED run returns a transient report and leaves the
+// archive-level report/badge untouched — it only refreshes catalog hashes for the
+// files it actually rescanned.
+func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress func(float64, string)) (*DriftReport, error) {
 	cfg := a.LoadConfig()
 	coll := a.Store.Collection(collectionID)
 	if coll == nil {
 		return nil, fmt.Errorf("archive %d not found", collectionID)
 	}
+	persist := strings.TrimSpace(scopePrefix) == ""
 	folders := a.Store.FoldersOf(collectionID)
 	if len(folders) == 0 {
 		return nil, fmt.Errorf("archive %q has no scanned folders — scan one first", coll.Name)
@@ -117,6 +124,9 @@ func (a *App) ReconcileCollection(collectionID int, progress func(float64, strin
 				rel = fileRel[cf.FileID]
 			}
 			abs := filepath.Join(folder, filepath.FromSlash(rel))
+			if !persist && !underScopePrefix(filepath.ToSlash(abs), scopePrefix) {
+				continue // scoped rescan: only compare backed files under the prefix
+			}
 			b := &backed{abs: abs, rel: rel, hash: h, chunk: c.Name, vols: vols, fileID: cf.FileID}
 			backedByPath[abs] = b
 			if h != "" {
@@ -133,14 +143,26 @@ func (a *App) ReconcileCollection(collectionID int, progress func(float64, strin
 	var paths []string
 	perFolder := map[string]int{}
 	for _, fo := range folders {
+		// Scoped rescan: skip a scanned root that can't intersect the prefix, and prune
+		// directories off the path to it — so a subfolder rescan stays cheap.
+		if !persist && !pathRelated(fo.Path, scopePrefix) {
+			continue
+		}
 		_ = filepath.WalkDir(fo.Path, func(p string, d os.DirEntry, err error) error {
 			if err != nil {
 				return nil
 			}
-			if !d.IsDir() {
-				paths = append(paths, p)
-				perFolder[p] = fo.ID
+			if d.IsDir() {
+				if !persist && !pathRelated(p, scopePrefix) {
+					return filepath.SkipDir // neither an ancestor of nor inside the scope
+				}
+				return nil
 			}
+			if !persist && !underScopePrefix(filepath.ToSlash(p), scopePrefix) {
+				return nil
+			}
+			paths = append(paths, p)
+			perFolder[p] = fo.ID
 			return nil
 		})
 	}
@@ -263,8 +285,12 @@ func (a *App) ReconcileCollection(collectionID int, progress func(float64, strin
 	infoTotal := info["new"] + info["modified"] + info["missing"] + info["moved"]
 	rep := &DriftReport{At: time.Now().UTC(), CollectionID: collectionID,
 		Counts: counts, InfoCounts: info, ByExt: byExt, Items: items}
-	a.Store.ReplaceDriftReport(rep)
-	a.Store.Log("reconcile", fmt.Sprintf("archive %d: %d change(s), %d informational", collectionID, rep.Changes(), infoTotal))
+	if persist {
+		a.Store.ReplaceDriftReport(rep) // whole-archive run drives the Archives drift badge
+		a.Store.Log("reconcile", fmt.Sprintf("archive %d: %d change(s), %d informational", collectionID, rep.Changes(), infoTotal))
+	} else {
+		a.Store.Log("reconcile", fmt.Sprintf("archive %d (scope %s): %d change(s), %d informational — scoped, badge untouched", collectionID, scopePrefix, rep.Changes(), infoTotal))
+	}
 	progress(1.0, fmt.Sprintf("%d changes · %d informational", rep.Changes(), infoTotal))
 	return rep, nil
 }

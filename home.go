@@ -111,8 +111,28 @@ func (a *App) HomeOverview(onlineVolumeIDs map[int]bool) HomeData {
 	volumes := a.Store.Volumes()
 	chunks := a.Store.Chunks(0)
 
+	// Retired archives stop asking for attention. `retired` (either tier) hides the
+	// archive as an entity (card, count, health nags, incremental feed); `hidden` (the
+	// firm tier) additionally drops it from the global Files/Data-known totals. In BOTH
+	// tiers the dedup grouping index below still includes their files, so a drive
+	// holding them never reads as mystery. Active archives (for the incremental feed)
+	// exclude retired.
+	retired := map[int]bool{}
+	hidden := map[int]bool{}
+	activeArchives := make([]*Collection, 0, len(archives))
+	for _, c := range archives {
+		if c.Retired {
+			retired[c.ID] = true
+			if c.RetireHidden {
+				hidden[c.ID] = true
+			}
+			continue
+		}
+		activeArchives = append(activeArchives, c)
+	}
+
 	var data HomeData
-	data.Totals.Archives = len(archives)
+	data.Totals.Archives = len(activeArchives)
 	data.Totals.VolumesKnown = len(volumes)
 	data.Totals.Locations = len(a.Store.Locations())
 	data.Totals.VolumesOnline = len(onlineVolumeIDs)
@@ -174,6 +194,9 @@ func (a *App) HomeOverview(onlineVolumeIDs map[int]bool) HomeData {
 		}
 	}
 	for _, coll := range archives {
+		if hidden[coll.ID] {
+			continue // firm-tier retired: excluded from the headline totals
+		}
 		for _, f := range a.Store.FilesOf(coll.ID) {
 			addContent(f.Hash, f.SizeBytes)
 		}
@@ -203,6 +226,9 @@ func (a *App) HomeOverview(onlineVolumeIDs map[int]bool) HomeData {
 
 	// ---- archive cards + protection rollup ----
 	for _, coll := range archives {
+		if retired[coll.ID] {
+			continue // retired archives are hidden as an entity (and their under-protected nags with them)
+		}
 		prot := a.Store.Protection(coll.ID)
 		card := HomeArchiveCard{ID: coll.ID, Name: coll.Name, Sourceless: coll.IsSourceless(),
 			Protection: prot.Summary}
@@ -259,8 +285,8 @@ func (a *App) HomeOverview(onlineVolumeIDs map[int]bool) HomeData {
 	// Two feeds, merged: content-containment against adopted-drive snapshots, PLUS the
 	// explicit incremental "back up changes" sessions (which name their target volume
 	// and archive directly — no heuristic needed).
-	data.Incremental = a.detectIncrementalBackups(archives, snapshots, archiveSha, archiveB3)
-	data.Incremental = append(data.Incremental, a.sessionIncrementals(archives, data.Incremental)...)
+	data.Incremental = a.detectIncrementalBackups(activeArchives, snapshots, archiveSha, archiveB3)
+	data.Incremental = append(data.Incremental, a.sessionIncrementals(activeArchives, data.Incremental)...)
 	sort.Slice(data.Incremental, func(i, j int) bool {
 		if data.Incremental[i].ArchiveName != data.Incremental[j].ArchiveName {
 			return data.Incremental[i].ArchiveName < data.Incremental[j].ArchiveName
@@ -271,6 +297,9 @@ func (a *App) HomeOverview(onlineVolumeIDs map[int]bool) HomeData {
 	// ---- remaining health signals ----
 	drifted := map[int]bool{}
 	for _, dr := range a.Store.DriftReports() {
+		if retired[dr.CollectionID] {
+			continue // no drift nags for a retired archive
+		}
 		if ch := dr.Changes(); ch > 0 {
 			data.Health.DriftAlarms += ch
 			drifted[dr.CollectionID] = true
@@ -283,6 +312,9 @@ func (a *App) HomeOverview(onlineVolumeIDs map[int]bool) HomeData {
 	}
 	cutoff := time.Now().AddDate(0, -months, 0)
 	for _, c := range chunks {
+		if retired[c.CollectionID] {
+			continue // no verify-due nags for a retired archive's packages
+		}
 		if chunkVerifyDue(c, cutoff) {
 			data.Health.VerifyDue++
 		}

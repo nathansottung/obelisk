@@ -40,6 +40,17 @@ This list is just as important as the one above.
 
 ---
 
+## Removing an archive (retire vs remove)
+
+Sometimes a project is finished, or an archive was a test. You have two ways to clear it, and **neither one touches your files on disk** — they only change what the app remembers. Every dialog says so.
+
+- **Retire** (the reversible one). The archive steps back from attention: it leaves Home, the Archives table, the dashboards, and the search default. Every record — files, packages, copies, verify history — is kept, and you can bring it back any time from the **Retired** list. Two tiers: *keep counting it* (its files still count in your totals) or *hide its numbers* (also removed from the totals). Either way, a drive that holds its files still reads as **known — from a retired archive**, never as mystery data. This is the answer for "done with this project, but its tapes still exist."
+- **Remove** (the permanent one, guarded). This forgets the archive and its file records. Your **volumes and their inventories are kept** — a package on a tape simply shows as *from a removed archive* on that volume, because the tape still describes itself. Removing an empty archive asks only that you type its name. Removing one with packages also asks you to **save a fresh Structure Export first** (a content-free record of what was on the media) and won't proceed until you have. The archive's name becomes free to use again.
+
+The rule on both dialogs is the same as everywhere else in this tool: **it never deletes files — it only changes what the app remembers.**
+
+---
+
 ## Verify this claim (if you're comfortable with code)
 
 You don't have to take our word for it. The promise is guarded by one function and proven by tests that ship with the source code. If you're comfortable at a command line — or have a friend who is — run them with `go test ./...`:

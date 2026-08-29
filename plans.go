@@ -109,15 +109,32 @@ type PlanFile struct {
 func (a *App) planFiles(plan *Plan) []PlanFile {
 	frozen := plan.Status == PlanCompiled || plan.Status == PlanExecuting
 
-	// In-scope hashes (empty archive scope = every snapshot file).
+	// In-scope hashes (empty archive scope = every snapshot file). An optional folder-
+	// tree scope (ScopePrefix) narrows the universe to files under a path prefix within
+	// the scoped archive(s) — the content-addressed analogue of the mirror/backup scope.
 	useScope := len(plan.ArchiveIDs) > 0
 	scope := map[string]bool{}
 	if useScope {
+		folderPath := map[int]string{}
+		if plan.ScopePrefix != "" {
+			for _, aid := range plan.ArchiveIDs {
+				for _, fo := range a.Store.FoldersOf(aid) {
+					folderPath[fo.ID] = fo.Path
+				}
+			}
+		}
 		for _, aid := range plan.ArchiveIDs {
 			for _, f := range a.Store.FilesOf(aid) {
-				if f.Hash != "" {
-					scope[f.Hash] = true
+				if f.Hash == "" {
+					continue
 				}
+				if plan.ScopePrefix != "" {
+					full := filepath.ToSlash(filepath.Join(folderPath[f.FolderID], filepath.FromSlash(f.RelPath)))
+					if !underScopePrefix(full, plan.ScopePrefix) {
+						continue
+					}
+				}
+				scope[f.Hash] = true
 			}
 		}
 	}

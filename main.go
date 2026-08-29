@@ -72,7 +72,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("open catalog: %v", err)
 	}
-	app := &App{DataDir: *dataDir, Store: store}
+	app := &App{DataDir: *dataDir, Store: store, Perf: NewPerfMeter()}
 	setHashAccel(app.LoadConfig().HashAccel) // apply the persisted hash-acceleration preference at startup
 
 	// Optional gentle continuity: if an auto-export cadence is configured, write one
@@ -601,6 +601,14 @@ func api(mux *http.ServeMux, app *App) {
 			"data_dir": app.DataDir,
 		})
 	})
+	// Live Performance strip: the app's OWN transfer rates (per source/destination),
+	// buffer state, process CPU%, and machine RAM. Served entirely from the perf meter
+	// + meminfo/proccpu — it NEVER takes the catalog mutex, so it can't contend with a
+	// running job for the store. The UI polls this every 2s only while the strip is open
+	// or a job runs. These are app rates, not whole-system disk activity.
+	mux.HandleFunc("GET /api/perf", func(w http.ResponseWriter, r *http.Request) {
+		jsonOut(w, app.Perf.Sample(time.Now()))
+	})
 	// External-tools catalog: every optional helper with its detected status, config
 	// path, and official download link. Manually-browsed binary paths save via config.
 	mux.HandleFunc("GET /api/tools", func(w http.ResponseWriter, r *http.Request) {
@@ -839,6 +847,90 @@ func api(mux *http.ServeMux, app *App) {
 		}
 		jsonOut(w, coll)
 	})
+	// ---- archive removal: Retire (reversible, two tiers) + Remove (permanent, guarded).
+	// All record-only: files on disk are never touched. ----
+	register(mux, "POST /api/collections/{id}/retire", func(w http.ResponseWriter, r *http.Request) {
+		id := pathID(r)
+		if app.Store.Collection(id) == nil {
+			jsonErr(w, 404, fmt.Errorf("archive not found"))
+			return
+		}
+		hidden := bl(body(r), "hidden")
+		if err := app.Store.SetCollectionRetired(id, true, hidden); err != nil {
+			jsonErr(w, 400, err)
+			return
+		}
+		jsonOut(w, map[string]any{"retired": true, "retire_hidden": hidden})
+	})
+	register(mux, "POST /api/collections/{id}/unretire", func(w http.ResponseWriter, r *http.Request) {
+		id := pathID(r)
+		if app.Store.Collection(id) == nil {
+			jsonErr(w, 404, fmt.Errorf("archive not found"))
+			return
+		}
+		if err := app.Store.SetCollectionRetired(id, false, false); err != nil {
+			jsonErr(w, 400, err)
+			return
+		}
+		jsonOut(w, map[string]any{"retired": false})
+	})
+	// The Remove guard's "save a fresh Structure Export to a folder you choose" button.
+	register(mux, "POST /api/collections/{id}/structure-export-save", func(w http.ResponseWriter, r *http.Request) {
+		id := pathID(r)
+		if app.Store.Collection(id) == nil {
+			jsonErr(w, 404, fmt.Errorf("archive not found"))
+			return
+		}
+		paths, err := app.writeStructureExportTo(id, s(body(r), "dir"))
+		if err != nil {
+			jsonErr(w, 400, err)
+			return
+		}
+		jsonOut(w, map[string]any{"saved": paths})
+	})
+	// Counts the Remove dialog states plainly ("forgets where N files are stored; your
+	// V tapes are untouched"), and which guard branch applies.
+	register(mux, "GET /api/collections/{id}/removal-info", func(w http.ResponseWriter, r *http.Request) {
+		id := pathID(r)
+		c := app.Store.Collection(id)
+		if c == nil {
+			jsonErr(w, 404, fmt.Errorf("archive not found"))
+			return
+		}
+		chunks := app.Store.Chunks(id)
+		vols := map[int]bool{}
+		copies := 0
+		for _, ch := range chunks {
+			for _, cp := range ch.Copies {
+				if !cp.Superseded {
+					copies++
+					vols[cp.VolumeID] = true
+				}
+			}
+			for _, sg := range ch.Segments {
+				if sg.VolumeID != 0 {
+					vols[sg.VolumeID] = true
+				}
+			}
+		}
+		jsonOut(w, map[string]any{"name": c.Name, "files": len(app.Store.FilesOf(id)),
+			"folders": len(app.Store.FoldersOf(id)), "packages": len(chunks), "copies": copies,
+			"volumes": len(vols), "guarded": len(chunks) > 0})
+	})
+	register(mux, "DELETE /api/collections/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := pathID(r)
+		if app.Store.Collection(id) == nil {
+			jsonErr(w, 404, fmt.Errorf("archive not found"))
+			return
+		}
+		b := body(r)
+		counts, err := app.RemoveArchive(id, s(b, "confirm_name"), s(b, "export_dir"))
+		if err != nil {
+			jsonErr(w, 400, err) // guard not met (wrong name / export required)
+			return
+		}
+		jsonOut(w, map[string]any{"removed": true, "counts": counts})
+	})
 	register(mux, "POST /api/collections/{id}/scan", func(w http.ResponseWriter, r *http.Request) {
 		id := pathID(r)
 		root := s(body(r), "path")
@@ -901,15 +993,26 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("%q is a sourceless archive — there is no source folder to reconcile against; its truth is the union of adopted media", c.Name))
 			return
 		}
-		jsonOut(w, runJob(app, "reconcile", "Rescan & compare "+c.Name, func(p func(float64, string)) (map[string]any, error) {
-			d, err := app.ReconcileCollection(id, p)
+		scope := s(body(r), "scope_prefix")
+		label := "Rescan & compare " + c.Name
+		if disp := app.Store.scopeDisplay(id, scope); disp != "" {
+			label += " — " + disp
+		}
+		jsonOut(w, runJob(app, "reconcile", label, func(p func(float64, string)) (map[string]any, error) {
+			d, err := app.ReconcileCollection(id, scope, p)
 			var res map[string]any
 			if d != nil {
-				res = map[string]any{"collection_id": id, "changes": d.Changes(),
-					"artifacts": []Artifact{{
+				res = map[string]any{"collection_id": id, "changes": d.Changes(), "scoped": scope != ""}
+				if scope == "" {
+					// Whole-archive run persists the badge-linked report — deep-link to it.
+					res["artifacts"] = []Artifact{{
 						Kind: "drift", Label: fmt.Sprintf("Drift report — %d change(s)", d.Changes()),
 						Count: d.Changes(), ShowView: "drift", ShowID: id,
-					}}}
+					}}
+				} else {
+					// Scoped run is transient (badge untouched); surface its report inline.
+					res["drift"] = d
+				}
 			}
 			return res, err
 		}))
@@ -954,6 +1057,8 @@ func api(mux *http.ServeMux, app *App) {
 			return
 		}
 		folderIDs := intList(b, "folder_ids")
+		scope := s(b, "scope_prefix")
+		scopeDisp := app.Store.scopeDisplay(cid, scope)
 		throttle := f(b, "throttle_mbps")
 		targets, _ := b["targets"].([]any)
 		if len(targets) == 0 {
@@ -978,9 +1083,12 @@ func api(mux *http.ServeMux, app *App) {
 				return
 			}
 			label := fmt.Sprintf("Mirror %s → %s", coll.Name, dest)
+			if scopeDisp != "" {
+				label = fmt.Sprintf("Mirror %s — %s → %s", coll.Name, scopeDisp, dest)
+			}
 			// One job per volume — they run concurrently (v1's multi-volume copy).
 			resp := runJob(app, "mirror", label, func(p func(float64, string)) (map[string]any, error) {
-				mr, err := app.MirrorToVolume(cid, folderIDs, dest, vol, throttle, p)
+				mr, err := app.MirrorToVolume(cid, folderIDs, dest, vol, throttle, scope, p)
 				var res map[string]any
 				if mr != nil {
 					res = map[string]any{"mirrored": mr.Mirrored, "bytes": mr.Bytes, "sidecar": mr.Sidecar, "failed": mr.Failed}
@@ -1006,7 +1114,7 @@ func api(mux *http.ServeMux, app *App) {
 		// volume_id may be 0 here (previewing before registering a volume inline) — a
 		// fresh volume holds nothing, so the delta is the whole in-scope set.
 		volID := int(f(b, "volume_id"))
-		d, err := app.BackupDeltaPreview(id, intList(b, "folder_ids"), volID, s(b, "base"), s(b, "mode"), s(b, "dest_dir"))
+		d, err := app.BackupDeltaPreview(id, intList(b, "folder_ids"), volID, s(b, "base"), s(b, "mode"), s(b, "dest_dir"), s(b, "scope_prefix"))
 		if err != nil {
 			jsonErr(w, 400, err)
 			return
@@ -1033,9 +1141,14 @@ func api(mux *http.ServeMux, app *App) {
 		}
 		folderIDs := intList(b, "folder_ids")
 		base, mode, dest, throttle := s(b, "base"), s(b, "mode"), s(b, "dest_dir"), f(b, "throttle_mbps")
-		label := fmt.Sprintf("Back up changes: %s → %s", coll.Name, nonEmpty(app.Store.Volume(vol).Label, "volume"))
+		scope := s(b, "scope_prefix")
+		volLabel := nonEmpty(app.Store.Volume(vol).Label, "volume")
+		label := fmt.Sprintf("Back up changes: %s → %s", coll.Name, volLabel)
+		if disp := app.Store.scopeDisplay(id, scope); disp != "" {
+			label = fmt.Sprintf("Back up changes — %s → %s", disp, volLabel)
+		}
 		resp := runJob(app, "incremental", label, func(p func(float64, string)) (map[string]any, error) {
-			res, err := app.BackupChanges(id, folderIDs, vol, base, mode, dest, throttle, p)
+			res, err := app.BackupChanges(id, folderIDs, vol, base, mode, dest, throttle, scope, p)
 			if res == nil {
 				return nil, err
 			}
@@ -1403,7 +1516,8 @@ func api(mux *http.ServeMux, app *App) {
 			return
 		}
 		p := app.Store.AddPlan(&Plan{Name: name, ArchiveIDs: intList(b, "archive_ids"),
-			TemplateID: tid, DestinationRoot: filepath.ToSlash(s(b, "destination_root"))})
+			ScopePrefix: filepath.ToSlash(s(b, "scope_prefix")),
+			TemplateID:  tid, DestinationRoot: filepath.ToSlash(s(b, "destination_root"))})
 		jsonOut(w, p)
 	})
 	mux.HandleFunc("GET /api/plans/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -1439,6 +1553,10 @@ func api(mux *http.ServeMux, app *App) {
 		if _, ok := b["archive_ids"]; ok {
 			p.ArchiveIDs = intList(b, "archive_ids")
 			p.Status, p.Mapping = PlanDraft, nil
+		}
+		if _, ok := b["scope_prefix"]; ok {
+			p.ScopePrefix = filepath.ToSlash(s(b, "scope_prefix"))
+			p.Status, p.Mapping = PlanDraft, nil // scope change → recompile
 		}
 		app.Store.UpdatePlan(p)
 		jsonOut(w, p)
@@ -1610,6 +1728,22 @@ func api(mux *http.ServeMux, app *App) {
 		jsonOut(w, app.Store.Treemap(id, r.URL.Query().Get("path"), r.URL.Query().Get("color")))
 	})
 
+	// folder tree — one expanded level of the Archives folder tree: the immediate child
+	// FOLDERS of ?path= (name-sorted, protection-status rollups), paginated by
+	// ?offset=/?limit= for virtualization. Same one-level-at-a-time, catalog-only
+	// contract as treemap; backs the inline tree + folder-scoped action bar.
+	register(mux, "GET /api/collections/{id}/tree", func(w http.ResponseWriter, r *http.Request) {
+		id := pathID(r)
+		if app.Store.Collection(id) == nil {
+			jsonErr(w, 404, fmt.Errorf("archive not found"))
+			return
+		}
+		q := r.URL.Query()
+		offset, _ := strconv.Atoi(q.Get("offset"))
+		limit, _ := strconv.Atoi(q.Get("limit"))
+		jsonOut(w, app.Store.FolderTree(id, q.Get("path"), offset, limit))
+	})
+
 	// Explorer info panel — totals + largest folders, role breakdown, and per-extension
 	// counts scoped to ?path=. Pure catalog read, same as treemap.
 	register(mux, "GET /api/collections/{id}/explore-stats", func(w http.ResponseWriter, r *http.Request) {
@@ -1662,7 +1796,7 @@ func api(mux *http.ServeMux, app *App) {
 		if v, ok := b["encrypted"].(bool); ok {
 			encrypted = v
 		}
-		res, err := app.Plan(int(f(b, "collection_id")), s(b, "media_kind"), f(b, "target_gb"), int(f(b, "par2_redundancy")), encrypted)
+		res, err := app.Plan(int(f(b, "collection_id")), s(b, "media_kind"), f(b, "target_gb"), int(f(b, "par2_redundancy")), encrypted, s(b, "scope_prefix"))
 		if err != nil {
 			jsonErr(w, 400, err)
 			return
@@ -2214,6 +2348,15 @@ func api(mux *http.ServeMux, app *App) {
 			on := false
 			row := map[string]any{"id": c.ID, "name": c.Name, "status": c.Status, "bytes": c.EncBytes,
 				"spanned": c.Spanned, "file_count": c.FileCount, "encrypted": c.Encrypted, "private_manifest": c.PrivateManifest, "mirror": c.Mirror}
+			// Resolve the owning archive (nil-safe): a Removed archive leaves a dangling
+			// CollectionID → the medium still self-describes, so mark it "from a removed
+			// archive"; a Retired archive is named with an Unretire affordance.
+			row["archive_id"] = c.CollectionID
+			if coll := app.Store.Collection(c.CollectionID); coll != nil {
+				row["archive"], row["archive_retired"] = coll.Name, coll.IsRetired()
+			} else {
+				row["archive_removed"] = true
+			}
 			for _, cp := range c.Copies {
 				if cp.VolumeID == v.ID && !cp.Superseded {
 					on = true
@@ -2653,9 +2796,21 @@ func api(mux *http.ServeMux, app *App) {
 
 	// Dashboard-facing rollup of the persisted per-collection status summaries.
 	mux.HandleFunc("GET /api/protection", func(w http.ResponseWriter, r *http.Request) {
-		sums := app.Store.ProtectionSummaries()
+		// Retired archives are hidden from the dashboard (their records are still
+		// computed and kept — this only filters the read).
+		retired := map[int]bool{}
+		for _, c := range app.Store.Collections() {
+			if c.IsRetired() {
+				retired[c.ID] = true
+			}
+		}
+		var sums []*ProtectionSummary
 		totals := map[string]int{}
-		for _, sm := range sums {
+		for _, sm := range app.Store.ProtectionSummaries() {
+			if retired[sm.CollectionID] {
+				continue
+			}
+			sums = append(sums, sm)
 			for st, n := range sm.Files {
 				totals[st] += n
 			}

@@ -131,6 +131,12 @@ button that opens the thing itself, so you're never left wondering where the out
 went. Jobs are remembered across restarts; if one was cut off by a shutdown it shows
 as **INTERRUPTED**, so you know to run it again rather than assuming it finished.
 
+A small **Performance strip** on the Home page and on a running job shows how fast
+Obelisk is moving bytes right now — the read and write speed for each drive, the
+buffer state, and how much of your computer it is using. These are Obelisk's own
+transfer rates, not your whole system's disk activity, so a slow number points at the
+one job, not at everything on the machine.
+
 **After any scan or verify: open the Explorer.** A scan or verify job's detail has a
 **View results** button that opens the **Explorer** (also reachable on its own from
 **Check → Explore data**). The Explorer draws your archive as a size-weighted map —

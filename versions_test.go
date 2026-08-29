@@ -152,7 +152,7 @@ func TestReconcileModifiedShowsPriorVersion(t *testing.T) {
 	if err := os.WriteFile(doc, []byte("edited content — now different\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rep, err := a.ReconcileCollection(coll.ID, noprog)
+	rep, err := a.ReconcileCollection(coll.ID, "", noprog)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}

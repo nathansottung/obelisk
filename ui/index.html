@@ -301,6 +301,70 @@ button.help:hover{border-color:var(--act);color:var(--act)}
 .ccban.ccok{background:rgba(46,94,78,.10);border-color:var(--ok);color:var(--ink)}
 .ccban.ccbad{background:rgba(160,49,35,.08);border-color:var(--bad);color:var(--ink)}
 .ccban.ccneutral{background:var(--panel);border-color:var(--line);color:var(--ink-2)}
+/* ---- Archives folder tree (disclosure triangles are CSS-drawn, never a glyph) ---- */
+.ftcar{display:inline-block;width:14px;text-align:center;cursor:pointer;color:var(--ink-2);
+  user-select:none;margin-right:4px;vertical-align:1px}
+.ftcar::before{content:"";display:inline-block;width:0;height:0;
+  border-left:5px solid currentColor;border-top:4px solid transparent;border-bottom:4px solid transparent;
+  opacity:.6;transition:transform .12s ease}
+.ftcar[aria-expanded="true"]::before{transform:rotate(90deg)}
+.ftcar:focus-visible{outline:2px solid var(--act);border-radius:2px}
+.ftree{background:var(--panel);border-top:1px solid var(--line)}
+.ftbody{max-height:340px;overflow:auto}
+.frow{display:flex;align-items:center;gap:10px;padding:4px 12px;cursor:pointer;
+  border-bottom:1px solid rgba(128,128,128,.08);outline:none}
+.frow:hover{background:rgba(128,128,128,.07)}
+.frow.sel{background:rgba(90,140,120,.16)}
+.frow:focus-visible{box-shadow:inset 2px 0 0 var(--act)}
+.frcar{display:inline-flex;align-items:center;justify-content:center;width:12px;color:var(--ink-2);
+  cursor:pointer;flex:0 0 auto;user-select:none}
+.frcar::before{content:"";display:inline-block;width:0;height:0;
+  border-left:5px solid currentColor;border-top:4px solid transparent;border-bottom:4px solid transparent;
+  opacity:.6;transition:transform .12s ease}
+.frow[aria-expanded="true"]>.frcar::before{transform:rotate(90deg)}
+.frcar.leaf::before{border:0;width:4px;height:4px;border-radius:50%;background:currentColor;opacity:.28}
+.frname{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px}
+.frmeta{flex:0 0 auto;font-size:11px}
+.frkids{}
+.ftcrumb{font-size:11px;padding:5px 12px;color:var(--ink-2);background:rgba(128,128,128,.05);
+  border-bottom:1px solid rgba(128,128,128,.08);position:sticky;top:0}
+.ftmore{margin:6px 12px;font-size:11px}
+.ftscope{background:rgba(90,140,120,.12);border:1px solid var(--line);border-radius:5px;
+  padding:6px 10px;margin-bottom:8px;font-size:12px}
+.ftbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 12px;
+  border-top:1px solid var(--line);background:var(--panel)}
+.ftbarlabel{font-size:12px}
+.ftbarbtns{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto}
+/* ---- Performance strip (app-centric live transfer meter) ---- */
+.perfstrip{margin-bottom:16px}
+.pline,.phead{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:7px 10px;font-size:12px}
+.phead{border-radius:6px 6px 0 0}
+.plbl{font-weight:600}
+.pdim{color:var(--ink-2)}
+.pcar{width:14px;height:14px;border:0;background:transparent;cursor:pointer;padding:0;position:relative;flex:0 0 auto}
+.pcar::before{content:"";position:absolute;left:3px;top:3px;width:0;height:0;border-left:5px solid var(--ink-2);border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .12s}
+.pcar.open::before{transform:rotate(90deg)}
+.phelp{margin-left:auto;width:18px;height:18px;border:1px solid var(--line);border-radius:50%;background:transparent;color:var(--ink-2);cursor:pointer;font-size:11px;line-height:1;flex:0 0 auto}
+.pbody{border-left:1px solid var(--line);border-right:1px solid var(--line);background:var(--panel);max-height:230px;overflow:auto}
+.prow{display:flex;align-items:center;gap:8px;padding:4px 10px;border-top:1px solid var(--line-2);font-size:11.5px}
+.pk{flex:0 0 auto;font:10px var(--mono);letter-spacing:.04em;padding:1px 5px;border-radius:2px;border:1px solid var(--line)}
+.pk-source{color:var(--ink-2)}
+.pk-dest{color:var(--act)}
+.pnm{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pbar{flex:0 0 90px;height:6px;background:var(--line-2);border-radius:3px;overflow:hidden}
+.pbar>span{display:block;height:100%;background:var(--act)}
+.pmb{flex:0 0 auto;font:11px var(--mono);min-width:66px;text-align:right}
+.pthr{font:10px var(--mono);color:var(--warn)}
+.ppause{display:inline-block;width:8px;height:9px;position:relative;vertical-align:-1px}
+.ppause::before,.ppause::after{content:"";position:absolute;top:0;width:2px;height:9px;background:var(--warn)}
+.ppause::before{left:1px}
+.ppause::after{right:1px}
+.pfoot{padding:6px 10px;background:var(--panel);border:1px solid var(--line);border-top:0;border-radius:0 0 6px 6px;font-size:11px;color:var(--ink-2)}
+.phelpbox{background:var(--panel);border:1px solid var(--line);border-top:0;padding:6px 10px;font-size:11px;color:var(--ink-2)}
+/* ---- Archive removal (retire / remove) ---- */
+.doctrine{margin-top:12px;padding:8px 10px;border-left:3px solid var(--act);background:rgba(90,140,120,.08);font-size:12px;border-radius:0 4px 4px 0}
+.retdis{margin-top:14px}
+.retdis>summary{cursor:pointer;font-weight:600;font-size:12.5px;color:var(--ink-2);padding:4px 0}
 </style>
 </head>
 <body>
@@ -656,6 +720,8 @@ function tmBytes(n){if(!n)return '0 B';const u=['B','KB','MB','GB','TB','PB'];le
 let _tm={cid:0,path:'',color:'protection',name:'',res:null,rects:[],explore:false};
 /* Entry point: open the treemap fresh at the archive root (from within an archive). */
 function tmOpen(id){_tm.path='';_tm.color='protection';_tm.explore=false;vArchiveTreemap(id);}
+/* Open the treemap zoomed straight to a folder (from the Archives folder tree). */
+function tmOpenAt(id,path){_tm.cid=id;_tm.path=path||'';_tm.color='protection';_tm.explore=false;vArchiveTreemap(id);}
 /* Explorer navigation: a pending {path,color} consumed by the next explore open. */
 let _exploreInit=null;
 function exploreGo(cid,path,color){_exploreInit={path:path||'',color:color||'protection'};location.hash='#explore/'+cid;}
@@ -1035,6 +1101,10 @@ async function vHome(){
     ${tile('Last activity',t.last_activity_at?esc((t.last_activity_at||'').slice(0,10)):'—',t.last_activity_what?clip(t.last_activity_what,44):'')}
   </div>`;
 
+  // Live Performance strip (populated by perfMount after paint; hidden in Guided mode
+  // unless a job is running).
+  h+='<div id="perfstrip" class="perfstrip"></div>';
+
   // (2) Your data — archive cards + a distinct ungrouped card.
   h+='<div class="panel"><h2>Your data</h2>';
   if(!arcs.length&&!ung)h+='<div class="dim">No archives yet.</div>';
@@ -1086,6 +1156,7 @@ async function vHome(){
     <span class="dim" style="margin:0 8px">·</span>
     <a href="#" class="wherelink" onclick="appBackupDlg();return false">Back up this app's records</a></div>`;
   $('#view').innerHTML=h;
+  perfMount();
 }
 function clip(s,n){s=String(s||'');return s.length>n?s.slice(0,n-1)+'…':s}
 // The getting-started checklist, SCOPED to the setup answers (st = GET /api/setup).
@@ -1331,9 +1402,14 @@ function renderSetupSummary(res){
 async function vVault(){
   let [cs,chunksAll,cfgr]=await Promise.all([api('GET','/api/collections'),api('GET','/api/chunks'),api('GET','/api/config')]);
   cs=cs||[]; chunksAll=chunksAll||[];
+  // Retired archives step back from attention: hidden from the table (into a "Retired"
+  // disclosure), the search/export lists, and the page's nag banners.
+  const activeCs=cs.filter(c=>!c.retired), retiredCs=cs.filter(c=>c.retired);
+  const activeIds=new Set(activeCs.map(c=>c.id));
+  const activeChunks=chunksAll.filter(c=>activeIds.has(c.collection_id));
   const cfg=(cfgr&&cfgr.config)||{}; const months=cfg.verify_due_months||12; const required=cfg.required_copies||2;
-  const due=dueCount(chunksAll,months);
-  const under=(chunksAll||[]).filter(c=>currentCopies(c).length>0&&verifiedCopies(c)<required).length;
+  const due=dueCount(activeChunks,months);
+  const under=activeChunks.filter(c=>currentCopies(c).length>0&&verifiedCopies(c)<required).length;
   let h=`${hdr('Archives','your data, organized — every file checked at the source','vault')}
   ${under?`<div class="panel" style="border-left:3px solid var(--bad)"><b>${under}</b> package${under>1?'s are':' is'} under-protected — fewer than ${required} verified copies. Write another copy to a volume in a different location.</div>`:''}
   ${due?`<div class="panel" style="border-left:3px solid #9a7a10"><b>${due}</b> verified package${due>1?'s':''} due for re-verification (older than ${months} months). Open <a href="#packages" style="color:var(--act)">Packages → Verify a medium</a> and re-check the tape/disc.</div>`:''}
@@ -1344,7 +1420,7 @@ async function vVault(){
   <div class="panel"><div class="row" style="align-items:baseline"><h2 style="flex:1">Portable exports <span class="dim" style="font-weight:400;font-size:11.5px">· the organization scheme, hash-keyed</span></h2>
       <button class="btn ghost" onclick="importDlg()">Import…</button></div>
     <div class="dim" style="font-size:11.5px;margin-bottom:8px">A Structure Export lists every file's hash, role, event, capture date, and where it lives — <b>no file content</b>. <b>Safe to email your organization scheme; it contains no file content.</b> Import into a fresh install to reconstruct the knowledge (not the data).</div>
-    ${cs.length?`<table><tr><th>Archive</th><th>Structure export</th></tr>${cs.map(c=>`<tr><td>${esc(c.name)}</td><td>
+    ${activeCs.length?`<table><tr><th>Archive</th><th>Structure export</th></tr>${activeCs.map(c=>`<tr><td>${esc(c.name)}</td><td>
       <a class="btn ghost" style="font-size:11px" href="${mediaURL('/api/collections/'+c.id+'/structure-export?format=json')}" target="_blank">JSON</a>
       <a class="btn ghost" style="font-size:11px" href="${mediaURL('/api/collections/'+c.id+'/structure-export?format=csv')}" target="_blank">CSV</a>
       <a class="btn ghost" style="font-size:11px" href="${mediaURL('/api/collections/'+c.id+'/structure-export?format=md')}" target="_blank">Markdown</a></td></tr>`).join('')}</table>`:'<div class="dim">No archives yet.</div>'}</div>
@@ -1356,7 +1432,7 @@ async function vVault(){
     </div>
     <div class="row" style="margin-top:6px">
       <select id="qstatus" onchange="doSearch()"><option value="">any protection status</option>${PROT_ORDER.map(sx=>`<option value="${sx}">${PROT[sx].t}</option>`).join('')}</select>
-      <select id="qarch" onchange="doSearch()"><option value="">all archives</option>${cs.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
+      <select id="qarch" onchange="doSearch()"><option value="">all archives</option>${activeCs.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
       <select id="qrole" onchange="doSearch()"><option value="">any role</option>${['ORIGINALS','DELIVERABLES','SIDECARS','PROJECT-FILES','OTHER'].map(r=>`<option value="${r}">${r}</option>`).join('')}</select>
     </div>
     <div class="row" style="margin-top:6px">
@@ -1366,19 +1442,20 @@ async function vVault(){
       <span class="dim" style="font-size:11.5px">e.g. role <b>ORIGINALS</b> + captured <b>Oct 2019</b> → originals from October 2019</span>
     </div>
     <div id="sres"></div></div>`;
-  const drifted=(cs||[]).filter(c=>c.drift&&c.drift.changes>0);
+  const drifted=activeCs.filter(c=>c.drift&&c.drift.changes>0);
   if(drifted.length)h=h.replace('<div class="panel"><h2>Find a file',
     `<div class="panel" style="border-left:3px solid var(--bad)"><b>Unresolved drift:</b> ${drifted.map(c=>`<a href="#" onclick="vDrift(${c.id},'${esc(c.name)}');return false" style="color:var(--act)">${esc(c.name)} (${c.drift.changes})</a>`).join(' · ')} — sources changed since backup.</div>\n  <div class="panel"><h2>Find a file`);
   h+='<div class="panel"><h2>Archives</h2>';
   if(!cs.length) h+='<div class="empty">No archives yet. Create one, then scan a folder into it.</div>';
+  else if(!activeCs.length) h+='<div class="empty">No active archives — all are retired (see below).</div>';
   else{h+='<table><tr><th>Name</th><th class="num">Files</th><th class="num">Size</th><th class="num">Packages</th><th></th></tr>';
-    for(const c of cs){const dr=c.drift;const sl=c.kind==='SOURCELESS';
+    for(const c of activeCs){const dr=c.drift;const sl=c.kind==='SOURCELESS';
       const srcActions=`<button class="btn ghost" onclick="scanDlg(${c.id},'${esc(c.name)}')">Scan folder…</button>
       <button class="btn ghost" onclick="backupChangesDlg(${c.id},'${esc(c.name)}')">Back up changes…</button>
       <button class="btn ghost" onclick="mirrorDlg(${c.id},'${esc(c.name)}')">Mirror backup…</button>
       <button class="btn ghost" onclick="doReconcile(${c.id},'${esc(c.name)}')">Rescan & compare</button>`;
       const slActions=`<button class="btn ghost" onclick="adoptFolderDlg(${c.id},'${esc(c.name)}')">Adopt a drive…</button>`;
-      h+=`<tr><td>${esc(c.name)}${sl?' <span class="etag" title="No source folder — its files are the union of adopted drives">scattered</span>':''}${!sl&&dr&&dr.changes>0?` <a href="#" onclick="vDrift(${c.id},'${esc(c.name)}');return false" class="etag due" style="text-decoration:none">${dr.changes} changes${dr.informational?' · '+dr.informational+' informational':''}</a>`:(!sl&&dr)?` <span class="etag enc">in sync</span>`:''}</td>
+      h+=`<tr><td>${!sl?`<span id="arccar-${c.id}" class="ftcar" role="button" tabindex="0" aria-expanded="false" aria-label="Show folder tree for ${esc(c.name)}" onclick="ftreeToggle(${c.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}"></span>`:''}${esc(c.name)}${sl?' <span class="etag" title="No source folder — its files are the union of adopted drives">scattered</span>':''}${!sl&&dr&&dr.changes>0?` <a href="#" onclick="vDrift(${c.id},'${esc(c.name)}');return false" class="etag due" style="text-decoration:none">${dr.changes} changes${dr.informational?' · '+dr.informational+' informational':''}</a>`:(!sl&&dr)?` <span class="etag enc">in sync</span>`:''}</td>
       <td class="num">${c.files}</td><td class="num">${GB(c.bytes)} GB</td>
       <td class="num">${c.chunks}</td><td class="row" style="justify-content:flex-end">
       ${sl?slActions:srcActions}
@@ -1387,23 +1464,210 @@ async function vVault(){
       <button class="btn ghost" onclick="vArchiveProtection(${c.id})">Protection…</button>
       <button class="btn ghost" onclick="tmOpen(${c.id})">Treemap…</button>
       <button class="btn ghost" onclick="censusDlg(${c.id},'${esc(c.name)}')">Formats…</button>
-      <button class="btn ghost" onclick="bagExportDlg(${c.id},'${esc(c.name)}')">Export bag…</button></td></tr>`}
+      <button class="btn ghost" onclick="bagExportDlg(${c.id},'${esc(c.name)}')">Export bag…</button>
+      <button class="btn ghost" onclick="retireDlg(${c.id},'${esc(c.name)}')">Retire…</button>
+      <button class="btn ghost" style="color:var(--bad)" onclick="removeDlg(${c.id},'${esc(c.name)}')">Remove…</button></td></tr>${!sl?`<tr id="tree-${c.id}" class="ftrow" style="display:none"><td colspan="5" style="padding:0"><div class="ftree" id="ftree-${c.id}" data-cid="${c.id}" data-name="${esc(c.name)}" role="tree" aria-label="Folders in ${esc(c.name)}" onkeydown="ftreeKey(event,${c.id})"><div class="ftbody"><div class="dim" style="padding:10px 14px">Loading folders…</div></div><div class="ftbar" style="display:none"></div></div></td></tr>`:''}`}
     h+='</table>'}
+  // Retired archives — reversible, out of the way. Each shows its tier and can be
+  // brought back (either tier) or removed for good.
+  if(retiredCs.length){
+    h+=`<details class="retdis"><summary>Retired (${retiredCs.length})</summary>
+      <div class="dim" style="font-size:11.5px;margin:6px 0 8px">Retired archives are kept in full — their records are untouched. They just stop asking for attention. Bring one back any time.</div>
+      <table>${retiredCs.map(c=>`<tr><td>${esc(c.name)} <span class="etag">${c.retire_hidden?'hidden from totals':'counted'}</span></td>
+        <td class="num dim" style="font-size:11px">${c.files} files · ${GB(c.bytes)} GB · ${c.chunks} pkg</td>
+        <td class="row" style="justify-content:flex-end">
+          <button class="btn ghost" onclick="unretire(${c.id})">Unretire</button>
+          <button class="btn ghost" onclick="retireTier(${c.id},${c.retire_hidden?'false':'true'})">${c.retire_hidden?'Keep counting it':'Hide its numbers'}</button>
+          <button class="btn ghost" style="color:var(--bad)" onclick="removeDlg(${c.id},'${esc(c.name)}')">Remove…</button>
+        </td></tr>`).join('')}</table></details>`;
+  }
   h+='</div>';
   $('#view').innerHTML=h;
 }
-async function doReconcile(id,name){try{await api('POST','/api/collections/'+id+'/reconcile');
-  toast('Rescan & compare started — see Jobs; drift shows on the archive when done');loc('jobs')}catch(e){toast(e.message,1)}}
+async function unretire(id){try{await api('POST','/api/collections/'+id+'/unretire');toast('Archive is back.');vVault();}catch(e){toast(e.message,1)}}
+async function retireTier(id,hidden){try{await api('POST','/api/collections/'+id+'/retire',{hidden});toast(hidden?'Hidden from the totals.':'Now counted again.');vVault();}catch(e){toast(e.message,1)}}
+// Retire: reversible, record-only. Two tiers — soft (keep counting) or hidden (also
+// drop from the global numbers). Files on disk are never touched.
+function retireDlg(id,name){
+  dlg(`<h1>Retire “${esc(name)}”</h1>
+    <div class="dim" style="margin-bottom:10px">Retiring an archive tidies it away without forgetting anything — every file, package, copy, and verify record is kept, and you can bring it back any time.</div>
+    <label class="row" style="gap:8px;align-items:flex-start;margin-top:4px"><input type="radio" name="rtier" value="soft" checked style="width:auto;margin-top:3px"> <span><b>Retire — keep counting it.</b> Hidden from Home, the Archives table, and the nags, but its files still count in your totals.</span></label>
+    <label class="row" style="gap:8px;align-items:flex-start;margin-top:8px"><input type="radio" name="rtier" value="hidden" style="width:auto;margin-top:3px"> <span><b>Retire and hide its numbers.</b> Also removed from the global Files/Data totals — but a drive holding its files still reads as “known”, not mystery.</span></label>
+    <div class="doctrine">This app never deletes files. This only changes what the app remembers.</div>
+    <div class="row" style="margin-top:14px"><button class="btn" onclick="go()">Retire</button></div>`,
+  async()=>{
+    const hidden=(document.querySelector('input[name=rtier]:checked')||{}).value==='hidden';
+    await api('POST','/api/collections/'+id+'/retire',{hidden});
+    toast('Retired — find it under “Retired” on the Archives page.');vVault();
+  });
+}
+// Remove: permanent, record-only, guarded. An empty archive (a test/mistake) needs
+// only the typed name; one with packages also needs a fresh Structure Export saved to
+// a folder you choose. Files on disk are never touched.
+let _rmExportDir='';
+async function removeDlg(id,name){
+  let info; try{info=await api('GET','/api/collections/'+id+'/removal-info');}catch(e){toast(e.message,1);return;}
+  _rmExportDir='';
+  const guarded=info.guarded;
+  const consequence=guarded
+    ? `This forgets where <b>${commaN(info.files)}</b> file${info.files===1?' is':'s are'} stored. Your files and your <b>${commaN(info.volumes)}</b> ${info.volumes===1?'volume':'volumes'} are untouched, but this app will no longer know what is on them.`
+    : `This archive has no packages — removing it just clears a test or a mistake. Your files on disk are untouched.`;
+  const exportRow=guarded?`<label style="margin-top:12px">Save a fresh Structure Export first — required</label>
+    <div class="dim" style="font-size:11px;margin-bottom:4px">A content-free record of every file's hash and where it lives, so you keep a note of what was on those media. Safe to store anywhere.</div>
+    <div class="row"><input id="rm_exp" class="mono" placeholder="no folder chosen yet" style="flex:1" readonly>
+      <button type="button" class="btn ghost" onclick="rmPickExport(${id},'${esc(name)}')">Choose folder &amp; save…</button></div>`:'';
+  dlg(`<h1>Remove “${esc(name)}”</h1>
+    <div class="panel" style="border-left:3px solid var(--bad);background:rgba(160,49,35,.06)">${consequence}</div>
+    ${exportRow}
+    <label style="margin-top:12px">Type the archive's name to confirm</label>
+    <input id="rm_name" placeholder="${esc(name)}" autocomplete="off" oninput="rmToggle('${esc(name)}',${guarded})">
+    <div class="doctrine">This app never deletes files. This only changes what the app remembers.</div>
+    <div class="row" style="margin-top:14px"><button class="btn" id="rm_go" disabled style="background:var(--bad);border-color:var(--bad);color:#fff" onclick="go()">Remove permanently</button></div>`,
+  async()=>{
+    const r=await api('DELETE','/api/collections/'+id,{confirm_name:(($('#rm_name')||{}).value||''),export_dir:_rmExportDir});
+    const cc=(r&&r.counts)||{};
+    toast(`Removed — forgot ${commaN(cc.files||0)} file record(s); kept ${commaN(cc.packages||0)} package(s) on your media.`);
+    vVault();
+  });
+}
+function rmToggle(name,guarded){const b=$('#rm_go');if(!b)return;const typed=((($('#rm_name')||{}).value)||'')===name;const exported=!guarded||!!_rmExportDir;b.disabled=!(typed&&exported);}
+async function rmPickExport(id,name){
+  pickFolder('',async p=>{
+    if(!p)return;
+    try{await api('POST','/api/collections/'+id+'/structure-export-save',{dir:p});
+      _rmExportDir=p;const el=$('#rm_exp');if(el)el.value=p;
+      toast('Structure Export saved ✓');rmToggle(name,true);
+    }catch(e){toast(e.message,1);}
+  });
+}
+async function doReconcile(id,name,scope){try{await api('POST','/api/collections/'+id+'/reconcile',scope?{scope_prefix:scope}:{});
+  toast(scope?('Rescan & compare started for '+scope+' — see Jobs (scoped; the archive badge is unchanged)'):'Rescan & compare started — see Jobs; drift shows on the archive when done');loc('jobs')}catch(e){toast(e.message,1)}}
+
+/* ---------- Archives folder tree ----------
+   Expand any archive row into a lazy, file-manager-style folder tree (one level per
+   fetch via /tree — immediate child folders + server-side rollups, never the whole
+   tree). Selecting a folder reveals a scoped action bar that runs the existing
+   engines against that path prefix. Keyboard: up/down move, right/left expand and
+   collapse, Enter selects. Disclosure triangles are CSS-drawn (no glyph); protection
+   status is always colour + shape (dot) + text. */
+const _ft={}; // cid -> {sel:{path,name}}
+function ftreeToggle(cid){
+  const box=document.getElementById('tree-'+cid), car=document.getElementById('arccar-'+cid);
+  if(!box)return;
+  const open=box.style.display==='none';
+  box.style.display=open?'':'none';
+  if(car)car.setAttribute('aria-expanded',open?'true':'false');
+  if(open){const t=document.getElementById('ftree-'+cid);
+    if(t&&!t.dataset.loaded){t.dataset.loaded='1';ftreeLoadLevel(cid,'',t.querySelector('.ftbody'),0,0);
+      requestAnimationFrame(()=>{const r=t.querySelector('.frow');if(r)r.tabIndex=0;});}}
+}
+async function ftreeLoadLevel(cid,path,container,depth,offset){
+  try{
+    const d=await api('GET',`/api/collections/${cid}/tree?path=${encodeURIComponent(path||'')}${offset?'&offset='+offset:''}`);
+    if(!offset)container.innerHTML='';
+    if(!offset && depth>=3 && (d.crumbs||[]).length){
+      const bc=document.createElement('div');bc.className='ftcrumb';
+      bc.innerHTML='<span class="dim">in </span>'+d.crumbs.map((c,i,a)=>i===a.length-1?`<b>${esc(c.name)}</b>`:esc(c.name)).join(' <span class="dim">/</span> ');
+      container.appendChild(bc);
+    }
+    if(!(d.children||[]).length && !offset){
+      container.innerHTML=`<div class="dim" style="padding:8px 14px">No subfolders here${depth?'':' — this archive keeps its files at the scanned-folder roots'}.</div>`;return;
+    }
+    for(const n of d.children)container.appendChild(ftreeRow(cid,n,depth));
+    if(d.truncated){
+      const next=(d.offset||0)+d.children.length;
+      const more=document.createElement('button');more.className='btn ghost ftmore';
+      more.textContent=`Show more folders (${commaN(next)} of ${commaN(d.total)})`;
+      more.onclick=()=>{more.remove();ftreeLoadLevel(cid,path,container,depth,next);};
+      container.appendChild(more);
+    }
+  }catch(e){container.innerHTML='<div class="err" style="padding:8px 14px">'+esc(e.message)+'</div>';}
+}
+function ftreeRow(cid,n,depth){
+  const wrap=document.createElement('div');
+  const row=document.createElement('div');
+  row.className='frow';row.tabIndex=-1;row.setAttribute('role','treeitem');row.setAttribute('aria-expanded','false');
+  row.dataset.path=n.path;row.dataset.name=n.name;row.dataset.depth=depth;row.dataset.cid=cid;
+  row.style.paddingLeft=(10+depth*16)+'px';
+  if(!n.has_children)row.dataset.leaf='1';
+  const p=PROT[n.status]||PROT.UNASSIGNED;
+  row.innerHTML=`<span class="frcar${n.has_children?'':' leaf'}" aria-hidden="true"></span>`+
+    `<span class="frname">${esc(n.name)}</span>`+
+    `<span class="frmeta dim">${commaN(n.files)} file${n.files===1?'':'s'} · ${tmBytes(n.size)}</span>`+
+    `<span class="protbadge" style="border-color:${p.c};color:${p.c}">${dot(p.c)} ${p.t}</span>`;
+  const car=row.querySelector('.frcar');
+  if(car)car.onclick=(ev)=>{ev.stopPropagation();ftreeSelect(cid,row);ftreeExpandRow(row);};
+  row.onclick=(ev)=>{ev.stopPropagation();ftreeSelect(cid,row);if(row.getAttribute('aria-expanded')!=='true')ftreeExpandRow(row);};
+  const kids=document.createElement('div');kids.className='frkids';kids.style.display='none';
+  wrap.appendChild(row);wrap.appendChild(kids);
+  return wrap;
+}
+async function ftreeExpandRow(row){
+  if(row.dataset.leaf==='1')return; // leaf — nothing to expand
+  const kids=row.nextElementSibling;
+  if(row.getAttribute('aria-expanded')==='true'){ // collapse
+    kids.style.display='none';row.setAttribute('aria-expanded','false');return;
+  }
+  row.setAttribute('aria-expanded','true');kids.style.display='';
+  if(!kids.dataset.loaded){kids.dataset.loaded='1';
+    kids.innerHTML='<div class="dim" style="padding:6px 14px">Loading…</div>';
+    await ftreeLoadLevel(+row.dataset.cid,row.dataset.path,kids,(+row.dataset.depth)+1,0);}
+}
+function ftreeSelect(cid,row){
+  const box=document.getElementById('ftree-'+cid);if(!box)return;
+  box.querySelectorAll('.frow.sel').forEach(r=>{r.classList.remove('sel');r.tabIndex=-1;});
+  row.classList.add('sel');row.tabIndex=0;row.focus();
+  _ft[cid]={sel:{path:row.dataset.path,name:row.dataset.name}};
+  ftreeActionBar(cid);
+}
+function ftreeActionBar(cid){
+  const box=document.getElementById('ftree-'+cid);if(!box)return;
+  const bar=box.querySelector('.ftbar');if(!bar)return;
+  const sel=(_ft[cid]||{}).sel;
+  if(!sel){bar.style.display='none';return;}
+  bar.style.display='';
+  bar.innerHTML=`<span class="ftbarlabel">Scope: <b>${esc(sel.name)}</b> <span class="dim mono">${esc(sel.path)}</span></span>`+
+    '<span class="ftbarbtns">'+
+    [['backup','Back up changes'],['mirror','Mirror backup'],['plan','Plan packages'],['rescan','Rescan & compare'],['treemap','Treemap']]
+      .map(a=>`<button class="btn ghost" onclick="ftAct(${cid},'${a[0]}')">${a[1]}</button>`).join('')+
+    '</span>';
+}
+function ftAct(cid,kind){
+  const sel=(_ft[cid]||{}).sel;if(!sel)return;
+  const box=document.getElementById('ftree-'+cid), nm=(box&&box.dataset.name)||('#'+cid);
+  if(kind==='backup')backupChangesDlg(cid,nm,sel.path);
+  else if(kind==='mirror')mirrorDlg(cid,nm,sel.path);
+  else if(kind==='plan')planDlg(cid,nm,sel.path);
+  else if(kind==='rescan')doReconcile(cid,nm,sel.path);
+  else if(kind==='treemap')tmOpenAt(cid,sel.path);
+}
+function ftreeKey(ev,cid){
+  const box=document.getElementById('ftree-'+cid);if(!box)return;
+  const rows=[...box.querySelectorAll('.frow')].filter(r=>r.offsetParent!==null);
+  if(!rows.length)return;
+  const cur=rows.includes(document.activeElement)?document.activeElement:box.querySelector('.frow.sel');
+  const i=cur?rows.indexOf(cur):-1;
+  const focus=r=>{if(r){rows.forEach(x=>x.tabIndex=-1);r.tabIndex=0;r.focus();}};
+  switch(ev.key){
+    case 'ArrowDown':ev.preventDefault();focus(rows[Math.min(rows.length-1,i+1)]);break;
+    case 'ArrowUp':ev.preventDefault();focus(rows[i<=0?0:i-1]);break;
+    case 'ArrowRight':ev.preventDefault();if(cur){if(cur.getAttribute('aria-expanded')==='true'){const c=cur.nextElementSibling&&cur.nextElementSibling.querySelector('.frow');focus(c);}else ftreeExpandRow(cur);}break;
+    case 'ArrowLeft':ev.preventDefault();if(cur){if(cur.getAttribute('aria-expanded')==='true')ftreeExpandRow(cur);else{const pk=cur.parentElement.parentElement.closest('.frkids');const pr=pk&&pk.previousElementSibling;if(pr&&pr.classList.contains('frow'))focus(pr);}}break;
+    case 'Enter':case ' ':ev.preventDefault();if(cur)ftreeSelect(cid,cur);break;
+  }
+}
 /* Mirror backup — plain-file copies (source tree preserved) to one or more
    volumes, copy-then-verified. The browsable complement to sealed packages. */
-async function mirrorDlg(id,name){
+async function mirrorDlg(id,name,scope){
   const [folders,vols]=await Promise.all([api('GET','/api/collections/'+id+'/folders'),api('GET','/api/volumes')]);
   if(!(vols||[]).length){toast('Register a target Volume first (Volumes → Register volume…)',1);return}
   window._mvols=(vols||[]).map(r=>r.volume||r);
+  window._mscope=scope||'';
   const folderChecks=(folders||[]).length
     ? folders.map(f=>`<label class="row" style="gap:8px;align-items:center"><input type="checkbox" class="mfolder" value="${f.id}" checked style="width:auto"> <span class="mono" style="font-size:11.5px">${esc(f.path)}</span> <span class="dim">· ${f.files} files · ${GB(f.bytes)} GB</span></label>`).join('')
     : '<div class="dim">No folders scanned into this archive yet — scan one first.</div>';
   dlg(`<h1>Mirror ${esc(name)} to volume(s)</h1>
+    ${window._mscope?`<div class="ftscope">Scoped to <b>${esc(window._mscope)}</b> — only files under this folder are mirrored.</div>`:''}
     <div class="dim" style="margin-bottom:8px">A <b>mirror</b> copies files as <b>plain files</b> (source tree preserved) — browse or restore them with any file manager; no key, no unpack. Each file is copy-then-verified (SHA-256) and recorded as a verified copy, so drift &amp; coverage count it. The live, browsable complement to sealed <b>packages</b> (tar+par2, encrypted, for tape/optical). Sources are only read.</div>
     <label>Folders to mirror</label>
     <div style="max-height:150px;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:6px">${folderChecks}</div>
@@ -1421,7 +1685,7 @@ async function mirrorDlg(id,name){
       return dest&&vid?{dest_dir:dest,volume_id:vid}:null}).filter(Boolean);
     if(!targets.length){toast('Add at least one target (dest folder + volume)',1);return}
     const r=await api('POST','/api/mirror',{collection_id:id,folder_ids:folder_ids,
-      throttle_mbps:parseFloat($('#mthrottle').value)||0,targets:targets});
+      throttle_mbps:parseFloat($('#mthrottle').value)||0,targets:targets,scope_prefix:window._mscope||''});
     toast(`${(r.jobs||[]).length} mirror job(s) started — see Jobs`);loc('jobs');
   });
   addMirrorTarget();
@@ -1441,9 +1705,10 @@ function addMirrorTarget(){
    a stateless run recorded as a named session. Output follows the volume kind (mirror
    for drives, packages for tape/optical). Reuses the mirror + plan engines. */
 window._bcid=0;
-async function backupChangesDlg(id,name){
+async function backupChangesDlg(id,name,scope){
   const [folders,vols]=await Promise.all([api('GET','/api/collections/'+id+'/folders'),api('GET','/api/volumes')]);
   window._bcid=id;
+  window._bcscope=scope||'';
   window._bcvols=(vols||[]).map(r=>r.volume||r).filter(v=>v.label!=='(unregistered)');
   const folderChecks=(folders||[]).length
     ? folders.map(f=>`<label class="row" style="gap:8px;align-items:center"><input type="checkbox" class="bcfolder" value="${f.id}" checked style="width:auto" onchange="bcPreview()"> <span class="mono" style="font-size:11.5px">${esc(f.path)}</span> <span class="dim">· ${f.files} files · ${GB(f.bytes)} GB</span></label>`).join('')
@@ -1451,6 +1716,7 @@ async function backupChangesDlg(id,name){
   const volOpts=(window._bcvols||[]).map(v=>`<option value="${v.id}" data-kind="${esc(v.kind||'')}">${esc(v.label)}${v.location?' · '+esc(v.location):''}${v.kind?' · '+esc(v.kind):''}</option>`).join('');
   const bcBrowse=`<button type="button" class="btn ghost" style="padding:4px 10px;font-size:12px;margin-top:4px" onclick="pickFolder((($('#bcdest')||{}).value||'').trim(),p=>{const el=$('#bcdest');if(el)el.value=p;bcPreview();})">Browse…</button>`;
   dlg(`<h1>Back up changes — ${esc(name)}</h1>
+    ${window._bcscope?`<div class="ftscope">Scoped to <b>${esc(window._bcscope)}</b> — only changed files under this folder are backed up.</div>`:''}
     <div class="dim" style="margin-bottom:10px">Copies only what's <b>new or changed</b> to a destination volume. The tool tracks every file individually, so there's no full-vs-incremental bookkeeping and an interrupted or skipped run just picks up what's still missing next time. Sources are only read.</div>
     <label>What to back up</label>
     <label class="row" style="gap:8px;align-items:flex-start;margin-top:4px"><input type="radio" name="bcbase" value="volume" checked style="width:auto;margin-top:3px" onchange="bcPreview()"> <span><b>Everything not yet on this volume</b> — new + changed files this drive doesn't already hold. For rotating per-drive incrementals.</span></label>
@@ -1470,7 +1736,7 @@ async function backupChangesDlg(id,name){
   async()=>{
     const base=(document.querySelector('input[name=bcbase]:checked')||{}).value||'volume';
     const folder_ids=bcScopedFolders();
-    const payload={base,dest_dir:(($('#bcdest')||{}).value||'').trim(),folder_ids};
+    const payload={base,dest_dir:(($('#bcdest')||{}).value||'').trim(),folder_ids,scope_prefix:window._bcscope||''};
     const vsel=$('#bcvol').value;
     if(vsel==='__new'){const lbl=($('#bcnewlabel').value||'').trim();if(!lbl){toast('Name the new volume first',1);throw new Error('vol');}
       payload.new_volume={label:lbl,kind:$('#bcnewkind').value};}
@@ -1502,7 +1768,7 @@ function bcPreview(){clearTimeout(_bcT);_bcT=setTimeout(async()=>{
   const mode=bcCurrentMode();
   const dest=(($('#bcdest')||{}).value||'').trim();
   const dr=$('#bcdestrow');if(dr)dr.style.display=mode==='package'?'none':'';
-  try{const d=await api('POST','/api/collections/'+window._bcid+'/backup-delta',{base,volume_id,mode,dest_dir:dest,folder_ids:bcScopedFolders()});
+  try{const d=await api('POST','/api/collections/'+window._bcid+'/backup-delta',{base,volume_id,mode,dest_dir:dest,folder_ids:bcScopedFolders(),scope_prefix:window._bcscope||''});
     el.innerHTML=bcPreviewHTML(d);
   }catch(e){el.innerHTML='<div class="err">'+esc(e.message)+'</div>';}
 },250);}
@@ -1713,7 +1979,8 @@ function scanDlg(id,name){dlg(`<h1>Scan into “${esc(name)}”</h1>
   <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Start scan</button></div>`,
   async()=>{const p=$('#d1').value.trim();if(!p)return;
     await api('POST',`/api/collections/${id}/scan`,{path:p});toast('Scan started — see Jobs');loc('jobs')});}
-function planDlg(id,name){dlg(`<h1>Plan packages for “${esc(name)}”</h1>
+function planDlg(id,name,scope){dlg(`<h1>Plan packages for “${esc(name)}”</h1>
+  ${scope?`<div class="ftscope">Scoped to <b>${esc(scope)}</b> — only files under this folder are planned into packages.</div>`:''}
   <label>Target medium</label><select id="d1" class="full">
     <option value="LTO8">LTO-8 tape (11 TB usable)</option><option value="LTO9">LTO-9 tape (16.5 TB)</option>
     <option value="BD-R25">Blu-ray 25 GB</option><option value="BD-R50">Blu-ray 50 GB</option>
@@ -1725,7 +1992,7 @@ function planDlg(id,name){dlg(`<h1>Plan packages for “${esc(name)}”</h1>
   <label class="row" style="gap:8px;align-items:center;margin-top:10px"><input id="d4" type="checkbox" checked> Encrypt packages (AES-256)</label>
   <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Plan</button></div>`,
   async()=>{const r=await api('POST','/api/plan',{collection_id:id,media_kind:$('#d1').value,
-      target_gb:parseFloat($('#d2').value)||0,par2_redundancy:parseInt($('#d3').value)||0,encrypted:$('#d4').checked});
+      target_gb:parseFloat($('#d2').value)||0,par2_redundancy:parseInt($('#d3').value)||0,encrypted:$('#d4').checked,scope_prefix:scope||''});
     const adv=await api('GET','/api/space-advice?collection_id='+id).catch(()=>null);
     renderPlanResult(r,adv);});}
 function renderPlanResult(r,adv){
@@ -1915,7 +2182,7 @@ async function vBurn(){
 }
 async function burnQueueDlg(){
   const cs=await api('GET','/api/collections')||[];
-  const opts=cs.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  const opts=cs.filter(c=>!c.retired).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
   dlg(`<h1>New burn queue</h1>
     <label>Archive</label><select id="d1" class="full"><option value="0">All archives</option>${opts}</select>
     <label>Media kind (optical)</label><select id="d2" class="full">
@@ -2139,7 +2406,7 @@ async function volDetail(id){const d=await api('GET','/api/volumes/'+id);const v
   if(!cs.length)h+='<div class="empty">Nothing recorded on this volume yet.</div>';
   else cs.forEach((c,i)=>{
     h+=`<div style="margin:6px 0;padding-bottom:8px;border-bottom:1px solid var(--line)">
-      <div class="mono" style="cursor:pointer" tabindex="0" role="button" onkeydown="if(event.key==='Enter')this.click()" onclick="const e=document.getElementById('vf${i}');e.style.display=e.style.display==='none'?'block':'none'">${esc(c.name)}${c.mirror?' <span class="etag">mirror</span>':''}${c.spanned?' <span class="etag due">spanned'+(c.holds_segment?' seg'+c.holds_segment:'')+'</span>':''}${c.private_manifest?' <span class="etag enc">private manifest</span>':''}</div>
+      <div class="mono" style="cursor:pointer" tabindex="0" role="button" onkeydown="if(event.key==='Enter')this.click()" onclick="const e=document.getElementById('vf${i}');e.style.display=e.style.display==='none'?'block':'none'">${esc(c.name)}${c.mirror?' <span class="etag">mirror</span>':''}${c.spanned?' <span class="etag due">spanned'+(c.holds_segment?' seg'+c.holds_segment:'')+'</span>':''}${c.private_manifest?' <span class="etag enc">private manifest</span>':''}${c.archive_removed?' <span class="etag due" title="Its archive was removed from the catalog. The medium still self-describes via its own sidecars.">from a removed archive</span>':(c.archive_retired?` <span class="etag">from retired archive ${esc(c.archive||'')}</span> <a href="#" onclick="volUnretire(${c.archive_id},${id});return false" style="font-size:10.5px;color:var(--act)">unretire</a>`:(c.archive?` <span class="dim" style="font-size:10.5px">· ${esc(c.archive)}</span>`:''))}</div>
       <div style="font-size:11.5px;margin-top:2px">${copyVerifyLabel(c)} <span class="dim">· ${GB(c.bytes)} GB · ${c.file_count} files</span></div>
       <div id="vf${i}" style="display:none;margin-top:4px">
         <div class="dim mono" style="font-size:11px;max-height:200px;overflow:auto">${(c.files||[]).slice(0,500).map(esc).join('<br>')||'—'}</div>
@@ -2148,6 +2415,7 @@ async function volDetail(id){const d=await api('GET','/api/volumes/'+id);const v
   $('#view').innerHTML=h+'</div>';
   if(d.has_snapshot)loadVolSnapshot(id);
 }
+async function volUnretire(archiveId,volId){try{await api('POST','/api/collections/'+archiveId+'/unretire');toast('Archive is back.');volDetail(volId);}catch(e){toast(e.message,1)}}
 /* ---- offline drive SNAPSHOT: browse an unplugged drive from the catalog ---- */
 const ROLE_COLOR={'ORIGINALS':'var(--blue)','DELIVERABLES':'var(--ok)','SIDECARS':'var(--ink-3)','PROJECT-FILES':'var(--bad)','OTHER':'var(--ink-3)'};
 function roleDot(role){return `<span title="${esc(role||'OTHER')}" style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${ROLE_COLOR[role]||'var(--ink-3)'};margin-right:6px;vertical-align:middle"></span>`}
@@ -2359,7 +2627,7 @@ function showManifest(name,m){const files=m.files||[];
 async function adoptDlg(){
   const [colls,vols]=await Promise.all([api('GET','/api/collections'),api('GET','/api/volumes')]);
   if(!(colls||[]).length){toast('Create an archive first (Vault → Create archive) to adopt into',1);return}
-  const collOpts=(colls||[]).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  const collOpts=(colls||[]).filter(c=>!c.retired).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
   dlg(`<h1>Adopt existing media</h1>
     <div class="dim" style="margin-bottom:8px">Point at a mounted medium (or folder). Every payload found — <span class="mono">*.tar</span> / <span class="mono">*.tar.gpg</span>, flat or one folder deep — is hashed and cataloged as an <b>ADOPTED-VERIFIED</b> package with a copy on the chosen volume. Nothing is rewritten; already-cataloged payloads are skipped by hash.</div>
     <label>Archive to adopt into</label><select id="d0" class="full">${collOpts}</select>
@@ -2476,6 +2744,7 @@ async function activity(){
   const el=$('#activity');if(!el)return;
   let js;try{js=await api('GET','/api/jobs')||[]}catch(e){js=[]}
   const running=js.filter(j=>j.status==='RUNNING');
+  window._perfHasJob=running.length>0;perfKick(); // let the Performance strip appear/poll while a job runs
   // Hide when idle, or on the Jobs tab (which already shows everything); keep a
   // slow tick when idle and a fast one while work is live.
   if(!running.length||location.hash==='#jobs'){el.className='hide';
@@ -2498,6 +2767,65 @@ rate ${j.rate_mbps||0} MB/s · eta ${Math.round(j.eta_seconds||0)}s</div>`:'';
   clearTimeout(activityTimer);activityTimer=setTimeout(activity,900);}
 function toggleActivity(){_activityCollapsed=!_activityCollapsed;activity()}
 function toggleActivityDebug(){_activityDebug=!_activityDebug;activity()}
+
+/* ---------- Performance strip ----------
+   The app's OWN live transfer rates (per source/destination), buffer state, process
+   CPU%, and machine RAM — read from GET /api/perf, which never touches the catalog
+   mutex. Collapsed to one line by default; polls every 2s ONLY while expanded or a job
+   runs (zero cost when idle+collapsed). Guided mode shows it only during a job. All
+   shapes are CSS-drawn (no glyph); these are app rates, not whole-system disk activity. */
+let _perfOpen=false; try{_perfOpen=localStorage.getItem('perfOpen')==='1'}catch(e){}
+let _perfData=null,_perfTimer=null,_perfBusy=false;
+window._perfHasJob=false;
+function perfActive(){return !!document.getElementById('perfstrip')&&(_perfOpen||window._perfHasJob);}
+function perfMount(){if(document.getElementById('perfstrip')){perfRender();perfKick();}}
+function perfKick(){if(perfActive()){if(!_perfTimer&&!_perfBusy)perfTick();}else{clearTimeout(_perfTimer);_perfTimer=null;}}
+async function perfTick(){
+  _perfTimer=null; if(!perfActive())return;
+  _perfBusy=true; try{_perfData=await api('GET','/api/perf');}catch(e){} _perfBusy=false;
+  perfRender();
+  if(perfActive())_perfTimer=setTimeout(perfTick,2000);
+}
+function perfToggle(){_perfOpen=!_perfOpen;try{localStorage.setItem('perfOpen',_perfOpen?'1':'0')}catch(e){}perfRender();perfKick();}
+function perfHelp(){const h=document.getElementById('perfhelp');if(h)h.style.display=h.style.display==='none'?'block':'none';}
+function perfRender(){
+  const el=document.getElementById('perfstrip');if(!el)return;
+  if(_uiMode==='guided'&&!window._perfHasJob){el.style.display='none';el.innerHTML='';return;} // Guided: only during a job
+  el.style.display='';
+  el.innerHTML=perfStripHTML(_perfData);
+}
+function perfBufStr(s){return (s&&s.buffer_pct>=0)?`buffer ${s.buffer_pct}%${s.stalls?' · '+s.stalls+' stall'+(s.stalls>1?'s':''):''}`:'buffer idle';}
+function perfStripHTML(s){
+  const cpu=(s&&s.cpu_available)?`${s.cpu_percent}%`:'—';
+  const ram=(s&&s.ram_total_bytes)?`${GB(s.ram_free_bytes)}/${GB(s.ram_total_bytes)} GB free`:'—';
+  const summary=`CPU ${cpu} · RAM ${ram} · ${perfBufStr(s)}`;
+  const car=`<button class="pcar${_perfOpen?' open':''}" aria-expanded="${_perfOpen}" aria-label="${_perfOpen?'Collapse':'Expand'} the performance strip" onclick="perfToggle()"></button>`;
+  if(!_perfOpen){
+    return `<div class="pline">${car}<span class="plbl">Performance</span> <span class="pdim">${summary}</span></div>`;
+  }
+  const rows=(s&&s.streams)||[];
+  let body;
+  if(!rows.length){
+    body=`<div class="pdim" style="padding:6px 10px">No active transfers. Rates appear here while Obelisk is copying.</div>`;
+  }else{
+    body=rows.map(r=>{
+      const peak=Math.max(r.peak_mbps||0,r.mbps||0,0.1);
+      const w=Math.max(0,Math.min(100,(r.mbps||0)/peak*100));
+      const kind=r.kind==='source'?'read':'write';
+      const thr=r.throttle_mbps?` <span class="pthr">cap ${r.throttle_mbps} MB/s</span>${r.throttled?'<span class="ppause" title="throttled — pacing to stay under the cap"></span>':''}`:'';
+      const bufr=(r.buffer_pct>=0)?` <span class="pdim">buf ${r.buffer_pct}%${r.stalls?' · '+r.stalls+' stall'+(r.stalls>1?'s':''):''}</span>`:'';
+      return `<div class="prow"><span class="pk pk-${r.kind}">${kind}</span>`
+        +`<span class="pnm">${r.label?'<b>'+esc(r.label)+'</b> ':''}<span class="mono pdim">${esc(clip(r.path||'',44))}</span></span>`
+        +`<span class="pbar"><span style="width:${w}%"></span></span>`
+        +`<span class="pmb">${(r.mbps||0).toFixed(1)} MB/s</span>${thr}${bufr}</div>`;
+    }).join('');
+  }
+  return `<div class="phead">${car}<span class="plbl">Performance</span> <span class="pdim">${summary}</span>`
+    +`<button class="phelp" onclick="perfHelp()" aria-label="About these numbers">?</button></div>`
+    +`<div class="pbody">${body}</div>`
+    +`<div class="pfoot">These are Obelisk's own transfer rates, not total disk activity.</div>`
+    +`<div id="perfhelp" class="phelpbox" style="display:none">Obelisk measures only the bytes it moves itself — not other programs, and not whole-disk activity. A destination pinned at its throttle cap shows a paused mark; a starved buffer shows stalls.</div>`;
+}
 // Show-the-artifact backstop on the Jobs row: a finished job that produced an
 // artifact offers to show/open it (kit summary, mirror sidecar, drift, …).
 function jobArtifact(j){if(j.status!=='COMPLETED'||!j.result)return '';const r=j.result;
@@ -2602,7 +2930,8 @@ async function vJobDetail(id){
         <button class="btn ghost" style="font-size:11px;padding:2px 12px" onclick="loc('jobs')">← All jobs</button></div>
       <div class="dim" style="font-size:12px;margin-top:8px">Started ${esc((j.created_at||'').slice(0,19).replace('T',' '))} UTC${dur?` · ${running?'running for':'took'} ${dur}`:''}</div>
       ${jobWrites(j,cfg)}
-      ${running?`<div style="margin-top:10px"><div class="bar"><div style="width:${Math.round((j.progress||0)*100)}%"></div></div>${jobTelemetry(j)}</div>`:''}`;
+      ${running?`<div style="margin-top:10px"><div class="bar"><div style="width:${Math.round((j.progress||0)*100)}%"></div></div>${jobTelemetry(j)}</div>
+      <div id="perfstrip" class="perfstrip" style="margin-top:12px;margin-bottom:0"></div>`:''}`;
   // "View results" — hash/scan jobs open the Explorer scoped to what they covered.
   if(['scan','verify','reconcile','dock'].includes(j.kind)&&r.collection_id){
     h+=`<div style="margin-top:12px"><button class="btn" onclick="exploreGo(${r.collection_id},'${esc(r.path||'')}','validation')">View results in Explorer →</button></div>`;
@@ -2619,6 +2948,8 @@ async function vJobDetail(id){
   }
   h+=`</div>`;
   $('#view').innerHTML=h;
+  if(running)window._perfHasJob=true; // a job's own detail always shows the strip, even in Guided mode
+  perfMount();
   clearTimeout(jobDetailTimer);
   if(running)jobDetailTimer=setTimeout(()=>{if((location.hash||'').startsWith('#job/'+id))vJobDetail(id)},1000);
 }
@@ -3471,7 +3802,7 @@ function clusterDlg(){api('GET','/api/collections').then(cs=>{
   const src=(cs||[]);
   dlg(`<h1>Cluster an archive into events</h1>
     <div class="dim" style="font-size:11.5px;margin-bottom:8px">Groups the archive's dated files into capture-date bursts. Works best on chaotic (sourceless) archives adopted from old drives.</div>
-    <label>Archive</label><select id="cl_arch" class="full">${src.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
+    <label>Archive</label><select id="cl_arch" class="full">${src.filter(c=>!c.retired).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
     <div class="row"><div style="flex:1"><label>Min files / burst</label><input id="cl_min" class="full" value="12"></div><div style="flex:1"><label>Max span (days)</label><input id="cl_span" class="full" value="3"></div></div>
     <div class="row" style="margin-top:14px"><button class="btn" onclick="go()">Cluster →</button></div>`,
   async()=>{const cid=parseInt($('#cl_arch').value);const r=await api('POST','/api/events/cluster',{collection_id:cid,min_files:parseInt($('#cl_min').value)||0,span_days:parseInt($('#cl_span').value)||0});
@@ -3548,7 +3879,7 @@ async function editTemplate(id){
     <div class="dim" style="font-size:11.5px;margin:10px 0 4px">Tokens you can use in a route: ${tokens.map(x=>`<span class="chip mono" style="font-size:10.5px">${esc(x)}</span>`).join(' ')}. A route ending in <b>/</b> is a folder; the original filename is appended.</div>
     <table style="width:100%">${ROLE_ROUTE_ORDER.map(r=>`<tr><td style="width:120px"><b>${r}</b></td><td><input id="tpl_r_${r}" class="full" value="${esc((t.routes||{})[r]||'')}" oninput="tplPreview()" placeholder="(unrouted)" style="font:12px var(--mono)"></td></tr>`).join('')}</table>
     <div class="row" style="margin-top:10px;align-items:center"><label class="dim" style="font-size:11.5px">Preview against</label>
-      <select id="tpl_arch" onchange="tplPreview()"><option value="0">all archives</option>${(colls||[]).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
+      <select id="tpl_arch" onchange="tplPreview()"><option value="0">all archives</option>${(colls||[]).filter(c=>!c.retired).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
     <div id="tpl_preview" class="panel" style="background:var(--panel-2,rgba(127,127,127,.06));margin-top:10px"><div class="dim">Enter routes to see the consequence preview…</div></div>
     <div class="row" style="margin-top:12px"><button class="btn" onclick="saveTemplateEditor(${editingId})">${editingId?'Save template':'Create template'}</button>
       <button class="btn ghost" onclick="loc('templates')">Cancel</button></div>
