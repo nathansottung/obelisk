@@ -92,7 +92,7 @@ func TestMusicianProject_RolesCriticalAndRouting(t *testing.T) {
 		"project/song.als":  "ABLETON",
 	})
 	coll := app.Store.AddCollection("Blue Album")
-	if _, err := app.ScanFolder(coll.ID, src, func(float64, string) {}); err != nil {
+	if _, _, err := app.ScanFolder(coll.ID, src, func(float64, string) {}); err != nil {
 		t.Fatal(err)
 	}
 	byRel := map[string]*File{}

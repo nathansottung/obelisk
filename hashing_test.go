@@ -40,7 +40,7 @@ func TestScanRecordsBlake3(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("hello world\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.ScanFolder(coll.ID, src, func(float64, string) {}); err != nil {
+	if _, _, err := a.ScanFolder(coll.ID, src, func(float64, string) {}); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
 	files := a.Store.FilesOf(coll.ID)

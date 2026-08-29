@@ -131,7 +131,7 @@ func TestReconcileModifiedShowsPriorVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	noprog := func(float64, string) {}
-	if _, err := a.ScanFolder(coll.ID, srcDir, noprog); err != nil {
+	if _, _, err := a.ScanFolder(coll.ID, srcDir, noprog); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
 	files := a.Store.FilesOf(coll.ID)

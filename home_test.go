@@ -28,7 +28,7 @@ func TestHome_NASOnly(t *testing.T) {
 	src := t.TempDir()
 	writeTree(t, src, map[string]string{"a.jpg": "AAA", "b.jpg": "BBB", "c.jpg": "CCC"})
 	coll := app.Store.AddCollection("NAS Photos")
-	if _, err := app.ScanFolder(coll.ID, src, func(float64, string) {}); err != nil {
+	if _, _, err := app.ScanFolder(coll.ID, src, func(float64, string) {}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -96,7 +96,7 @@ func TestHome_Mixed(t *testing.T) {
 	src := t.TempDir()
 	writeTree(t, src, map[string]string{"a.jpg": "AAA", "b.jpg": "BBB", "c.jpg": "CCC", "d.jpg": "DDD"})
 	coll := app.Store.AddCollection("NAS Master")
-	if _, err := app.ScanFolder(coll.ID, src, func(float64, string) {}); err != nil {
+	if _, _, err := app.ScanFolder(coll.ID, src, func(float64, string) {}); err != nil {
 		t.Fatal(err)
 	}
 	// Two backup drives: a full copy and a 3-of-its-3-files subset — both entirely

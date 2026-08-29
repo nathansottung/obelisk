@@ -497,13 +497,23 @@ func (a *App) SyncKeystores() (int, error) {
 
 // ---- scanning --------------------------------------------------------------
 
-func (a *App) ScanFolder(collectionID int, root string, progress func(float64, string)) (int, error) {
+// ScanProblem is one file the scan could not catalog, kept instead of silently
+// dropped so the scan/job result can tell the operator exactly what was skipped and
+// why. Kind ∈ walk|stat|hash|unsupported: a WalkDir traversal error, a failed
+// os.Stat, a failed content hash (e.g. unreadable/locked), or a non-regular file.
+type ScanProblem struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"`
+	Err  string `json:"err"`
+}
+
+func (a *App) ScanFolder(collectionID int, root string, progress func(float64, string)) (int, []ScanProblem, error) {
 	// SOURCE READ-ONLY: scanning only WalkDir-traverses and hashes (os.Open
 	// O_RDONLY via hashFileHex). It registers `root` as a source root and writes
 	// nothing back into it — the catalog is the only thing mutated.
 	info, err := os.Stat(root)
 	if err != nil || !info.IsDir() {
-		return 0, fmt.Errorf("not a readable folder: %s", root)
+		return 0, nil, fmt.Errorf("not a readable folder: %s", root)
 	}
 	// Batch catalog writes for the duration of the scan (idempotent re-run).
 	a.Store.BeginBatch()
@@ -511,10 +521,21 @@ func (a *App) ScanFolder(collectionID int, root string, progress func(float64, s
 	a.Store.SetVersionsRetained(a.LoadConfig().VersionsRetained) // cap file-version history per config
 	folder := a.Store.AddFolder(collectionID, root)
 
+	// Problems are appended from both the WalkDir callback (single goroutine) and the
+	// parallelHash workers (many), so guard the slice.
+	var pmu sync.Mutex
+	var problems []ScanProblem
+	addProblem := func(path, kind, msg string) {
+		pmu.Lock()
+		problems = append(problems, ScanProblem{Path: path, Kind: kind, Err: msg})
+		pmu.Unlock()
+	}
+
 	var paths []string
 	err = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
-			return nil // skip unreadable, keep scanning
+			addProblem(p, "walk", err.Error()) // record the unreadable entry, keep scanning
+			return nil
 		}
 		if !d.IsDir() {
 			paths = append(paths, p)
@@ -522,9 +543,10 @@ func (a *App) ScanFolder(collectionID int, root string, progress func(float64, s
 		return nil
 	})
 	if err != nil {
-		return 0, err
+		return 0, problems, err
 	}
 	total := len(paths)
+	var scanned int64         // files actually recorded (not merely enqueued)
 	reg := a.formatRegistry() // extension → role, for media metadata on still images
 	parallelHash(paths, func(d int) {
 		progress(float64(d)/float64(total), progStats(0, 0, int64(d), int64(total), "hashing source files"))
@@ -538,19 +560,38 @@ func (a *App) ScanFolder(collectionID int, root string, progress func(float64, s
 				RelPath: filepath.ToSlash(rel), SizeBytes: size, HashAlg: "SHA256", Hash: sha, Blake3: b3, ModTime: mtime, Role: role}
 			f.ShotAt, f.CameraSerial = a.extractMediaMeta(p, role)
 			a.Store.UpsertFile(f)
+			atomic.AddInt64(&scanned, 1)
 		}
-	})
+	}, addProblem)
 	a.Store.Flush()
-	a.Store.Log("scan", fmt.Sprintf("archive %d: %s (%d files)", collectionID, root, len(paths)))
-	return len(paths), nil
+	a.Store.Log("scan", fmt.Sprintf("archive %d: %s (%d files, %d problems)", collectionID, root, scanned, len(problems)))
+	return int(scanned), problems, nil
 }
+
+// scanFaultHook is a test-only fault-injection seam (nil in production): when set,
+// parallelHash consults it per path and, if it returns a non-empty kind ("stat" or
+// "hash"), reports that failure at the real classification branch instead of
+// stat/hashing the file. It lets tests prove scan problems are surfaced without
+// staging OS-specific unreadable files. See ScanProblem.
+var scanFaultHook func(path string) string
 
 // parallelHash hashes paths across a worker pool sized min(8, NumCPU). fn is
 // called concurrently for each readable file with BOTH hashes computed in one
 // read pass: sha256 (durable, on-media) and blake3 (fast, catalog-only) — callers
 // must make fn safe (Store methods already lock). progress(done) fires every 25
 // files and at the end. This is the shared pool used by scan, reconcile, and dock.
-func parallelHash(paths []string, progress func(done int), fn func(path, sha, b3 string, size int64, mtime time.Time)) {
+//
+// An optional onProblem reporter (variadic so existing callers are unchanged)
+// receives every file that could not be hashed — a failed os.Stat (kind "stat"), a
+// non-regular file (kind "unsupported"), or a failed content read (kind "hash") —
+// which the scan surfaces as ScanProblems instead of dropping. onProblem may be
+// called concurrently; callers must make it safe.
+func parallelHash(paths []string, progress func(done int), fn func(path, sha, b3 string, size int64, mtime time.Time), onProblem ...func(path, kind, msg string)) {
+	report := func(path, kind, msg string) {
+		if len(onProblem) > 0 && onProblem[0] != nil {
+			onProblem[0](path, kind, msg)
+		}
+	}
 	workers := runtime.NumCPU()
 	if workers > 8 {
 		workers = 8
@@ -567,8 +608,24 @@ func parallelHash(paths []string, progress func(done int), fn func(path, sha, b3
 		go func() {
 			defer wg.Done()
 			for p := range jobs {
-				if st, e := os.Stat(p); e == nil && !st.IsDir() {
-					if sha, b3, e := hashFileBoth(p); e == nil {
+				fault := ""
+				if scanFaultHook != nil {
+					fault = scanFaultHook(p)
+				}
+				st, e := os.Stat(p)
+				switch {
+				case fault == "stat":
+					report(p, "stat", "injected stat failure")
+				case e != nil:
+					report(p, "stat", e.Error())
+				case !st.Mode().IsRegular():
+					report(p, "unsupported", "not a regular file ("+st.Mode().String()+")")
+				case fault == "hash":
+					report(p, "hash", "injected hash failure")
+				default:
+					if sha, b3, e := hashFileBoth(p); e != nil {
+						report(p, "hash", e.Error())
+					} else {
 						fn(p, sha, b3, st.Size(), st.ModTime().UTC())
 					}
 				}

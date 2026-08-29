@@ -948,14 +948,16 @@ func api(mux *http.ServeMux, app *App) {
 			return
 		}
 		jsonOut(w, runJob(app, "scan", "Scan "+root, func(p func(float64, string)) (map[string]any, error) {
-			n, err := app.ScanFolder(id, root, p)
+			n, problems, err := app.ScanFolder(id, root, p)
 			if err != nil {
 				return nil, err
 			}
 			// Scope + artifact: a scan cataloged n files under this archive; "View
-			// results" opens the Explorer scoped to the scanned folder.
+			// results" opens the Explorer scoped to the scanned folder. Any files the
+			// scan could not catalog ride along under "problems" so the job result can
+			// surface them instead of dropping them silently.
 			return map[string]any{
-				"files": n, "collection_id": id, "path": root,
+				"files": n, "collection_id": id, "path": root, "problems": problems,
 				"artifacts": []Artifact{{
 					Kind: "catalog", Label: fmt.Sprintf("%d files cataloged", n), Count: n,
 					ShowView: "explore", ShowID: id, ShowPath: root,

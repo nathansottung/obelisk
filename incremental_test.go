@@ -15,7 +15,7 @@ import (
 
 func scanInto(t *testing.T, app *App, collID int, root string) {
 	t.Helper()
-	if _, err := app.ScanFolder(collID, root, func(float64, string) {}); err != nil {
+	if _, _, err := app.ScanFolder(collID, root, func(float64, string) {}); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
 }

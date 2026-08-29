@@ -41,7 +41,7 @@ func TestMirror_CopyVerifyTreeAndCoverage(t *testing.T) {
 		"sub/deep/c.bin": "charlie deep binary payload\n",
 	})
 	coll := app.Store.AddCollection("Photos")
-	if n, err := app.ScanFolder(coll.ID, src, noProgMirror); err != nil || n != 3 {
+	if n, _, err := app.ScanFolder(coll.ID, src, noProgMirror); err != nil || n != 3 {
 		t.Fatalf("scan: n=%d err=%v", n, err)
 	}
 	vol := app.Store.AddVolume(Volume{Label: "MIR-A", Kind: "HDD"})
@@ -113,7 +113,7 @@ func TestMirror_RefusesSourceDest(t *testing.T) {
 	src := t.TempDir()
 	writeTree(t, src, map[string]string{"x.txt": "hi\n"})
 	coll := app.Store.AddCollection("A")
-	if _, err := app.ScanFolder(coll.ID, src, noProgMirror); err != nil {
+	if _, _, err := app.ScanFolder(coll.ID, src, noProgMirror); err != nil {
 		t.Fatal(err)
 	}
 	vol := app.Store.AddVolume(Volume{Label: "V", Kind: "HDD"})
@@ -129,7 +129,7 @@ func TestMirror_ConcurrentMultiVolume(t *testing.T) {
 	src := t.TempDir()
 	writeTree(t, src, map[string]string{"a.txt": "a\n", "b.txt": "bb\n", "c.txt": "ccc\n"})
 	coll := app.Store.AddCollection("Multi")
-	if _, err := app.ScanFolder(coll.ID, src, noProgMirror); err != nil {
+	if _, _, err := app.ScanFolder(coll.ID, src, noProgMirror); err != nil {
 		t.Fatal(err)
 	}
 	volA := app.Store.AddVolume(Volume{Label: "MV-A", Kind: "HDD", Location: "office"})
@@ -180,10 +180,10 @@ func TestMirror_IdempotentAndMultiFolderTree(t *testing.T) {
 	writeTree(t, src1, map[string]string{"one.txt": "1\n"})
 	writeTree(t, src2, map[string]string{"two.txt": "2\n"})
 	coll := app.Store.AddCollection("TwoRoots")
-	if _, err := app.ScanFolder(coll.ID, src1, noProgMirror); err != nil {
+	if _, _, err := app.ScanFolder(coll.ID, src1, noProgMirror); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.ScanFolder(coll.ID, src2, noProgMirror); err != nil {
+	if _, _, err := app.ScanFolder(coll.ID, src2, noProgMirror); err != nil {
 		t.Fatal(err)
 	}
 	vol := app.Store.AddVolume(Volume{Label: "MF", Kind: "HDD"})

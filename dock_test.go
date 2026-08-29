@@ -50,7 +50,7 @@ func TestDockIngest_TwoDrivesSequentialAndReinsert(t *testing.T) {
 		"deep/c.txt": "charlie, the third file\n",
 	})
 	coll := app.Store.AddCollection("Photos")
-	if n, err := app.ScanFolder(coll.ID, src, func(float64, string) {}); err != nil || n != 3 {
+	if n, _, err := app.ScanFolder(coll.ID, src, func(float64, string) {}); err != nil || n != 3 {
 		t.Fatalf("scan: n=%d err=%v", n, err)
 	}
 

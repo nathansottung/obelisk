@@ -31,7 +31,7 @@ func TestDriveSnapshot_OfflineBrowseMirrorAndLocationVerdict(t *testing.T) {
 	}
 	writeTree(t, src, files)
 	coll := app.Store.AddCollection("Shoot")
-	if _, err := app.ScanFolder(coll.ID, src, func(float64, string) {}); err != nil {
+	if _, _, err := app.ScanFolder(coll.ID, src, func(float64, string) {}); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
 

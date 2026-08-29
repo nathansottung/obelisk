@@ -54,7 +54,7 @@ func abPopulate(t *testing.T, app *App) (archives, files, volumes, packages, ver
 		}
 	}
 	coll := app.Store.AddCollection("Backup Me")
-	n, err := app.ScanFolder(coll.ID, src, func(float64, string) {})
+	n, _, err := app.ScanFolder(coll.ID, src, func(float64, string) {})
 	if err != nil {
 		t.Fatalf("ScanFolder: %v", err)
 	}
