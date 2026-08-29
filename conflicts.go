@@ -300,8 +300,7 @@ func (s *Store) ResolveConflict(id int, resolution string, canonicalFileID int) 
 		return errString("resolution must be CANONICAL or KEEP-BOTH")
 	}
 	c.Status, c.ResolvedAt = ConflictResolved, &now
-	_ = s.save()
-	return nil
+	return s.save()
 }
 
 // ---- store: review-queue views -----------------------------------------

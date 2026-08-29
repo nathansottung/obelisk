@@ -1072,7 +1072,11 @@ type Store struct {
 	dirty         bool
 	lastSave      time.Time
 	batchInterval time.Duration
-	jobs          struct {
+	// failSave is a test-only fault-injection seam: nil in production. When set, it is
+	// consulted at the top of writeCatalog so a test can simulate a disk-write failure
+	// and prove persistence errors propagate instead of being silently dropped.
+	failSave func() error
+	jobs     struct {
 		mu   sync.Mutex
 		next int
 		rows []*Job
@@ -1288,6 +1292,13 @@ func (s *Store) save() error {
 }
 
 func (s *Store) writeCatalog() error {
+	// Test-only fault-injection seam (nil in production): simulate a write failure so
+	// tests can prove persistence errors propagate rather than being dropped.
+	if s.failSave != nil {
+		if err := s.failSave(); err != nil {
+			return err
+		}
+	}
 	// Forward-compatibility gate: never overwrite a catalog a newer app created.
 	if s.readOnly {
 		return fmt.Errorf("%s", s.readOnlyReason)
@@ -1471,8 +1482,7 @@ func (s *Store) SetCollectionIntegrity(id int, iv *Integrity) error {
 	for _, c := range s.c.Collections {
 		if c.ID == id {
 			c.Integrity = iv
-			_ = s.save()
-			return nil
+			return s.save()
 		}
 	}
 	return fmt.Errorf("archive %d not found", id)
@@ -1506,8 +1516,7 @@ func (s *Store) SetCollectionRetired(id int, retired, hidden bool) error {
 			}
 			s.c.Audit = append(s.c.Audit, Audit{At: time.Now().UTC(), Action: action,
 				Detail: fmt.Sprintf("%s (id %d) — %s; files on disk untouched", c.Name, id, tier)})
-			_ = s.save()
-			return nil
+			return s.save()
 		}
 	}
 	return fmt.Errorf("archive %d not found", id)
@@ -1639,7 +1648,9 @@ func (s *Store) RemoveCollection(id int) (RemoveCounts, error) {
 	}
 	s.c.Collections = colls
 	s.buildFileIndexLocked()
-	_ = s.save()
+	if err := s.save(); err != nil {
+		return counts, err
+	}
 	return counts, nil
 }
 
@@ -2400,8 +2411,7 @@ func (s *Store) SetVolumeLocation(volumeID, locationID int) error {
 	}
 	if locationID == 0 {
 		vol.LocationID = 0
-		_ = s.save()
-		return nil
+		return s.save()
 	}
 	var loc *Location
 	for _, l := range s.c.Locations {
@@ -2415,8 +2425,7 @@ func (s *Store) SetVolumeLocation(volumeID, locationID int) error {
 	}
 	vol.LocationID = loc.ID
 	vol.Offsite, vol.Location = loc.Offsite, loc.Name // keep legacy fields in sync
-	_ = s.save()
-	return nil
+	return s.save()
 }
 
 // LocationStats returns per-location volume counts + total device bytes, for the
@@ -3084,8 +3093,7 @@ func (s *Store) UpdateProfile(p Profile) error {
 	cur.RequiredOffsiteCopies = p.RequiredOffsiteCopies
 	cur.MediaKindsAllowed = p.MediaKindsAllowed
 	cur.VerifyDueMonths = p.VerifyDueMonths
-	_ = s.save()
-	return nil
+	return s.save()
 }
 
 // DeleteProfile removes a custom profile. Built-in profiles are refused, and a
@@ -3111,8 +3119,7 @@ func (s *Store) DeleteProfile(id string) error {
 		}
 	}
 	s.c.Profiles = out
-	_ = s.save()
-	return nil
+	return s.save()
 }
 
 // profileUsersLocked returns human-readable descriptions of every assignment
@@ -3175,15 +3182,13 @@ func (s *Store) SetAssignment(collectionID int, path, profileID string) error {
 			} else {
 				s.c.Assignments[i].ProfileID = profileID
 			}
-			_ = s.save()
-			return nil
+			return s.save()
 		}
 	}
 	if profileID != "" {
 		s.c.Assignments = append(s.c.Assignments, &Assignment{CollectionID: collectionID, Path: path, ProfileID: profileID})
 	}
-	_ = s.save()
-	return nil
+	return s.save()
 }
 
 // resolveProfileLocked returns the nearest-ancestor-wins profile for a logical
