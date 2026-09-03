@@ -110,13 +110,14 @@ func bagOxum(files []ChunkFileRef) (bytes int64, count int) {
 }
 
 // bagPayloadManifest renders BagIt manifest lines ("<sha256>  <relpath>") over a
-// package's source files, sorted by path for a stable, diffable manifest. Paths are
-// percent-encoded per RFC 8493 (see bagEncodePath) so a name holding a newline cannot
-// forge a second manifest line. The paths are otherwise the ORIGINAL tree-relative paths — exactly what the payload tar yields on
-// extraction (no data/ prefix), because this manifest lives inside that tar and
-// beside it on media, describing the tree as it comes out. Files with no recorded
-// SHA-256 (legacy/adopted-without-hash) are skipped so no unverifiable entry is
-// listed; the conformant EXPORT rehashes every byte and is always complete.
+// package's source files, sorted by hash for stable, diffable output (sort.Strings
+// orders whole rows, and every row leads with its checksum). Paths are percent-encoded
+// per RFC 8493 (see bagEncodePath) so a name holding a newline cannot forge a second
+// manifest line; they are otherwise the ORIGINAL tree-relative paths — exactly what the
+// payload tar yields on extraction (no data/ prefix), because this manifest lives
+// inside that tar and beside it on media, describing the tree as it comes out. Files
+// with no recorded SHA-256 (legacy/adopted-without-hash) are skipped so no unverifiable
+// entry is listed; the conformant EXPORT rehashes every byte and is always complete.
 func bagPayloadManifest(files []ChunkFileRef) string {
 	rows := make([]string, 0, len(files))
 	for _, f := range files {
