@@ -968,10 +968,15 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	_ = setStatus("BUILDING", "")
 	fail := func(err error) error { _ = setStatus("FAILED", err.Error()); return err }
 
+	// NUL-delimited, not newline: a newline is a legal character in a POSIX filename,
+	// so a newline-delimited list splits such a name into two paths that do not exist
+	// and the file silently never enters the archive. GNU tar also reads a leading "-"
+	// in a plain list as an OPTION. With --null (below) every name is taken verbatim,
+	// exactly as the catalog recorded it. Staging-only: this list never ships on media.
 	list := filepath.Join(work, "filelist.txt")
 	var sb strings.Builder
 	for _, cf := range c.Files {
-		sb.WriteString(cf.RelPath + "\n")
+		sb.WriteString(cf.RelPath + "\x00")
 	}
 	if err := os.WriteFile(list, []byte(sb.String()), 0o644); err != nil {
 		return fail(err)
@@ -1027,7 +1032,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	if err := run(tarBin, "", "--format=posix", "-cf", tarPath, "-C", work, bagPayloadManifestName); err != nil {
 		return fail(err)
 	}
-	if err := run(tarBin, "", "--format=posix", "-rf", tarPath, "-C", c.SrcRoot, "-T", list); err != nil {
+	if err := run(tarBin, "", "--format=posix", "-rf", tarPath, "-C", c.SrcRoot, "--null", "-T", list); err != nil {
 		return fail(err)
 	}
 	finish("tar", t, 0.28)

@@ -687,7 +687,10 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	if !c.Encrypted {
 		// Unencrypted: the payload is a plain tar; extract it directly, no gpg.
 		progress(0.25, "extract")
-		targs := []string{"-xf", enc, "-C", outputDir}
+		// "--" ends option parsing: members are archive member names chosen by the
+		// caller, and a member beginning with "-" would otherwise be read as a tar
+		// option rather than as the file to restore.
+		targs := []string{"-xf", enc, "-C", outputDir, "--"}
 		targs = append(targs, members...)
 		if err := run(tarBin, "", targs...); err != nil {
 			return nil, fmt.Errorf("tar extract failed: %v", err)
@@ -709,7 +712,7 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	if err != nil {
 		return nil, err
 	}
-	targs := []string{"-xf", "-", "-C", outputDir}
+	targs := []string{"-xf", "-", "-C", outputDir, "--"} // "--": member names are never options
 	targs = append(targs, members...)
 	tarc := exec.Command(tarBin, targs...)
 	tarc.Stdin = pipe
