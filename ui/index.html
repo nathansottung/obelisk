@@ -301,6 +301,15 @@ button.help:hover{border-color:var(--act);color:var(--act)}
 .ccban.ccok{background:rgba(46,94,78,.10);border-color:var(--ok);color:var(--ink)}
 .ccban.ccbad{background:rgba(160,49,35,.08);border-color:var(--bad);color:var(--ink)}
 .ccban.ccneutral{background:var(--panel);border-color:var(--line);color:var(--ink-2)}
+/* Read-failure block: SOLID red, not a tinted warning — the operator is one click from
+   erasing the card, so this must never be mistaken at a glance for the green verdict. */
+.ccban.ccstop{background:var(--bad);border-color:var(--bad);color:#fff}
+.ccban.ccstop b{color:#fff}
+.ccban.ccstop .ccdnf{display:block;font:700 16px var(--sans);letter-spacing:.04em;margin-bottom:4px}
+.ccban.ccstop ul{margin:6px 0 0 18px;padding:0}
+.ccban.ccstop li{margin:2px 0}
+.ccprob{font-size:11.5px}
+.ccprob td{vertical-align:top}
 /* ---- Archives folder tree (disclosure triangles are CSS-drawn, never a glyph) ---- */
 .ftcar{display:inline-block;width:14px;text-align:center;cursor:pointer;color:var(--ink-2);
   user-select:none;margin-right:4px;vertical-align:1px}
@@ -3179,19 +3188,54 @@ async function ccStart(path){
   }
 }
 function ccTile(k,v,u){return `<div class="htile"><div class="hk">${esc(k)}</div><div class="hv">${v}</div>${u?`<div class="hu">${esc(u)}</div>`:''}</div>`;}
+// ccProbWhat turns a backend problem kind into what actually went wrong, in the
+// operator's words. Kinds come from the Go ScanProblem type (walk|stat|hash|unsupported).
+function ccProbWhat(kind){
+  switch(kind){
+    case 'walk':return 'folder could not be listed';
+    case 'stat':return 'file could not be opened';
+    case 'hash':return 'file could not be read';
+    case 'unsupported':return 'not an ordinary file';
+    default:return kind||'unreadable';
+  }
+}
 function ccRender(res,path){
   const box=$('#ccresult');if(!box)return;
   const tot=res.total_files||0,backedN=res.backed_up_files||0,newN=res.new_files||0;
+  // The three independent reasons the card must not be formatted. They combine: a card
+  // can have new frames AND unreadable ones AND folders that would not open.
+  const skipN=res.skipped||0,walkN=res.walk_errors||0,probs=res.problems||[];
+  const why=[];
+  if(newN)why.push(`<b>${commaN(newN)}</b> file(s) (${GB(res.new_bytes)} GB) are <b>not backed up yet</b>`);
+  if(skipN)why.push(`<b>${commaN(skipN)}</b> file(s) <b>could not be read</b> — we cannot say whether they are backed up`);
+  if(walkN)why.push(`<b>${commaN(walkN)}</b> folder(s) <b>could not be listed</b> — anything inside was never even checked`);
   let banner;
-  if(!tot)banner=`<div class="ccban ccneutral">No files found on ${esc(path)}.</div>`;
-  else if(res.safe_to_format)banner=`<div class="ccban ccok">✓ <b>Safe to format.</b> All <b>${commaN(tot)}</b> file(s) (${GB(res.total_bytes)} GB) on this card are already backed up.</div>`;
-  else banner=`<div class="ccban ccbad">Warning: <b>${commaN(newN)}</b> of ${commaN(tot)} file(s) (${GB(res.new_bytes)} GB) are <b>not backed up yet</b> — copy these off before you reformat.</div>`;
+  if(res.safe_to_format)banner=`<div class="ccban ccok">✓ <b>Safe to format.</b> All <b>${commaN(tot)}</b> file(s) (${GB(res.total_bytes)} GB) on this card are already backed up.</div>`;
+  else if(skipN||walkN)banner=`<div class="ccban ccstop"><span class="ccdnf">✕ DO NOT FORMAT</span>
+    Part of this card could not be read, so "already backed up" cannot be answered for all of it:
+    <ul>${why.map(w=>`<li>${w}</li>`).join('')}</ul>
+    Copy what you can off the card and check the reader, the cable and the card itself before erasing anything.</div>`;
+  else if(newN)banner=`<div class="ccban ccbad">Warning: <b>${commaN(newN)}</b> of ${commaN(tot)} file(s) (${GB(res.new_bytes)} GB) are <b>not backed up yet</b> — copy these off before you reformat.</div>`;
+  else if(!tot)banner=`<div class="ccban ccneutral">No files found on ${esc(path)}.</div>`;
+  else banner=`<div class="ccban ccbad">Not safe to format — this card could not be fully accounted for.</div>`;
   let h=banner+`<div class="hstrip">
     ${ccTile('On the card',commaN(tot),GB(res.total_bytes)+' GB')}
     ${ccTile('Already backed up',commaN(backedN),GB(res.backed_up_bytes)+' GB')}
     ${ccTile('New / unsaved',commaN(newN),GB(res.new_bytes)+' GB')}
-    ${res.skipped?ccTile('Unreadable',commaN(res.skipped),'skipped'):''}
+    ${skipN?ccTile('Could not read',commaN(skipN),'file(s) skipped'):''}
+    ${walkN?ccTile('Could not list',commaN(walkN),'folder(s) skipped'):''}
   </div>`;
+  if(skipN||walkN){
+    h+=`<div class="panel" style="border-left:3px solid var(--bad)"><h2>What could not be read (${commaN(skipN+walkN)})</h2>
+      <div class="dim" style="font-size:11.5px;margin-bottom:6px">These are the reason the card is not cleared for formatting. A file we could not read might be your only copy; a folder we could not list may hold frames we never saw at all.</div>`;
+    if(probs.length){
+      h+=`<table class="ccprob"><tr><th>Path</th><th>What happened</th><th>Reported by the system</th></tr>`;
+      for(const pr of probs)h+=`<tr><td class="mono">${esc(pr.path||'')}</td><td>${esc(ccProbWhat(pr.kind))}</td><td class="dim">${esc(pr.err||'')}</td></tr>`;
+      if(probs.length<skipN+walkN)h+=`<tr><td colspan="3" class="dim">…and ${commaN(skipN+walkN-probs.length)} more (only the first ${commaN(probs.length)} are listed)</td></tr>`;
+      h+='</table>';
+    }
+    h+='</div>';
+  }
   if((res.where||[]).length)h+=`<div class="panel"><h2>Where the already-backed-up files live</h2>
     <div class="row" style="flex-wrap:wrap;gap:6px">${res.where.map(w=>`<span class="etag enc">${esc(w)}</span>`).join('')}</div></div>`;
   if(newN){
