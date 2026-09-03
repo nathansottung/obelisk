@@ -3434,7 +3434,14 @@ func (s *Store) SetJobResult(id int, result map[string]any) {
 func (s *Store) Jobs() []*Job {
 	s.jobs.mu.Lock()
 	defer s.jobs.mu.Unlock()
-	out := append([]*Job{}, s.jobs.rows...)
+	// Hand out copies, not the live rows: a running job's progress/telemetry is
+	// updated under this lock while a reader (the /api/jobs encoder) is still
+	// walking the result.
+	out := make([]*Job, 0, len(s.jobs.rows))
+	for _, j := range s.jobs.rows {
+		cp := *j
+		out = append(out, &cp)
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID > out[j].ID })
 	if len(out) > 100 {
 		out = out[:100]
