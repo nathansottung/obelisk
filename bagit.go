@@ -44,6 +44,61 @@ const bagItDeclaration = "BagIt-Version: 1.0\nTag-File-Character-Encoding: UTF-8
 // on media — a description layer, never a restructuring of the payload.
 const bagPayloadManifestName = "manifest-sha256.txt"
 
+// bagEncodePath percent-encodes the FILEPATH column of a manifest line as RFC 8493
+// §2.1.3 requires: "If a filepath includes a Line Feed (LF), a Carriage Return (CR), a
+// Carriage-Return Line Feed (CRLF), or a percent sign (%), those characters (and only
+// those) MUST be percent-encoded following [RFC3986]." So exactly three replacements —
+// % → %25, LF → %0A, CR → %0D (CRLF falls out as %0D%0A) — and nothing else: a space,
+// a quote or a non-ASCII character is left alone, since encoding them would change the
+// path a validator compares against.
+//
+// This matters because these are the only bytes that could end a manifest LINE or
+// disguise an escape, and a manifest with an ambiguous line is a manifest stock BagIt
+// tooling reads wrongly — silently, and on the medium, where Obelisk is not there to
+// explain. A single Replacer pass is deliberate: it never rescans what it just wrote,
+// so a literal "%0A" in a name encodes to "%250A" and not to a bare newline escape.
+func bagEncodePath(p string) string {
+	if !strings.ContainsAny(p, "%\n\r") {
+		return p
+	}
+	return strings.NewReplacer("%", "%25", "\n", "%0A", "\r", "%0D").Replace(p)
+}
+
+// bagDecodePath is the exact inverse of bagEncodePath, decoding only the three escapes
+// the spec defines for this column (hex case-insensitively, since a producer other than
+// us may write %0a). Nothing in Obelisk reads these manifests back today — they are
+// written for third-party BagIt tooling — but the inverse belongs beside the encoder so
+// the round trip is testable and any future reader decodes symmetrically instead of
+// inventing its own rules.
+func bagDecodePath(p string) string {
+	if !strings.Contains(p, "%") {
+		return p
+	}
+	var b strings.Builder
+	b.Grow(len(p))
+	for i := 0; i < len(p); {
+		if p[i] == '%' && i+3 <= len(p) {
+			switch strings.ToUpper(p[i+1 : i+3]) {
+			case "25":
+				b.WriteByte('%')
+				i += 3
+				continue
+			case "0A":
+				b.WriteByte('\n')
+				i += 3
+				continue
+			case "0D":
+				b.WriteByte('\r')
+				i += 3
+				continue
+			}
+		}
+		b.WriteByte(p[i])
+		i++
+	}
+	return b.String()
+}
+
 // bagOxum returns the BagIt Payload-Oxum "octetstream sum": total bytes "." file
 // count over the source files a package preserves.
 func bagOxum(files []ChunkFileRef) (bytes int64, count int) {
@@ -55,8 +110,9 @@ func bagOxum(files []ChunkFileRef) (bytes int64, count int) {
 }
 
 // bagPayloadManifest renders BagIt manifest lines ("<sha256>  <relpath>") over a
-// package's source files, sorted by path for a stable, diffable manifest. The paths
-// are the ORIGINAL tree-relative paths — exactly what the payload tar yields on
+// package's source files, sorted by path for a stable, diffable manifest. Paths are
+// percent-encoded per RFC 8493 (see bagEncodePath) so a name holding a newline cannot
+// forge a second manifest line. The paths are otherwise the ORIGINAL tree-relative paths — exactly what the payload tar yields on
 // extraction (no data/ prefix), because this manifest lives inside that tar and
 // beside it on media, describing the tree as it comes out. Files with no recorded
 // SHA-256 (legacy/adopted-without-hash) are skipped so no unverifiable entry is
@@ -67,7 +123,7 @@ func bagPayloadManifest(files []ChunkFileRef) string {
 		if f.Hash == "" {
 			continue
 		}
-		rows = append(rows, fmt.Sprintf("%s  %s", f.Hash, filepath.ToSlash(f.RelPath)))
+		rows = append(rows, fmt.Sprintf("%s  %s", f.Hash, bagEncodePath(filepath.ToSlash(f.RelPath))))
 	}
 	sort.Strings(rows)
 	if len(rows) == 0 {
@@ -133,7 +189,7 @@ func writeBagItTags(dir string, c *Chunk) error {
 		if err := os.WriteFile(filepath.Join(dir, n), []byte(tags[n]), 0o644); err != nil {
 			return fmt.Errorf("writing BagIt tag %s: %w", n, err)
 		}
-		fmt.Fprintf(&tm, "%s  %s\n", sha256Hex([]byte(tags[n])), n)
+		fmt.Fprintf(&tm, "%s  %s\n", sha256Hex([]byte(tags[n])), bagEncodePath(n))
 	}
 	if err := os.WriteFile(filepath.Join(dir, "tagmanifest-sha256.txt"), []byte(tm.String()), 0o644); err != nil {
 		return fmt.Errorf("writing BagIt tagmanifest: %w", err)
@@ -203,7 +259,7 @@ func (a *App) exportBagForChunks(bagBaseName string, chunks []*Chunk, outputDir 
 		if err := os.WriteFile(dst, data, 0o644); err != nil {
 			return err
 		}
-		manifestLines = append(manifestLines, fmt.Sprintf("%s  data/%s", sha256Hex(data), rel))
+		manifestLines = append(manifestLines, fmt.Sprintf("%s  data/%s", sha256Hex(data), bagEncodePath(rel)))
 		payloadBytes += int64(len(data))
 		payloadCount++
 		return nil
@@ -268,7 +324,7 @@ func (a *App) exportBagForChunks(bagBaseName string, chunks []*Chunk, outputDir 
 		if err := os.WriteFile(filepath.Join(bagRoot, n), []byte(tagFiles[n]), 0o644); err != nil {
 			return nil, err
 		}
-		fmt.Fprintf(&tm, "%s  %s\n", sha256Hex([]byte(tagFiles[n])), n)
+		fmt.Fprintf(&tm, "%s  %s\n", sha256Hex([]byte(tagFiles[n])), bagEncodePath(n))
 	}
 	if err := os.WriteFile(filepath.Join(bagRoot, "tagmanifest-sha256.txt"), []byte(tm.String()), 0o644); err != nil {
 		return nil, err
