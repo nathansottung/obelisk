@@ -5,7 +5,12 @@ package main
 // already-safe vs new, name where the safe ones live, give a correct safe-to-format
 // verdict, and — critically — touch nothing (read-only: no source root, no ingest).
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"testing"
+)
 
 func hasStr(list []string, sub string) bool {
 	for _, s := range list {
@@ -87,6 +92,94 @@ func TestCardCheck_SafeToFormat(t *testing.T) {
 	}
 	if !res.SafeToFormat || res.NewFiles != 0 || res.BackedUpFiles != 2 {
 		t.Fatalf("expected safe-to-format with 2 backed/0 new, got %+v", res)
+	}
+	// Green only when the card was read COMPLETELY: nothing skipped, nothing unlistable.
+	if res.Skipped != 0 || res.WalkErrors != 0 || len(res.Problems) != 0 {
+		t.Fatalf("a fully readable card must report no losses, got skipped=%d walk=%d problems=%+v",
+			res.Skipped, res.WalkErrors, res.Problems)
+	}
+}
+
+// FAIL-CLOSED, gate 1: a file we could not hash is a file we cannot vouch for. It drops
+// out of TotalFiles, so NewFiles stays 0 — the verdict must still refuse to go green.
+func TestCardCheck_UnhashableFileBlocksFormat(t *testing.T) {
+	app := newSetupApp(t)
+	coll := app.Store.AddCollectionKind("Shoot", ArchiveSourced)
+	src := t.TempDir()
+	writeFile(t, src, "a.jpg", "one")
+	scanInto(t, app, coll.ID, src)
+
+	card := t.TempDir()
+	writeFile(t, card, "IMG_1.JPG", "one")        // already archived
+	writeFile(t, card, "IMG_2.JPG", "unreadable") // will fail to hash
+
+	scanFaultHook = func(p string) string {
+		if filepath.Base(p) == "IMG_2.JPG" {
+			return "hash"
+		}
+		return ""
+	}
+	defer func() { scanFaultHook = nil }()
+
+	res, err := app.CardCheck(card, func(float64, string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Skipped != 1 {
+		t.Errorf("skipped = %d, want 1 (the unhashable frame)", res.Skipped)
+	}
+	if res.NewFiles != 0 {
+		t.Errorf("new = %d, want 0 — the point is that a skip is invisible to NewFiles", res.NewFiles)
+	}
+	if res.SafeToFormat {
+		t.Fatalf("safe_to_format must be false when a file could not be read: %+v", res)
+	}
+	if len(res.Problems) == 0 {
+		t.Error("the result must name what could not be read, not just flip the boolean")
+	}
+}
+
+// FAIL-CLOSED, gate 2: a folder we could not LIST hides files that never reach the hash
+// pass at all — so they are invisible to Skipped by construction. WalkErrors is therefore
+// its own independent gate, not a duplicate of Skipped.
+func TestCardCheck_UnlistableDirBlocksFormat(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX directory permissions")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	app := newSetupApp(t)
+	coll := app.Store.AddCollectionKind("Shoot", ArchiveSourced)
+	src := t.TempDir()
+	writeFile(t, src, "a.jpg", "one")
+	scanInto(t, app, coll.ID, src)
+
+	card := t.TempDir()
+	writeFile(t, card, "IMG_1.JPG", "one")                 // already archived
+	writeFile(t, card, "DCIM/LOCKED/IMG_9.JPG", "unsaved") // hidden behind an unreadable folder
+	locked := filepath.Join(card, "DCIM", "LOCKED")
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(locked, 0o755) // let TempDir clean up
+
+	res, err := app.CardCheck(card, func(float64, string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.WalkErrors < 1 {
+		t.Errorf("walk_errors = %d, want >= 1 (the unlistable folder)", res.WalkErrors)
+	}
+	// The hidden frame is counted NOWHERE else — that is exactly why WalkErrors must gate.
+	if res.Skipped != 0 || res.NewFiles != 0 {
+		t.Errorf("skipped=%d new=%d — a walk loss is invisible to both, by construction", res.Skipped, res.NewFiles)
+	}
+	if res.SafeToFormat {
+		t.Fatalf("safe_to_format must be false when a folder could not be listed: %+v", res)
+	}
+	if len(res.Problems) == 0 {
+		t.Error("the result must name the folder it could not list")
 	}
 }
 

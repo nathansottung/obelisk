@@ -28,6 +28,10 @@ import (
 // huge libraries; a few is plenty to reassure "it's on the NAS and a backup drive").
 const maxKnownLocs = 3
 
+// maxCardProblems caps how many individual unreadable paths the result carries back
+// for display; the Skipped / WalkErrors counts below are always exact.
+const maxCardProblems = 100
+
 // CardFileResult is one file on the card and whether its content is already known.
 type CardFileResult struct {
 	Rel       string   `json:"rel"`
@@ -55,8 +59,10 @@ type CardCheckResult struct {
 	BackedUpBytes int64            `json:"backed_up_bytes"`
 	NewFiles      int              `json:"new_files"`
 	NewBytes      int64            `json:"new_bytes"`
-	Skipped       int              `json:"skipped"` // unreadable files (I/O error while hashing)
+	Skipped       int              `json:"skipped"`     // files listed but not hashed (I/O error)
+	WalkErrors    int              `json:"walk_errors"` // folders/entries that could not be listed at all
 	SafeToFormat  bool             `json:"safe_to_format"`
+	Problems      []ScanProblem    `json:"problems,omitempty"`      // what could not be read, capped (kind walk|stat|hash|unsupported)
 	Where         []string         `json:"where,omitempty"`         // distinct places the already-backed-up files live
 	New           []CardFileResult `json:"new,omitempty"`           // the not-yet-backed-up files (capped)
 	NewTruncated  int              `json:"new_truncated,omitempty"` // how many more new files beyond the cap
@@ -176,11 +182,29 @@ func (a *App) CardCheck(mountPath string, progress func(float64, string)) (*Card
 	progress(0.01, "reading inventory")
 	idx := a.knownContent()
 
+	res := &CardCheckResult{MountPath: mountPath}
+	var mu sync.Mutex
+	// Whatever the card will not give us is COUNTED, never dropped. A folder we cannot
+	// list and a file we cannot hash are independent losses — a file inside an unlistable
+	// folder never reaches `paths`, so it can never show up in Skipped — so each gets its
+	// own tally, and either one vetoes the format verdict below.
+	addProblem := func(p, kind, msg string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if kind == "walk" {
+			res.WalkErrors++
+		}
+		if len(res.Problems) < maxCardProblems {
+			res.Problems = append(res.Problems, ScanProblem{Path: p, Kind: kind, Err: msg})
+		}
+	}
+
 	progress(0.03, "listing files on the card")
 	var paths []string
-	_ = filepath.WalkDir(mountPath, func(p string, d os.DirEntry, err error) error {
+	if err := filepath.WalkDir(mountPath, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
-			return nil // skip unreadable entries, keep going
+			addProblem(p, "walk", err.Error()) // could not list this entry — keep going, but remember
+			return nil
 		}
 		if d.IsDir() {
 			if p != mountPath && cardSkipDir(d.Name()) {
@@ -193,15 +217,18 @@ func (a *App) CardCheck(mountPath string, progress func(float64, string)) (*Card
 		}
 		paths = append(paths, p)
 		return nil
-	})
+	}); err != nil {
+		addProblem(mountPath, "walk", err.Error())
+	}
 
 	reg := a.formatRegistry()
-	res := &CardCheckResult{MountPath: mountPath}
 	extAgg := map[string]*CardExtRow{}
 	whereSet := map[string]bool{}
-	var mu sync.Mutex
 	total := len(paths)
 	if total == 0 {
+		// No readable file is not the same as nothing to save: an empty listing is
+		// itself what an unreadable card looks like. SafeToFormat stays false.
+		progress(1.0, cardCheckSummary(res))
 		return res, nil
 	}
 
@@ -251,10 +278,15 @@ func (a *App) CardCheck(mountPath string, progress func(float64, string)) (*Card
 				res.NewTruncated++
 			}
 		}
-	})
+	}, addProblem)
 
-	res.Skipped = total - res.TotalFiles // files that failed to hash (I/O errors)
-	res.SafeToFormat = res.TotalFiles > 0 && res.NewFiles == 0
+	res.Skipped = total - res.TotalFiles // listed but never hashed (stat/read errors)
+	// FAIL CLOSED on the one destructive path in the product. "Safe to format" may only
+	// mean: we read the card COMPLETELY (every folder listed, every file hashed) and found
+	// every single file already in the inventory. Skipped and WalkErrors are separate
+	// gates because they hide different losses — Skipped cannot see files we never listed.
+	// Any doubt at all, the answer is no.
+	res.SafeToFormat = res.TotalFiles > 0 && res.NewFiles == 0 && res.Skipped == 0 && res.WalkErrors == 0
 
 	for l := range whereSet {
 		res.Where = append(res.Where, l)
@@ -274,6 +306,17 @@ func (a *App) CardCheck(mountPath string, progress func(float64, string)) (*Card
 	})
 	sort.Slice(res.New, func(i, j int) bool { return res.New[i].Rel < res.New[j].Rel })
 
-	progress(1.0, fmt.Sprintf("checked %d file(s): %d already backed up, %d new", res.TotalFiles, res.BackedUpFiles, res.NewFiles))
+	progress(1.0, cardCheckSummary(res))
 	return res, nil
+}
+
+// cardCheckSummary is the one-line human verdict, and it always says what we could NOT
+// read — the counts are the reason "safe to format" is withheld, so they must travel
+// with it rather than silently flipping a boolean.
+func cardCheckSummary(res *CardCheckResult) string {
+	msg := fmt.Sprintf("checked %d file(s): %d already backed up, %d new", res.TotalFiles, res.BackedUpFiles, res.NewFiles)
+	if res.Skipped > 0 || res.WalkErrors > 0 {
+		msg += fmt.Sprintf(" — %d file(s) could not be read, %d folder(s) could not be listed: DO NOT FORMAT", res.Skipped, res.WalkErrors)
+	}
+	return msg
 }
