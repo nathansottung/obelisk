@@ -71,7 +71,7 @@ func ringCopy(src, dst string, offset, length int64, blockMB int, bufferGB, thro
 	if err != nil {
 		return "", stats, err
 	}
-	defer out.Close()
+	defer out.Close() // safety net for the error paths; the success path closes explicitly below
 
 	ch := make(chan []byte, depth)
 	errCh := make(chan error, 1)
@@ -168,6 +168,14 @@ func ringCopy(src, dst string, offset, length int64, blockMB int, bufferGB, thro
 		return "", stats, err
 	default:
 	}
+	// The payload is not written until the medium says it is. Closing on a deferred
+	// call would swallow the error from the final flush — a full disk, or a write
+	// error on the tape/drive that only surfaces at close — and we would return a
+	// stream hash computed over the bytes we MEANT to write, describing a file that
+	// is short on the medium. Fail here instead, with no hash.
+	if err := finalizeWrite(out, dst); err != nil {
+		return "", stats, err
+	}
 	secs := time.Since(start).Seconds()
 	stats.Bytes, stats.Seconds = written, round2(secs)
 	stats.WriteMBps = round1(float64(written) / 1e6 / secs)
@@ -175,6 +183,35 @@ func ringCopy(src, dst string, offset, length int64, blockMB int, bufferGB, thro
 		stats.ReadMBps = round1(float64(atomic.LoadInt64(&readBytes)) / 1e6 / readSecs)
 	}
 	return hex.EncodeToString(h.Sum(nil)), stats, nil
+}
+
+// writeFlushFaultHook is a test-only fault-injection seam (nil in production): when
+// set, finalizeWrite consults it in place of the real Sync and, if it returns an
+// error, fails the write exactly as a failed final flush would. It lets tests prove a
+// destination that cannot be flushed is never reported as a successful write, without
+// having to stage a genuinely full disk. See finalizeWrite.
+var writeFlushFaultHook func(dst string) error
+
+// finalizeWrite forces a freshly written file all the way to stable storage and
+// reports any error from that final flush or close, so a caller may only treat a write
+// as done once the medium has actually accepted every byte. Callers keep their
+// deferred Close as the safety net for error paths — closing an already-closed file is
+// harmless, and the deferred error is the one we can afford to drop.
+func finalizeWrite(out *os.File, dst string) error {
+	if writeFlushFaultHook != nil {
+		if err := writeFlushFaultHook(dst); err != nil {
+			out.Close()
+			return fmt.Errorf("flushing %s: %w", dst, err)
+		}
+	}
+	if err := out.Sync(); err != nil {
+		out.Close()
+		return fmt.Errorf("flushing %s: %w", dst, err)
+	}
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("closing %s: %w", dst, err)
+	}
+	return nil
 }
 
 func round1(f float64) float64 { return float64(int(f*10+0.5)) / 10 }
@@ -728,7 +765,12 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-	_, err = io.Copy(out, in)
-	return err
+	defer out.Close() // safety net for the error paths; the success path closes explicitly below
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	// Same rule as the payload stream: a sidecar (par2 block, manifest, RESTORE.txt)
+	// whose final flush fails is a sidecar that is not on the medium, and the caller
+	// must hear about it rather than read a nil error.
+	return finalizeWrite(out, dst)
 }
