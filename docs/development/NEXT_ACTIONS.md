@@ -323,6 +323,25 @@ makes the suite green on Windows and restores the OB-008 regression coverage the
 only a test file, so it does not belong in any of the five PRs above; it is worth doing first or
 alongside PR-01. Adding a `windows-latest` CI job is the durable version of that fix.
 
+> **Status update 2026-09-07 (OBX-001 fixture done; it uncovered OBX-006).** The one-line move
+> above is **implemented and test-only** on `fix/obx-001-windows-fixture`, branched from the
+> published PR-02 checkpoint `406ed2365b074398f4ef80094951753b961cf757`. Report:
+> [reviews/OBX-001-WINDOWS-FIXTURE-2026-09-07.md](reviews/OBX-001-WINDOWS-FIXTURE-2026-09-07.md).
+>
+> **It does not make the suite green on Windows, and the paragraph above was wrong to expect
+> that.** With the fixture fixed, both tests run real product code for the first time on Windows
+> and fail there, in `BuildChunk`. That failure is filed as **OBX-006** (Windows bsdtar
+> filename-list handling for the tested Unicode paths, related to OB-008) and is left unfixed by
+> design — it needs its own scoped change and review.
+>
+> Suite: **212 pass / 2 fail / 4 skip** — **not green**, and no count is promised for a future fix.
+> Build and vet clean. **Windows race still NOT TESTED** (verified: `-race` requires cgo,
+> `CGO_ENABLED=0`, no gcc). **No CI ran.** The `windows-latest` CI job is **still not done**, so
+> only the fixture sub-scope of OBX-001 is complete.
+>
+> **Next:** a separate bounded **Windows Unicode archive-build compatibility repair** for
+> OBX-006, with **PR-03 queued immediately after** it. Neither is started.
+
 ---
 
 ## Follow-on, in dependency order after the first five

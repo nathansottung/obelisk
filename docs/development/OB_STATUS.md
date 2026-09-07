@@ -796,6 +796,25 @@ New IDs, not renumbered OB issues. These were found while establishing the basel
 | OBX-003 | Low | The same script crashes with `UnicodeEncodeError` on a Windows cp1252 console before finishing, and reports 144 false positives from the untracked handoff bundle while it is extracted in-tree. It needs UTF-8 output and a scope exclusion to be runnable as documented. |
 | OBX-004 | High | `LoadConfig` (`pipeline.go:146`) discards both read and unmarshal errors and returns `defaultConfig()`. `SaveConfig` (`pipeline.go:158`) starts by calling it, so **any settings write following a corrupt or unreadable config persists the defaults over the user's real settings** — including `AuthToken` (the non-localhost bind gate), `KeystorePaths`, `StagingDir` and `Par2Redundancy`. Same fail-open family as OB-001; `loadJobs` (`store.go:3293`) shares it. Settings persistence is also a bare `os.WriteFile` with no temp-and-rename and no fsync (`pipeline.go:179`), weaker than both `writeCatalog` and `saveJobs`, and `out, _ := json.MarshalIndent(...)` drops the marshal error. |
 | OBX-005 | Medium | `parseTarTOC` (`adopt.go:134-166`) parses untrusted human-readable `tar -tvf` output line by line. A member name containing a newline splits into two catalog entries; one containing `" -> "` is truncated there; a name shaped like a listing line can inject a fabricated entry. Results are written to the catalog as `Chunk.Files` (`adopt.go:332`). Belongs with OB-008. |
+| OBX-006 | High | **Windows bsdtar filename-list handling fails for tested Unicode paths.** Found 2026-09-07 when the OBX-001 fixture repair let these tests reach product code on Windows for the first time. `BuildChunk` fails for the tested Unicode names: `pipeline.go:976-981` writes `filelist.txt` as UTF-8, and `pipeline.go:1035` passes it as `--null -T` to `C:\Windows\System32\tar.exe` (bsdtar 3.8.4 / libarchive 3.8.4, active ANSI codepage CP1252). Probed in isolation: `café.txt` fails with a UTF-8 list and **succeeds** with a CP1252 list; `ünïcødé★ 日本語.txt` fails; ASCII-only lists pass with and without a trailing NUL. The evidence supports this build decoding the list in the active ANSI codepage rather than UTF-8. Re-encoding alone is not sufficient — `日本語` has no CP1252 form. **Not established:** that every non-ASCII name fails, that every Windows tar behaves this way, behavior under other codepages (including 65001), GNU/MSYS tar, or POSIX behavior. A separate **unconfirmed security hypothesis** is noted in the report: one probe's diagnostic text contained path-like bytes not derived from the input, which *may* indicate uninitialized-buffer handling upstream; **no disclosure has been demonstrated**, and the raw output is **kept local and excluded from the published checkpoint**. Belongs with OB-008 — these are that fix's regression tests. Fix: a separate bounded Windows Unicode archive-build compatibility repair. |
+
+> **Update 2026-09-07 (OBX-001: the Windows fixture half is repaired; the CI half is not).**
+> The TAB name now sits behind the existing `runtime.GOOS != "windows"` guard on branch
+> `fix/obx-001-windows-fixture` (test-only, parent `406ed2365b074398f4ef80094951753b961cf757`),
+> and the guard's comment now names the two rules actually tested — Windows filename rules
+> exclude TAB and newline — without claiming anything broader. Report:
+> [reviews/OBX-001-WINDOWS-FIXTURE-2026-09-07.md](reviews/OBX-001-WINDOWS-FIXTURE-2026-09-07.md).
+>
+> **Both affected tests now reach product code on Windows for the first time — and both still
+> fail, on a real failure the broken fixture had been hiding.** That is filed separately as
+> **OBX-006** and is **not fixed here**.
+>
+> The suite reads **212 pass / 2 fail / 4 skip** before and after, which understates the change:
+> the same two tests fail, but previously they aborted at fixture creation having exercised
+> nothing, and now `BuildChunk` fails. **The suite is not green, and no count is predicted for a
+> future OBX-006 fix.** Build and vet pass. **Windows race testing remains NOT TESTED** — verified,
+> not assumed (`-race` needs cgo; `CGO_ENABLED=0` and no gcc). **No CI ran.** The
+> `windows-latest` CI job remains outstanding, so **OBX-001 is not closed**.
 
 ---
 
