@@ -10,7 +10,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -1077,7 +1079,17 @@ type Store struct {
 	// consulted at the top of writeCatalog so a test can simulate a disk-write failure
 	// and prove persistence errors propagate instead of being silently dropped.
 	failSave func() error
-	jobs     struct {
+	// persistObserver is a test-only OBSERVATION seam: nil in production, installed
+	// only through openStore. Every attempted authority write reports itself here via
+	// notePersist BEFORE the gates that could turn it into an early return, so a test
+	// can prove a refused startup attempted no write at all — an absent catalog.json.tmp
+	// proves nothing, because a successful rename removes that name too. Covers
+	// writeCatalog, dailyBackup (create and prune) and backupBeforeMigrate. Jobs-sidecar
+	// writes are outside this observer's scope: loadJobs can call saveJobs during startup
+	// reconciliation, but a rejected catalog read returns before loadJobs is reached. The
+	// dataDir MkdirAll precedes the read and is also outside this observer's scope.
+	persistObserver func(op, path string)
+	jobs            struct {
 		mu   sync.Mutex
 		next int
 		rows []*Job
@@ -1107,21 +1119,72 @@ func (s *Store) buildFileIndexLocked() {
 var openStoreFailSave func() error
 
 func OpenStore(dataDir string) (*Store, error) {
+	return openStore(dataDir, os.ReadFile, nil)
+}
+
+// openStore is OpenStore with its two boundaries injected, so a test can drive the
+// REAL decision logic below instead of standing in a mock that already behaves.
+// readFile supplies the catalog read RESULT — bytes and error together — that the
+// classification switches on, so an injected failure and a genuine one travel the
+// identical branch. persistObserver, when non-nil, records attempted authority
+// writes (see the Store field). Production has exactly one caller, OpenStore, which
+// passes os.ReadFile and nil. Keeping these as parameters rather than package-level
+// hooks means no shared mutable test state, no cleanup, and no way for one test's
+// injected fault to reach another.
+func openStore(dataDir string, readFile func(string) ([]byte, error), persistObserver func(op, path string)) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, err
 	}
 	s := &Store{path: filepath.Join(dataDir, "catalog.json")}
 	s.failSave = openStoreFailSave
+	s.persistObserver = persistObserver
 	s.jobs.path = filepath.Join(dataDir, "jobs.json")
 	s.c.NextID = map[string]int{}
 	existed := false
 	var raw []byte
-	if b, err := os.ReadFile(s.path); err == nil {
-		existed = len(b) > 0
+	// Catalog-read classification (OB-001). Three outcomes, deliberately distinct,
+	// because only ONE of them may end in a new catalog:
+	//
+	//   read succeeded  -> this is the existing catalog; parse it.
+	//   not-found       -> the only case that may initialize a new one.
+	//   anything else   -> refuse to start.
+	//
+	// The last branch is the fix. Permission denial, an I/O error, a directory in the
+	// way, a share held by a backup agent or antivirus, a data dir whose mount is not
+	// up: every one of those used to fall through here with err != nil and leave an
+	// EMPTY in-memory catalog. Seeding below then set recovered=true and saved, which
+	// renames a three-profile empty catalog over the unread original — and dailyBackup
+	// went on to spend a backup slot on those empty bytes. An unavailable authority
+	// must not be replaced by an apparently new one.
+	b, readErr := readFile(s.path)
+	switch {
+	case readErr == nil:
+		// A zero-length catalog is the classic torn-write/power-loss artifact. Treating
+		// it as "brand new" (the old len(b) > 0 test) skipped the schema gate and the
+		// pre-migration backup and then overwrote it. It is damaged input, not consent.
+		if len(b) == 0 {
+			return nil, fmt.Errorf("%s is empty (0 bytes) — that is a damaged catalog, not a new one. "+
+				"Recover it from a catalog.json.bak-YYYYMMDD sidecar in the same folder, or move the "+
+				"empty file aside if you really do want to start a new catalog here. "+
+				"Refusing to overwrite it", s.path)
+		}
+		existed = true
 		raw = b
 		if err := json.Unmarshal(b, &s.c); err != nil {
 			return nil, fmt.Errorf("catalog.json is damaged: %w", err)
 		}
+	case errors.Is(readErr, fs.ErrNotExist):
+		// Genuinely absent: initialize a new catalog, exactly as before. Note what this
+		// does NOT establish — that the operator INTENDED a new catalog. A previously
+		// initialized data directory whose drive is not mounted also reads as absent.
+		// Telling those apart needs storage identity, which this change does not add;
+		// the residual is recorded against OB-001.
+	default:
+		// Any bytes handed back alongside an error are discarded on purpose: a partial
+		// read must never be parsed as if it were the whole catalog.
+		return nil, fmt.Errorf("cannot read %s: %w — refusing to start so an unreadable "+
+			"catalog is never replaced by a new empty one. Check the file's permissions, "+
+			"and that the drive holding the data folder is connected", s.path, readErr)
 	}
 	if s.c.NextID == nil {
 		s.c.NextID = map[string]int{}
@@ -1281,6 +1344,7 @@ func (s *Store) backupBeforeMigrate(raw []byte, from int) {
 		return
 	}
 	name := fmt.Sprintf("%s.pre-schema-v%d-%s", s.path, from, time.Now().Format("20060102-150405"))
+	s.notePersist("pre-schema-backup", name)
 	_ = os.WriteFile(name, raw, 0o644)
 }
 
@@ -1305,6 +1369,9 @@ func (s *Store) save() error {
 }
 
 func (s *Store) writeCatalog() error {
+	// Record the ATTEMPT first — ahead of the fault seam and the read-only gate below,
+	// either of which would otherwise return early and hide it from an observer.
+	s.notePersist("catalog-write", s.path)
 	// Test-only fault-injection seam (nil in production): simulate a write failure so
 	// tests can prove persistence errors propagate rather than being dropped.
 	if s.failSave != nil {
@@ -1409,13 +1476,25 @@ func (s *Store) dailyBackup(b []byte) {
 	s.lastBak = day
 	bak := s.path + ".bak-" + day
 	if _, err := os.Stat(bak); err != nil {
+		s.notePersist("backup-create", bak)
 		_ = os.WriteFile(bak, b, 0o644)
 	}
 	matches, _ := filepath.Glob(s.path + ".bak-*")
 	sort.Strings(matches) // YYYYMMDD suffix sorts chronologically
 	for len(matches) > 14 {
+		s.notePersist("backup-prune", matches[0])
 		_ = os.Remove(matches[0])
 		matches = matches[1:]
+	}
+}
+
+// notePersist reports an attempted authority write to the observer openStore
+// installed. nil in production, so every call site pays one nil check. Callers report
+// the attempt BEFORE performing it, and before any gate that could skip it, so "zero
+// attempts" is a statement about what the code tried, not only about what survived.
+func (s *Store) notePersist(op, path string) {
+	if s.persistObserver != nil {
+		s.persistObserver(op, path)
 	}
 }
 
