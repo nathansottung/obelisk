@@ -229,6 +229,69 @@ first `EndBatch` to fire decrements to 1 and skips the flush entirely).
 **Priority P0. Original evidence: PATTERN_REPRODUCED + CODE_OBSERVED. Classification:
 `CONFIRMED_AT_BASELINE`.**
 
+> **Update 2026-09-07 (PR-02 implemented, awaiting independent review).** The defect and all five
+> caller anchors below were re-verified at the current tree and are **still exact**. The
+> destructive fallback is removed on branch `fix/ob-003-safe-replacement` (uncommitted), with
+> regressions in `atomic_replace_test.go`. Report:
+> [reviews/PR02-OB-003-IMPLEMENTATION-2026-09-07.md](reviews/PR02-OB-003-IMPLEMENTATION-2026-09-07.md).
+>
+> - **The "smallest complete fix" text below is partly superseded.** It says "on Windows use a
+>   replacement primitive that overwrites in one operation". No such primitive was needed:
+>   `os.Rename` **already replaces an existing file** on this Windows host (Go issues `MoveFileEx`
+>   with `MOVEFILE_REPLACE_EXISTING`), established by execution, not by reading. The old comment
+>   claiming otherwise was the reasoning that produced the defect and is corrected in the patch.
+> - Cross-device is handled by **failing with the underlying error and never copying**, rather
+>   than by explicit detection: no current caller can produce it, since every one stages its
+>   temporary in the destination directory.
+> - **Classification stays `CONFIRMED_AT_BASELINE`** until an independent review lands. The
+>   guarantee proven is preservation of the destination across a failed publication — **not**
+>   crash durability, network-filesystem safety, concurrency safety or ACL preservation, and the
+>   injected failure causes prove handling rather than OS occurrence. The missing directory sync
+>   noted below is **unchanged and still open**.
+> - Full suite after the patch: **212 pass / 2 fail / 4 skip** (+8 = the new tests). The two
+>   failures are the same OBX-001 Windows TAB-fixture pair, unrelated and untouched. Windows race
+>   testing remains **NOT TESTED**.
+
+> **Update 2026-09-07 (review findings F-1/F-2 applied).** The same-session adversarial review
+> ([reviews/PR02-OB-003-INDEPENDENT-REVIEW-2026-09-07.md](reviews/PR02-OB-003-INDEPENDENT-REVIEW-2026-09-07.md))
+> accepted the bounded replacement correction and asked for two things, both now done
+> ([reviews/PR02-OB-003-REVIEW-FOLLOWUP-2026-09-07.md](reviews/PR02-OB-003-REVIEW-FOLLOWUP-2026-09-07.md)):
+> the restore regression now asserts the staging file was actually created and is then gone
+> (positive not-found), and the `appbackup.go` cleanup comment no longer reads as a guarantee.
+> That comment was the **only** production change — `mirror.go` is untouched. Cleanup can still
+> fail with its error discarded (an OBX-004-family instance at `appbackup.go:401`, recorded, not
+> fixed), removal is not secure erasure, and the fixture covers the **catalog** staging file only,
+> not keystores. **Classification stays `CONFIRMED_AT_BASELINE`**: neither review to date is
+> independent of the authoring session.
+
+> **Update 2026-09-07 (external review accepted; PR-02 checkpointed on its fix branch).** The
+> bounded replacement repair was reviewed by a reviewer outside the authoring session and
+> **accepted by the owner for publication**, and the branch `fix/ob-003-safe-replacement` is now
+> committed and pushed. Report:
+> [reviews/PR02-OB-003-EXTERNAL-REVIEW-2026-09-07.md](reviews/PR02-OB-003-EXTERNAL-REVIEW-2026-09-07.md).
+> **F-1 and F-2 are closed.** Publication is a checkpoint of the reviewed artifact, not a merge,
+> a release, or a claim of production readiness.
+>
+> What that external review is, exactly: a **separate AI source review** plus **isolated Linux
+> probes** of the extracted production code — not a human audit or certification. Its evidence
+> boundary carries forward unchanged:
+>
+> - Full repository **build, vet and tests were dependency-blocked** in that sandbox (no network
+>   for `go mod download`); no dependency was stubbed to manufacture a pass.
+> - The isolated Linux **race** run succeeded, but that is a narrow harness result — **not** a
+>   full-product race result and **not Windows race evidence**. Windows race testing remains
+>   **NOT TESTED**.
+> - **212 pass / 2 fail / 4 skip** remains *reported* execution evidence from the local Windows
+>   authoring/review sessions. It was **not re-executed during publication**, and no new test run
+>   or CI pass is implied by this checkpoint.
+> - The 2 failures are the same OBX-001 Windows TAB-fixture pair, unrelated and untouched.
+>
+> **Still open, unchanged by PR-02:** the Windows TAB fixture failures; cleanup-error
+> observability (including `appbackup.go:401`); keystore/key file permissions; staging-path
+> aliasing and ownership against a racing or hostile process; crash durability (no directory
+> fsync here, unlike `writeCatalog`); and PR-01's initialization-identity residual.
+> **Classification stays `CONFIRMED_AT_BASELINE`.**
+
 **Anchor.** `mirror.go:318-324`, quoted in full:
 
 ```go

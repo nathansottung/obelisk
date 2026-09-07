@@ -48,6 +48,47 @@ Original OB IDs and PR numbers from the handoff's `02_FIRST_PULL_REQUESTS.md` ar
 > `OB_STATUS.md` records. Everything above this block is retained as written, including the
 > superseded regression-test proposal and the corrections to it.
 
+> **Status update 2026-09-07 (PR-02 started and implemented).** PR-01 is published; **PR-02 /
+> OB-003 is now implemented and uncommitted** on branch `fix/ob-003-safe-replacement`, cut from
+> the published PR-01 checkpoint `4cd867b2ddb26c945f7c74faee8ef32780743be7`. The destructive
+> delete-destination-and-retry fallback in `atomicRename` is gone; a failed publication now
+> leaves the existing file byte-identical and returns the underlying error. Changed:
+> `mirror.go`, `appbackup.go`, and the new `atomic_replace_test.go`. PR-01's `store.go` and
+> `catalog_open_test.go` are **verified byte-identical** and were not touched. Report:
+> [reviews/PR02-OB-003-IMPLEMENTATION-2026-09-07.md](reviews/PR02-OB-003-IMPLEMENTATION-2026-09-07.md).
+>
+> Awaiting **one substantive independent review**; nothing is staged, committed or pushed, and
+> **PR-03 is not started**. Full suite: 212 pass / 2 fail / 4 skip — the +8 are the new tests, and
+> the 2 failures remain the OBX-001 Windows TAB fixture pair. The section below describes PR-01,
+> which is complete; it is retained as written for provenance.
+
+> **Status update 2026-09-07 (PR-02 review findings applied).** F-1 and F-2 from the same-session
+> review are applied and verified; see
+> [reviews/PR02-OB-003-REVIEW-FOLLOWUP-2026-09-07.md](reviews/PR02-OB-003-REVIEW-FOLLOWUP-2026-09-07.md).
+> The production delta for that work was **comment-only**. PR-02 remains **uncommitted** on
+> `fix/ob-003-safe-replacement` and now awaits a **fresh review by someone who has not seen it** —
+> both existing PR-02 reviews came from the authoring session. **PR-03 is not started.**
+
+> **Status update 2026-09-07 (PR-02 externally reviewed, owner accepted, published as a branch
+> checkpoint).** PR-02 / OB-003 received the required review from **outside the authoring
+> session**, the owner accepted it for publication, and the reviewed patch is now **committed and
+> pushed on `fix/ob-003-safe-replacement`** (stacked on the unmerged PR-01). **F-1/F-2 closed.**
+> Report:
+> [reviews/PR02-OB-003-EXTERNAL-REVIEW-2026-09-07.md](reviews/PR02-OB-003-EXTERNAL-REVIEW-2026-09-07.md).
+> This is a checkpoint of the reviewed artifact only — **not merged, not released, not a
+> production-readiness claim.**
+>
+> The review was a **separate AI source review plus isolated Linux probes**, not a human audit.
+> Full repository **build/vet/tests were dependency-blocked** in that sandbox. The isolated Linux
+> race success is **not** full-product or Windows race evidence, and **Windows race testing
+> remains NOT TESTED**. The Windows **212 pass / 2 fail / 4 skip** figure remains *reported*
+> evidence from the local authoring/review sessions — **not re-executed during publication**, and
+> **no new test run or CI pass is implied** by this push.
+>
+> **Open and untouched:** the two OBX-001 Windows TAB-fixture failures, cleanup-error
+> observability, key/keystore permissions, staging-path aliasing, crash durability, and PR-01's
+> initialization-identity residual. **PR-03 is not started.**
+
 ## The one exact next implementation target
 
 **PR-01 / OB-001 — an existing catalog cannot silently become a new catalog.**
