@@ -816,6 +816,119 @@ New IDs, not renumbered OB issues. These were found while establishing the basel
 > not assumed (`-race` needs cgo; `CGO_ENABLED=0` and no gcc). **No CI ran.** The
 > `windows-latest` CI job remains outstanding, so **OBX-001 is not closed**.
 
+> **Update 2026-09-07 (OBX-006: boundary diagnosed, regressions added, `DESIGN_DECISION_REQUIRED`).**
+> Branch `fix/obx-006-windows-unicode-tar`, test-only, parent
+> `c880c7d3afd7e61e367b8ee3aa64068af540c768`. One new file, `tar_unicode_names_test.go`.
+> **No production change** — none of the five boundaries can be repaired losslessly at the
+> helper-invocation boundary with the pinned helper. Report:
+> [reviews/OBX-006-WINDOWS-UNICODE-IMPLEMENTATION-2026-09-07.md](reviews/OBX-006-WINDOWS-UNICODE-IMPLEMENTATION-2026-09-07.md).
+>
+> **The mechanism is pinned.** `C:\Windows\System32\tar.exe` (bsdtar 3.8.4, SHA-256
+> `9B77D4C9…AE86`, no embedded manifest) decodes the `--null -T` list in the process ANSI code
+> page (ACP 1252), not UTF-8. Same file, same directory: a UTF-8 list for `café.txt` **exits 0
+> having archived `cafÃ©.txt`**; a CP1252 list archives `café.txt`. Separately, `-C`, `-f` and any
+> **directory component** lose anything outside CP1252, while argv *leaf* names (including
+> `日本語.txt` and a supplementary-plane name) survive intact — so the boundaries genuinely differ
+> and only `-T` plus ANSI path resolution are at fault. Archive **headers are not the defect**;
+> they record correct UTF-8 for whatever the helper opened.
+>
+> **Rejected with evidence:** UTF-8+BOM, UTF-16LE, `-T -` on stdin, absolute paths in the list,
+> `--options hdrcharset=UTF-8` (output-only, no effect on `-T`), `LANG`/`LC_ALL`/`LC_CTYPE` on the
+> child only (no effect — the Windows CRT ignores them), `\\?\` prefixes, CP1252 re-encoding
+> (lossy; `日本語` has no form), and moving the member list to argv (cannot carry a non-CP1252
+> directory component, and would need an unbounded command line). 8.3 short paths **do** fix `-C`
+> and `-f` losslessly but fix no filename. Nothing machine-wide was changed.
+>
+> **New exposure recorded, not introduced:** the wrong-file build is caught by
+> `verifyTarContents` (`pipeline.go:834-885`) only under `build_verify` `full`/`contents`. The
+> default is `full`, so shipped defaults fail safe — but under the **`FAST` preset
+> (`build_verify: none`) a wrongly named neighbour would reach the medium unchecked.**
+>
+> Suite now **212 pass / 7 fail / 4 skip** (uncached, `-count=1 -v ./...`): the 2 pre-existing
+> `BuildChunk` failures plus the 5 added regressions. Build, vet and `gofmt` pass. **Windows race
+> remains NOT TESTED** (verified: `-race` needs cgo, `CGO_ENABLED=0`, no gcc). **No CI ran.**
+> **OBX-006 stays open** and now needs a design decision — see NEXT_ACTIONS.
+
+> **Update 2026-09-07 (OBX-006: decision recorded; FAST containment implemented, pending review).**
+> Same branch, same parent `c880c7d3`. Report:
+> [reviews/OBX-006-CONTAINMENT-2026-09-07.md](reviews/OBX-006-CONTAINMENT-2026-09-07.md);
+> the decision itself is recorded as §10a of the investigation report.
+>
+> **Investigation complete for the pinned helper** (`C:\Windows\System32\tar.exe`, bsdtar 3.8.4).
+> **Native writer direction recorded, implementation deferred** to its own scope — replace Windows
+> tar *construction* only, shared explicit member contract, streaming, existing manifest placement
+> and package layout preserved, explicit metadata/entry-type support and rejection, separate
+> finalisation and file-completion checks, verification kept on during initial deployment,
+> helper-selection transparency, external-reader interoperability validated, Unicode restore tracked
+> separately. **Not built here.**
+>
+> **New-build containment implemented, pending review.** `assertWindowsTarBuildVerifiable`
+> (`pipeline.go`) refuses a Windows external-tar build whose **effective, normalised** tier is
+> `none` — decided on `effectiveIntegrity`, not a preset label or raw config string, so a per-archive
+> FAST override on a `full` global is caught too. It runs before tool resolution, staging creation,
+> the `BUILDING` write, key generation and every tar call; the package stays `PLANNED`, no saved
+> setting is altered, and the message says Contents/Full is required, why, and that **enabling
+> verification does not fix Unicode**. No bypass, no version-string allowlist, no code-page
+> workaround. Non-Windows behaviour and Contents/Full semantics are unchanged.
+>
+> Two existing tests that expected an unverified Windows build to succeed had **only their
+> Windows-specific expectation** changed to the explicit refusal
+> (`TestBuildVerify_FastModeSkipsAndWarns`, `TestFastArchiveAttestsReducedIntegrity`); neither is
+> skipped and their other-platform coverage is intact.
+>
+> Suite **220 pass / 7 fail / 4 skip** (uncached): **+8** containment passes, the **same 7**
+> compatibility failures preserved, **no new skips**. Build, vet, `gofmt` pass. **Windows race
+> remains NOT TESTED.** **No CI ran.**
+>
+> **Not closed:** Unicode support is not fixed; **packages built unverified before this guard may
+> exist and are NOT retroactively made safe** — their eligibility for later write/rewrite/span needs
+> a separate assessment; and `verifyTarContents` is not a namespace-security proof (member-name
+> validation, source aliasing, missing hashes and restore confinement remain **OB-008**, **OBX-005**,
+> **OB-009**). **OBX-006 remains open.** **PR-03 / OB-002 remains the next substantial workstream.**
+
+> **Update 2026-09-07 (OBX-006: containment reviewed, accepted and checkpointed).** Owner accepted
+> the fresh-session review
+> [reviews/OBX-006-CONTAINMENT-REVIEW-2026-09-07.md](reviews/OBX-006-CONTAINMENT-REVIEW-2026-09-07.md)
+> (verdict `READY_FOR_OWNER_REVIEW`, no blocker) and authorised committing and pushing this
+> bounded safety change to `fix/obx-006-windows-unicode-tar` only. **Not authorised and not done:**
+> merge, any change to `main`, a release, the native tar writer, or PR-03.
+>
+> The review confirmed independently, against base `c880c7d3`, that the guard decides on the
+> **normalised effective** configuration — per-archive override else global, legacy `"fast"`
+> already mapped to `none` — and refuses a new Windows external-tar build at the `none` tier
+> **before** tool resolution, staging-directory creation, the `BUILDING` transition, key
+> generation and any `tar` invocation. It verified `BuildChunk` is the only new-package
+> construction path, that no saved global or per-archive setting is mutated by a refusal, that the
+> platform predicate is unreachable from configuration or API, and — by removing only the guard
+> call in a **disposable copy** — that exactly the intended refusal assertions fail without it and
+> nothing else moves. In that guardless copy an unverified build reached `STAGED` holding the
+> wrong look-alike member, which is the path this guard closes.
+>
+> **Job bookkeeping still occurs on refusal** — a FAILED job and a log line are recorded. The claim
+> is only that the unsafe *build operation* is refused; **no "zero catalog activity" guarantee is
+> made and job durability is not addressed by this change.**
+>
+> **Prior executed review evidence (not a new publication run): 220 pass / 7 fail / 4 skip**,
+> reproduced by the reviewer. The **seven failures are the known Unicode compatibility failures**,
+> preserved deliberately. **Windows race testing and CI remain NOT TESTED.** The suite is not
+> green, the branch is **not** release-ready, and **OBX-006 is not resolved**.
+>
+> **Optional test follow-ups from this review** (non-blocking, deliberately **not** implemented in
+> the checkpoint so the accepted candidate stayed byte-identical; these belong to
+> `OBX-006-CONTAINMENT-REVIEW-2026-09-07.md` and are unrelated to similarly numbered findings from
+> PR-01/PR-02):
+> - **F1** — add in-tree coverage for a *verifying* archive override under a `FAST`/`none` global
+>   (verified correct out-of-tree, but unpinned in the repository), and assert that a refusal
+>   leaves the **per-archive** override intact as well as the global config.
+> - **F2** — the tool-independent refusal tests inherit `nativeTools`' skip they do not need.
+>
+> **Still open, unchanged by this checkpoint:** Unicode compatibility itself; **packages built
+> unverified before this guard, which were not reassessed, altered or made safe**; the native
+> Windows tar writer, which is an **approved future direction, not implemented functionality**;
+> and **OB-008**, **OBX-005**, **OB-009** and the other separately tracked boundaries.
+> **Refs OBX-006. PR-03 / OB-002 remains the next substantial implementation workstream**, and the
+> published tip of this branch — not `c880c7d3` — is its intended parent.
+
 ---
 
 ## Unreviewed areas
