@@ -312,15 +312,45 @@ func copyVerifyToDest(srcPath, destPath string, th *throttler, onBytes func(int6
 	return streamHash, n, nil
 }
 
-// atomicRename renames tmp -> final, replacing any prior file at final so a
-// re-mirror overwrites cleanly (os.Rename already replaces on unix; on Windows
-// it fails if the target exists, so remove first).
+// renameFile is the one rename primitive behind atomicRename, and a test-only
+// fault-injection seam: production always holds os.Rename. Tests replace it to drive
+// the REAL failure handling below; an injected error demonstrates how a failure is
+// handled, not that a given OS produces that error in the simulated circumstance.
+var renameFile = os.Rename
+
+// atomicRename publishes the staged file tmp under its real name final, replacing
+// whatever is already there, in a single rename.
+//
+// It never removes final. A rename that fails leaves the existing file exactly as it
+// was and reports the error, so a failed publication cannot also destroy the copy it
+// was meant to replace (OB-003). The previous version deleted final after ANY first
+// rename failure and retried; when the retry failed too, the good bytes were gone and
+// the new bytes had never been published. The delete was justified by the claim that
+// a rename cannot replace an existing file on Windows. That claim is false for
+// os.Rename, which issues MoveFileEx with MOVEFILE_REPLACE_EXISTING there, and
+// TestAtomicRename_ReplacesExistingDestination pins the replacing behavior by
+// execution on the host that runs the suite.
+//
+// What "atomic" claims here, precisely: the swap of an existing final for tmp is one
+// filesystem operation, so a reader never observes a half-written file under the real
+// name, and a failure leaves the previous contents whole. It does NOT claim crash
+// durability — no directory fsync is performed, unlike writeCatalog — nor correctness
+// across network filesystems, nor safety against another process writing final
+// concurrently. None of those are tested, so none are asserted.
+//
+// Assumptions, all satisfied by the five current callers, which each build tmp as
+// final plus a suffix in the same directory: tmp and final are distinct paths on the
+// same filesystem, and tmp is a staging file this process owns. Publication across
+// filesystems is not supported; the rename simply fails and that error is returned,
+// rather than being silently downgraded to a copy that would have to delete or
+// overwrite final to finish. On failure tmp is left alone — discarding it is each
+// caller's decision, since only the caller knows whether it can be rebuilt.
 func atomicRename(tmp, final string) error {
-	if err := os.Rename(tmp, final); err == nil {
-		return nil
+	if err := renameFile(tmp, final); err != nil {
+		// Wrapped for context, %w so callers can still inspect the cause.
+		return fmt.Errorf("publish %s: %w", final, err)
 	}
-	_ = os.Remove(final)
-	return os.Rename(tmp, final)
+	return nil
 }
 
 // mirrorFolderLabels assigns each source folder a unique, filesystem-safe subtree

@@ -393,7 +393,16 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 		if err := os.WriteFile(tmp, b, 0o644); err != nil {
 			return err
 		}
-		return atomicRename(tmp, dest)
+		if err := atomicRename(tmp, dest); err != nil {
+			// atomicRename leaves the existing dest untouched, so the live file is still
+			// good. Best-effort cleanup of this operation's staging file: the removal can
+			// fail too (its error is deliberately discarded here), and unlinking a path is
+			// not secure erasure of the bytes behind it. Either way the original
+			// publication error is what gets returned.
+			_ = os.Remove(tmp)
+			return err
+		}
+		return nil
 	}
 	var restoredKeystores []string
 	for _, m := range man.Members {
