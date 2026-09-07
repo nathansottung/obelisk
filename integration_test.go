@@ -111,6 +111,35 @@ func (s *itServer) job(m map[string]any) {
 	s.t.Fatalf("job %v timed out", jid)
 }
 
+// jobFailure is job's mirror image: it waits for the job to FAIL and returns its
+// label, so a test can assert a refusal by its actual reason. A job that COMPLETES is
+// itself the failure — that is the point of asserting a refusal.
+func (s *itServer) jobFailure(m map[string]any) string {
+	s.t.Helper()
+	jid, ok := m["job_id"].(float64)
+	if !ok {
+		s.t.Fatalf("expected a job response, got: %v", m)
+	}
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, j := range s.arr("GET", "/api/jobs", nil) {
+			jm := j.(map[string]any)
+			if jm["id"].(float64) == jid {
+				switch jm["status"] {
+				case "FAILED":
+					label, _ := jm["label"].(string)
+					return label
+				case "COMPLETED":
+					s.t.Fatalf("job %v was expected to be refused but COMPLETED: %v", jid, jm["label"])
+				}
+			}
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+	s.t.Fatalf("job %v timed out waiting for the expected failure", jid)
+	return ""
+}
+
 func (s *itServer) setConfig(extra map[string]any) {
 	s.t.Helper()
 	cfg := map[string]any{"staging_dir": s.staging, "par2_redundancy": 10, "tools": s.tools}

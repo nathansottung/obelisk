@@ -189,6 +189,15 @@ func TestBuildVerify_FullAttestation(t *testing.T) {
 // build_verify=fast is the explicit opt-out: both checks are skipped (so an
 // injected tar corruption is NOT caught), and the package is stamped with the
 // amber warning in the catalog and on the medium's manifest.
+//
+// INTENTIONAL BEHAVIOUR CHANGE (OBX-006 containment, 2026-09-07): on the Windows
+// external-tar path this opt-out is temporarily REFUSED instead of honoured, because
+// that helper can archive a wrongly named file while reporting success and content
+// verification is the only thing that catches it. The opt-out's semantics are unchanged
+// everywhere else, and this test still proves them there. The Windows refusal has its
+// own coverage in build_verify_windows_containment_test.go — including the assertion
+// that this build is stopped before tar runs, which is why the corruption hook below
+// could not fire on Windows either way.
 func TestBuildVerify_FastModeSkipsAndWarns(t *testing.T) {
 	tools := nativeTools(t)
 	app, _ := newTestApp(t, tools)
@@ -202,6 +211,23 @@ func TestBuildVerify_FastModeSkipsAndWarns(t *testing.T) {
 	// Even with the tar deliberately corrupted, fast mode does not check it.
 	buildAfterTarHook = func(tarPath string) { corruptFirstTarMember(t, tarPath) }
 	defer func() { buildAfterTarHook = nil }()
+
+	// Windows half of the intentional change: the opt-out is refused outright, so the
+	// corrupted tar is never even produced. Asserted here rather than skipped, so this
+	// test keeps saying something true on this platform.
+	if buildUsesWindowsExternalTar() {
+		err := app.BuildChunk(c.ID, noProg)
+		if err == nil {
+			t.Fatal("OBX-006 containment: a fast build must be REFUSED on the Windows external-tar path")
+		}
+		if !strings.Contains(err.Error(), "refusing to build without content verification on Windows") {
+			t.Fatalf("expected the containment refusal, got: %v", err)
+		}
+		if got := app.Store.Chunk(c.ID); got.Status == "STAGED" {
+			t.Error("a refused fast build must not leave the package STAGED")
+		}
+		return
+	}
 
 	if err := app.BuildChunk(c.ID, noProg); err != nil {
 		t.Fatalf("fast build must SUCCEED (checks skipped): %v", err)

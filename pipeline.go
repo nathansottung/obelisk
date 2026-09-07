@@ -824,6 +824,68 @@ var (
 	buildDecryptPassphraseHook func(pass string) string
 )
 
+// buildUsesWindowsExternalTarHook lets a test exercise the OBX-006 containment on
+// any platform by stating whether this build would construct the archive with the
+// external tar helper on Windows. nil in production, where the answer is simply
+// runtime.GOOS — same guarding rule as the fault-injection hooks above: it is wired
+// only from *_test.go in this package, and a nil value (the only value a shipped
+// binary ever has) means the real platform decides.
+var buildUsesWindowsExternalTarHook func() bool
+
+func buildUsesWindowsExternalTar() bool {
+	if buildUsesWindowsExternalTarHook != nil {
+		return buildUsesWindowsExternalTarHook()
+	}
+	// Every package today is constructed by the configured external tar; there is no
+	// native writer yet. When one lands (OBX-006 §8 option 1), this is the predicate
+	// that stops applying to the paths it replaces.
+	return runtime.GOOS == "windows"
+}
+
+// windowsTarUnverifiedBuildRefusal is the operator-facing reason a Windows build at
+// the "none" tier is refused. It says what to change, why the restriction exists, and
+// — explicitly — that turning verification on does not make Unicode filenames work.
+const windowsTarUnverifiedBuildRefusal = "refusing to build without content verification on Windows: " +
+	"build verify is %q for this archive, and Windows builds temporarily require %q or %q. " +
+	"The external tar this path uses can misread the member list in the host ANSI code page and " +
+	"archive a DIFFERENT, similarly-named file while reporting success — café.txt requested, " +
+	"cafÃ©.txt archived — and content verification is what catches that. " +
+	"Set build verify to Contents or Full for this archive (or globally) and build again. " +
+	"This is a temporary restriction on the Windows external-tar path (OBX-006); it does NOT fix " +
+	"Unicode filename support, which still fails on this path with verification enabled."
+
+// assertWindowsTarBuildVerifiable is the OBX-006 containment: on the Windows
+// external-tar construction path, refuse a build whose EFFECTIVE tier switches off
+// package-content verification.
+//
+// Why refusing is the conservative choice. verifyTarContents is the only thing that
+// compares the archive's members against the catalog, and OBX-006 demonstrated this
+// path can exit 0 having archived the wrong file. At the "none" tier nothing compares
+// them, so a wrongly named package could be staged, written and read back — every one
+// of those checks passing — and still not contain what the catalog says it does.
+// Helper success, content verification, encryption round-trip and media read-back are
+// four different guarantees; none substitutes for another, and only the second catches
+// this.
+//
+// iv must be the normalised EFFECTIVE integrity for the archive being built, not a
+// preset label and not a raw config string. Nothing here reads or rewrites saved
+// settings: a refused build leaves the operator's global and per-archive configuration
+// exactly as they set it.
+//
+// Deliberately narrow: it restricts the current Windows external-tar path, and asserts
+// nothing about other platforms or about which tar binaries share the defect. It is not
+// keyed off the helper's version string, and there is no bypass.
+func assertWindowsTarBuildVerifiable(iv Integrity) error {
+	if !buildUsesWindowsExternalTar() {
+		return nil
+	}
+	if normBuildVerify(iv.BuildVerify) != BuildVerifyNone {
+		return nil
+	}
+	return fmt.Errorf(windowsTarUnverifiedBuildRefusal,
+		BuildVerifyNone, BuildVerifyContents, BuildVerifyFull)
+}
+
 // verifyTarContents streams the staged tar with Go's stdlib archive/tar reader
 // (no extraction to disk, no external tool), hashes every regular-file member,
 // and compares each against the catalog's source-file hash for that rel_path.
@@ -926,6 +988,15 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 			return fmt.Errorf("refusing to encrypt: %s", st["reason"])
 		}
 	}
+	// The EFFECTIVE integrity for this archive (its own override, else the global
+	// preset), already normalised by effectiveIntegrity. Read here — before any tool
+	// is resolved, any staging directory is made, any key is generated and any tar is
+	// invoked — so the OBX-006 containment below decides on exactly the same value the
+	// rest of the build then uses, rather than on a preset label or a raw config string.
+	iv := a.effectiveIntegrity(c.CollectionID)
+	if err := assertWindowsTarBuildVerifiable(iv); err != nil {
+		return err
+	}
 	tarBin, err := a.tool("tar")
 	if err != nil {
 		return err
@@ -1003,7 +1074,9 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	// The build-verify tier comes from this archive's EFFECTIVE integrity (its own
 	// override, else the global preset), and the resulting attestation records the
 	// full effective settings so the medium self-documents its assurance level.
-	iv := a.effectiveIntegrity(c.CollectionID)
+	// iv was read at the top of this function, before anything was resolved or
+	// created, so the OBX-006 containment there and the attestation here cannot
+	// disagree about which tier this build ran at.
 	mode := iv.BuildVerify
 	bv := &BuildVerified{Mode: mode, Preset: iv.Preset, Par2Percent: c.Par2,
 		RoutineVerifyLevel: iv.RoutineVerifyLevel, VerifyDueMonths: iv.VerifyDueMonths, ReadbackAfterWrite: true}

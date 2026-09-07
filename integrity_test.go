@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -81,6 +82,24 @@ func TestFastArchiveAttestsReducedIntegrity(t *testing.T) {
 	plan := s.obj("POST", "/api/plan", map[string]any{"collection_id": cid, "media_kind": "CUSTOM", "target_gb": 1.0, "encrypted": false})
 	pkg := plan["chunks_created"].([]any)[0].(map[string]any)
 	pid := int(pkg["id"].(float64))
+
+	// INTENTIONAL BEHAVIOUR CHANGE (OBX-006 containment, 2026-09-07): on the Windows
+	// external-tar path a FAST archive can no longer be BUILT, so there is no built
+	// package to attest. Everything above — the override, its effective FAST/none
+	// configuration and the 5% par2 it plans — is platform-independent and still
+	// asserted. What changes here is only the outcome of the build itself, which must
+	// now be an explicit refusal rather than an unverified success.
+	if buildUsesWindowsExternalTar() {
+		label := s.jobFailure(s.obj("POST", fmt.Sprintf("/api/chunks/%d/build", pid), nil))
+		if !strings.Contains(label, "refusing to build without content verification on Windows") {
+			t.Fatalf("a FAST build on Windows must be refused by the OBX-006 containment, got: %s", label)
+		}
+		if chunk := s.obj("GET", fmt.Sprintf("/api/chunks/%d", pid), nil); chunk["status"] == "STAGED" {
+			t.Error("a refused FAST build must not leave the package STAGED")
+		}
+		return
+	}
+
 	s.job(s.obj("POST", fmt.Sprintf("/api/chunks/%d/build", pid), nil))
 	chunk := s.obj("GET", fmt.Sprintf("/api/chunks/%d", pid), nil)
 
