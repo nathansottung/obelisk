@@ -507,7 +507,7 @@ type ScanProblem struct {
 	Err  string `json:"err"`
 }
 
-func (a *App) ScanFolder(collectionID int, root string, progress func(float64, string)) (int, []ScanProblem, error) {
+func (a *App) ScanFolder(collectionID int, root string, progress func(float64, string)) (count int, problems []ScanProblem, err error) {
 	// SOURCE READ-ONLY: scanning only WalkDir-traverses and hashes (os.Open
 	// O_RDONLY via hashFileHex). It registers `root` as a source root and writes
 	// nothing back into it — the catalog is the only thing mutated.
@@ -517,14 +517,15 @@ func (a *App) ScanFolder(collectionID int, root string, progress func(float64, s
 	}
 	// Batch catalog writes for the duration of the scan (idempotent re-run).
 	a.Store.BeginBatch()
-	defer a.Store.EndBatch()
+	defer endBatchInto(a.Store, &err)
 	a.Store.SetVersionsRetained(a.LoadConfig().VersionsRetained) // cap file-version history per config
 	folder := a.Store.AddFolder(collectionID, root)
 
 	// Problems are appended from both the WalkDir callback (single goroutine) and the
 	// parallelHash workers (many), so guard the slice.
 	var pmu sync.Mutex
-	var problems []ScanProblem
+	// problems is the named result (see the signature); it starts nil exactly as the
+	// local declaration did, and every return statement below is unchanged.
 	addProblem := func(path, kind, msg string) {
 		pmu.Lock()
 		problems = append(problems, ScanProblem{Path: path, Kind: kind, Err: msg})

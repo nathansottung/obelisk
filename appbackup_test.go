@@ -72,9 +72,20 @@ func abPopulate(t *testing.T, app *App) (archives, files, volumes, packages, ver
 	app.Store.RecordCopy(ch, vol.ID, "H:/AB-PKG", true)
 	app.Store.AppendVerifyEvent(ch, VerifyEvent{At: time.Now().UTC(), OK: true, Level: "B", Note: "campaign"})
 
-	j := app.Store.NewJob("scan", "Scan "+src)
-	app.Store.AppendJobArtifact(j.ID, Artifact{Kind: "catalog", Label: "2 files cataloged", Count: n})
-	app.Store.SetJob(j.ID, 1, "", "COMPLETED")
+	// OB-002 signature adaptation only: these persistence calls now RETURN their
+	// write error. This fixture writes to a real temp store where they must succeed,
+	// so the test now fails loudly if one does not — strictly stronger than the
+	// previous silent discard. What the test asserts about the backup is unchanged.
+	j, err := app.Store.NewJob("scan", "Scan "+src)
+	if err != nil {
+		t.Fatalf("NewJob: %v", err)
+	}
+	if err := app.Store.AppendJobArtifact(j.ID, Artifact{Kind: "catalog", Label: "2 files cataloged", Count: n}); err != nil {
+		t.Fatalf("AppendJobArtifact: %v", err)
+	}
+	if err := app.Store.SetJob(j.ID, 1, "", "COMPLETED"); err != nil {
+		t.Fatalf("SetJob COMPLETED: %v", err)
+	}
 
 	// Recount verify events the way RestoreResult does (per chunk).
 	ve := 0

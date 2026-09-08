@@ -144,7 +144,7 @@ func (a *App) DockCandidates(sessionID int) ([]DockCandidate, error) {
 // detail — BEFORE hashing the whole drive — so the operator can copy critical data
 // off a dying disk first. Re-call with confirm=true to inventory it anyway (the
 // read is non-destructive; nothing is ever written to the drive).
-func (a *App) IngestDrive(sessionID int, mountPath, serial, label, mode, level string, confirm bool, progress func(float64, string)) (map[string]any, error) {
+func (a *App) IngestDrive(sessionID int, mountPath, serial, label, mode, level string, confirm bool, progress func(float64, string)) (res map[string]any, err error) {
 	ds := a.Store.DockSession(sessionID)
 	if ds == nil {
 		return nil, fmt.Errorf("dock session %d not found", sessionID)
@@ -160,7 +160,7 @@ func (a *App) IngestDrive(sessionID int, mountPath, serial, label, mode, level s
 	}
 	// Batch catalog writes across the ingest (idempotent: matched by content hash).
 	a.Store.BeginBatch()
-	defer a.Store.EndBatch()
+	defer endBatchInto(a.Store, &err)
 
 	progress(0.02, "identifying drive")
 	// An explicit serial (from the watcher, which already resolved the candidate,
@@ -231,7 +231,8 @@ func (a *App) IngestDrive(sessionID int, mountPath, serial, label, mode, level s
 	// check of the known mirror instead of the full content re-hash. Adoption and
 	// level B always do the full content match.
 	var drive *DockDrive
-	var err error
+	// err is the named result (see the signature) so a failed final catalog flush can
+	// be folded into it by endBatchInto; it is no longer declared locally here.
 	if effMode == "reverify" && normLevel(level) != VerifyB {
 		drive, err = a.dockReverifyAtLevel(ds, mountPath, vol, normLevel(level), progress)
 	} else {

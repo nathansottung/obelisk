@@ -119,7 +119,7 @@ type MirrorResult struct {
 // files (copy-then-verify each), records a verified mirror Copy on the volume,
 // and refreshes the volume inventory sidecar. One call == one volume; run several
 // concurrently for multi-volume mirroring.
-func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, volumeID int, throttleMbps float64, scopePrefix string, progress func(float64, string)) (*MirrorResult, error) {
+func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, volumeID int, throttleMbps float64, scopePrefix string, progress func(float64, string)) (out *MirrorResult, err error) {
 	coll := a.Store.Collection(collectionID)
 	if coll == nil {
 		return nil, fmt.Errorf("archive %d not found", collectionID)
@@ -141,7 +141,7 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 	}
 	// Batch catalog writes across the mirror job (idempotent copy-then-verify).
 	a.Store.BeginBatch()
-	defer a.Store.EndBatch()
+	defer endBatchInto(a.Store, &err)
 
 	// Resolve the source files (optionally limited to chosen folders) and the
 	// folder roots they hang off.

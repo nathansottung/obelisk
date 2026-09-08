@@ -221,7 +221,7 @@ func (a *App) payloadTOC(payloadPath, keyRef string, encrypted bool) ([]ChunkFil
 // AdoptMedia catalogs every payload found under mountPath as an ADOPTED-VERIFIED
 // package with a verified Copy on volumeID. It is idempotent by payload hash.
 // deep=true enumerates manifest-less payloads via `tar -tvf` where possible.
-func (a *App) AdoptMedia(mountPath string, collectionID, volumeID int, deep bool, progress func(float64, string)) (map[string]any, error) {
+func (a *App) AdoptMedia(mountPath string, collectionID, volumeID int, deep bool, progress func(float64, string)) (res map[string]any, err error) {
 	if strings.TrimSpace(mountPath) == "" {
 		return nil, fmt.Errorf("mount_path required")
 	}
@@ -234,7 +234,7 @@ func (a *App) AdoptMedia(mountPath string, collectionID, volumeID int, deep bool
 	// Batch catalog writes across the adoption (idempotent: already-cataloged
 	// payloads are skipped by hash on a re-run).
 	a.Store.BeginBatch()
-	defer a.Store.EndBatch()
+	defer endBatchInto(a.Store, &err)
 	if volumeID <= 0 {
 		volumeID = a.Store.EnsureUnregistered().ID
 	}
@@ -372,7 +372,7 @@ func (a *App) AdoptMedia(mountPath string, collectionID, volumeID int, deep bool
 // adopted this way IS the archive's file list — the union is the truth. A file
 // present on N drives shows N copies across their locations; identical content is
 // one union entry. READ-ONLY toward the folder (only hashes; the catalog changes).
-func (a *App) AdoptFolder(mountPath string, collectionID, volumeID int, progress func(float64, string)) (map[string]any, error) {
+func (a *App) AdoptFolder(mountPath string, collectionID, volumeID int, progress func(float64, string)) (res map[string]any, err error) {
 	coll := a.Store.Collection(collectionID)
 	if coll == nil {
 		return nil, fmt.Errorf("archive %d not found", collectionID)
@@ -397,7 +397,7 @@ func (a *App) AdoptFolder(mountPath string, collectionID, volumeID int, progress
 		progress = func(float64, string) {}
 	}
 	a.Store.BeginBatch()
-	defer a.Store.EndBatch()
+	defer endBatchInto(a.Store, &err)
 	if _, changed := a.resolveVolumeIdentity(vol, mountPath); changed {
 		a.Store.UpdateVolume(vol)
 	}

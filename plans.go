@@ -664,7 +664,7 @@ type PlanExecResult struct {
 // reads (a mismatch flags the drive as differing from its snapshot and skips the
 // file). Any-order and resumable: a hash already satisfied by an earlier drive is
 // confirmed, not recopied. Sources are read-only; only the destination is written.
-func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progress func(float64, string)) (*PlanExecResult, error) {
+func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progress func(float64, string)) (out *PlanExecResult, err error) {
 	plan := a.Store.Plan(planID)
 	if plan == nil {
 		return nil, fmt.Errorf("plan not found")
@@ -706,7 +706,7 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 	}
 	a.ensurePlanDestVolume(plan)
 	a.Store.BeginBatch()
-	defer a.Store.EndBatch()
+	defer endBatchInto(a.Store, &err)
 	if plan.Status == PlanCompiled {
 		plan.Status = PlanExecuting
 	}

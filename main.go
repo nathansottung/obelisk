@@ -463,8 +463,48 @@ func progBytes(done, total int64, human string) string {
 
 // runJob executes fn in a goroutine bound to a Job row the UI can poll. fn's
 // returned map is captured as the job's Result so the UI can show the artifact.
-func runJob(app *App, kind, label string, fn func(progress func(float64, string)) (map[string]any, error)) map[string]any {
-	j := app.Store.NewJob(kind, label)
+// started writes the response for a job-start request. It exists so the 20 handlers
+// that used `jsonOut(w, runJob(...))` can keep passing runJob's results straight
+// through now that it returns (response, error): Go forbids mixing a multi-value
+// call with other arguments, but a method on the writer takes the pair exactly.
+type started struct{ w http.ResponseWriter }
+
+func startedOn(w http.ResponseWriter) started { return started{w} }
+
+// write emits the RUNNING acknowledgement, or a truthful 503 when the job board
+// could not record the job — in which case runJob started no work at all, so the
+// client is not left holding an ID for something that may or may not be happening.
+func (s started) write(m map[string]any, err error) {
+	if err != nil {
+		jsonErr(s.w, 503, err)
+		return
+	}
+	jsonOut(s.w, m)
+}
+
+// runJob records a job, then runs fn in the background and publishes its outcome.
+//
+// OB-002 changed two things about truthfulness here:
+//
+//   - It returns an error. If the initial job record cannot be persisted, NO work is
+//     launched and the caller reports the failure, rather than handing back an ID the
+//     system falsely describes as recorded.
+//   - The terminal state is published with the job's artifacts and result in ONE
+//     checked write (FinishJob). If that write fails the job is marked unrecorded in
+//     the same lock hold, so it is never presented as durable COMPLETED history —
+//     not even for the instant between the write failing and this goroutine noticing.
+//
+// The catalog and jobs.json remain two separate files and this does not make them
+// one transaction: fn's own catalog changes are committed by its EndBatch before it
+// returns, and the job record is written afterwards. When the catalog commit
+// succeeds and the job record does not, the data stays and only the bookkeeping is
+// reported as missing — nothing successfully written is rolled back to make the two
+// files agree.
+func runJob(app *App, kind, label string, fn func(progress func(float64, string)) (map[string]any, error)) (map[string]any, error) {
+	j, jerr := app.Store.NewJob(kind, label)
+	if jerr != nil {
+		return nil, jerr
+	}
 	go func() {
 		start := time.Now()
 		var lastDone int64
@@ -491,7 +531,7 @@ func runJob(app *App, kind, label string, fn func(progress func(float64, string)
 			if human != "" {
 				l = label + " — " + human
 			}
-			app.Store.SetJob(j.ID, p, l, "")
+			_ = app.Store.SetJob(j.ID, p, l, "") // progress only: in-memory, never persisted
 			// Telemetry: a recent-window MB/s from byte deltas, ETA from what's left.
 			var rate, eta float64
 			now := time.Now()
@@ -514,21 +554,64 @@ func runJob(app *App, kind, label string, fn func(progress func(float64, string)
 			app.Store.SetJobTelemetry(j.ID, rate, eta, done, total, filesDone, filesTotal)
 		}
 		res, err := fn(prog)
+		app.Store.SetJobTelemetry(j.ID, 0, 0, 0, 0, 0, 0)
 		if err != nil {
-			app.Store.SetJob(j.ID, -1, label+" — ERROR: "+err.Error(), "FAILED")
-			app.Store.SetJobTelemetry(j.ID, 0, 0, 0, 0, 0, 0)
+			// fn's error already carries any final catalog-flush failure, folded in by
+			// endBatchInto, so a job whose work succeeded but whose catalog write did
+			// not lands here as FAILED rather than as COMPLETED.
+			if serr := app.Store.FinishJob(j.ID, -1, label+" — ERROR: "+err.Error(), "FAILED", nil, nil); serr != nil {
+				app.noteUnrecordedJob(j.ID, "FAILED", serr)
+			}
 			return
 		}
-		app.Store.SetJob(j.ID, 1, "", "COMPLETED")
 		// A job may report its structured artifacts under the "artifacts" key of its
-		// result (the show-the-artifact rule, made structural). Lift them onto the job
-		// record; the rest of the result stays as the free-form summary.
-		if arts, ok := res["artifacts"].([]Artifact); ok && len(arts) > 0 {
-			app.Store.SetJobArtifacts(j.ID, arts)
+		// result (the show-the-artifact rule, made structural). They are published
+		// WITH the terminal status, not after it, so jobs.json never holds a completed
+		// job whose outputs are missing.
+		arts, _ := res["artifacts"].([]Artifact)
+		if serr := app.Store.FinishJob(j.ID, 1, "", "COMPLETED", arts, res); serr != nil {
+			app.noteUnrecordedJob(j.ID, "COMPLETED", serr)
 		}
-		app.Store.SetJobResult(j.ID, res)
 	}()
-	return map[string]any{"job_id": j.ID, "status": "RUNNING", "label": label}
+	return map[string]any{"job_id": j.ID, "status": "RUNNING", "label": label}, nil
+}
+
+// noteUnrecordedJob REPORTS the one case the job board cannot report through itself:
+// the work reached a terminal state but the sidecar write failed.
+//
+// It does not set the job's state. FinishJob already published the terminal snapshot
+// and its not-recorded qualification together, under one hold of s.jobs.mu, before it
+// returned this error — so by the time this runs, /api/jobs has been serving the
+// qualified row all along. This function must not re-flag the row either: an ordinary
+// jobs write may already have recorded it in the meantime, and saying "not recorded"
+// about a row that is on disk would be the same class of falsehood in the other
+// direction.
+//
+// What it does is get the failure OUT of the failing subsystem, in two steps of
+// decreasing reliability, and it is worth being exact about which is which:
+//
+//   - The process log line ALWAYS happens. It is the durable-in-practice record here:
+//     no disk of ours, no lock, nothing to fail.
+//   - The catalog audit append is BEST EFFORT and frequently does not reach a file.
+//     Store.Log appends in memory and calls save(), which (a) writes catalog.json —
+//     a different file, but usually the same volume, so the realistic whole-volume
+//     failure takes it out too, and (b) is a no-op write when another job holds a
+//     batch open, in which case the entry is only marked dirty for a later flush that
+//     may never come. Measured on both paths: zero entries on disk after a reopen. So
+//     an audit ATTEMPT is not evidence of a durable audit entry, and nothing here or
+//     downstream may describe it as one.
+//
+// Neither step is a retry of the sidecar: that is the thing that just failed, and
+// retrying it is how this turns into a loop. Recovery is left to ordinary subsequent
+// jobs writes (see saveJobs).
+func (a *App) noteUnrecordedJob(id int, status string, cause error) {
+	msg := fmt.Sprintf("job %d reached %s but its record could not be written: %v", id, status, cause)
+	log.Print("jobs: " + msg)
+	// Deliberately last, deliberately unchecked, and deliberately outside any jobs
+	// lock: Store.Log takes s.mu, and holding s.jobs.mu across that would invent a
+	// lock ordering this code does not otherwise have. A failure here changes nothing
+	// that has already been reported above.
+	a.Store.Log("job-unrecorded", msg)
 }
 
 // ---- routes ---------------------------------------------------------------
@@ -633,7 +716,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("path required (the mounted card or drive)"))
 			return
 		}
-		resp := runJob(app, "cardcheck", "Check card "+p, func(prog func(float64, string)) (map[string]any, error) {
+		resp, jerr := runJob(app, "cardcheck", "Check card "+p, func(prog func(float64, string)) (map[string]any, error) {
 			res, err := app.CardCheck(p, prog)
 			if res == nil {
 				return nil, err
@@ -643,6 +726,10 @@ func api(mux *http.ServeMux, app *App) {
 			_ = json.Unmarshal(bb, &m)
 			return m, err
 		})
+		if jerr != nil {
+			jsonErr(w, 503, jerr)
+			return
+		}
 		jsonOut(w, resp)
 	})
 
@@ -690,7 +777,7 @@ func api(mux *http.ServeMux, app *App) {
 			return
 		}
 		includeKeys := bl(b, "include_keys")
-		jsonOut(w, runJob(app, "appbackup", "Back up app records → "+dest, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "appbackup", "Back up app records → "+dest, func(p func(float64, string)) (map[string]any, error) {
 			p(0.1, "gathering records")
 			res, err := app.ExportAppBackup(dest, includeKeys)
 			if err != nil {
@@ -947,7 +1034,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("path required"))
 			return
 		}
-		jsonOut(w, runJob(app, "scan", "Scan "+root, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "scan", "Scan "+root, func(p func(float64, string)) (map[string]any, error) {
 			n, problems, err := app.ScanFolder(id, root, p)
 			if err != nil {
 				return nil, err
@@ -980,7 +1067,7 @@ func api(mux *http.ServeMux, app *App) {
 			return
 		}
 		vol := resolveVolume(app, b)
-		jsonOut(w, runJob(app, "adopt-folder", "Adopt drive → "+c.Name, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "adopt-folder", "Adopt drive → "+c.Name, func(p func(float64, string)) (map[string]any, error) {
 			return app.AdoptFolder(path, id, vol, p)
 		}))
 	})
@@ -1000,7 +1087,7 @@ func api(mux *http.ServeMux, app *App) {
 		if disp := app.Store.scopeDisplay(id, scope); disp != "" {
 			label += " — " + disp
 		}
-		jsonOut(w, runJob(app, "reconcile", label, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "reconcile", label, func(p func(float64, string)) (map[string]any, error) {
 			d, err := app.ReconcileCollection(id, scope, p)
 			var res map[string]any
 			if d != nil {
@@ -1089,7 +1176,7 @@ func api(mux *http.ServeMux, app *App) {
 				label = fmt.Sprintf("Mirror %s — %s → %s", coll.Name, scopeDisp, dest)
 			}
 			// One job per volume — they run concurrently (v1's multi-volume copy).
-			resp := runJob(app, "mirror", label, func(p func(float64, string)) (map[string]any, error) {
+			resp, jerr := runJob(app, "mirror", label, func(p func(float64, string)) (map[string]any, error) {
 				mr, err := app.MirrorToVolume(cid, folderIDs, dest, vol, throttle, scope, p)
 				var res map[string]any
 				if mr != nil {
@@ -1097,6 +1184,13 @@ func api(mux *http.ServeMux, app *App) {
 				}
 				return res, err
 			})
+			if jerr != nil {
+				// This volume's job was never recorded and never started. Report it in
+				// place of a job id so the caller cannot mistake it for one running.
+				jobs = append(jobs, map[string]any{"volume_id": vol, "dest_dir": dest,
+					"status": "NOT_STARTED", "error": jerr.Error()})
+				continue
+			}
 			resp["volume_id"] = vol
 			resp["dest_dir"] = dest
 			jobs = append(jobs, resp)
@@ -1149,7 +1243,7 @@ func api(mux *http.ServeMux, app *App) {
 		if disp := app.Store.scopeDisplay(id, scope); disp != "" {
 			label = fmt.Sprintf("Back up changes — %s → %s", disp, volLabel)
 		}
-		resp := runJob(app, "incremental", label, func(p func(float64, string)) (map[string]any, error) {
+		resp, jerr := runJob(app, "incremental", label, func(p func(float64, string)) (map[string]any, error) {
 			res, err := app.BackupChanges(id, folderIDs, vol, base, mode, dest, throttle, scope, p)
 			if res == nil {
 				return nil, err
@@ -1158,6 +1252,10 @@ func api(mux *http.ServeMux, app *App) {
 				"name": res.Name, "session_id": res.SessionID, "sidecar": res.Sidecar, "planned": res.Planned,
 				"message": res.Message, "dest": res.Dest, "changed": res.Changed, "failed": res.Failed}, err
 		})
+		if jerr != nil {
+			jsonErr(w, 503, jerr)
+			return
+		}
 		resp["volume_id"] = vol
 		jsonOut(w, resp)
 	})
@@ -1615,7 +1713,7 @@ func api(mux *http.ServeMux, app *App) {
 	// Offer at execution setup: adopt an already-partially-populated destination.
 	mux.HandleFunc("POST /api/plans/{id}/adopt-destination", func(w http.ResponseWriter, r *http.Request) {
 		id := pathID(r)
-		jsonOut(w, runJob(app, "plan", "Adopt destination", func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "plan", "Adopt destination", func(p func(float64, string)) (map[string]any, error) {
 			return app.AdoptDestination(id, p)
 		}))
 	})
@@ -1628,7 +1726,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("mount_path (the docked source drive) required"))
 			return
 		}
-		jsonOut(w, runJob(app, "plan", "Execute plan from "+mount, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "plan", "Execute plan from "+mount, func(p func(float64, string)) (map[string]any, error) {
 			res, err := app.ExecutePlanFromDrive(id, mount, serial, p)
 			if err != nil {
 				return nil, err
@@ -1770,7 +1868,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("output_dir required"))
 			return
 		}
-		jsonOut(w, runJob(app, "bagit-export", "BagIt export → "+out, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "bagit-export", "BagIt export → "+out, func(p func(float64, string)) (map[string]any, error) {
 			return app.ExportBag(id, out, p)
 		}))
 	})
@@ -1786,7 +1884,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("output_dir required"))
 			return
 		}
-		jsonOut(w, runJob(app, "bagit-export", "BagIt export → "+out, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "bagit-export", "BagIt export → "+out, func(p func(float64, string)) (map[string]any, error) {
 			return app.ExportPackageBag(id, out, p)
 		}))
 	})
@@ -1824,7 +1922,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("package not found"))
 			return
 		}
-		jsonOut(w, runJob(app, "build", "Build "+c.Name, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "build", "Build "+c.Name, func(p func(float64, string)) (map[string]any, error) {
 			if err := app.BuildChunk(id, p); err != nil {
 				return nil, err
 			}
@@ -1869,7 +1967,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 409, err)
 			return
 		}
-		jsonOut(w, runJob(app, "write", "Write "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "write", "Write "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {
 			return app.WriteChunk(id, dest, f(b, "buffer_gb"), int(f(b, "block_mb")), f(b, "throttle_mbps"), vol, p)
 		}))
 	})
@@ -1890,7 +1988,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 409, err)
 			return
 		}
-		jsonOut(w, runJob(app, "write", "Re-write "+c.Name+" copy", func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "write", "Re-write "+c.Name+" copy", func(p func(float64, string)) (map[string]any, error) {
 			return app.RewriteCopy(id, vol, f(b, "buffer_gb"), int(f(b, "block_mb")), f(b, "throttle_mbps"), p)
 		}))
 	})
@@ -1912,7 +2010,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 409, err)
 			return
 		}
-		jsonOut(w, runJob(app, "write", "Span-write next segment of "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "write", "Span-write next segment of "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {
 			return app.SpanWriteNext(id, dest, f(b, "buffer_gb"), int(f(b, "block_mb")), f(b, "throttle_mbps"), vol, p)
 		}))
 	})
@@ -1943,7 +2041,7 @@ func api(mux *http.ServeMux, app *App) {
 			return
 		}
 		level := s(b, "level")
-		jsonOut(w, runJob(app, "verify", "Verify campaign — "+dest, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "verify", "Verify campaign — "+dest, func(p func(float64, string)) (map[string]any, error) {
 			return app.VerifyCampaign(dest, level, p)
 		}))
 	})
@@ -1967,7 +2065,7 @@ func api(mux *http.ServeMux, app *App) {
 		deep, _ := b["deep"].(bool)
 		// Adoption result (adopted / skipped-duplicate / unreadable) is surfaced via
 		// the job's final label and the refreshed Packages/Volumes views.
-		jsonOut(w, runJob(app, "adopt", "Adopt media — "+mount, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "adopt", "Adopt media — "+mount, func(p func(float64, string)) (map[string]any, error) {
 			return app.AdoptMedia(mount, cid, vol, deep, p)
 		}))
 	})
@@ -1992,7 +2090,7 @@ func api(mux *http.ServeMux, app *App) {
 				}
 			}
 		}
-		jsonOut(w, runJob(app, "restore", "Restore "+c.Name, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "restore", "Restore "+c.Name, func(p func(float64, string)) (map[string]any, error) {
 			return app.RestoreChunk(id, s(b, "source_dir"), out, members, p)
 		}))
 	})
@@ -2040,7 +2138,7 @@ func api(mux *http.ServeMux, app *App) {
 			}
 			sel.AsOf = &t
 		}
-		jsonOut(w, runJob(app, "restore", fmt.Sprintf("Restore file %d", id), func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "restore", fmt.Sprintf("Restore file %d", id), func(p func(float64, string)) (map[string]any, error) {
 			return app.RestoreFileVersion(id, sel, s(b, "source_dir"), out, p)
 		}))
 	})
@@ -2101,7 +2199,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("burn queue not found"))
 			return
 		}
-		jsonOut(w, runJob(app, "burn", "Burn next disc in "+q.Name, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "burn", "Burn next disc in "+q.Name, func(p func(float64, string)) (map[string]any, error) {
 			return app.BurnNext(id, p)
 		}))
 	})
@@ -2121,9 +2219,13 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("output_dir required"))
 			return
 		}
-		resp := runJob(app, "recoverykit", "Recovery Kit → "+out, func(p func(float64, string)) (map[string]any, error) {
+		resp, jerr := runJob(app, "recoverykit", "Recovery Kit → "+out, func(p func(float64, string)) (map[string]any, error) {
 			return app.BuildRecoveryKit(out, p)
 		})
+		if jerr != nil {
+			jsonErr(w, 503, jerr)
+			return
+		}
 		resp["warning"] = recoveryKitWarning
 		jsonOut(w, resp)
 	})
@@ -2173,9 +2275,13 @@ func api(mux *http.ServeMux, app *App) {
 	mux.HandleFunc("POST /api/escrow/fetch", func(w http.ResponseWriter, r *http.Request) {
 		cfg := app.LoadConfig()
 		census := app.FormatCensus(0)
-		resp := runJob(app, "escrow-fetch", "Fetch escrow cache", func(p func(float64, string)) (map[string]any, error) {
+		resp, jerr := runJob(app, "escrow-fetch", "Fetch escrow cache", func(p func(float64, string)) (map[string]any, error) {
 			return app.FetchEscrowCache(cfg.EscrowIncludeReaders, census, p)
 		})
+		if jerr != nil {
+			jsonErr(w, 503, jerr)
+			return
+		}
 		jsonOut(w, resp)
 	})
 
@@ -2476,7 +2582,7 @@ func api(mux *http.ServeMux, app *App) {
 		}
 		b := body(r)
 		mount, level := s(b, "mount"), s(b, "level")
-		jsonOut(w, runJob(app, "verify", fmt.Sprintf("Mirror re-verify (%s) — %s", levelTag(level), v.Label), func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "verify", fmt.Sprintf("Mirror re-verify (%s) — %s", levelTag(level), v.Label), func(p func(float64, string)) (map[string]any, error) {
 			return app.VerifyMirrorVolume(v.ID, mount, level, p)
 		}))
 	})
@@ -2645,7 +2751,7 @@ func api(mux *http.ServeMux, app *App) {
 		}
 		serial, label, mode, level := s(b, "serial"), s(b, "label"), s(b, "mode"), s(b, "level")
 		confirm := bl(b, "confirm") // proceed past the SMART failure gate (operator acknowledged)
-		jsonOut(w, runJob(app, "dock", "Ingest "+mount, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "dock", "Ingest "+mount, func(p func(float64, string)) (map[string]any, error) {
 			return app.IngestDrive(id, mount, serial, label, mode, level, confirm, p)
 		}))
 	})
@@ -2823,6 +2929,27 @@ func api(mux *http.ServeMux, app *App) {
 		jsonOut(w, app.recomputeJob())
 	})
 
+	// Both job endpoints below serialise the whole Job, so both carry the OB-002
+	// recording-state contract, identically and from the same snapshot:
+	//
+	//   "unrecorded": true    — the terminal snapshot in this very response has NOT
+	//                           been written to jobs.json. `status` still says what the
+	//                           work did; the bookkeeping is what is missing. Present
+	//                           only when true (omitempty).
+	//   "persist_error": "…"  — the cause of the most recent recording failure. It is
+	//                           HISTORY and outlives recovery, so its presence alone
+	//                           does NOT mean the record is missing now: read it with
+	//                           "unrecorded", never instead of it.
+	//
+	// Both fields are additive; a clean job's JSON is byte-for-byte what it was.
+	//
+	// The compatibility limit, stated plainly because adding a field does not repair
+	// an existing client: anything that branches on `status == "COMPLETED"` alone
+	// keeps compiling, keeps working, and keeps being WRONG about the unrecorded case
+	// — it will read a finished-but-unrecorded job as an ordinary success. Every
+	// in-tree consumer (ui/index.html's job list, job detail, waitJob and the
+	// card-check poll) has been updated to read the snapshot rather than the status.
+	// External clients have not been, and cannot be by us; they must add the check.
 	mux.HandleFunc("GET /api/jobs", func(w http.ResponseWriter, r *http.Request) { jsonOut(w, app.Store.Jobs()) })
 	// One job with its full artifact list — the job detail view's source.
 	register(mux, "GET /api/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {

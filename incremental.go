@@ -255,7 +255,7 @@ type BackupChangesResult struct {
 // copies + refreshes the sidecar; package mode plans media-sized packages from the
 // delta for the normal build/write engine. Either way a named BackupSession is
 // recorded (unless the delta was empty).
-func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, base, mode, destDir string, throttleMbps float64, scopePrefix string, progress func(float64, string)) (*BackupChangesResult, error) {
+func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, base, mode, destDir string, throttleMbps float64, scopePrefix string, progress func(float64, string)) (out *BackupChangesResult, err error) {
 	coll := a.Store.Collection(collectionID)
 	if coll == nil {
 		return nil, fmt.Errorf("archive %d not found", collectionID)
@@ -305,7 +305,7 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 	}
 
 	a.Store.BeginBatch()
-	defer a.Store.EndBatch()
+	defer endBatchInto(a.Store, &err)
 
 	folderPath := map[int]string{}
 	for _, f := range a.Store.FoldersOf(collectionID) {

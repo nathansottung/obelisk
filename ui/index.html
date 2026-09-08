@@ -114,6 +114,9 @@ tr:last-child td{border-bottom:none}
 .stamp.PLANNED{background:var(--idle)} .stamp.STAGED,.stamp.WRITTEN{background:#5b7367}
 .stamp.BUILDING,.stamp.WRITING{background:var(--warn)}
 .stamp.INTERRUPTED{background:var(--warn)}
+/* OB-002: a finished job whose completion could not be written to the job board.
+   Deliberately NOT .VERIFIED — the work happened, the record of it did not. */
+.stamp.UNRECORDED{background:var(--warn)}
 .err{color:var(--bad);font:12.5px var(--mono)}
 .empty{color:var(--ink-3);padding:26px 10px;text-align:center;font-size:13.5px}
 
@@ -2726,7 +2729,10 @@ function recoveryKitDlg(){dlg(`<h1>Export Recovery Kit</h1>
     toast('Recovery Kit generating — see Jobs. '+(r.warning||''),1);loc('jobs');
     // Show-the-artifact rule: when the job finishes, surface the kit itself.
     // Fire-and-forget so this dialog closes now instead of hanging on the job.
-    waitJob(r.job_id).then(job=>{if(job&&job.result)showKitResult(job.result)}).catch(()=>{})});}
+    // On the unrecorded path the kit itself still exists on disk, so show it — with
+    // the warning, and without the ordinary success wording.
+    waitJob(r.job_id).then(job=>{if(job&&job.result)showKitResult(job.result)})
+      .catch(e=>{if(e&&e.unrecorded){toast(e.message,1);if(e.job&&e.job.result)showKitResult(e.job.result)}})});}
 
 /* ---------------- Jobs ---------------- */
 let jobsTimer;
@@ -2882,15 +2888,85 @@ async function vJobs(){
   let h=`${hdr('Jobs','long operations run in the background — safe to navigate away','jobs')}<div class="panel">`;
   if(!js.length)h+='<div class="empty">No jobs yet — scans, builds, writes and verifies report their progress here.</div>';
   else{h+='<table><tr><th style="width:52%">Job</th><th>Progress</th><th>State</th></tr>';
-    for(const j of js)h+=`<tr><td><a href="#job/${j.id}" style="color:var(--act);font-weight:600">${esc(j.label)}</a>${jobArtifact(j)}${jobWrites(j,cfg)}</td>
+    for(const j of js)h+=`<tr><td><a href="#job/${j.id}" style="color:var(--act);font-weight:600">${esc(j.label)}</a>${jobArtifact(j)}${jobWrites(j,cfg)}${jobRecordingNote(j)}</td>
       <td><div class="bar"><div style="width:${Math.round((j.progress||0)*100)}%"></div></div>${jobTelemetry(j)}</td>
-      <td><span class="stamp ${jobStamp(j.status)}">${esc(j.status)}</span></td></tr>`;
+      <td><span class="stamp ${jobStamp(j)}">${esc(jobStampText(j))}</span></td></tr>`;
     h+='</table>'}
   $('#view').innerHTML=h+'</div>';
   clearTimeout(jobsTimer);
   if(js.some(j=>j.status==='RUNNING'))jobsTimer=setTimeout(()=>{if(location.hash==='#jobs')vJobs()},1000);
 }
-function jobStamp(st){return st==='COMPLETED'?'VERIFIED':st==='FAILED'?'FAILED':st==='INTERRUPTED'?'INTERRUPTED':'BUILDING';}
+/* ---- OB-002: job recording state -------------------------------------------
+   Every job carries TWO different facts about being written to the job board, and
+   the whole point is that they are not the same fact:
+
+     j.unrecorded    CURRENT state. This exact finished result is not in the saved
+                     record. Warn about it.
+     j.persist_error HISTORY. The cause of the last recording failure, kept after
+                     recovery. On its own it means "this was once at risk", NOT
+                     "it is missing now" — so it is never read without j.unrecorded.
+
+   Which is why these take the JOB, not the bare status: `status` alone cannot tell
+   a recorded completion from an unrecorded one, and reading it alone is exactly the
+   bug this replaces.
+
+   PRECEDENCE, and it only goes one way: the EXECUTION OUTCOME is primary and always
+   survives. `unrecorded` is an ADDITIONAL qualification laid beside it — it can say a
+   result is missing from the saved record, and it can never say the work went better
+   than it did. A FAILED job whose failure record also could not be written is still a
+   FAILED job. Letting `unrecorded` answer first was a real defect: it painted an amber
+   NOT RECORDED stamp over a red FAILED one and printed "the operation itself finished
+   and its results are real" over a scan that never finished and produced nothing. */
+const JOB_UNRECORDED_MSG='Work finished — completion not recorded';
+function jobStamp(j){
+  const st=j&&j.status;
+  // Outcome first. A failure or an interruption keeps its own stamp and its own colour
+  // whatever happened to the record; only a genuine COMPLETED can be downgraded to the
+  // amber UNRECORDED, because only there is "it finished, we just did not save it" true.
+  if(st==='FAILED')return 'FAILED';
+  if(st==='INTERRUPTED')return 'INTERRUPTED';
+  if(j&&j.unrecorded)return 'UNRECORDED';
+  return st==='COMPLETED'?'VERIFIED':'BUILDING';}
+// The stamp's WORDS. An unrecorded COMPLETED must not read "COMPLETED" on its own,
+// because that is the half of the truth that is misleading. Every other status reads as
+// itself — replacing FAILED with NOT RECORDED would hide the outcome that matters most.
+function jobStampText(j){
+  const st=(j&&j.status)||'';
+  return (j&&j.unrecorded&&st==='COMPLETED')?'NOT RECORDED':st;}
+/* The plain-language line under a job. Each state gets its OWN sentence — never one
+   string doing several jobs, and never the completion sentence on a job that did not
+   complete. The recording problem is reported as a second, subordinate fact. */
+function jobRecordingNote(j){
+  if(!j)return '';
+  const cause=j.persist_error?` <span class="dim mono">${esc(j.persist_error)}</span>`:'';
+  if(j.unrecorded&&j.status==='COMPLETED')return `<div class="err" style="font-size:11.5px;margin-top:6px"><b>${esc(JOB_UNRECORDED_MSG)}.</b>
+    The operation itself finished and its results are real and still available here — but the job board could not be written, so this completion is <b>not in the saved record</b> and is not verified history.
+    It is not retried and the operation is not re-run: the next ordinary job update saves the board and records it.${cause}</div>`;
+  if(j.unrecorded){
+    // A non-COMPLETED terminal job that was also not recorded. The outcome sentence comes
+    // first and states what actually happened; the recording failure is appended as a
+    // separate problem. Nothing here says the work finished, that any output exists, or
+    // that anything produced is usable — because none of that is known to be true.
+    // FAILED is the reachable case (main.go finishes a failing job with FinishJob(…,
+    // "FAILED", nil, nil), and a failed sidecar write flags any terminal status).
+    // INTERRUPTED + unrecorded is NOT produced by the application — loadJobs sets
+    // INTERRUPTED on restart and deliberately leaves those rows unflagged — so that
+    // branch is defensive only, and is written so it degrades honestly if it ever fires.
+    const st=j.status;
+    const what=st==='FAILED'?'The job failed. Its failure record could not be saved.'
+      :st==='INTERRUPTED'?'The job was interrupted. Its record could not be saved.'
+      :'This job did not finish. Its record could not be saved.';
+    return `<div class="err" style="font-size:11.5px;margin-top:6px"><b>${esc(what)}</b>
+      The outcome above stands; what is missing is the saved record of it, so the job board may not show this outcome after a restart.
+      It is not retried and the operation is not re-run: the next ordinary job update saves the board and records it.${cause}</div>`;}
+  if(j.persist_error)return `<div class="dim" style="font-size:11px;margin-top:4px">Recorded. An earlier attempt to record this job failed (<span class="mono">${esc(j.persist_error)}</span>); a later save succeeded, and this completion is now in the saved record.</div>`;
+  return '';}
+// Finishing is not verifying. A job reaching COMPLETED says the operation ran to the
+// end and its record was written — it never says the bytes it wrote were read back
+// and checked. That claim belongs to verify/check jobs and their own results.
+function jobUnrecordedError(j){
+  const e=new Error(JOB_UNRECORDED_MSG+(j&&j.persist_error?' ('+j.persist_error+')':''));
+  e.unrecorded=true;e.job=j;return e;}
 /* ---------------- Job detail — "what did I just do, to what, where can I see it?" ----
    A single job's plain summary, live counters while running, and an ARTIFACTS list
    where every output has a Show action that opens the thing itself. */
@@ -2935,9 +3011,10 @@ async function vJobDetail(id){
   let h=`${hdr('Job — '+esc(j.label),'what ran, on what, and where to see the results','jobs')}
     <div class="panel">
       <div class="row" style="justify-content:space-between;align-items:baseline;flex-wrap:wrap">
-        <div><span class="stamp ${jobStamp(j.status)}">${esc(j.status)}</span> <span class="dim" style="font-size:12px;margin-left:6px">${esc(j.kind)}</span></div>
+        <div><span class="stamp ${jobStamp(j)}">${esc(jobStampText(j))}</span> <span class="dim" style="font-size:12px;margin-left:6px">${esc(j.kind)}</span></div>
         <button class="btn ghost" style="font-size:11px;padding:2px 12px" onclick="loc('jobs')">← All jobs</button></div>
       <div class="dim" style="font-size:12px;margin-top:8px">Started ${esc((j.created_at||'').slice(0,19).replace('T',' '))} UTC${dur?` · ${running?'running for':'took'} ${dur}`:''}</div>
+      ${jobRecordingNote(j)}
       ${jobWrites(j,cfg)}
       ${running?`<div style="margin-top:10px"><div class="bar"><div style="width:${Math.round((j.progress||0)*100)}%"></div></div>${jobTelemetry(j)}</div>
       <div id="perfstrip" class="perfstrip" style="margin-top:12px;margin-bottom:0"></div>`:''}`;
@@ -2982,10 +3059,32 @@ function showKitResult(r){dlg(`<h1>Recovery Kit ready</h1>
 
 /* ---------------- Dock — guided legacy-drive inventory ---------------- */
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+/* waitJob resolves ONLY for a clean, recorded success.
+   A finished-but-unrecorded job takes the warning path instead — it rejects with an
+   error carrying `unrecorded` and the whole job, so the caller can still show what the
+   work produced while it warns, and cannot accidentally announce plain success. That
+   asymmetry is deliberate: a caller nobody updated fails loudly rather than lying
+   quietly. Every terminal status ends the poll; nothing here waits forever. */
 async function waitJob(jobId){
   for(;;){const jobs=await api('GET','/api/jobs');const j=(jobs||[]).find(x=>x.id===jobId);
-    if(j&&j.status==='COMPLETED')return j;
-    if(j&&j.status==='FAILED')throw new Error((j.label||'inventory failed').replace(/^.*ERROR:\s*/,''));
+    if(j&&j.status==='COMPLETED'){
+      if(j.unrecorded)throw jobUnrecordedError(j);
+      return j;}
+    if(j&&j.status==='FAILED'){
+      // The operation's OWN error stays the error, and the rejection stays the ordinary
+      // failure path — a failed job must never reach a success toast. If the failure
+      // record also could not be written, that is appended as a second clause and
+      // carried on its OWN field: `unrecorded` is not set here, because `unrecorded`
+      // means "finished successfully but not saved" and sends callers down the path that
+      // shows the job's results. A failed job has none to show.
+      const err=new Error((j.label||'inventory failed').replace(/^.*ERROR:\s*/,'')
+        +(j.unrecorded?' — this failure record could not be saved'+(j.persist_error?' ('+j.persist_error+')':''):''));
+      if(j.unrecorded)err.recordUnsaved=true;
+      err.job=j;
+      throw err;}
+    // INTERRUPTED is terminal too: the process that owned this job is gone and it can
+    // never reach COMPLETED, so waiting on it is waiting forever.
+    if(j&&j.status==='INTERRUPTED')throw new Error('This job was interrupted and did not finish.');
     await sleep(700)}}
 let dockTimer=null, dockBanner=null;
 async function vDock(){
@@ -3085,7 +3184,12 @@ async function dockIngest(sid,path,mode,level,confirm){
   try{
     toast('Inventorying '+path+' — hashing & matching…');
     const r=await api('POST',`/api/dock/session/${sid}/ingest`,{mount_path:path,mode:mode||'',level:level||'',confirm:!!confirm});
-    const j=await waitJob(r.job_id);
+    // Unrecorded is not a failure of the inventory — the drive really was read — so the
+    // result is kept and used; what changes is that the banner says so instead of
+    // reporting a clean DONE.
+    let j,unrecorded=null;
+    try{j=await waitJob(r.job_id)}
+    catch(e){if(e&&e.unrecorded){unrecorded=e;j=e.job}else throw e}
     const res=(j&&j.result)||{};
     // Pre-flight drive-mortality gate — SMART is shouting failure BEFORE the long read.
     if(res.needs_confirmation){
@@ -3097,7 +3201,8 @@ async function dockIngest(sid,path,mode,level,confirm){
     const last=(d.session.drives_processed||[]).slice().sort((a,b)=>new Date(b.finished_at||0)-new Date(a.finished_at||0))[0]||{};
     let detail=`${last.label||'drive'}: ${last.matched||0} files matched (${GB(last.matched_bytes)} GB)${last.mode==='reverify'?' · re-verified':''} · ${last.unreadable||0} unreadable. ${d.coverage.pct||0}% of the selected archives now covered.`;
     const notes=(res.report&&res.report.notes)||[];
-    dockBanner={message:'DONE — safe to eject. Insert the next drive.',detail,notes,
+    if(unrecorded)toast(unrecorded.message,1);
+    dockBanner={message:unrecorded?(JOB_UNRECORDED_MSG+' — safe to eject, but this inventory is not in the saved record.'):'DONE — safe to eject. Insert the next drive.',detail,notes,
       atRisk:!!(res.report&&res.report.mirror&&res.report.mirror.at_risk)};
     vDock();
   }catch(e){toast(e.message,1)}
@@ -3183,7 +3288,10 @@ async function ccStart(path){
     const j=(jobs||[]).find(x=>x.id===jid);if(!j)continue;
     const bar=$('#ccbar');if(bar)bar.style.width=Math.max(2,Math.round((j.progress||0)*100))+'%';
     const msg=$('#ccmsg');if(msg)msg.textContent=(j.label||'').split('—').slice(1).join('—').trim()||'working…';
-    if(j.status==='COMPLETED'){ccRender(j.result||{},path);return;}
+    // Same rule as waitJob, in the loop that predates it: a card check that finished
+    // without being recorded still answers "is it safe to format?", and still must not
+    // be presented as a recorded result.
+    if(j.status==='COMPLETED'){ccRender(j.result||{},path,j);return;}
     if(j.status==='FAILED'){box.innerHTML=`<div class="panel"><div class="err">${esc((j.label||'card check failed').replace(/^.*ERROR:\s*/,''))}</div></div>`;return;}
   }
 }
@@ -3199,8 +3307,9 @@ function ccProbWhat(kind){
     default:return kind||'unreadable';
   }
 }
-function ccRender(res,path){
+function ccRender(res,path,job){
   const box=$('#ccresult');if(!box)return;
+  const recNote=jobRecordingNote(job);
   const tot=res.total_files||0,backedN=res.backed_up_files||0,newN=res.new_files||0;
   // The three independent reasons the card must not be formatted. They combine: a card
   // can have new frames AND unreadable ones AND folders that would not open.
@@ -3218,7 +3327,9 @@ function ccRender(res,path){
   else if(newN)banner=`<div class="ccban ccbad">Warning: <b>${commaN(newN)}</b> of ${commaN(tot)} file(s) (${GB(res.new_bytes)} GB) are <b>not backed up yet</b> — copy these off before you reformat.</div>`;
   else if(!tot)banner=`<div class="ccban ccneutral">No files found on ${esc(path)}.</div>`;
   else banner=`<div class="ccban ccbad">Not safe to format — this card could not be fully accounted for.</div>`;
-  let h=banner+`<div class="hstrip">
+  // The recording warning goes ABOVE the safe-to-format verdict, because it qualifies
+  // that verdict: the check ran, but its completion is not in the saved record.
+  let h=recNote+banner+`<div class="hstrip">
     ${ccTile('On the card',commaN(tot),GB(res.total_bytes)+' GB')}
     ${ccTile('Already backed up',commaN(backedN),GB(res.backed_up_bytes)+' GB')}
     ${ccTile('New / unsaved',commaN(newN),GB(res.new_bytes)+' GB')}
@@ -4129,7 +4240,11 @@ function editPlanDlg(id){api('GET','/api/plans/'+id).then(d=>{const p=d.plan;
 async function delPlan(id){if(!confirm('Delete this plan? Nothing on disk is affected.'))return;
   try{await api('POST','/api/plans/'+id+'/delete',{});toast('Deleted');loc('plans')}catch(e){toast(e.message,1)}}
 function adoptDest(id){if(!confirm('Check the destination drive and mark the files it already has (matched by content) as done?'))return;
-  api('POST','/api/plans/'+id+'/adopt-destination',{}).then(r=>waitJob(r.job_id)).then(()=>{toast('Destination adopted');vPlanDetail(id)}).catch(e=>toast(e.message,1))}
+  // No 'Destination adopted' toast on the unrecorded path — the adoption happened, but
+  // saying so plainly would claim a recorded outcome. Warn, and still refresh the view
+  // so the real result is reachable.
+  api('POST','/api/plans/'+id+'/adopt-destination',{}).then(r=>waitJob(r.job_id)).then(()=>{toast('Destination adopted');vPlanDetail(id)})
+    .catch(e=>{toast(e.message,1);if(e&&e.unrecorded)vPlanDetail(id)})}
 function execPlanDlg(id){dlg(`<h1>Execute plan work from a drive</h1>
   <div class="dim" style="font-size:11.5px;margin-bottom:8px">Dock the source drive and give its mounted path. Only the files THIS drive can supply are copied (copy-then-verify into the planned tree). Any order; resumable. Its bytes are re-checked against the snapshot as they read.</div>
   <label>Mounted path of the source drive</label><input id="ex_mount" class="full" placeholder="E:\\ or /mnt/drive">${browseBtn('ex_mount')}
