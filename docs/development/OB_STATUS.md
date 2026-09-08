@@ -929,6 +929,53 @@ New IDs, not renumbered OB issues. These were found while establishing the basel
 > **Refs OBX-006. PR-03 / OB-002 remains the next substantial implementation workstream**, and the
 > published tip of this branch — not `c880c7d3` — is its intended parent.
 
+> **Update 2026-09-07 (OB-002 / PR-03: truthful completion implemented, pending review).**
+> Branch `fix/ob-002-durable-completion`, parent `f98eedf381253aae9a94dcfcc80f6bab2aec9317`.
+> **Uncommitted and unpushed.** Report:
+> [reviews/PR03-OB-002-IMPLEMENTATION-2026-09-07.md](reviews/PR03-OB-002-IMPLEMENTATION-2026-09-07.md).
+>
+> **Five falsehoods, all still open at the parent and all traced in current source, not from
+> the baseline's anchors:** `EndBatch` discarded its final catalog write error
+> (`_ = s.writeCatalog()`); `EndBatch` wrote only when `batchDepth == 0`, and that counter is
+> shared by every concurrent job, so a job finishing while another held a batch wrote
+> **nothing** and depended on that unrelated job flushing later; `saveJobs` returned nothing
+> and swallowed marshal, write and rename failures with no fsync; `NewJob` ignored its own
+> persistence failure and handed back an ID the system called recorded; and `runJob`
+> published `COMPLETED` ahead of the artifacts and result describing it, in three unchecked
+> writes. `GET /api/jobs` serves memory directly, so a reader could observe `COMPLETED`
+> before any of the required writes succeeded.
+>
+> **Fixed, bounded.** `EndBatch() error` returns its failure and flushes whenever the catalog
+> is dirty — a finishing job always writes its own work; all **nine** current batch owners
+> (re-enumerated, none nested) fold that error into their result via `endBatchInto`, which
+> joins rather than substitutes so an operation error and a flush error never mask each other.
+> `saveJobs() error` is a checked, fsynced, atomically published write that preserves the
+> previous good record on failure. `NewJob` persists first and rolls back the row **and the ID
+> counter** on failure; `runJob` returns 503 and starts no work. `FinishJob` publishes the
+> terminal status with its artifacts and result in one checked write.
+>
+> **Truthful, not atomic.** `catalog.json` and `jobs.json` remain two files. When the catalog
+> commits and the terminal job write fails, the data and catalog are **kept** — nothing
+> successfully written is rolled back — and the job reads `COMPLETED` **plus** an additive
+> `persist_error` field and a `NOT RECORDED` label, with a restart reporting `INTERRUPTED`.
+> The failing sidecar is never retried; the failure is reported to the process log and the
+> catalog audit trail instead. `syncDir` is still a **no-op on Windows**: this is not
+> zero-loss crash durability, and no rollback after an ambiguous rename is claimed.
+>
+> One additive schema field (`persist_error`, `omitempty`); no job status value added or
+> removed. `runJob` now returns `(map, error)` and all 25 call sites were updated.
+>
+> Suite **230 pass / 7 fail / 4 skip** (uncached): **+10** — exactly the new regressions —
+> the **same 7** Unicode compatibility failures by identity and cause, **no new skips**.
+> Red/green proven in a disposable copy (8 fail without the fix; the all-succeed and
+> batch-bookkeeping controls pass in both). Build, vet, `gofmt` pass. **Windows race remains
+> NOT TESTED** (verified: `-race` needs cgo, `CGO_ENABLED=0`, no gcc). **No CI ran.**
+>
+> **PR-01 fail-closed startup, PR-02 safe replacement, the OBX-001 fixture and the OBX-006
+> containment are behaviourally preserved**, with their regressions passing unchanged; two
+> test files were adapted for the new signatures only and both were made stricter.
+> **OB-002 awaits review. OBX-006 remains open.**
+
 ---
 
 ## Unreviewed areas
@@ -949,3 +996,155 @@ Recorded so the gap is visible rather than implied closed.
   OB-003, OB-004 and OB-011 needs its own evidence, and the handoff is explicit that OS-specific
   behavior requires OS-specific evidence.
 - **Race detector on this platform:** `NOT TESTED`, no C compiler.
+
+---
+
+## OB-002 — follow-up patch, 2026-09-07 (appended; nothing above edited)
+
+The fresh source review
+(`docs/development/reviews/PR03-OB-002-FRESH-REVIEW-2026-09-07.md`) returned
+`NEEDS_CHANGES` with three blockers. All three are now addressed in the working tree at
+base `f98eedf3…`; the review's own text and every earlier report are preserved unchanged.
+
+- **Blocker 1 — atomic qualification.** `FinishJob` published `COMPLETED`, released
+  `s.jobs.mu`, and the qualification was set by a *later* acquisition, so `/api/jobs`
+  could serve an unqualified `COMPLETED` for a job whose record on disk said `RUNNING`.
+  It is now set by `markJobUnrecordedLocked` **inside the same lock hold** that publishes
+  the status, artifacts and result. `Store.NoteJobUnrecorded` was removed;
+  `App.noteUnrecordedJob` only reports, outside every jobs lock. `Store.Job`/`Store.Jobs`
+  now hand out deep snapshots (`Result` map and `Artifacts` slice copied), closing the
+  escaped-pointer note.
+- **Blocker 2 — the UI.** `jobStamp` takes the job; an unrecorded completion gets an
+  amber `NOT RECORDED` stamp, never `VERIFIED`, plus "Work finished — completion not
+  recorded". `waitJob` resolves only for a clean recorded success and rejects on a
+  distinct warning path carrying the job, so the result stays reachable and no caller can
+  emit an ordinary success toast. All four in-tree consumers updated (jobs list, job
+  detail, `adoptDest`, `dockIngest`, card-check poll). Terminal polling always stops.
+- **Blocker 3 — current state vs history.** Two additive fields with one meaning each:
+  `unrecorded` (this snapshot is not on disk; cleared by `saveJobs` **before** marshalling
+  so bytes and memory agree, restored if the write fails) and `persist_error` (the last
+  failure's cause, retained as history). The `— NOT RECORDED:` label mutation is gone. A
+  later ordinary jobs write records the row; a later *failed* write cannot. No retry loop.
+  Records from older builds decode as "recorded, no history", which is correct.
+
+Also corrected in the same pass: the two false source comments about restart and the
+sidecar, the audit-fallback comment (measured **0** durable `job-unrecorded` entries both
+when the volume fails and when a batch is open — an attempt is not a durable entry), and
+the `runJob` call count, re-enumerated as **24** (the report's 25 counted one line of
+prose). The implementation report received a **dated addendum**; its original text was not
+rewritten.
+
+Suite **238 pass / 7 fail / 4 skip** (uncached) — **+8**, exactly the new tests; the
+**same seven** Windows Unicode compatibility failures by identity, **no new skips**, none
+weakened, native tar writer not implemented. Build, vet and `gofmt` pass (`gofmt` clean
+apart from the two pre-existing `docs/…/reproducers/` files). All three blockers were
+reproduced against the pre-follow-up implementation in a disposable copy; the working
+checkout was never reverted. **Windows race remains NOT TESTED** (`-race` needs cgo;
+`CGO_ENABLED=0`, no gcc). **No CI ran.** "Recorded" means the checked publication contract
+only — `syncDir` is still a **no-op on Windows** and `catalog.json`/`jobs.json` are still
+two files.
+
+**OB-002 awaits a focused recheck. OBX-006 remains open.**
+
+### Addendum — 7 September 2026, UI status-precedence correction
+
+The focused recheck closed Blockers 1 and 3 and closed Blocker 2 for `COMPLETED`, and found
+one **regression introduced by the follow-up**: the three job UI helpers branched on
+`unrecorded` before `status`, so a `FAILED` job whose failure record also could not be
+written rendered as an amber `NOT RECORDED` stamp under a sentence claiming the operation
+had finished and its results were real. Fixed in `ui/index.html` only (**+56 / −11** lines
+this pass): the execution outcome is now primary in `jobStamp`, `jobStampText` and
+`jobRecordingNote` — `FAILED` and `INTERRUPTED` keep their own stamp and styling, only a
+genuine `COMPLETED` can be downgraded to `UNRECORDED`, and a failed job's note says *"The
+job failed. Its failure record could not be saved."* rather than the completion sentence.
+`waitJob` already rejected failures on the ordinary error path (so no failed job could
+reach a success toast); it now also carries the recording clause, on its own
+`recordUnsaved` field rather than on `unrecorded`, which routes callers into the
+show-the-results path. `INTERRUPTED` + unrecorded is **not produced by the application**
+(`loadJobs` leaves those rows unflagged); that branch is defensive and its test is labelled
+synthetic. **No Go production file was touched** — `store.go` and `main.go` are
+byte-unchanged.
+
+Coverage added for the gap the recheck named: `TestJobsUI_ExecutionOutcomeTakesPrecedence`
+(same node harness, real `ui/index.html` script, cases A–E incl. the composed `vJobs` /
+`vJobDetail` output) and `TestDurableCompletion_K_FailedJobCanAlsoBeUnrecorded` (the
+backend premise, through the real `/api/jobs` handler). The new assertions were run against
+the **pre-edit** page in a disposable copy first and failed on exactly the reported
+regression, with the A/C/D/E controls passing; they pass against the corrected page, as does
+the pre-existing UI block.
+
+**Superseded diff figures.** `+756 / −109` and `+853 / −109` are both stale. Measured now:
+tracked **15 files, +900 / −110** (source/UI **+712 / −110**, docs **+188**), `ui/index.html`
+alone **+128 / −13**. Suite **240 pass / 7 fail / 4 skip** uncached — **+2**, exactly the two
+new tests; the **same seven** Windows Unicode compatibility failures by identity, no new
+skips. Build, vet, `gofmt` pass. **Windows race remains NOT TESTED** (`-race` needs cgo;
+`CGO_ENABLED=0`, no gcc). **No CI ran.** The nested-`Result` aliasing and input-ownership
+observations remain the recheck's documented **nonblockers** — not fixed here, and general
+deep immutability is not established.
+
+**Report:** `docs/development/reviews/PR03-OB-002-UI-PRECEDENCE-CLOSEOUT-2026-09-07.md`.
+**OB-002 awaits a targeted recheck of this correction. OBX-006 remains open.**
+
+### Owner acceptance and checkpoint — 7 September 2026, PR-03 / OB-002
+
+**The owner accepted the PR-03 review chain and the final targeted recheck for publication
+of the bounded OB-002 completion-recording repair, and it is now committed on
+`fix/ob-002-durable-completion`.** Implementation commit `f98310cb3209f374cf883f7df2f3c31b300b3f0a`,
+parent `f98eedf381253aae9a94dcfcc80f6bab2aec9317`.
+
+**This is owner acceptance of a reviewed development checkpoint. It is not a claim of
+production readiness, of complete concurrency safety, or of universal crash durability.**
+Nothing was merged, no release was published, `main` was not moved, and no next workstream
+was started.
+
+**Accepted sub-scope — what the checkpoint does establish.** Checked final catalog flushes
+propagate failure. A finishing batch no longer depends on an unrelated batch's eventual flush,
+under the implemented shared-catalog checkpoint contract. Failed initial job persistence
+prevents starting the work. Execution outcome and current recording qualification are exposed
+consistently: `unrecorded` describes the **current snapshot's** recording state, `persist_error`
+preserves **earlier** recording-failure history, and a later successful ordinary jobs save may
+record a previously unrecorded terminal result. `FAILED` remains `FAILED` when saving its
+failure record also fails, and the UI presents execution failure and recording failure
+separately.
+
+**Limits carried forward unchanged — none of these is closed by this acceptance.** Catalog data
+and `jobs.json` remain **two files, not one atomic transaction**. "Recorded" refers to the
+checked publication contract implemented here, **not** a guarantee against all power-loss
+scenarios, and completion still never asserts that written bytes were read back and verified.
+`syncDir` remains a **no-op on Windows**, so rename durability is not guaranteed on this
+platform. The nested-`Result` aliasing and input-ownership observations remain documented
+**nonblockers**, deliberately not addressed; general deep immutability is **not** established
+and no repository-wide audit was completed. The recovery-kit caller's pre-existing
+rejection-handling limitation (`ui/index.html:2735`) is **unchanged** and remains an optional
+improvement, as does the unused `recordUnsaved` marker. The known **Windows Unicode
+compatibility failures** and the deferred native tar writer are unchanged. OBX-006 remains
+open. Earlier baseline classifications stand; **no broader issue is closed by this
+checkpoint** — the work is referenced as `Refs OB-002`, not closed.
+
+**Test evidence, stated as it actually stands.** The latest reported **full** suite is
+**240 pass / 7 fail / 4 skip** — author-reported. **The final targeted reviewer did not rerun
+it.** That reviewer independently executed: the enumerated **20-test** selection
+(`^(TestJobsUI_|TestDurableCompletion_)`, 20/20 PASS), the **31** prior-safety tests (31/31
+PASS), the two **Node-backed UI logic tests** (both executed, not skipped), and a **labelled
+bounded mutation experiment** (RED exit 1 / 22 failures, GREEN exit 0). Those sets are **not**
+combined here into a full-suite figure and are **not** assumed disjoint; read the reports for
+the exact commands and identities. The seven full-suite failures remain the known Windows
+Unicode cases. **Windows `-race` remains NOT TESTED** (needs cgo; `CGO_ENABLED=0`, no gcc) and
+**no CI ran**. The Node harness is script-logic and emitted-HTML checking only — **not**
+browser rendering and **not** accessibility validation. `go build`, `go vet` and `gofmt` were
+re-run at publication and pass (`gofmt` clean apart from the two pre-existing frozen
+`docs/…/reproducers/` files, which are not published). The full suite was **not** rerun for an
+unchanged publication candidate.
+
+**Documentation correction.** A dated erratum was appended (append-only) to
+`docs/development/reviews/PR03-OB-002-UI-PRECEDENCE-CLOSEOUT-2026-09-07.md`: its pre-edit
+hashes never preserved the corresponding blobs, so its RED run stands as author-reported and
+the later mutation test is **not** a byte-identical replay of it; its two post-edit test blobs
+were transposed and are corrected with full hashes; and the distinction between files with
+established historical byte-identity and files for which only current identities were recorded
+is preserved. No review document was rewritten.
+
+**Reports:** `PR03-OB-002-IMPLEMENTATION-2026-09-07.md`, `PR03-OB-002-FRESH-REVIEW-2026-09-07.md`,
+`PR03-OB-002-REVIEW-FOLLOWUP-2026-09-07.md`, `PR03-OB-002-FOCUSED-RECHECK-2026-09-07.md`,
+`PR03-OB-002-UI-PRECEDENCE-CLOSEOUT-2026-09-07.md` (+ erratum),
+`PR03-OB-002-UI-TARGETED-RECHECK-2026-09-07.md`, all under `docs/development/reviews/`.

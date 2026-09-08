@@ -520,3 +520,160 @@ the PR-01 or PR-02 reviews:
 **PR-03 / OB-002 remains the next substantial implementation workstream.** The native writer does
 **not** move ahead of it. The published tip of `fix/obx-006-windows-unicode-tar` — not `c880c7d3`
 — is the intended parent for the PR-03 branch.
+
+---
+
+## Update 2026-09-07 (later) — PR-03 / OB-002 implemented, pending review
+
+Branch `fix/ob-002-durable-completion`, parent `f98eedf381253aae9a94dcfcc80f6bab2aec9317`
+(the published OBX-006 containment checkpoint). Report:
+[reviews/PR03-OB-002-IMPLEMENTATION-2026-09-07.md](reviews/PR03-OB-002-IMPLEMENTATION-2026-09-07.md).
+**Uncommitted and unpushed** — implementation and evidence only.
+
+**What it fixes.** Five open falsehoods on the completion path, all still present at the
+parent: `EndBatch` discarded its final catalog write error; `EndBatch` wrote only at
+`batchDepth == 0`, so a job finishing while another job held a batch wrote nothing and
+depended on that unrelated job flushing later; `saveJobs` swallowed every failure and never
+fsynced; `NewJob` ignored its own persistence failure; and `runJob` published `COMPLETED`
+before the artifacts and result that describe it.
+
+**The contract now.** Batch finalization returns its error and all nine batch owners fold it
+into their own result; a finishing job always writes its own work; the jobs sidecar is a
+checked, fsynced, atomically published write; a job whose initial record cannot be written
+starts no work and returns 503; and the terminal status is published with its artifacts and
+result in one checked write.
+
+**Deliberately NOT claimed.** `catalog.json` and `jobs.json` remain two files and two
+writes — this is not one atomic transaction. When the catalog commits and the job record
+does not, the data and catalog are kept, the job is reported `COMPLETED` **plus** an
+additive `persist_error` and a `NOT RECORDED` label, and a restart reports `INTERRUPTED`;
+the failing sidecar is never retried. `syncDir` is still a **no-op on Windows**, so this is
+not zero-loss crash durability.
+
+**Evidence.** Ten new regressions in `durable_completion_test.go` drive the real production
+paths and assert on bytes on disk or a genuine reopen. Red/green confirmed in a disposable
+copy: eight fail without the fix for the intended reason; the all-succeed and
+batch-bookkeeping controls pass in both. Full uncached suite **230 pass / 7 fail / 4 skip**
+— **+10** (exactly the new tests), the **same seven** Unicode compatibility failures by
+identity, **no new skips**. Build, vet and `gofmt` pass. **Windows race remains NOT TESTED**
+(verified: `-race` needs cgo, `CGO_ENABLED=0`, no gcc). **No CI ran.**
+
+**PR-01, PR-02, OBX-001 and OBX-006 behaviours are preserved** and their regressions pass
+unchanged. Two test files were adapted for the new signatures only, and both were made
+stricter rather than weaker.
+
+**Next:** one substantive review of this patch. Not started and not authorised here: the
+native tar writer, the containment review's optional F1/F2 tests, and PR-04.
+
+---
+
+## 2026-09-07 — OB-002 / PR-03 follow-up: the three review blockers are closed
+
+Appended; nothing above is edited. Base unchanged: `f98eedf3…` on
+`fix/ob-002-durable-completion`, still entirely uncommitted working-tree change.
+
+**What changed.** The qualification of an unrecorded completion is now published in the
+*same* lock hold as the terminal status (Blocker 1); the existing job UI and every in-tree
+`waitJob` consumer read it and warn instead of reporting recorded success (Blocker 2); and
+"not recorded right now" is a separate field from "a recording failure happened earlier",
+so a job a later save legitimately records stops claiming its record is missing
+(Blocker 3). Two false source comments about restart, the audit-fallback comment, and the
+`runJob` call count (25 → **24**) were corrected in the same pass.
+
+**The contract, in one line.** `unrecorded` is current state and is never present in a
+successfully written file; `persist_error` is history and survives recovery and restart.
+`saveJobs` clears the flag **before** marshalling and restores it if the write fails, so
+the bytes and the published in-memory state always agree and nothing is marked recorded
+optimistically.
+
+**Deliberately NOT claimed.** Recovery is ordinary, not scheduled — there is **no retry
+loop**; the next successful jobs write records the row, and until then the durable record
+stays what was last written (`RUNNING` → `INTERRUPTED` on restart). `catalog.json` and
+`jobs.json` are still two files and two writes. `syncDir` is still a **no-op on Windows**,
+so "recorded" means the checked publication contract, not zero-loss power-failure
+durability. The catalog audit fallback is an **attempt**, not a durable entry — measured
+0 entries on disk both when the volume fails and when another job holds a batch open.
+Job completion still never means the written bytes were read back and verified.
+
+**Evidence.** Eight new regressions: seven in `durable_completion_followup_test.go`
+(visibility gap direct + concurrent through the real HTTP handlers, later-successful
+write, later-failed write, restart without recovery publication, combined
+jobs+catalog failure, audit coalescing under an open batch) and one in
+`durable_completion_ui_test.go`, which executes the **real** `<script>` block from
+`ui/index.html` under `node` with a thin stub — no framework, nothing installed, and it
+*skips with a named coverage gap* if `node` is absent. All ten earlier regressions are
+retained and pass. Full uncached suite **238 pass / 7 fail / 4 skip** — **+8** (exactly
+the new tests), the **same seven** Unicode compatibility failures by identity, **no new
+skips**. Build, vet, `gofmt` pass. All three blockers were reproduced against the
+pre-follow-up implementation in a disposable copy. **Windows race NOT TESTED** (`-race`
+needs cgo; `CGO_ENABLED=0`, no gcc). **No CI ran.**
+
+**Report:** `docs/development/reviews/PR03-OB-002-REVIEW-FOLLOWUP-2026-09-07.md`.
+
+**Next:** one focused recheck of these three areas. Not started and not authorised here:
+the native tar writer, the containment review's optional F1/F2 tests, and PR-04.
+
+### Addendum — 7 September 2026, UI status-precedence correction
+
+The focused recheck's one remaining blocker is fixed: `jobStamp`, `jobStampText` and
+`jobRecordingNote` no longer let `unrecorded` displace the execution outcome, so a `FAILED`
+job whose failure record also could not be written keeps the red `FAILED` stamp and gets
+*"The job failed. Its failure record could not be saved."* as a separate qualification
+instead of the completion sentence. `waitJob` carries the recording clause on its own
+`recordUnsaved` field. `ui/index.html` only, **+56 / −11** this pass; **no Go production
+file touched**. New coverage: `TestJobsUI_ExecutionOutcomeTakesPrecedence` (A–E, real page
+script, composed list and detail output) and
+`TestDurableCompletion_K_FailedJobCanAlsoBeUnrecorded`. Red against the pre-edit page in a
+disposable copy, green against the corrected one.
+
+Current figures, superseding `+756 / −109` and `+853 / −109`: tracked **15 files,
++900 / −110**; suite **240 pass / 7 fail / 4 skip** — **+2**, exactly the new tests, same
+seven Unicode compatibility failures by identity. Build, vet, `gofmt` pass. **Windows race
+NOT TESTED** (needs cgo). **No CI ran.**
+
+**Report:** `docs/development/reviews/PR03-OB-002-UI-PRECEDENCE-CLOSEOUT-2026-09-07.md`.
+
+**Next:** a targeted recheck of this correction. Still not started and not authorised here:
+the nested-`Result` aliasing and input-ownership nonblockers, the native tar writer, the
+containment review's optional F1/F2 tests, and PR-04.
+
+### Owner acceptance and checkpoint — 7 September 2026, PR-03 / OB-002
+
+The PR-03 review chain and the final targeted recheck were **accepted by the owner for
+publication**, and the bounded OB-002 completion-recording repair is committed on
+`fix/ob-002-durable-completion` (implementation commit
+`f98310cb3209f374cf883f7df2f3c31b300b3f0a`, parent `f98eedf381253aae9a94dcfcc80f6bab2aec9317`).
+**A reviewed development checkpoint — not production readiness, not complete concurrency
+safety, not universal crash durability.** Not merged; `main`, the earlier fix branches and the
+tags were not moved; no release; no next workstream started.
+
+**Accepted sub-scope.** Checked final catalog flushes propagate failure; a finishing batch no
+longer depends on an unrelated batch's eventual flush under the implemented shared-catalog
+checkpoint contract; failed initial job persistence prevents starting the work; execution
+outcome and current recording qualification are exposed consistently (`unrecorded` = the
+current snapshot's recording state, `persist_error` = earlier recording-failure history, and a
+later successful ordinary jobs save may record a previously unrecorded terminal result);
+`FAILED` stays `FAILED` when saving its failure record also fails, with execution failure and
+recording failure presented separately in the UI.
+
+**Deliberately still not started and not authorised by this acceptance:** removal or redesign
+of the unused `recordUnsaved` marker; the recovery-kit caller's pre-existing
+rejection-handling limitation; nested-`Result` aliasing and input-ownership hardening; the
+native Windows tar writer; the containment review's optional F1/F2 tests; PR-04. Catalog data
+and `jobs.json` remain two files, not one atomic transaction; "recorded" means the checked
+publication contract only, not power-loss safety; `syncDir` is still a **no-op on Windows**.
+The known Windows Unicode compatibility failures stand and **OBX-006 remains open**. No
+baseline classification was erased and **no broader issue was closed** — `Refs OB-002` only.
+
+**Evidence, as it actually stands.** Full suite **240 / 7 / 4** is **author-reported and was
+not rerun** by the final targeted reviewer, who instead independently executed the enumerated
+20-test selection (20/20), the 31 prior-safety tests (31/31), the two Node-backed UI logic
+tests (executed, not skipped) and a labelled bounded mutation experiment (RED exit 1 / 22
+failures, GREEN exit 0). **These sets are not combined into a full-suite figure and are not
+assumed disjoint.** Windows `-race` **NOT TESTED**; **no CI ran**; the Node harness is not
+browser-rendering or accessibility validation. Build, vet and `gofmt` re-run at publication and
+pass.
+
+**Next (not authorised here):** the next safety workstream should branch from the **published
+PR-03 head of `fix/ob-002-durable-completion`**, not from `f98eedf3…`, which is no longer the
+branch tip.
