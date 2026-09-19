@@ -139,6 +139,9 @@ type App struct {
 	pfMu  sync.Mutex
 	pfAt  time.Time
 	pfVal map[string]any
+	// Per-instance test seams; nil in production. Configure only before use.
+	keystoreReadFile         func(string) ([]byte, error)
+	keystoreMutationObserver func(string)
 }
 
 func (a *App) configPath() string { return filepath.Join(a.DataDir, "config.json") }
@@ -355,6 +358,14 @@ func readStore(path string) (*keystoreFile, error) {
 }
 
 func writeStore(path string, ks *keystoreFile) error {
+	return writeStoreObserved(path, ks, nil)
+}
+
+// Observe the actual mutation boundary, before even creating a parent directory.
+func writeStoreObserved(path string, ks *keystoreFile, observe func(string)) error {
+	if observe != nil {
+		observe(path)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -368,56 +379,14 @@ func writeStore(path string, ks *keystoreFile) error {
 }
 
 func (a *App) KeystoreStatus() map[string]any {
-	cfg := a.LoadConfig()
-	stores := []map[string]any{}
-	sets := []map[string]bool{}
-	reachable := true
-	for _, p := range cfg.KeystorePaths {
-		e := map[string]any{"path": p, "reachable": false, "key_count": 0}
-		ks, err := readStore(p)
-		if err == nil {
-			e["reachable"] = true
-			e["key_count"] = len(ks.Keys)
-			set := map[string]bool{}
-			for _, k := range ks.Keys {
-				if r, ok := k["key_ref"].(string); ok {
-					set[r] = true
-				}
-			}
-			sets = append(sets, set)
-		} else {
-			e["error"] = err.Error()
-			reachable = false
-		}
-		stores = append(stores, e)
-	}
-	consistent := true
-	for i := 1; i < len(sets); i++ {
-		if len(sets[i]) != len(sets[0]) {
-			consistent = false
-			break
-		}
-		for k := range sets[0] {
-			if !sets[i][k] {
-				consistent = false
-			}
-		}
-	}
-	ok := len(cfg.KeystorePaths) >= MinKeystores && reachable && consistent
-	reason := ""
-	switch {
-	case len(cfg.KeystorePaths) < MinKeystores:
-		reason = fmt.Sprintf("Only %d keystore path(s) registered; %d required, on different physical devices.", len(cfg.KeystorePaths), MinKeystores)
-	case !reachable:
-		reason = "One or more keystores are unreachable."
-	case !consistent:
-		reason = "Keystores hold different key sets — run key sync."
-	}
-	return map[string]any{"ok": ok, "reason": reason, "min_required": MinKeystores, "stores": stores}
+	return a.keystoreStatus(a.LoadConfig().KeystorePaths, false)
 }
 
 func (a *App) GenerateKey(note string) (ref, passphrase, fpr string, err error) {
-	st := a.KeystoreStatus()
+	// Generation retains the existing first-use workflow; ordinary sync never
+	// treats absence as enrollment. The same conflict checks still apply.
+	cfg := a.LoadConfig()
+	st := a.keystoreStatus(cfg.KeystorePaths, true)
 	if !st["ok"].(bool) {
 		return "", "", "", fmt.Errorf("keystore requirement not met: %s", st["reason"])
 	}
@@ -433,7 +402,6 @@ func (a *App) GenerateKey(note string) (ref, passphrase, fpr string, err error) 
 	fpr = hex.EncodeToString(sum[:])
 	rec := map[string]any{"key_ref": ref, "algorithm": "GPG-AES256", "passphrase": passphrase,
 		"created_at": time.Now().UTC().Format(time.RFC3339), "note": note}
-	cfg := a.LoadConfig()
 	for _, p := range cfg.KeystorePaths {
 		ks, e := readStore(p)
 		if e != nil {
@@ -448,48 +416,58 @@ func (a *App) GenerateKey(note string) (ref, passphrase, fpr string, err error) 
 	return
 }
 
+// Passphrase tolerates unavailable replicas for offline recovery, but checks
+// every readable, valid participant for ambiguity in the requested reference.
+// Success proves availability, not complete replica consistency.
 func (a *App) Passphrase(ref string) (string, error) {
-	cfg := a.LoadConfig()
-	for _, p := range cfg.KeystorePaths {
-		ks, err := readStore(p)
+	paths := append([]string(nil), a.LoadConfig().KeystorePaths...)
+	var pass string
+	found := false
+	for _, p := range paths {
+		ks, err := a.readExistingKeystore(p, false)
 		if err != nil {
 			continue
 		}
 		for _, k := range ks.Keys {
-			if k["key_ref"] == ref {
-				if s, ok := k["passphrase"].(string); ok {
-					return s, nil
-				}
+			if k["key_ref"] != ref {
+				continue
 			}
+			secret := k["passphrase"].(string) // validated by readExistingKeystore
+			if found && pass != secret {
+				return "", fmt.Errorf("conflicting secret material for the requested key; reconcile the keystores before recovery")
+			}
+			pass, found = secret, true
 		}
 	}
-	return "", fmt.Errorf("key %s not found in any keystore", ref)
+	if !found {
+		return "", fmt.Errorf("requested key not found in any readable valid keystore")
+	}
+	return pass, nil
 }
 
+// SyncKeystores validates one participant snapshot before the first mutation.
+// Publication remains sequential: later errors do not roll back earlier stores.
+// This is not a lock against another process changing files after validation.
 func (a *App) SyncKeystores() (int, error) {
-	cfg := a.LoadConfig()
-	merged := map[string]map[string]any{}
-	for _, p := range cfg.KeystorePaths {
-		if ks, err := readStore(p); err == nil {
-			for _, k := range ks.Keys {
-				if r, ok := k["key_ref"].(string); ok {
-					merged[r] = k
-				}
-			}
-		}
+	paths := append([]string(nil), a.LoadConfig().KeystorePaths...)
+	if len(paths) == 0 {
+		return 0, fmt.Errorf("no keystores configured for synchronization")
 	}
-	out := &keystoreFile{Marker: 1}
-	for _, k := range merged {
-		out.Keys = append(out.Keys, k)
-	}
-	sort.Slice(out.Keys, func(i, j int) bool {
-		a1, _ := out.Keys[i]["created_at"].(string)
-		b1, _ := out.Keys[j]["created_at"].(string)
-		return a1 < b1
-	})
-	for _, p := range cfg.KeystorePaths {
-		if err := writeStore(p, out); err != nil {
+	stores := make([]*keystoreFile, 0, len(paths))
+	for _, p := range paths {
+		ks, err := a.readExistingKeystore(p, false)
+		if err != nil {
 			return 0, err
+		}
+		stores = append(stores, ks)
+	}
+	out, err := mergeKeystores(stores)
+	if err != nil {
+		return 0, err
+	}
+	for _, p := range paths {
+		if err := writeStoreObserved(p, out, a.keystoreMutationObserver); err != nil {
+			return 0, fmt.Errorf("keystore synchronization publication failed; earlier participants may already have been updated: %w", err)
 		}
 	}
 	return len(out.Keys), nil
@@ -985,7 +963,9 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 		return fmt.Errorf("package %s is %s; only PLANNED/FAILED can build", c.Name, c.Status)
 	}
 	if c.Encrypted {
-		if st := a.KeystoreStatus(); !st["ok"].(bool) {
+		// An encrypted build can be the first key-generation operation. Keep
+		// that initialization workflow separate from strict replica status/sync.
+		if st := a.keystoreStatus(cfg.KeystorePaths, true); !st["ok"].(bool) {
 			return fmt.Errorf("refusing to encrypt: %s", st["reason"])
 		}
 	}
