@@ -677,3 +677,31 @@ pass.
 **Next (not authorised here):** the next safety workstream should branch from the **published
 PR-03 head of `fix/ob-002-durable-completion`**, not from `f98eedf3…`, which is no longer the
 branch tip.
+
+
+### 2026-09-19 - New-desktop baseline recorded
+
+On setup/windows-nsott at 0dc7d5399c6889e015aebc9ba02e694a909d6e9c, Go 1.26.8 build/vet/format passed; uncached tests: 209 top-level pass / 0 fail / 39 skip, separately 10 subtests pass, and 3 system-disk probes excluded. Missing GPG/PAR2 accounts for 36 skips; this does not close Unicode/archive integration issues. Windows race, CI, Docker and hardware remain NOT TESTED. See [baseline](NEW_DESKTOP_BASELINE-2026-09-19.md) and [current handoff](CODEX_HANDOFF.md). PR-04 transfer and Figma design context remain pending. Repository-wide review, coverage ledger and feature matrix are not completed.
+
+ONE next action: begin a bounded persistence source-review pass at this pinned SHA and initialize the review ledger. Preserve this baseline; do not rerun it as setup or recreate the earlier aborted reviewer reports.
+
+
+### 2026-09-19 - Bounded persistence review complete
+
+Published source 0dc7d5399c6889e015aebc9ba02e694a909d6e9c remains unchanged. [Review](PERSISTENCE_REVIEW-2026-09-19.md) and [coverage ledger](REVIEW_COVERAGE.csv): 208 tracked files inventoried; 4 fully reviewed, 13 partial, 144 inventoried only, 47 excluded. One disposable probe run: 13 top-level and 5 subtest passes, native exit 0, reproducing known unsafe behavior with positive controls. Baseline was not rerun. OBX-004/OB-006 confirmed; accepted PR-01/02/03 scopes preserved. PR-04/Figma remain separately pending.
+
+ONE next action: prepare the bounded OB-006 validation-before-write repair and conflict/refused-participant regressions in a separately authorized task; sync currently overwrites rejected key stores. Keep partial publication and previous-generation retention as explicit residuals if outside that patch. Remaining repository review and feature matrix are not complete.
+
+
+### 2026-09-19 - OB-006 validation candidate ready for review
+
+On fix/ob-006-keystore-validation, parent 0dc7d5399c6889e015aebc9ba02e694a909d6e9c, strict participant validation and conflict-safe sync/status/lookup are implemented, uncommitted. First-use generation/build behavior is preserved. See [report](reviews/OB-006-KEYSTORE-VALIDATION-IMPLEMENTATION-2026-09-19.md). Final targeted 20 pass; build/vet/format pass; suite 226 pass / 0 fail / 39 skip, with 40 separately counted passing subtests and 3 excluded system-disk probes. Prior intermittent reopen failure reproduced on parent and candidate and retained. This is not all OB-006 solved: prior generations, partial publication, GenerateKey/catalog atomicity, ACL and ownership remain open.
+
+ONE next action: independent review of the candidate and its no-mutation/conflict/first-use evidence. Nothing staged, committed, pushed or merged; no next fix started.
+
+
+### 2026-09-19 - Accepted OB-006 checkpoint; next base
+
+Implementation d147a823262757065d7817a233c0327523916e2a is the owner-accepted, unchanged validation/conflict slice; [accepted review](reviews/OB-006-KEYSTORE-VALIDATION-DETACHED-REVIEW-2026-09-19.md). Refs OB-006. Scope/residuals and local-only raw evidence are recorded in [handoff](CODEX_HANDOFF.md). Prior-generation, multi-store/concurrency, GenerateKey/catalog and ACL work remain open. No new full-suite run for publication.
+
+ONE next action after branch publication: use the final evidence commit containing this note as the exact parent for the separately authorized configuration-loading sub-scope of OBX-004. Do not use 0dc7d539 as the repair base. Job-state loading, including loadJobs null-row handling, remains a subsequent sub-scope. Neither repair was begun here.

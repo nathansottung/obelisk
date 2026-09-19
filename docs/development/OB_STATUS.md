@@ -1148,3 +1148,15 @@ is preserved. No review document was rewritten.
 `PR03-OB-002-REVIEW-FOLLOWUP-2026-09-07.md`, `PR03-OB-002-FOCUSED-RECHECK-2026-09-07.md`,
 `PR03-OB-002-UI-PRECEDENCE-CLOSEOUT-2026-09-07.md` (+ erratum),
 `PR03-OB-002-UI-TARGETED-RECHECK-2026-09-07.md`, all under `docs/development/reviews/`.
+
+
+## OB-006 - validation slice, 2026-09-19 (uncommitted candidate)
+
+PATCH_PENDING_REVIEW on fix/ob-006-keystore-validation, parent 0dc7d5399c6889e015aebc9ba02e694a909d6e9c. Sync now validates existing participants and secret/metadata conflicts before publication; status and lookup distinguish replica consistency from available read-only recovery. First-use generation/build compatibility remains. [Implementation/evidence](reviews/OB-006-KEYSTORE-VALIDATION-IMPLEMENTATION-2026-09-19.md). No broader issue is closed. Prior generations, sequential partial publication, GenerateKey's partial-write and dropped catalog-metadata errors, missing-storage identity and ACL hardening remain open. Final suite passes with 39 skips; prior reopen sharing failure reproduces on the parent too. Await independent review, not publication.
+
+
+## OB-006 - owner-accepted validation checkpoint, 2026-09-19
+
+PARTIALLY_REPAIRED; owner-accepted implementation d147a823262757065d7817a233c0327523916e2a on fix/ob-006-keystore-validation. Refs OB-006. [Accepted review](reviews/OB-006-KEYSTORE-VALIDATION-DETACHED-REVIEW-2026-09-19.md) supports validation before mutation, order-independent observed-secret conflict refusal, truthful status/recovery distinction, first-use compatibility and accurate partial-publication errors. The implementation and historical reviews remain unchanged.
+
+Open: multi-store atomicity, concurrent writers, retained generations, GenerateKey partial publication/dropped catalog persistence errors, and broader ACL/key-security validation. This acceptance does not close all of OB-006. Raw AppData evidence remains local; see [handoff](CODEX_HANDOFF.md) for distinct author/reviewer results and the final evidence-commit base policy. OBX-004 configuration and job-state loading remain separate unfinished scopes.
