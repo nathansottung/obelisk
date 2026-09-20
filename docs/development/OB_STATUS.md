@@ -1160,3 +1160,10 @@ PATCH_PENDING_REVIEW on fix/ob-006-keystore-validation, parent 0dc7d5399c6889e01
 PARTIALLY_REPAIRED; owner-accepted implementation d147a823262757065d7817a233c0327523916e2a on fix/ob-006-keystore-validation. Refs OB-006. [Accepted review](reviews/OB-006-KEYSTORE-VALIDATION-DETACHED-REVIEW-2026-09-19.md) supports validation before mutation, order-independent observed-secret conflict refusal, truthful status/recovery distinction, first-use compatibility and accurate partial-publication errors. The implementation and historical reviews remain unchanged.
 
 Open: multi-store atomicity, concurrent writers, retained generations, GenerateKey partial publication/dropped catalog persistence errors, and broader ACL/key-security validation. This acceptance does not close all of OB-006. Raw AppData evidence remains local; see [handoff](CODEX_HANDOFF.md) for distinct author/reviewer results and the final evidence-commit base policy. OBX-004 configuration and job-state loading remain separate unfinished scopes.
+
+
+## OBX-004 - configuration slice accepted for publication, 2026-09-19
+
+PARTIALLY_REPAIRED. Owner requested publication after the [focused recheck](reviews/OBX-004-CONFIG-READ-SAFETY-FOCUSED-RECHECK-2026-09-19.md) closed R1/R2. Implementation `3ea444ae528af7343818142c867a8f955f9252aa` preserves the reviewed configuration read/update/initialization/caller contract. Explicit first-use no-replace publication requires hard links on the application-state filesystem. Container lifecycle documentation is source/syntax verified; Docker runtime is not established. Historical reports and reviewed bytes remain unchanged.
+
+Job-state loading/null rows remain unfixed. Multi-process coordination, storage identity, retained generations, cross-file transactions, ACL, Windows race/power-loss and integration limits remain open. This acceptance does not close all OBX-004. See CODEX_HANDOFF for distinct author/reviewer evidence and the final evidence-commit base policy. Only a successful local publication-receipt.md with a live-verified remote SHA clears the publication gate; no subsequent implementation starts here.
