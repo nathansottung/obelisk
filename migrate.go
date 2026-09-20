@@ -113,7 +113,8 @@ func (a *App) migrateDataDir(legacy, target string) (map[string]any, error) {
 	// reopening the store there. The catalog and job board now come from ~/.obelisk.
 	ns, err := OpenStore(target)
 	if err != nil {
-		return nil, fmt.Errorf("your records copied and verified, but reopening the catalog at %s failed: %w. Restart the app to use the new location", target, err)
+		a.Store.checkJobsAfterFailedReopen()
+		return nil, fmt.Errorf("your records copied and verified, but reopening the catalog at %s failed: %w. Resolve the rejected state before retrying", target, err)
 	}
 	a.Store = ns
 	a.DataDir = target

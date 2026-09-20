@@ -1125,10 +1125,12 @@ type Store struct {
 	// dataDir MkdirAll precedes the read and is also outside this observer's scope.
 	persistObserver func(op, path string)
 	jobs            struct {
-		mu   sync.Mutex
-		next int
-		rows []*Job
-		path string // jobs.json sidecar (persists the board across restarts)
+		mu      sync.Mutex
+		next    int
+		rows    []*Job
+		loaded  bool   // a validated or successfully published sidecar has existed
+		loadErr error  // refused reload: blocks every later jobs publication
+		path    string // jobs.json sidecar (persists the board across restarts)
 	}
 }
 
@@ -1159,7 +1161,7 @@ func OpenStore(dataDir string) (*Store, error) {
 
 // openStore is OpenStore with its two boundaries injected, so a test can drive the
 // REAL decision logic below instead of standing in a mock that already behaves.
-// readFile supplies the catalog read RESULT — bytes and error together — that the
+// readFile supplies the catalog and jobs read RESULTS — bytes and error together — that the
 // classification switches on, so an injected failure and a genuine one travel the
 // identical branch. persistObserver, when non-nil, records attempted authority
 // writes (see the Store field). Production has exactly one caller, OpenStore, which
@@ -1317,7 +1319,9 @@ func openStore(dataDir string, readFile func(string) ([]byte, error), persistObs
 	// up and visible with its partial artifacts rather than silently lost. The work
 	// itself isn't auto-resumed; resumable ops (burn, span) are re-triggered by the
 	// operator, and the chunk-status recovery above already reset mid-flight builds.
-	s.loadJobs()
+	if err := s.loadJobsFrom(readFile); err != nil {
+		return nil, fmt.Errorf("open job board: %w", err)
+	}
 	return s, nil
 }
 
@@ -3442,6 +3446,9 @@ func (s *Store) KeyMetas() []*KeyMeta {
 // is therefore recorded now, and must stop saying otherwise. See writeJobsRows for
 // why the flags are cleared before the bytes are produced rather than after.
 func (s *Store) saveJobs() error {
+	if s.jobs.loadErr != nil {
+		return fmt.Errorf("job board unavailable after refused load: %w", s.jobs.loadErr)
+	}
 	if s.jobs.path == "" {
 		return nil
 	}
@@ -3521,65 +3528,8 @@ func (s *Store) writeJobsRows() error {
 	// Best-effort, and a no-op on Windows: the bytes are already durable via Sync
 	// above, this only makes the rename itself survive a power loss where supported.
 	_ = syncDir(filepath.Dir(s.jobs.path))
+	s.jobs.loaded = true
 	return nil
-}
-
-// loadJobs restores the board from the sidecar on open. A job still marked RUNNING
-// belonged to a process that has since exited, so it can never complete — flip it
-// to INTERRUPTED (and clear stale live telemetry) so the UI shows it honestly.
-func (s *Store) loadJobs() {
-	if s.jobs.path == "" {
-		return
-	}
-	b, err := os.ReadFile(s.jobs.path)
-	if err != nil || len(b) == 0 {
-		return
-	}
-	var in struct {
-		Next int    `json:"next"`
-		Rows []*Job `json:"rows"`
-	}
-	if json.Unmarshal(b, &in) != nil {
-		return
-	}
-	s.jobs.mu.Lock()
-	defer s.jobs.mu.Unlock()
-	s.jobs.next = in.Next
-	changed := false
-	for _, j := range in.Rows {
-		// A row that is IN this file was recorded by the write that produced the file,
-		// so nothing read back is "not currently recorded". saveJobs already clears the
-		// flag before marshalling, so this should never fire; it is the belt to that
-		// braces, and it is also what gives records from OLDER builds (which have no
-		// `unrecorded` key, and may carry a `persist_error` written before this
-		// contract existed) the right reading: recorded, with the failure kept as
-		// history. PersistError is left alone — history survives a restart.
-		j.Unrecorded = false
-		if j.Status == "RUNNING" {
-			j.Status = "INTERRUPTED"
-			j.RateMBps, j.ETASeconds = 0, 0
-			changed = true
-		}
-		if j.ID > s.jobs.next {
-			s.jobs.next = j.ID
-		}
-	}
-	s.jobs.rows = in.Rows
-	if changed {
-		// Best-effort by design, and the one saveJobs result that is not propagated:
-		// this is startup reconciliation of a board that is ALREADY on disk, not an
-		// acknowledgement of new work. If it fails the rows stay INTERRUPTED in memory
-		// and the next terminal write re-persists them; nothing claims to be recorded
-		// on the strength of it. Failing OpenStore here would refuse to start over a
-		// cosmetic sidecar repair while the catalog itself is fine.
-		//
-		// These rows are deliberately NOT marked Unrecorded when this write fails.
-		// RUNNING → INTERRUPTED is not a result this process produced and could lose;
-		// it is a conclusion re-derived deterministically from the stored RUNNING row
-		// on every open. Flagging it would report a missing record where nothing is
-		// missing.
-		_ = s.saveJobs()
-	}
 }
 
 // NewJob creates a job row and PERSISTS it before returning (OB-002). If the board
@@ -3590,6 +3540,12 @@ func (s *Store) loadJobs() {
 func (s *Store) NewJob(kind, label string) (*Job, error) {
 	s.jobs.mu.Lock()
 	defer s.jobs.mu.Unlock()
+	if s.jobs.loadErr != nil {
+		return nil, fmt.Errorf("job board unavailable after refused load: %w", s.jobs.loadErr)
+	}
+	if s.jobs.next == int(^uint(0)>>1) {
+		return nil, fmt.Errorf("job identity counter exhausted; no work was started")
+	}
 	s.jobs.next++
 	j := &Job{ID: s.jobs.next, Kind: kind, Label: label, Status: "RUNNING", CreatedAt: time.Now().UTC()}
 	s.jobs.rows = append(s.jobs.rows, j)

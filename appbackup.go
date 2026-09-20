@@ -140,6 +140,9 @@ func (a *App) gatherMembers(includeKeys bool) ([]rawMember, error) {
 			if seen[name] { // two keystores with the same basename — disambiguate
 				name = fmt.Sprintf("keystores/%d-%s", len(members), filepath.Base(ksPath))
 			}
+			if !validAppBackupMemberName(name) {
+				return nil, fmt.Errorf("keystore filename %q is not portable in an app backup; rename it before exporting", filepath.Base(ksPath))
+			}
 			seen[name] = true
 			members = append(members, rawMember{name, b})
 		}
@@ -265,6 +268,24 @@ func (a *App) ExportAppBackup(destDir string, includeKeys bool) (ExportResult, e
 
 // ---- restore -------------------------------------------------------------
 
+// App backups use literal state-file names and flat keystores/<filename> entries
+// (both the current and legacy exporters). Do not clean or case-fold names: that
+// would let validation and extraction select different payloads for one file.
+// Portable leaf spelling also excludes Windows separators, streams and trailing
+// dot/space aliases. This is a format check, not filesystem/symlink containment.
+func validAppBackupMemberName(name string) bool {
+	switch name {
+	case "MANIFEST.json", "catalog.json", "config.json", "jobs.json", "formats.json":
+		return true
+	}
+	if !strings.HasPrefix(name, "keystores/") {
+		return false
+	}
+	leaf := strings.TrimPrefix(name, "keystores/")
+	return leaf != "" && leaf != "." && leaf != ".." &&
+		!strings.ContainsAny(leaf, "/\\:") && strings.TrimRight(leaf, " .") == leaf
+}
+
 // readTarMembers reads every member of a tar into memory, keyed by name.
 func readTarMembers(tarPath string) (map[string][]byte, error) {
 	f, err := os.Open(tarPath)
@@ -284,6 +305,12 @@ func readTarMembers(tarPath string) (map[string][]byte, error) {
 		}
 		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA {
 			continue
+		}
+		if !validAppBackupMemberName(hdr.Name) {
+			return nil, fmt.Errorf("unsupported app-backup member name %q; use canonical state-file names or flat keystores/<filename> entries", hdr.Name)
+		}
+		if _, exists := out[hdr.Name]; exists {
+			return nil, fmt.Errorf("duplicate app-backup member %q; restore requires one payload per name", hdr.Name)
 		}
 		b, err := io.ReadAll(tr)
 		if err != nil {
@@ -337,7 +364,15 @@ func verifyAppBackup(tarPath string) (appBackupManifest, map[string][]byte, erro
 			man.SchemaVersion, currentSchemaVersion)
 	}
 	// Every member hash must match the manifest (tamper / corruption detection).
+	seen := make(map[string]bool, len(man.Members))
 	for _, m := range man.Members {
+		if !validAppBackupMemberName(m.Name) || m.Name == "MANIFEST.json" {
+			return man, nil, fmt.Errorf("unsupported app-backup manifest member %q", m.Name)
+		}
+		if seen[m.Name] {
+			return man, nil, fmt.Errorf("duplicate app-backup manifest member %q", m.Name)
+		}
+		seen[m.Name] = true
 		b, ok := members[m.Name]
 		if !ok {
 			return man, nil, fmt.Errorf("backup is incomplete — member %q is missing", m.Name)
@@ -347,6 +382,13 @@ func verifyAppBackup(tarPath string) (appBackupManifest, map[string][]byte, erro
 		}
 		if int64(len(b)) != m.Size {
 			return man, nil, fmt.Errorf("integrity check failed on %q — size mismatch", m.Name)
+		}
+	}
+	// A correctly hashed member can still be an invalid job board. Refuse it
+	// before restore publishes it and leaves the running Store holding stale rows.
+	if b, ok := members["jobs.json"]; ok {
+		if _, err := decodeJobBoard(b); err != nil {
+			return man, nil, fmt.Errorf("backup job board: %w", err)
 		}
 	}
 	return man, members, nil
@@ -468,7 +510,10 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	// bringing an older backup forward — and swap it in.
 	ns, err := OpenStore(a.DataDir)
 	if err != nil {
-		return RestoreResult{}, fmt.Errorf("reopen catalog after restore: %w", err)
+		// Other members may already have changed. If the on-disk board is now
+		// rejected, prevent this retained Store from publishing its stale history.
+		a.Store.checkJobsAfterFailedReopen()
+		return RestoreResult{}, fmt.Errorf("reopen catalog after restore (members may already be restored): %w", err)
 	}
 	a.Store = ns
 
