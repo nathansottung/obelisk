@@ -25,7 +25,7 @@ func quarantineScenario(t *testing.T) (*App, string, int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := &App{DataDir: dataDir, Store: store}
+	app := initializedTestApp(t, &App{DataDir: dataDir, Store: store})
 
 	// A drive of two RAWs, snapshotted (roles = RAW so the template routes them).
 	d1 := t.TempDir()

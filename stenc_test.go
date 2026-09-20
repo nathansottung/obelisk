@@ -141,11 +141,11 @@ func TestStencAvailability(t *testing.T) {
 // harmless when stenc isn't installed: it must never flag a volume or panic.
 func TestNoteTapeDriveEncryption_NonFatalWhenAbsent(t *testing.T) {
 	app := dockApp(t)
-	if app.stencAvailable() {
+	if app.stencAvailable(mustConfig(t, app)) {
 		t.Skip("stenc installed here — the absent-tool path can't be exercised")
 	}
 	vol := app.Store.AddVolume(Volume{Label: "LTO-TEST", Kind: "TAPE"})
-	app.noteTapeDriveEncryption(vol.ID) // must be a no-op, never panic
+	app.noteTapeDriveEncryption(vol.ID, mustConfig(t, app)) // must be a no-op, never panic
 	if got := app.Store.Volume(vol.ID); got.DriveEncrypted {
 		t.Error("with stenc absent, a write must NOT flag the volume drive-encrypted")
 	}
@@ -155,7 +155,7 @@ func TestNoteTapeDriveEncryption_NonFatalWhenAbsent(t *testing.T) {
 // tool is absent, rather than pretending to have changed the drive.
 func TestSetDriveKey_RequiresTool(t *testing.T) {
 	app := dockApp(t)
-	if app.stencAvailable() {
+	if app.stencAvailable(mustConfig(t, app)) {
 		t.Skip("stenc installed here — the absent-tool path can't be exercised")
 	}
 	if err := app.SetDriveKey("", "/tmp/whatever.key", 1); err == nil {

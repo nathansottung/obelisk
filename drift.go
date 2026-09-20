@@ -61,7 +61,10 @@ func chunkVolumes(c *Chunk, volm map[int]*Volume) []string {
 // archive-level report/badge untouched — it only refreshes catalog hashes for the
 // files it actually rescanned.
 func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress func(float64, string)) (*DriftReport, error) {
-	cfg := a.LoadConfig()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	coll := a.Store.Collection(collectionID)
 	if coll == nil {
 		return nil, fmt.Errorf("archive %d not found", collectionID)

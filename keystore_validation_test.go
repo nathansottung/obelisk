@@ -28,7 +28,7 @@ func newKV(t *testing.T, records ...[]map[string]any) kvFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := kvFixture{app: &App{DataDir: data, Store: st}, root: t.TempDir()}
+	f := kvFixture{app: initializedTestApp(t, &App{DataDir: data, Store: st}), root: t.TempDir()}
 	for i, keys := range records {
 		p := filepath.Join(f.root, fmt.Sprint(i), "keys.json")
 		if err := writeStore(p, &keystoreFile{Marker: 1, Keys: keys}); err != nil {

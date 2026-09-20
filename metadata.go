@@ -68,12 +68,12 @@ func mediaKindOf(rel string) string {
 // non-media, unreadable, or metadata-less file just yields empty fields. The role
 // is accepted for call-site clarity but classification is by extension, so any
 // discipline's media is handled uniformly.
-func (a *App) extractMediaMeta(path, role string) (time.Time, string) {
+func (a *App) extractMediaMeta(path, role string, cfg Config) (time.Time, string) {
 	switch mediaKindOf(path) {
 	case "image":
 		return extractShotMeta(path)
 	case "audio", "video":
-		if bin, err := a.ffprobeBin(); err == nil {
+		if bin, err := resolveConfigTool("ffprobe", cfg); err == nil {
 			if t := probeCreated(bin, path); !t.IsZero() {
 				return t, ""
 			}

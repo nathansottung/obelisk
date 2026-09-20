@@ -13,10 +13,10 @@ func TestUIMode_DefaultAndMergePersist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := &App{DataDir: dir, Store: store}
+	app := initializedTestApp(t, &App{DataDir: dir, Store: store})
 
 	// Default is Guided.
-	if got := app.LoadConfig().UIMode; got != UIModeGuided {
+	if got := mustConfig(t, app).UIMode; got != UIModeGuided {
 		t.Fatalf("default UIMode = %q, want %q", got, UIModeGuided)
 	}
 
@@ -24,11 +24,11 @@ func TestUIMode_DefaultAndMergePersist(t *testing.T) {
 	if _, err := app.SaveConfig(map[string]any{"par2_redundancy": 7, "build_verify": "contents"}); err != nil {
 		t.Fatal(err)
 	}
-	before := app.LoadConfig()
+	before := mustConfig(t, app)
 	if _, err := app.SaveConfig(map[string]any{"ui_mode": UIModeComplete}); err != nil {
 		t.Fatal(err)
 	}
-	after := app.LoadConfig()
+	after := mustConfig(t, app)
 
 	if after.UIMode != UIModeComplete {
 		t.Errorf("ui_mode not persisted: got %q", after.UIMode)

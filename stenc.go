@@ -76,25 +76,39 @@ func stencInstallHint() string {
 // stencBin resolves the stenc binary. It is Linux-only: on any other OS the drive
 // key is a vendor concern, so detection reports "not available" with the hint.
 func (a *App) stencBin() (string, error) {
-	if runtime.GOOS != "linux" {
-		return "", fmt.Errorf("stenc is not available on %s — drive-level encryption is managed via vendor tools", runtime.GOOS)
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return "", err
 	}
-	return a.tool("stenc")
+	return resolveStenc(cfg)
+}
+func resolveStenc(cfg Config) (string, error) {
+	if runtime.GOOS != "linux" {
+		return "", fmt.Errorf("stenc is not available on %s - drive-level encryption is managed via vendor tools", runtime.GOOS)
+	}
+	return resolveConfigTool("stenc", cfg)
 }
 
-// stencAvailable reports whether the drive-encryption feature can run at all.
-func (a *App) stencAvailable() bool { _, err := a.stencBin(); return err == nil }
+// Availability is derived from the caller's validated snapshot.
+func (a *App) stencAvailable(cfg Config) bool { _, err := resolveStenc(cfg); return err == nil }
 
 // StencStatus is the availability summary for the UI/preflight (never probes the
 // drive — that only happens on an explicit "check").
 func (a *App) StencStatus() map[string]any {
-	bin, err := a.stencBin()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return map[string]any{"available": false, "error": cfgErr.Error()}
+	}
+	return a.stencStatus(cfg)
+}
+func (a *App) stencStatus(cfg Config) map[string]any {
+	bin, err := resolveStenc(cfg)
 	if err != nil {
 		return map[string]any{"available": false, "supported": runtime.GOOS == "linux",
 			"os": runtime.GOOS, "hint": stencInstallHint()}
 	}
 	return map[string]any{"available": true, "supported": true, "os": runtime.GOOS,
-		"bin": bin, "device": a.tapeDevice()}
+		"bin": bin, "device": a.tapeDevice(cfg)}
 }
 
 // DriveEncStatus is the parsed drive-level encryption state read from stenc.
@@ -212,13 +226,20 @@ func colonValue(raw string) string {
 // is a status QUERY (SPIN) — read-only toward the drive, no tape movement. Returns
 // the tool's not-available error when stenc is absent (Linux only).
 func (a *App) DriveEncryptionStatus(deviceOverride string) (*DriveEncStatus, error) {
-	bin, err := a.stencBin()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
+	return a.driveEncryptionStatus(deviceOverride, cfg)
+}
+func (a *App) driveEncryptionStatus(deviceOverride string, cfg Config) (*DriveEncStatus, error) {
+	bin, err := resolveStenc(cfg)
 	if err != nil {
 		return nil, err
 	}
 	dev := strings.TrimSpace(deviceOverride)
 	if dev == "" {
-		dev = a.tapeDevice()
+		dev = a.tapeDevice(cfg)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -242,7 +263,11 @@ func (a *App) DriveEncryptionStatus(deviceOverride string) (*DriveEncStatus, err
 // itself is never logged, and Obelisk never stores it — where the key lives is
 // the operator's responsibility (recorded as the volume's DriveEncNote).
 func (a *App) SetDriveKey(deviceOverride, keyFile string, algorithmIndex int) error {
-	bin, err := a.stencBin()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return cfgErr
+	}
+	bin, err := resolveStenc(cfg)
 	if err != nil {
 		return err
 	}
@@ -257,7 +282,7 @@ func (a *App) SetDriveKey(deviceOverride, keyFile string, algorithmIndex int) er
 	}
 	dev := strings.TrimSpace(deviceOverride)
 	if dev == "" {
-		dev = a.tapeDevice()
+		dev = a.tapeDevice(cfg)
 	}
 	args := []string{"-f", dev, "-e", "on", "-a", strconv.Itoa(algorithmIndex), "-k", keyFile}
 	if err := a.runStenc(bin, args, dev); err != nil {
@@ -271,13 +296,17 @@ func (a *App) SetDriveKey(deviceOverride, keyFile string, algorithmIndex int) er
 // while it was on remain drive-encrypted — clearing the key here only stops the
 // drive encrypting future writes; it never makes an already-encrypted tape readable.
 func (a *App) ClearDriveKey(deviceOverride string) error {
-	bin, err := a.stencBin()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return cfgErr
+	}
+	bin, err := resolveStenc(cfg)
 	if err != nil {
 		return err
 	}
 	dev := strings.TrimSpace(deviceOverride)
 	if dev == "" {
-		dev = a.tapeDevice()
+		dev = a.tapeDevice(cfg)
 	}
 	if err := a.runStenc(bin, []string{"-f", dev, "-e", "off"}, dev); err != nil {
 		return err
@@ -309,15 +338,15 @@ func (a *App) runStenc(bin string, args []string, dev string) error {
 // about the missing-drive-key risk. Best-effort and silent-but-logged — the status
 // query is read-only, and a failure here never affects the write. Never enables
 // anything; it only records what the drive is already doing.
-func (a *App) noteTapeDriveEncryption(volumeID int) {
-	if volumeID <= 0 || !a.stencAvailable() {
+func (a *App) noteTapeDriveEncryption(volumeID int, cfg Config) {
+	if volumeID <= 0 || !a.stencAvailable(cfg) {
 		return
 	}
 	v := a.Store.Volume(volumeID)
 	if v == nil || !strings.EqualFold(v.Kind, "TAPE") || v.DriveEncrypted {
 		return
 	}
-	st, err := a.DriveEncryptionStatus("")
+	st, err := a.driveEncryptionStatus("", cfg)
 	if err != nil || st == nil || !st.Encrypting {
 		return
 	}

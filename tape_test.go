@@ -157,14 +157,14 @@ func TestResolveTapeTool_ConfigOverride(t *testing.T) {
 	if _, err := app.SaveConfig(map[string]any{"tape_tool": stub, "tape_device": `\\.\Tape3`}); err != nil {
 		t.Fatalf("SaveConfig: %v", err)
 	}
-	def, bin, ok := app.resolveTapeTool()
+	def, bin, ok := app.resolveTapeTool(mustConfig(t, app))
 	if !ok || def.Name != "itdt" || bin != stub {
 		t.Fatalf("config override should resolve to itdt at %s; got ok=%v name=%s bin=%s", stub, ok, def.Name, bin)
 	}
-	if !app.TapeAvailable() {
+	if !testValue(app.TapeAvailable()) {
 		t.Error("TapeAvailable should be true with a configured tool")
 	}
-	if got := app.tapeDevice(); got != `\\.\Tape3` {
+	if got := app.tapeDevice(mustConfig(t, app)); got != `\\.\Tape3` {
 		t.Errorf("tapeDevice should honor config, got %q", got)
 	}
 }

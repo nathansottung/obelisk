@@ -108,7 +108,7 @@ func TestSmartDeviceNode_SystemDisk(t *testing.T) {
 // is blocked — exactly the silent-but-logged, complement-not-substitute contract.
 func TestVolumeHealth_SystemDisk(t *testing.T) {
 	app := dockApp(t) // fresh store/app (defined in dock_test.go)
-	if !app.smartAvailable() {
+	if !app.smartAvailable(mustConfig(t, app)) {
 		t.Skip("smartctl not installed — feature hides behind the install hint (expected)")
 	}
 	wd, err := os.Getwd()

@@ -108,7 +108,10 @@ func (a *App) gatherMembers(includeKeys bool) ([]rawMember, error) {
 	members = append(members, rawMember{"catalog.json", catalog})
 
 	// config.json — scrub the auth token so a deployment secret never travels.
-	cfg := a.LoadConfig()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	cfg.AuthToken = ""
 	cfgBytes, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -368,7 +371,38 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 
 	// Preserve the current machine's auth token when the backup's is blank (we scrub on
 	// export) — never lock a running deployment out of its own API.
-	curToken := a.LoadConfig().AuthToken
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return RestoreResult{}, cfgErr
+	}
+	curToken := cfg.AuthToken
+
+	// Validate and prepare the config member before any restore mutation. Restore
+	// remains a multi-file operation; a later publication failure can leave a
+	// partial restore and must reach its caller without a success result.
+	var restoredConfig []byte
+	if cfgBytes, ok := members["config.json"]; ok {
+		restored, fields, e := decodeConfig(cfgBytes)
+		if e != nil {
+			return RestoreResult{}, fmt.Errorf("restored configuration is invalid: %w", e)
+		}
+		if restored.AuthToken == "" {
+			restored.AuthToken = curToken
+		}
+		var paths []string
+		for _, m := range man.Members {
+			if strings.HasPrefix(m.Name, "keystores/") {
+				paths = append(paths, filepath.Join(a.DataDir, "keystores", filepath.Base(m.Name)))
+			}
+		}
+		if len(paths) > 0 {
+			restored.KeystorePaths = paths
+		}
+		restoredConfig, e = encodeConfig(restored, fields)
+		if e != nil {
+			return RestoreResult{}, e
+		}
+	}
 
 	// (4) Back up the current records first, so the restore is itself reversible.
 	stamp := time.Now().UTC().Format("20060102-150405")
@@ -404,7 +438,6 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 		}
 		return nil
 	}
-	var restoredKeystores []string
 	for _, m := range man.Members {
 		b := members[m.Name]
 		switch {
@@ -415,7 +448,6 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 			if err := writeFile(dest, b); err != nil {
 				return RestoreResult{}, fmt.Errorf("restore %s: %w", m.Name, err)
 			}
-			restoredKeystores = append(restoredKeystores, dest)
 		default: // catalog.json, jobs.json, formats.json
 			if err := writeFile(filepath.Join(a.DataDir, m.Name), b); err != nil {
 				return RestoreResult{}, fmt.Errorf("restore %s: %w", m.Name, err)
@@ -423,22 +455,12 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 		}
 	}
 
-	// Config, patched: keep the current auth token if the backup's is blank, and point
-	// KeystorePaths at any keystores we just restored.
-	if cfgBytes, ok := members["config.json"]; ok {
-		var cfg Config
-		if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
-			return RestoreResult{}, fmt.Errorf("restored config is unreadable: %w", err)
-		}
-		if cfg.AuthToken == "" {
-			cfg.AuthToken = curToken
-		}
-		if len(restoredKeystores) > 0 {
-			cfg.KeystorePaths = restoredKeystores
-		}
-		out, _ := json.MarshalIndent(cfg, "", "  ")
-		if err := writeFile(a.configPath(), out); err != nil {
-			return RestoreResult{}, fmt.Errorf("restore config.json: %w", err)
+	if restoredConfig != nil {
+		a.configMu.Lock()
+		_, e := a.publishConfig(restoredConfig, false)
+		a.configMu.Unlock()
+		if e != nil {
+			return RestoreResult{}, fmt.Errorf("restore config.json (other members may already be restored): %w", e)
 		}
 	}
 
@@ -504,7 +526,10 @@ func autoExportCadenceLabel(cadence string) string {
 // and this period's file is not already present. Keys are never included in an
 // automated export. Best-effort: returns nil when there is nothing to do.
 func (a *App) maybeAutoExport(now time.Time) error {
-	cfg := a.LoadConfig()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return cfgErr
+	}
 	dir := strings.TrimSpace(cfg.AutoExportDir)
 	if dir == "" {
 		return nil

@@ -30,7 +30,10 @@ const smartInstallHint = "smartctl (smartmontools) not found — drive-health si
 func (a *App) smartctlBin() (string, error) { return a.tool("smartctl") }
 
 // smartAvailable reports whether the drive-health feature can run at all.
-func (a *App) smartAvailable() bool { _, err := a.smartctlBin(); return err == nil }
+func (a *App) smartAvailable(cfg Config) bool {
+	_, err := resolveConfigTool("smartctl", cfg)
+	return err == nil
+}
 
 // smartRaw is the slice of `smartctl -j -a` we care about, spanning ATA + NVMe.
 type smartRaw struct {
@@ -163,7 +166,14 @@ func evaluateAdvisory(snap *SmartSnapshot, raw smartRaw) {
 // on non-critical paths (dock ingest) ignore the error. Never called in a write
 // path. Read-only toward the device.
 func (a *App) VolumeHealth(vol *Volume, path string) (*SmartSnapshot, error) {
-	bin, err := a.smartctlBin()
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return nil, err
+	}
+	return a.volumeHealth(vol, path, cfg)
+}
+func (a *App) volumeHealth(vol *Volume, path string, cfg Config) (*SmartSnapshot, error) {
+	bin, err := resolveConfigTool("smartctl", cfg)
 	if err != nil {
 		return nil, err // feature hidden — caller surfaces the install hint
 	}

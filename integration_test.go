@@ -42,7 +42,7 @@ func newIT(t *testing.T) *itServer {
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	app := &App{DataDir: dataDir, Store: store}
+	app := initializedTestApp(t, &App{DataDir: dataDir, Store: store})
 	mux := http.NewServeMux()
 	api(mux, app)
 	ts := httptest.NewServer(mux)

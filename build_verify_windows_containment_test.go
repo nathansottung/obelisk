@@ -118,7 +118,7 @@ func TestContainment_RefusesWindowsBuildWhenVerificationDisabled(t *testing.T) {
 			t.Error("a refused build must not create the package's staging directory")
 		}
 		// The operator's saved settings must survive a refusal untouched.
-		if bv := app.LoadConfig().BuildVerify; normBuildVerify(bv) != BuildVerifyNone {
+		if bv := mustConfig(t, app).BuildVerify; normBuildVerify(bv) != BuildVerifyNone {
 			t.Errorf("refusal silently rewrote the saved global setting to %q", bv)
 		}
 	})
@@ -135,10 +135,10 @@ func TestContainment_RefusesWindowsBuildWhenVerificationDisabled(t *testing.T) {
 		}
 		// Precondition: the GLOBAL label still says a verifying tier. Only the effective
 		// configuration says otherwise, so a guard reading the global would let this pass.
-		if g := normBuildVerify(app.LoadConfig().BuildVerify); g != BuildVerifyFull {
+		if g := normBuildVerify(mustConfig(t, app).BuildVerify); g != BuildVerifyFull {
 			t.Fatalf("fixture: global should still be full, got %q", g)
 		}
-		if eff := effectiveTier(app, coll.ID); eff != BuildVerifyNone {
+		if eff := effectiveTier(t, app, coll.ID); eff != BuildVerifyNone {
 			t.Fatalf("fixture: effective tier should be none, got %q", eff)
 		}
 
@@ -162,8 +162,8 @@ func TestContainment_RefusesWindowsBuildWhenVerificationDisabled(t *testing.T) {
 }
 
 // effectiveTier is a tiny readability helper: the normalised effective build-verify tier.
-func effectiveTier(app *App, collectionID int) string {
-	return normBuildVerify(app.effectiveIntegrity(collectionID).BuildVerify)
+func effectiveTier(t *testing.T, app *App, collectionID int) string {
+	return normBuildVerify(app.effectiveIntegrity(collectionID, mustConfig(t, app)).BuildVerify)
 }
 
 // TestContainment_RefusesBeforeKeyGeneration proves the refusal precedes encryption key
@@ -196,7 +196,7 @@ func TestContainment_RefusesBeforeKeyGeneration(t *testing.T) {
 func keystoreKeyCounts(t *testing.T, app *App) []int {
 	t.Helper()
 	var out []int
-	for _, p := range app.LoadConfig().KeystorePaths {
+	for _, p := range mustConfig(t, app).KeystorePaths {
 		ks, err := readStore(p)
 		if err != nil {
 			t.Fatalf("read keystore %s: %v", p, err)

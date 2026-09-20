@@ -92,7 +92,7 @@ func TestPerfEndpointFastNoCatalogLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	app := &App{DataDir: t.TempDir(), Store: st, Perf: NewPerfMeter()}
+	app := initializedTestApp(t, &App{DataDir: t.TempDir(), Store: st, Perf: NewPerfMeter()})
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, app.Perf.Sample(time.Now()))
 	}

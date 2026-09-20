@@ -120,6 +120,10 @@ type MirrorResult struct {
 // and refreshes the volume inventory sidecar. One call == one volume; run several
 // concurrently for multi-volume mirroring.
 func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, volumeID int, throttleMbps float64, scopePrefix string, progress func(float64, string)) (out *MirrorResult, err error) {
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	coll := a.Store.Collection(collectionID)
 	if coll == nil {
 		return nil, fmt.Errorf("archive %d not found", collectionID)
@@ -137,7 +141,7 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 		return nil, fmt.Errorf("volume %d not found", volumeID)
 	}
 	if throttleMbps <= 0 {
-		throttleMbps = a.LoadConfig().ThrottleMbps
+		throttleMbps = cfg.ThrottleMbps
 	}
 	// Batch catalog writes across the mirror job (idempotent copy-then-verify).
 	a.Store.BeginBatch()

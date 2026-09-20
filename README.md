@@ -165,17 +165,81 @@ secret via **`OBELISK_AUTH_TOKEN`** (env, recommended) or **`auth_token`** in
 The web UI prompts once and remembers it for the browser session. The static UI
 itself is public (so it can load and prompt); only `/api` is gated.
 
+### One-time container initialization
+
+Use an image built from this corrected source checkout; do not assume a previously
+published `latest` image contains `-init-config` or the no-replace repair. From this
+checkout, build the tag used by the committed Compose file:
+
 ```bash
-# Quick run (creates a token, persists /data, mirrors a read-only source):
-docker run -d --name obelisk -p 7821:7821 \
-  -e OBELISK_AUTH_TOKEN="$(openssl rand -hex 32)" \
-  -v mnemo-data:/data -v mnemo-staging:/staging \
-  -v /mnt/tank/photos:/sources/photos:ro \
-  ghcr.io/nathansottung/obelisk:latest
+docker build -t ghcr.io/nathansottung/obelisk:latest .
 ```
 
-Or use the committed **[`docker-compose.yml`](docker-compose.yml)** (put the token
-in a `.env` as `OBELISK_AUTH_TOKEN=…`).
+Create a private `.env` file containing `OBELISK_AUTH_TOKEN=` followed by your long
+random token. Keep that file out of version control. Both examples below reuse it
+without printing the token. The `--pull never` options keep using the local build.
+The `/data` filesystem must support hard links for first-use publication (for
+example, NTFS on Windows or a supporting Linux filesystem); unsupported storage
+fails closed without a replacement fallback.
+
+**Docker run:** on deliberate first use, start this foreground bootstrap. It has
+no published ports and binds only to container loopback:
+
+```bash
+docker run --rm --name obelisk-init --pull never --env-file .env \
+  -v mnemo-data:/data -v mnemo-staging:/staging \
+  ghcr.io/nathansottung/obelisk:latest \
+  -listen 127.0.0.1:7821 -data /data -init-config
+```
+
+`-init-config` initializes **and continues serving**; it is not an exit-only
+command. After the ready message, run `docker stop obelisk-init` in another
+terminal and wait for the foreground command to return. Then start the normal
+service on the SAME named volumes, without the initialization flag:
+
+```bash
+docker run -d --name obelisk --pull never -p 7821:7821 --env-file .env \
+  -v mnemo-data:/data -v mnemo-staging:/staging \
+  -v /mnt/tank/photos:/sources/photos:ro \
+  ghcr.io/nathansottung/obelisk:latest \
+  -listen 0.0.0.0:7821 -data /data
+```
+
+**Compose:** use the committed [`docker-compose.yml`](docker-compose.yml), whose
+service is `obelisk`, with the same `.env`. First adjust its example source mounts
+to your real datasets, retaining `:ro`. Run all commands from the same project
+directory: Compose persists `/data` in `./data` (different from the Docker-run
+example's named volume). Choose one deployment path and keep its storage mapping.
+For deliberate first use, before `up`, run:
+
+```bash
+docker compose run --rm --no-deps --pull never --name obelisk-init obelisk \
+  -listen 127.0.0.1:7821 -data /data -init-config
+```
+
+`compose run` does not publish service ports without `--service-ports`; do not add
+that option for bootstrap. `--rm` removes the one-off container when stopped and
+overrides its restart policy, retaining the bound data. After the ready message,
+run `docker stop obelisk-init` in another terminal and wait for the foreground
+command to return. Then:
+
+```bash
+docker compose up -d --pull never --no-build obelisk
+```
+
+This uses the ordinary service command (`-listen 0.0.0.0:7821 -data /data`) and
+restart policy, with no `-init-config`. Keep that flag out of permanent CMD,
+Compose commands and restart scripts. Overriding Docker CMD replaces the entire
+argument list, which is why bootstrap includes both `-listen` and `-data`.
+
+Neither stopping bootstrap nor normal restarts should remove `/data`. If an
+existing installation reports missing, unreadable or corrupt configuration,
+reconnect storage or restore the original config; do not initialize again as a
+recovery shortcut. Deliberately creating defaults alongside existing catalog/key
+files does not recover the original token, helper paths, keystore paths or staging
+preferences. Those files can remain intact while their settings are absent;
+choosing defaults requires intentional setup. A configuration entry that appears
+during initialization is preserved and initialization refuses.
 
 ### Source datasets: always mount `:ro`
 
@@ -226,6 +290,12 @@ obelisk.exe                # Windows — then open http://127.0.0.1:7821
 ./obelisk-linux-amd64      # Linux (server / NAS / Pi)
 ./obelisk-darwin-arm64     # Apple Silicon
 ```
+For deliberate first use, add `-init-config` to the command (for example,
+`obelisk.exe -init-config`). Subsequent launches use the saved configuration
+without that flag. If an existing installation reports a missing or damaged
+configuration, restore access to its settings before continuing; ordinary
+startup and settings updates do not recreate it.
+
 Flags: `-port 7821 -data ~/.obelisk`. Open the printed URL; the **Preflight**
 panel (Settings) checks that `tar`/`gpg`/`par2` are installed and tells you
 how to get any that are missing.

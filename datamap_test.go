@@ -36,7 +36,7 @@ func TestDataMap_WritesAndNever(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dm := app.DataMap()
+	dm := testValue(app.DataMap())
 
 	// Every documented write category is present.
 	for _, name := range []string{"The catalog", "Settings", "Keystores", "Staging",
@@ -93,7 +93,7 @@ func TestDataMap_WritesAndNever(t *testing.T) {
 func TestDataMap_MissingFlags(t *testing.T) {
 	app := newSetupApp(t)
 	// Fresh: no staging, no keystores → both flagged missing with a warning.
-	dm := app.DataMap()
+	dm := testValue(app.DataMap())
 	if st := findLoc(dm.Writes, "Staging"); !st.Missing || st.Warn == "" {
 		t.Errorf("empty staging should be flagged missing with a warning: %+v", st)
 	}
@@ -106,7 +106,7 @@ func TestDataMap_MissingFlags(t *testing.T) {
 // pointer on an honesty screen is worse than none.
 func TestDataMap_VerifyPointersAreReal(t *testing.T) {
 	app := newSetupApp(t)
-	dm := app.DataMap()
+	dm := testValue(app.DataMap())
 	if len(dm.VerifyTests) == 0 || strings.TrimSpace(dm.VerifyNote) == "" {
 		t.Fatal("verify note + tests must be present")
 	}

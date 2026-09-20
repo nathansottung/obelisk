@@ -145,6 +145,10 @@ func (a *App) DockCandidates(sessionID int) ([]DockCandidate, error) {
 // off a dying disk first. Re-call with confirm=true to inventory it anyway (the
 // read is non-destructive; nothing is ever written to the drive).
 func (a *App) IngestDrive(sessionID int, mountPath, serial, label, mode, level string, confirm bool, progress func(float64, string)) (res map[string]any, err error) {
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	ds := a.Store.DockSession(sessionID)
 	if ds == nil {
 		return nil, fmt.Errorf("dock session %d not found", sessionID)
@@ -198,7 +202,7 @@ func (a *App) IngestDrive(sessionID int, mountPath, serial, label, mode, level s
 	// ingest. Snapshots accrue in the volume's history so trends show across
 	// dock sessions.
 	var health *SmartSnapshot
-	if snap, herr := a.VolumeHealth(vol, mountPath); herr == nil {
+	if snap, herr := a.volumeHealth(vol, mountPath, cfg); herr == nil {
 		health = snap
 	}
 
@@ -275,6 +279,10 @@ func (a *App) IngestDrive(sessionID int, mountPath, serial, label, mode, level s
 // so the inventory lives ONLY in the catalog (the snapshot), unlike tool-written
 // media which still carry a sidecar (see docs/ARCHITECTURE.md on this asymmetry).
 func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode string, health *SmartSnapshot, progress func(float64, string)) (*DockDrive, error) {
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	// Source-safety: refuse to treat a registered source folder as a docked drive.
 	// (We no longer write to the drive at all, but adopting a NAS source AS a drive
 	// would double-count it and is never intended — read-only or not.)
@@ -357,7 +365,7 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 			rel := driveRel(mountPath, p)
 			role, crit := classifyRole(reg, rel)
 			sf := SnapFile{RelPath: rel, SizeBytes: size, ModTime: mtime, Hash: sha, Blake3: b3, Role: role, Critical: crit}
-			sf.ShotAt, sf.CameraSerial = a.extractMediaMeta(p, role)
+			sf.ShotAt, sf.CameraSerial = a.extractMediaMeta(p, role, cfg)
 			mu.Lock()
 			defer mu.Unlock()
 			snapFiles = append(snapFiles, sf)

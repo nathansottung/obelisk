@@ -108,7 +108,10 @@ func dataSegmentCount(segs []Segment) int {
 // (manifest + RESTORE.txt) land on every tape; the par2 set rides the last data
 // tape or its own, per the build-time plan.
 func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string)) (map[string]any, error) {
-	cfg := a.LoadConfig()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	if bufferGB <= 0 {
 		bufferGB = cfg.BufferGB
 	}
@@ -226,7 +229,7 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 	now := time.Now().UTC()
 	seg.Status, seg.Dest = "VERIFIED", destDir
 	// Awareness: this segment's tape may have been written with drive-level AES on.
-	a.noteTapeDriveEncryption(volumeID)
+	a.noteTapeDriveEncryption(volumeID, cfg)
 	a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: true, Path: destChunk, Note: fmt.Sprintf("span segment %d/%d read-back verified", seg.Index, N)})
 
 	done := 0

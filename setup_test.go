@@ -18,7 +18,7 @@ func newSetupApp(t *testing.T) *App {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &App{DataDir: dir, Store: store}
+	return initializedTestApp(t, &App{DataDir: dir, Store: store})
 }
 
 func hasReq(reqs []SetupRequirement, target string) *SetupRequirement {
@@ -185,7 +185,7 @@ func TestSetupState_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reloaded := (&App{DataDir: app.DataDir, Store: store}).SetupState()
+	reloaded := testValue((initializedTestApp(t, &App{DataDir: app.DataDir, Store: store})).SetupState())
 	if reloaded.Template != applied.Template || reloaded.ArchiveKind != applied.ArchiveKind ||
 		strings.Join(reloaded.NavExpanded, ",") != strings.Join(applied.NavExpanded, ",") ||
 		len(reloaded.Requirements) != len(applied.Requirements) ||
@@ -203,7 +203,7 @@ func TestApplySetup_PreservesUnrelated(t *testing.T) {
 	if _, err := app.ApplySetup(SetupAnswers{DataKind: DataPhotos, IntegrityPreset: "FAST"}); err != nil {
 		t.Fatal(err)
 	}
-	cfg := app.LoadConfig()
+	cfg := mustConfig(t, app)
 	if cfg.BarcodeScheme != "ZZZ" || cfg.BufferGB != 12.5 {
 		t.Errorf("setup clobbered unrelated settings: scheme=%q buffer=%v", cfg.BarcodeScheme, cfg.BufferGB)
 	}

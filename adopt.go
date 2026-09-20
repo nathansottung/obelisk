@@ -373,6 +373,10 @@ func (a *App) AdoptMedia(mountPath string, collectionID, volumeID int, deep bool
 // present on N drives shows N copies across their locations; identical content is
 // one union entry. READ-ONLY toward the folder (only hashes; the catalog changes).
 func (a *App) AdoptFolder(mountPath string, collectionID, volumeID int, progress func(float64, string)) (res map[string]any, err error) {
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	coll := a.Store.Collection(collectionID)
 	if coll == nil {
 		return nil, fmt.Errorf("archive %d not found", collectionID)
@@ -437,7 +441,7 @@ func (a *App) AdoptFolder(mountPath string, collectionID, volumeID int, progress
 			}
 			role, _ := classifyRole(reg, rel)
 			uf := unionFile{RelPath: filepath.ToSlash(rel), Hash: sha, Size: size, Role: role}
-			uf.ShotAt, uf.CameraSerial = a.extractMediaMeta(p, role)
+			uf.ShotAt, uf.CameraSerial = a.extractMediaMeta(p, role, cfg)
 			mu.Lock()
 			hashed[p] = uf
 			mu.Unlock()

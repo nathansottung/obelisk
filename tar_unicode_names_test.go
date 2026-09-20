@@ -131,7 +131,7 @@ func newUnicodeTestApp(t *testing.T, tools map[string]string, staging string) *A
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	app := &App{DataDir: dataDir, Store: store}
+	app := initializedTestApp(t, &App{DataDir: dataDir, Store: store})
 	ks1 := filepath.Join(t.TempDir(), "keystore1.json")
 	ks2 := filepath.Join(t.TempDir(), "keystore2.json")
 	if err := writeStore(ks1, &keystoreFile{Marker: 1}); err != nil {

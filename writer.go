@@ -280,7 +280,10 @@ func (a *App) refreshChunkStatus(c *Chunk) {
 }
 
 func (a *App) WriteChunk(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string)) (map[string]any, error) {
-	cfg := a.LoadConfig()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	if bufferGB <= 0 {
 		bufferGB = cfg.BufferGB
 	}
@@ -412,7 +415,7 @@ func (a *App) WriteChunk(id int, destDir string, bufferGB float64, blockMB int, 
 	a.Store.RecordCopy(c, volumeID, dest, ok)
 	// Awareness: if this landed on a tape whose drive is actively encrypting (stenc),
 	// record it on the volume so kits/inventories shout about the drive-key risk.
-	a.noteTapeDriveEncryption(volumeID)
+	a.noteTapeDriveEncryption(volumeID, cfg)
 	note := "write read-back"
 	if !ok {
 		note = "write read-back: hash mismatch medium=" + rb

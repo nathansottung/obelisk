@@ -75,6 +75,10 @@ func atoiSafe(s string) int {
 // InferStructure walks an organized tree and returns its detected structure with
 // harvested events. Leaf folders are directories that directly contain files.
 func (a *App) InferStructure(root string) (*InferredStructure, error) {
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	if fi, err := os.Stat(root); err != nil || !fi.IsDir() {
 		return nil, fmt.Errorf("not a readable folder: %s", root)
 	}
@@ -203,7 +207,7 @@ func (a *App) InferStructure(root string) (*InferredStructure, error) {
 		if etype == "" {
 			etype = guessEventType(name, vocab)
 		}
-		start, end, imgCount, bytes := a.leafDateRange(reg, lf.files)
+		start, end, imgCount, bytes := a.leafDateRange(reg, lf.files, cfg)
 		if year == 0 && !start.IsZero() {
 			year = start.Year()
 		}
@@ -255,13 +259,13 @@ func patternFromRoles(roles []string) string {
 // [min,max], the dated-file count, and total bytes. Non-media and undatable files
 // are ignored. Discipline-neutral: a leaf of stems + masters ranges by their
 // created dates the same way a leaf of RAWs ranges by EXIF.
-func (a *App) leafDateRange(reg map[string]FormatEntry, files []string) (start, end time.Time, imgCount int, bytes int64) {
+func (a *App) leafDateRange(reg map[string]FormatEntry, files []string, cfg Config) (start, end time.Time, imgCount int, bytes int64) {
 	for _, p := range files {
 		if mediaKindOf(p) == "" {
 			continue
 		}
 		role, _ := classifyRole(reg, p)
-		shot, _ := a.extractMediaMeta(p, role)
+		shot, _ := a.extractMediaMeta(p, role, cfg)
 		if shot.IsZero() {
 			continue
 		}

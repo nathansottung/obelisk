@@ -14,7 +14,7 @@ func versApp(t *testing.T) *App {
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	return &App{DataDir: filepath.Dir(st.path), Store: st}
+	return initializedTestApp(t, &App{DataDir: filepath.Dir(st.path), Store: st})
 }
 
 // TestUpsertFileRetainsVersions proves a hash change appends the OLD version to

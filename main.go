@@ -57,6 +57,7 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:7821", "listen address host:port. Default is localhost-only; use 0.0.0.0:7821 in a container (which then REQUIRES an auth token).")
 	port := flag.Int("port", 0, "DEPRECATED: listen port on 127.0.0.1 (use -listen). When set, overrides the port of -listen.")
 	dataDir := flag.String("data", defaultDataDir(), "data directory (catalog.json, config.json)")
+	initConfig := flag.Bool("init-config", false, "explicitly initialize configuration for first use; never overwrite damaged existing settings")
 	flag.Parse()
 
 	addr := *listen
@@ -68,21 +69,29 @@ func main() {
 		addr = net.JoinHostPort(host, strconv.Itoa(*port))
 	}
 
+	startupConfig, err := loadStartupConfig(*dataDir, *initConfig)
+	if err != nil {
+		log.Fatalf("configuration: %v", err)
+	}
 	store, err := OpenStore(*dataDir)
 	if err != nil {
 		log.Fatalf("open catalog: %v", err)
 	}
 	app := &App{DataDir: *dataDir, Store: store, Perf: NewPerfMeter()}
-	setHashAccel(app.LoadConfig().HashAccel) // apply the persisted hash-acceleration preference at startup
+	setHashAccel(startupConfig.HashAccel) // apply the persisted hash-acceleration preference at startup
 
 	// Optional gentle continuity: if an auto-export cadence is configured, write one
 	// app-backup bundle per period. A single hourly ticker suffices — maybeAutoExport
 	// is a cheap no-op when off or when this period's file already exists. Best-effort;
 	// a failed auto-export never affects the running app. See appbackup.go.
 	go func() {
-		_ = app.maybeAutoExport(time.Now())
+		if err := app.maybeAutoExport(time.Now()); err != nil {
+			log.Printf("automatic app backup: %v", err)
+		}
 		for range time.Tick(time.Hour) {
-			_ = app.maybeAutoExport(time.Now())
+			if err := app.maybeAutoExport(time.Now()); err != nil {
+				log.Printf("automatic app backup: %v", err)
+			}
 		}
 	}()
 	if ro, why := store.ReadOnly(); ro {
@@ -98,7 +107,7 @@ func main() {
 		token = strings.TrimSpace(os.Getenv("MNEMO_AUTH_TOKEN"))
 	}
 	if token == "" {
-		token = strings.TrimSpace(app.LoadConfig().AuthToken)
+		token = strings.TrimSpace(startupConfig.AuthToken)
 	}
 	if !isLocalhostAddr(addr) && token == "" {
 		log.Fatalf("refusing to bind non-localhost address %q without an auth token.\n"+
@@ -643,7 +652,8 @@ func api(mux *http.ServeMux, app *App) {
 	// The only live probe (which volumes are connected now) is injected here so the
 	// computation itself stays pure/testable.
 	mux.HandleFunc("GET /api/home", func(w http.ResponseWriter, r *http.Request) {
-		jsonOut(w, app.HomeOverview(app.onlineVolumeIDsCached()))
+		view, viewErr := app.HomeOverview(app.onlineVolumeIDsCached())
+		jsonResult(w, view, viewErr)
 	})
 	mux.HandleFunc("GET /api/media", func(w http.ResponseWriter, r *http.Request) { jsonOut(w, MediaPresets) })
 	mux.HandleFunc("GET /api/pathinfo", func(w http.ResponseWriter, r *http.Request) {
@@ -695,12 +705,14 @@ func api(mux *http.ServeMux, app *App) {
 	// External-tools catalog: every optional helper with its detected status, config
 	// path, and official download link. Manually-browsed binary paths save via config.
 	mux.HandleFunc("GET /api/tools", func(w http.ResponseWriter, r *http.Request) {
-		jsonOut(w, app.ToolsView())
+		view, viewErr := app.ToolsView()
+		jsonResult(w, view, viewErr)
 	})
 	// "Where your data lives": the plain, honest map of everything the tool writes and
 	// what it promises never to touch. Pure surfacing — computed from live config.
 	mux.HandleFunc("GET /api/data-map", func(w http.ResponseWriter, r *http.Request) {
-		jsonOut(w, app.DataMap())
+		view, viewErr := app.DataMap()
+		jsonResult(w, view, viewErr)
 	})
 
 	// Mounted removable media (the card/drive picker for the card check).
@@ -734,11 +746,29 @@ func api(mux *http.ServeMux, app *App) {
 	})
 
 	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
-		cfg := app.LoadConfig()
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
 		jsonOut(w, map[string]any{"config": cfg, "keystore_status": app.KeystoreStatus()})
 	})
 	mux.HandleFunc("PUT /api/config", func(w http.ResponseWriter, r *http.Request) {
-		cfg, err := app.SaveConfig(body(r))
+		update, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+		if readErr != nil {
+			jsonErr(w, 400, fmt.Errorf("cannot read configuration update"))
+			return
+		}
+		if _, _, err := decodeConfig(update); err != nil {
+			jsonErr(w, 400, err)
+			return
+		}
+		var patch map[string]any
+		if err := json.Unmarshal(update, &patch); err != nil {
+			jsonErr(w, 400, fmt.Errorf("invalid configuration update"))
+			return
+		}
+		cfg, err := app.SaveConfig(patch)
 		if err != nil {
 			jsonErr(w, 400, err)
 			return
@@ -748,7 +778,8 @@ func api(mux *http.ServeMux, app *App) {
 	// First-run setup interview (see setup.go). GET returns the derived state for the
 	// current config (summary + scoped checklist facts); POST applies answers coherently.
 	mux.HandleFunc("GET /api/setup", func(w http.ResponseWriter, r *http.Request) {
-		jsonOut(w, app.SetupState())
+		view, viewErr := app.SetupState()
+		jsonResult(w, view, viewErr)
 	})
 	mux.HandleFunc("POST /api/setup", func(w http.ResponseWriter, r *http.Request) {
 		b := body(r)
@@ -843,7 +874,8 @@ func api(mux *http.ServeMux, app *App) {
 	// globally or per archive. Individual knobs stay editable (→ "Custom").
 	mux.HandleFunc("GET /api/integrity", func(w http.ResponseWriter, r *http.Request) {
 		cid, _ := strconv.Atoi(r.URL.Query().Get("collection_id"))
-		jsonOut(w, app.integrityView(cid))
+		view, viewErr := app.integrityView(cid)
+		jsonResult(w, view, viewErr)
 	})
 	mux.HandleFunc("PUT /api/integrity", func(w http.ResponseWriter, r *http.Request) {
 		iv, err := app.applyGlobalIntegrity(body(r))
@@ -853,7 +885,8 @@ func api(mux *http.ServeMux, app *App) {
 		}
 		app.Store.Log("integrity", fmt.Sprintf("global → %s (build_verify=%s, par2=%d%%, routine=%s, due=%dmo)",
 			iv.Preset, iv.BuildVerify, iv.Par2Redundancy, iv.RoutineVerifyLevel, iv.VerifyDueMonths))
-		jsonOut(w, app.integrityView(0))
+		view, viewErr := app.integrityView(0)
+		jsonResult(w, view, viewErr)
 	})
 	register(mux, "GET /api/collections/{id}/integrity", func(w http.ResponseWriter, r *http.Request) {
 		id := pathID(r)
@@ -861,7 +894,8 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("archive not found"))
 			return
 		}
-		jsonOut(w, app.integrityView(id))
+		view, viewErr := app.integrityView(id)
+		jsonResult(w, view, viewErr)
 	})
 	register(mux, "PUT /api/collections/{id}/integrity", func(w http.ResponseWriter, r *http.Request) {
 		id := pathID(r)
@@ -876,7 +910,8 @@ func api(mux *http.ServeMux, app *App) {
 			return
 		}
 		app.Store.Log("integrity", fmt.Sprintf("%s → %s (build_verify=%s, par2=%d%%)", c.Name, iv.Preset, iv.BuildVerify, iv.Par2Redundancy))
-		jsonOut(w, app.integrityView(id))
+		view, viewErr := app.integrityView(id)
+		jsonResult(w, view, viewErr)
 	})
 
 	// Space advice — the single source of truth for "do I have room?" so the UI
@@ -885,7 +920,8 @@ func api(mux *http.ServeMux, app *App) {
 		q := r.URL.Query()
 		cid, _ := strconv.Atoi(q.Get("collection_id"))
 		chid, _ := strconv.Atoi(q.Get("chunk_id"))
-		jsonOut(w, app.SpaceAdvice(cid, chid, q.Get("dest")))
+		view, viewErr := app.SpaceAdvice(cid, chid, q.Get("dest"))
+		jsonResult(w, view, viewErr)
 	})
 
 	// collections + scan
@@ -926,10 +962,15 @@ func api(mux *http.ServeMux, app *App) {
 		if strings.EqualFold(s(b, "kind"), ArchiveSourceless) || bl(b, "sourceless") {
 			kind = ArchiveSourceless
 		}
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
 		coll := app.Store.AddCollectionKind(name, kind)
 		// Honor the configured default protection profile (blank = the built-in 3-2-1
 		// default AddCollectionKind already assigned). Best-effort: a bad id is ignored.
-		if dp := strings.TrimSpace(app.LoadConfig().DefaultProfile); dp != "" && dp != DefaultProfileID {
+		if dp := strings.TrimSpace(cfg.DefaultProfile); dp != "" && dp != DefaultProfileID {
 			_ = app.Store.SetAssignment(coll.ID, "", dp)
 		}
 		jsonOut(w, coll)
@@ -2260,20 +2301,28 @@ func api(mux *http.ServeMux, app *App) {
 	// explicit (network-touching) cache fetch. Writing bundles never hits the
 	// network; this endpoint is how the cache gets populated.
 	mux.HandleFunc("GET /api/escrow", func(w http.ResponseWriter, r *http.Request) {
-		cfg := app.LoadConfig()
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
 		census := app.FormatCensus(0)
-		full := app.planEscrow(EscrowFull, cfg.EscrowIncludeReaders, census)
-		bin := app.planEscrow(EscrowBinariesOnly, cfg.EscrowIncludeReaders, census)
+		full := app.planEscrow(EscrowFull, cfg.EscrowIncludeReaders, census, cfg)
+		bin := app.planEscrow(EscrowBinariesOnly, cfg.EscrowIncludeReaders, census, cfg)
 		jsonOut(w, map[string]any{
 			"version": appVersion, "fetchable": looksLikeReleaseTag(appVersion),
-			"cache_dir": app.escrowCacheDir(), "policy": normEscrowMode(cfg.EscrowOnMedia),
+			"cache_dir": app.escrowCacheDir(cfg), "policy": normEscrowMode(cfg.EscrowOnMedia),
 			"include_readers": cfg.EscrowIncludeReaders,
 			"full":            map[string]any{"present_bytes": full.PresentBytes, "estimated_bytes": full.estimatedBundleBytes(), "missing": full.MissingNames, "components": full.Components},
 			"binaries_only":   map[string]any{"present_bytes": bin.PresentBytes, "estimated_bytes": bin.estimatedBundleBytes(), "missing": bin.MissingNames},
 		})
 	})
 	mux.HandleFunc("POST /api/escrow/fetch", func(w http.ResponseWriter, r *http.Request) {
-		cfg := app.LoadConfig()
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
 		census := app.FormatCensus(0)
 		resp, jerr := runJob(app, "escrow-fetch", "Fetch escrow cache", func(p func(float64, string)) (map[string]any, error) {
 			return app.FetchEscrowCache(cfg.EscrowIncludeReaders, census, p)
@@ -2412,14 +2461,24 @@ func api(mux *http.ServeMux, app *App) {
 			jsonOut(w, map[string]any{"volume": v, "assigned": false, "barcode": v.Barcode})
 			return
 		}
-		v.Barcode = app.Store.NextBarcode(app.LoadConfig().BarcodeScheme)
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
+		v.Barcode = app.Store.NextBarcode(cfg.BarcodeScheme)
 		app.Store.UpdateVolume(v)
 		app.Store.Log("volume", fmt.Sprintf("%s: assigned barcode %s", v.Label, v.Barcode))
 		jsonOut(w, map[string]any{"volume": v, "assigned": true, "barcode": v.Barcode})
 	})
 	// Preview the next barcode the scheme would assign (no mutation).
 	mux.HandleFunc("GET /api/volumes/next-barcode", func(w http.ResponseWriter, r *http.Request) {
-		jsonOut(w, map[string]any{"next": app.Store.NextBarcode(app.LoadConfig().BarcodeScheme)})
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
+		jsonOut(w, map[string]any{"next": app.Store.NextBarcode(cfg.BarcodeScheme)})
 	})
 	// Printable HTML label (opens in a new tab, print-ready at common sizes).
 	mux.HandleFunc("GET /api/volumes/{id}/label", func(w http.ResponseWriter, r *http.Request) {
@@ -2428,7 +2487,12 @@ func api(mux *http.ServeMux, app *App) {
 			http.Error(w, "volume not found", 404)
 			return
 		}
-		lw, lh := labelSizeParts(app.LoadConfig().LabelSize)
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
+		lw, lh := labelSizeParts(cfg.LabelSize)
 		htmlPage, err := volumeLabelHTML(v, v.Barcode, lw, lh)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -2491,8 +2555,13 @@ func api(mux *http.ServeMux, app *App) {
 		// smart_available drives whether the volume view shows the Media health card
 		// with a "Check now" action or the install hint. The volume itself carries
 		// its SMART snapshot history (Volume.SmartHistory).
-		out := map[string]any{"volume": v, "chunks": rows, "smart_available": app.smartAvailable()}
-		if !app.smartAvailable() {
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
+		out := map[string]any{"volume": v, "chunks": rows, "smart_available": app.smartAvailable(cfg)}
+		if !app.smartAvailable(cfg) {
 			out["smart_hint"] = smartInstallHint
 		}
 		if snap := app.Store.VolumeSnapshot(v.ID); snap != nil {
@@ -2512,7 +2581,12 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("volume not found"))
 			return
 		}
-		if !app.smartAvailable() {
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
+		if !app.smartAvailable(cfg) {
 			jsonOut(w, map[string]any{"available": false, "hint": smartInstallHint})
 			return
 		}
@@ -2521,7 +2595,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("mount_path required (where the drive is mounted, e.g. E:\\ or /mnt/disk)"))
 			return
 		}
-		snap, err := app.VolumeHealth(v, mp)
+		snap, err := app.volumeHealth(v, mp, cfg)
 		if err != nil {
 			// Silent-but-logged in VolumeHealth; surface a soft error to the UI.
 			jsonOut(w, map[string]any{"available": true, "error": err.Error(), "history": v.SmartHistory})
@@ -2596,7 +2670,12 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("volume not found"))
 			return
 		}
-		as := app.AssessFinalize(v, r.URL.Query().Get("mount_path"), app.LoadConfig())
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
+		as := app.AssessFinalize(v, r.URL.Query().Get("mount_path"), cfg)
 		jsonOut(w, map[string]any{"assessment": as, "sealed": v.Sealed})
 	})
 	mux.HandleFunc("POST /api/volumes/{id}/finalize", func(w http.ResponseWriter, r *http.Request) {
@@ -2637,7 +2716,12 @@ func api(mux *http.ServeMux, app *App) {
 		jsonOut(w, st)
 	})
 	mux.HandleFunc("POST /api/tape/check", func(w http.ResponseWriter, r *http.Request) {
-		if !app.TapeAvailable() {
+		available, availableErr := app.TapeAvailable()
+		if availableErr != nil {
+			jsonErr(w, 503, availableErr)
+			return
+		}
+		if !available {
 			jsonOut(w, app.TapeToolStatus()) // {available:false, hints:[...]}
 			return
 		}
@@ -2667,7 +2751,12 @@ func api(mux *http.ServeMux, app *App) {
 	// movement). Explicitly gated: the caller must pass confirm:true, having shown
 	// the operator the warning. This is OUTSIDE the gpg restore story; never silent.
 	mux.HandleFunc("POST /api/tape/drive-key", func(w http.ResponseWriter, r *http.Request) {
-		if !app.stencAvailable() {
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
+		if !app.stencAvailable(cfg) {
 			jsonOut(w, map[string]any{"available": false, "hint": stencInstallHint()})
 			return
 		}
@@ -2980,4 +3069,13 @@ func profileFromBody(b map[string]any) Profile {
 		MediaKindsAllowed:          strList(b, "media_kinds_allowed"),
 		VerifyDueMonths:            int(f(b, "verify_due_months")),
 	}
+}
+
+// jsonResult preserves a non-success HTTP result for a fallible read view.
+func jsonResult[T any](w http.ResponseWriter, value T, err error) {
+	if err != nil {
+		jsonErr(w, 503, err)
+		return
+	}
+	jsonOut(w, value)
 }

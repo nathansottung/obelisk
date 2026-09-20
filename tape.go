@@ -143,8 +143,7 @@ func defaultTapeDevice() string {
 // resolveTapeTool picks the diagnostics tool to use: an explicit config path
 // (matched to a known def by its binary name), else the first registry tool
 // found on PATH. Returns the def, the resolved binary path, and ok.
-func (a *App) resolveTapeTool() (tapeToolDef, string, bool) {
-	cfg := a.LoadConfig()
+func (a *App) resolveTapeTool(cfg Config) (tapeToolDef, string, bool) {
 	if p := strings.TrimSpace(cfg.TapeTool); p != "" {
 		base := strings.ToLower(filepath.Base(p))
 		for _, d := range tapeTools {
@@ -168,8 +167,8 @@ func (a *App) resolveTapeTool() (tapeToolDef, string, bool) {
 }
 
 // tapeDevice returns the device path to probe: config override, else per-OS default.
-func (a *App) tapeDevice() string {
-	if d := strings.TrimSpace(a.LoadConfig().TapeDevice); d != "" {
+func (a *App) tapeDevice(cfg Config) string {
+	if d := strings.TrimSpace(cfg.TapeDevice); d != "" {
 		return d
 	}
 	return defaultTapeDevice()
@@ -177,11 +176,25 @@ func (a *App) tapeDevice() string {
 
 // TapeAvailable reports whether any tape-diagnostics tool is present (drives
 // whether the whole feature is shown or hidden behind an install hint).
-func (a *App) TapeAvailable() bool { _, _, ok := a.resolveTapeTool(); return ok }
+func (a *App) TapeAvailable() (bool, error) {
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return false, err
+	}
+	_, _, ok := a.resolveTapeTool(cfg)
+	return ok, nil
+}
 
 // TapeToolStatus is the availability summary for the UI/preflight.
 func (a *App) TapeToolStatus() map[string]any {
-	def, bin, ok := a.resolveTapeTool()
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return map[string]any{"available": false, "error": err.Error()}
+	}
+	return a.tapeToolStatus(cfg)
+}
+func (a *App) tapeToolStatus(cfg Config) map[string]any {
+	def, bin, ok := a.resolveTapeTool(cfg)
 	if !ok {
 		hints := make([]string, 0, len(tapeTools))
 		for _, d := range tapeTools {
@@ -190,7 +203,7 @@ func (a *App) TapeToolStatus() map[string]any {
 		return map[string]any{"available": false, "hints": hints,
 			"summary": "No tape-diagnostics tool found. This optional panel reads drive health only — it never moves the tape or writes to it."}
 	}
-	return map[string]any{"available": true, "tool": def.Name, "bin": bin, "device": a.tapeDevice()}
+	return map[string]any{"available": true, "tool": def.Name, "bin": bin, "device": a.tapeDevice(cfg)}
 }
 
 // TapeCheck runs the resolved tool against the device (override optional), parses
@@ -198,13 +211,17 @@ func (a *App) TapeToolStatus() map[string]any {
 // never on a write path; each command runs under a timeout, and failures are
 // returned to the caller and logged.
 func (a *App) TapeCheck(deviceOverride string) (*TapeHealth, error) {
-	def, bin, ok := a.resolveTapeTool()
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return nil, err
+	}
+	def, bin, ok := a.resolveTapeTool(cfg)
 	if !ok {
 		return nil, fmt.Errorf("no tape-diagnostics tool found — install ITDT, sg3_utils, or HPE L&TT")
 	}
 	dev := strings.TrimSpace(deviceOverride)
 	if dev == "" {
-		dev = a.tapeDevice()
+		dev = a.tapeDevice(cfg)
 	}
 	var outs [][]byte
 	for _, argv := range def.Commands(dev) {

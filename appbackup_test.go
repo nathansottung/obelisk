@@ -23,7 +23,7 @@ func abTestApp(t *testing.T) *App {
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	app := &App{DataDir: dataDir, Store: store}
+	app := initializedTestApp(t, &App{DataDir: dataDir, Store: store})
 	ks := filepath.Join(t.TempDir(), "keystore1.json")
 	if err := writeStore(ks, &keystoreFile{Marker: 1}); err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func TestAppBackup_ExportRestoreRoundTrip(t *testing.T) {
 	// Restore into a completely fresh data dir.
 	dst := abTestApp(t)
 	// give the target a DIFFERENT auth token to prove it's preserved (incoming is blank)
-	dstToken := dst.LoadConfig().AuthToken
+	dstToken := mustConfig(t, dst).AuthToken
 	rr, err := dst.RestoreAppBackup(res.TarPath)
 	if err != nil {
 		t.Fatalf("RestoreAppBackup: %v", err)
@@ -186,9 +186,9 @@ func TestAppBackup_ExportRestoreRoundTrip(t *testing.T) {
 		t.Error("restored volume lost its serial — reconnect-by-serial would break")
 	}
 	// Auth token preserved (backup's was blank → keep the machine's own).
-	if dst.LoadConfig().AuthToken != dstToken {
+	if mustConfig(t, dst).AuthToken != dstToken {
 		t.Errorf("restore should preserve the current machine's auth token; got %q want %q",
-			dst.LoadConfig().AuthToken, dstToken)
+			mustConfig(t, dst).AuthToken, dstToken)
 	}
 	// A pre-restore backup was made.
 	if _, err := os.Stat(rr.PreRestoreDir); err != nil {

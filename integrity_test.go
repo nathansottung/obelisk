@@ -28,18 +28,18 @@ func TestEffectiveIntegrityArchiveOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	app := &App{DataDir: filepath.Dir(st.path), Store: st}
+	app := initializedTestApp(t, &App{DataDir: filepath.Dir(st.path), Store: st})
 	coll := st.AddCollection("A")
 
 	// Default (no override) is the global ARCHIVAL preset.
-	if iv := app.effectiveIntegrity(coll.ID); iv.Preset != "ARCHIVAL" || iv.BuildVerify != BuildVerifyFull {
+	if iv := app.effectiveIntegrity(coll.ID, mustConfig(t, app)); iv.Preset != "ARCHIVAL" || iv.BuildVerify != BuildVerifyFull {
 		t.Fatalf("default should be ARCHIVAL/full, got %+v", iv)
 	}
 	// Override to FAST.
 	if _, err := app.applyArchiveIntegrity(coll.ID, map[string]any{"preset": "FAST"}); err != nil {
 		t.Fatalf("apply FAST: %v", err)
 	}
-	iv := app.effectiveIntegrity(coll.ID)
+	iv := app.effectiveIntegrity(coll.ID, mustConfig(t, app))
 	if iv.Preset != "FAST" || iv.BuildVerify != BuildVerifyNone || iv.Par2Redundancy != 5 || iv.VerifyDueMonths != 24 {
 		t.Fatalf("archive should be FAST, got %+v", iv)
 	}
@@ -50,14 +50,14 @@ func TestEffectiveIntegrityArchiveOverride(t *testing.T) {
 	if _, err := app.applyArchiveIntegrity(coll.ID, map[string]any{"build_verify": "contents"}); err != nil {
 		t.Fatalf("edit knob: %v", err)
 	}
-	if iv := app.effectiveIntegrity(coll.ID); iv.Preset != "Custom" || iv.Par2Redundancy != 5 {
+	if iv := app.effectiveIntegrity(coll.ID, mustConfig(t, app)); iv.Preset != "Custom" || iv.Par2Redundancy != 5 {
 		t.Fatalf("edited FAST should be Custom keeping par2 5, got %+v", iv)
 	}
 	// Clear → back to global ARCHIVAL.
 	if _, err := app.applyArchiveIntegrity(coll.ID, map[string]any{"clear": true}); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
-	if iv := app.effectiveIntegrity(coll.ID); iv.Preset != "ARCHIVAL" {
+	if iv := app.effectiveIntegrity(coll.ID, mustConfig(t, app)); iv.Preset != "ARCHIVAL" {
 		t.Fatalf("cleared override should inherit global ARCHIVAL, got %+v", iv)
 	}
 }

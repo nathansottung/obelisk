@@ -142,54 +142,24 @@ type App struct {
 	// Per-instance test seams; nil in production. Configure only before use.
 	keystoreReadFile         func(string) ([]byte, error)
 	keystoreMutationObserver func(string)
+	configMu                 sync.Mutex
+	configIO                 configHooks
 }
 
 func (a *App) configPath() string { return filepath.Join(a.DataDir, "config.json") }
 
-func (a *App) LoadConfig() Config {
-	cfg := defaultConfig()
-	if b, err := os.ReadFile(a.configPath()); err == nil {
-		_ = json.Unmarshal(b, &cfg)
-	}
-	if cfg.Tools == nil {
-		cfg.Tools = map[string]string{}
-	}
-	return cfg
-}
-
-func (a *App) SaveConfig(in map[string]any) (Config, error) {
-	cfg := a.LoadConfig()
-	b, _ := json.Marshal(in)
-	if err := json.Unmarshal(b, &cfg); err != nil {
-		return cfg, err
-	}
-	// Source-safety invariant: staging is written into during builds and keystores
-	// are rewritten on key generation — neither may live inside source data.
-	if err := a.Store.AssertOutsideSources(cfg.StagingDir); err != nil {
-		return cfg, err
-	}
-	for _, ks := range cfg.KeystorePaths {
-		if err := a.Store.AssertOutsideSources(ks); err != nil {
-			return cfg, err
-		}
-	}
-	if cfg.AutoExportDir != "" {
-		if err := a.Store.AssertOutsideSources(cfg.AutoExportDir); err != nil {
-			return cfg, err
-		}
-	}
-	out, _ := json.MarshalIndent(cfg, "", "  ")
-	if err := os.WriteFile(a.configPath(), out, 0o644); err != nil {
-		return cfg, err
-	}
-	setHashAccel(cfg.HashAccel) // apply runtime preferences that live outside the request path
-	return cfg, nil
-}
-
 // ---- tools ---------------------------------------------------------------
 
 func (a *App) tool(name string) (string, error) {
-	cfg := a.LoadConfig()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return "", cfgErr
+	}
+	return resolveConfigTool(name, cfg)
+}
+
+// Resolve from a previously validated snapshot; optional probes must not swallow a new config read.
+func resolveConfigTool(name string, cfg Config) (string, error) {
 	if p := cfg.Tools[name]; p != "" {
 		if _, err := os.Stat(p); err == nil {
 			return p, nil
@@ -245,6 +215,9 @@ func detectLTFSMountsBounded(d time.Duration) []string {
 // single-flight so the Settings view and the 20s status lamp never both stall on
 // a slow tool probe.
 func (a *App) Preflight() map[string]any {
+	if _, err := a.LoadConfig(); err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
 	a.pfMu.Lock()
 	defer a.pfMu.Unlock()
 	if a.pfVal != nil && time.Since(a.pfAt) < 8*time.Second {
@@ -255,6 +228,10 @@ func (a *App) Preflight() map[string]any {
 }
 
 func (a *App) computePreflight() map[string]any {
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
 	out := map[string]any{}
 	hints := []string{}
 	allOK := true
@@ -263,7 +240,7 @@ func (a *App) computePreflight() map[string]any {
 		"gpg":  "Windows: install Gpg4win (gpg4win.org). Linux: apt install gnupg. macOS: brew install gnupg.",
 		"par2": "Windows: choco install par2cmdline. Linux: apt install par2. macOS: brew install par2.",
 	} {
-		p, err := a.tool(name)
+		p, err := resolveConfigTool(name, cfg)
 		item := map[string]any{"ok": err == nil, "path": p}
 		if err == nil {
 			if line := toolVersionLine(p); line != "" {
@@ -285,7 +262,7 @@ func (a *App) computePreflight() map[string]any {
 	// smartctl (drive-mortality signals) is OPTIONAL — informational only, never
 	// affects "ok". Present = the Media health card lights up on volumes; absent =
 	// the feature hides behind an install hint. It complements hash verification.
-	sp, serr := a.tool("smartctl")
+	sp, serr := resolveConfigTool("smartctl", cfg)
 	smart := map[string]any{"ok": serr == nil, "path": sp}
 	if serr != nil {
 		smart["hint"] = smartInstallHint
@@ -296,7 +273,7 @@ func (a *App) computePreflight() map[string]any {
 	// musician's or filmmaker's library clusters into sessions by date the way a
 	// photographer's does via EXIF); absent = those fields stay empty, ingest still
 	// succeeds. It complements, never replaces, hash verification.
-	fp, ferr := a.tool("ffprobe")
+	fp, ferr := resolveConfigTool("ffprobe", cfg)
 	ffprobe := map[string]any{"ok": ferr == nil, "path": fp}
 	if ferr != nil {
 		ffprobe["hint"] = ffprobeInstallHint
@@ -305,7 +282,7 @@ func (a *App) computePreflight() map[string]any {
 	// dvdisaster (disc-level ECC) — OPTIONAL and informational; never affects "ok".
 	// Present = the Burn tab can auto-generate a per-disc .ecc after verify; absent =
 	// the feature hides behind an install hint. It complements par2, never replaces it.
-	dp, derr := a.tool("dvdisaster")
+	dp, derr := resolveConfigTool("dvdisaster", cfg)
 	dvd := map[string]any{"ok": derr == nil, "path": dp}
 	if derr != nil {
 		dvd["hint"] = dvdisasterInstallHint
@@ -315,10 +292,10 @@ func (a *App) computePreflight() map[string]any {
 	// affects "ok". Present = the Tape Drive panel can read/manage the drive key;
 	// absent (or non-Linux) = hidden behind an OS-aware hint. It is OUTSIDE the gpg
 	// restore story — awareness, not dependence.
-	out["stenc"] = a.StencStatus()
+	out["stenc"] = a.stencStatus(cfg)
 	// Tape diagnostics tool (ITDT / tapeinfo / sg_logs / HPE L&TT) — OPTIONAL and
 	// informational; never affects "ok". Reads drive health only.
-	out["tape_tool"] = a.TapeToolStatus()
+	out["tape_tool"] = a.tapeToolStatus(cfg)
 	out["ok"] = allOK && ks["ok"].(bool)
 	out["hints"] = hints
 	return out
@@ -379,13 +356,20 @@ func writeStoreObserved(path string, ks *keystoreFile, observe func(string)) err
 }
 
 func (a *App) KeystoreStatus() map[string]any {
-	return a.keystoreStatus(a.LoadConfig().KeystorePaths, false)
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return map[string]any{"ok": false, "reason": err.Error(), "min_required": MinKeystores, "stores": []map[string]any{}}
+	}
+	return a.keystoreStatus(cfg.KeystorePaths, false)
 }
 
 func (a *App) GenerateKey(note string) (ref, passphrase, fpr string, err error) {
 	// Generation retains the existing first-use workflow; ordinary sync never
 	// treats absence as enrollment. The same conflict checks still apply.
-	cfg := a.LoadConfig()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return "", "", "", cfgErr
+	}
 	st := a.keystoreStatus(cfg.KeystorePaths, true)
 	if !st["ok"].(bool) {
 		return "", "", "", fmt.Errorf("keystore requirement not met: %s", st["reason"])
@@ -420,7 +404,11 @@ func (a *App) GenerateKey(note string) (ref, passphrase, fpr string, err error) 
 // every readable, valid participant for ambiguity in the requested reference.
 // Success proves availability, not complete replica consistency.
 func (a *App) Passphrase(ref string) (string, error) {
-	paths := append([]string(nil), a.LoadConfig().KeystorePaths...)
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return "", cfgErr
+	}
+	paths := append([]string(nil), cfg.KeystorePaths...)
 	var pass string
 	found := false
 	for _, p := range paths {
@@ -449,7 +437,11 @@ func (a *App) Passphrase(ref string) (string, error) {
 // Publication remains sequential: later errors do not roll back earlier stores.
 // This is not a lock against another process changing files after validation.
 func (a *App) SyncKeystores() (int, error) {
-	paths := append([]string(nil), a.LoadConfig().KeystorePaths...)
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return 0, cfgErr
+	}
+	paths := append([]string(nil), cfg.KeystorePaths...)
 	if len(paths) == 0 {
 		return 0, fmt.Errorf("no keystores configured for synchronization")
 	}
@@ -486,6 +478,10 @@ type ScanProblem struct {
 }
 
 func (a *App) ScanFolder(collectionID int, root string, progress func(float64, string)) (count int, problems []ScanProblem, err error) {
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return 0, nil, cfgErr
+	}
 	// SOURCE READ-ONLY: scanning only WalkDir-traverses and hashes (os.Open
 	// O_RDONLY via hashFileHex). It registers `root` as a source root and writes
 	// nothing back into it — the catalog is the only thing mutated.
@@ -496,7 +492,7 @@ func (a *App) ScanFolder(collectionID int, root string, progress func(float64, s
 	// Batch catalog writes for the duration of the scan (idempotent re-run).
 	a.Store.BeginBatch()
 	defer endBatchInto(a.Store, &err)
-	a.Store.SetVersionsRetained(a.LoadConfig().VersionsRetained) // cap file-version history per config
+	a.Store.SetVersionsRetained(cfg.VersionsRetained) // cap file-version history per config
 	folder := a.Store.AddFolder(collectionID, root)
 
 	// Problems are appended from both the WalkDir callback (single goroutine) and the
@@ -537,7 +533,7 @@ func (a *App) ScanFolder(collectionID int, root string, progress func(float64, s
 			role, _ := classifyRole(reg, rel)
 			f := File{CollectionID: collectionID, FolderID: folder.ID,
 				RelPath: filepath.ToSlash(rel), SizeBytes: size, HashAlg: "SHA256", Hash: sha, Blake3: b3, ModTime: mtime, Role: role}
-			f.ShotAt, f.CameraSerial = a.extractMediaMeta(p, role)
+			f.ShotAt, f.CameraSerial = a.extractMediaMeta(p, role, cfg)
 			a.Store.UpsertFile(f)
 			atomic.AddInt64(&scanned, 1)
 		}
@@ -647,9 +643,12 @@ type PlanResult struct {
 }
 
 func (a *App) Plan(collectionID int, mediaKind string, targetGB float64, par2 int, encrypted bool, scopePrefix string) (*PlanResult, error) {
-	cfg := a.LoadConfig()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	if par2 <= 0 {
-		par2 = a.effectiveIntegrity(collectionID).Par2Redundancy // archive override, else global preset
+		par2 = a.effectiveIntegrity(collectionID, cfg).Par2Redundancy // archive override, else global preset
 	}
 	target := MediaPresets[mediaKind]
 	if targetGB > 0 {
@@ -954,7 +953,10 @@ func decryptRoundtripHash(gpgBin, ciphertext, pass string) (string, error) {
 }
 
 func (a *App) BuildChunk(id int, progress func(float64, string)) error {
-	cfg := a.LoadConfig()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return cfgErr
+	}
 	c := a.Store.Chunk(id)
 	if c == nil {
 		return fmt.Errorf("package %d not found", id)
@@ -974,7 +976,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	// is resolved, any staging directory is made, any key is generated and any tar is
 	// invoked — so the OBX-006 containment below decides on exactly the same value the
 	// rest of the build then uses, rather than on a preset label or a raw config string.
-	iv := a.effectiveIntegrity(c.CollectionID)
+	iv := a.effectiveIntegrity(c.CollectionID, cfg)
 	if err := assertWindowsTarBuildVerifiable(iv); err != nil {
 		return err
 	}

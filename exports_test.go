@@ -47,7 +47,7 @@ func TestExportImport_StructureAndPlanRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := &App{DataDir: srcDir, Store: s1}
+	src := initializedTestApp(t, &App{DataDir: srcDir, Store: s1})
 
 	coll := src.Store.AddCollectionKind("Photos", ArchiveSourceless)
 	loc := src.Store.AddLocation("Shoe Box #1", false, "")
@@ -106,7 +106,7 @@ func TestExportImport_StructureAndPlanRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dst := &App{DataDir: dstDir, Store: s2}
+	dst := initializedTestApp(t, &App{DataDir: dstDir, Store: s2})
 	sres, err := dst.ImportStructure(structRT)
 	if err != nil {
 		t.Fatal(err)

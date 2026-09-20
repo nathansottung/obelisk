@@ -272,8 +272,12 @@ func (a *App) ApplySetup(ans SetupAnswers) (SetupResult, error) {
 // SetupState re-derives the presentational facts from the CURRENT saved config,
 // without changing anything — the UI reads it to re-render the summary or the scoped
 // checklist after a reload.
-func (a *App) SetupState() SetupResult {
-	return a.setupResult(a.LoadConfig())
+func (a *App) SetupState() (SetupResult, error) {
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return SetupResult{}, err
+	}
+	return a.setupResult(cfg), nil
 }
 
 // setupResult builds the derived facts for a config value.

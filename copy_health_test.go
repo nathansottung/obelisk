@@ -21,7 +21,7 @@ func TestCopyLevelVerifyAndRewrite(t *testing.T) {
 	tools := nativeTools(t)
 	app, _ := newTestApp(t, tools)
 	src, refs := makeSource(t)
-	required := app.LoadConfig().RequiredCopies
+	required := mustConfig(t, app).RequiredCopies
 	if required < 2 {
 		required = 2
 	}

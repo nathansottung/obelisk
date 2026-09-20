@@ -43,7 +43,7 @@ func TestPlan_ExecuteReverseAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := &App{DataDir: dataDir, Store: store}
+	app := initializedTestApp(t, &App{DataDir: dataDir, Store: store})
 
 	// Two overlapping "drives": shared/s.jpg is byte-identical on both.
 	d1, d2 := t.TempDir(), t.TempDir()
@@ -98,7 +98,7 @@ func TestPlan_ExecuteReverseAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app2 := &App{DataDir: dataDir, Store: store2}
+	app2 := initializedTestApp(t, &App{DataDir: dataDir, Store: store2})
 
 	// --- execute DRIVE-01: shared file already satisfied → confirmed, not recopied ---
 	r1, err := app2.ExecutePlanFromDrive(plan.ID, d1, "SER1", func(float64, string) {})

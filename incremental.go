@@ -256,6 +256,10 @@ type BackupChangesResult struct {
 // delta for the normal build/write engine. Either way a named BackupSession is
 // recorded (unless the delta was empty).
 func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, base, mode, destDir string, throttleMbps float64, scopePrefix string, progress func(float64, string)) (out *BackupChangesResult, err error) {
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	coll := a.Store.Collection(collectionID)
 	if coll == nil {
 		return nil, fmt.Errorf("archive %d not found", collectionID)
@@ -324,7 +328,7 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 	multi := len(usedFolders) > 1
 
 	if throttleMbps <= 0 {
-		throttleMbps = a.LoadConfig().ThrottleMbps
+		throttleMbps = cfg.ThrottleMbps
 	}
 	th := &throttler{bps: throttleMbps * 1e6, start: time.Now()}
 	throttleBps := throttleMbps * 1e6 // fed to the Performance strip's destination row
@@ -459,8 +463,11 @@ func (a *App) mergeMirrorRefs(archiveID int, vol *Volume, destDir string, deltaR
 // volume's payload budget — the same shape Plan produces, but over the delta rather
 // than the whole archive. The packages are then built & written by the normal engine.
 func (a *App) planDeltaPackages(coll *Collection, files []*File, vol *Volume, progress func(float64, string)) ([]*Chunk, error) {
-	cfg := a.LoadConfig()
-	par2 := a.effectiveIntegrity(coll.ID).Par2Redundancy
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
+	par2 := a.effectiveIntegrity(coll.ID, cfg).Par2Redundancy
 	mediaKind := nonEmpty(vol.Kind, "LTO8")
 	target := MediaPresets[mediaKind]
 	if target <= 0 {

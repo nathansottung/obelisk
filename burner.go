@@ -129,7 +129,10 @@ func (a *App) CreateBurnQueue(collectionID int, mediaKind, name string) (*BurnQu
 // command (with {SRC}/{LABEL} substituted), then optionally hash-verify the
 // burned payload against the chunk's enc_hash before marking DONE.
 func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, error) {
-	cfg := a.LoadConfig()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	if strings.TrimSpace(cfg.BurnCommand) == "" {
 		return nil, fmt.Errorf("burn_command is not configured (Settings)")
 	}
