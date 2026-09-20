@@ -6,11 +6,12 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { startPreview } from './server.mjs';
+import { catalogChecks } from './catalog-browser-checks.mjs';
 
-const [browser, evidence] = process.argv.slice(2);
+const [browser, evidence, catalog, adapter, expected] = process.argv.slice(2);
 if (!browser || !evidence || !path.isAbsolute(evidence)) throw new Error('Provide preinstalled browser path and absolute new evidence directory');
 await mkdir(evidence); // Refuse reuse of a profile or existing evidence directory.
-const server = await startPreview();
+const server = await startPreview(0, catalog ? { catalog, adapter } : null);
 const base = `http://127.0.0.1:${server.address().port}`;
 let child, socket, stopped, browserVersion, completed = false;
 const checks = [], requests = [], errors = [];
@@ -49,10 +50,13 @@ try {
     return r.result.value;
   };
   await cdp('Page.navigate', { url: base });
-  await evaluate("new Promise(resolve => { const timer = setInterval(() => { if(document.querySelector('.result')) { clearInterval(timer); resolve(true); } }, 25); })");
+  await evaluate(`new Promise(resolve => { const timer = setInterval(() => { if(document.querySelector(${JSON.stringify(catalog ? '#catalog-identity, [role=alert]' : '.result')})) { clearInterval(timer); resolve(true); } }, 25); })`);
   const check = async (name, expression) => { assert.equal(await evaluate(expression), true, name); checks.push(name); };
   const screenshot = async name => { const r = await cdp('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }); await writeFile(path.join(evidence, name + '.png'), Buffer.from(r.data, 'base64')); };
   const route = async slug => { await evaluate(`location.hash=${JSON.stringify('#' + slug)}`); await evaluate('new Promise(resolve => setTimeout(resolve, 60))'); };
+  if (catalog) {
+    await catalogChecks({ check, evaluate, cdp, screenshot, route, expected, evidence, writeFile, path });
+  } else {
   // Real keyboard skip-link regression; setup focuses the first primary-nav link,
   // then Shift+Tab reaches the application's skip link (never direct main focus).
   const skipCases = [];
@@ -199,6 +203,7 @@ try {
   await writeFile(path.join(evidence, 'accessibility-tree.json'), JSON.stringify(ax, null, 2));
   assert.ok(ax.nodes.some(n => n.role?.value === 'searchbox' && n.name?.value === 'Search inventory'));
   checks.push('Browser accessibility tree exposes named searchbox');
+  }
   assert.deepEqual(errors, []);
   assert.ok(requests.every(url => url.startsWith(base + '/') || url === base));
   assert.ok(!requests.some(url => url.includes('/api/')));
@@ -210,6 +215,8 @@ try {
   if (child && child.exitCode === null) child.kill();
   if (stopped) await stopped;
   await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
+  const catalogProcess = await server.catalogStopped;
+  await writeFile(path.join(evidence, 'catalog-process.json'), JSON.stringify({ catalog, adapter, expected, catalogProcess }, null, 2));
   clearTimeout(deadline);
   await writeFile(path.join(evidence, 'browser-results.json'), JSON.stringify({ completed, browserVersion, checks, requests, errors, browserPID: child?.pid, browserExit: child?.exitCode, browserSignal: child?.signalCode, browserStoppedAndWaited: Boolean(stopped), serverStopped: !server.listening, viewports: ['1440x1024 scale 2 (PDF comparison assumption)', '390x844 scale 1 (unspecified responsive smoke check)'] }, null, 2));
 }

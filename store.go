@@ -1155,6 +1155,9 @@ func (s *Store) buildFileIndexLocked() {
 // OpenStore performs before returning. nil in production. See the failSave field.
 var openStoreFailSave func() error
 
+// decodeCatalogJSON is the shared pure native decoder. Startup policy stays in openStore.
+func decodeCatalogJSON(raw []byte, c *catalog) error { return json.Unmarshal(raw, c) }
+
 func OpenStore(dataDir string) (*Store, error) {
 	return openStore(dataDir, os.ReadFile, nil)
 }
@@ -1207,7 +1210,7 @@ func openStore(dataDir string, readFile func(string) ([]byte, error), persistObs
 		}
 		existed = true
 		raw = b
-		if err := json.Unmarshal(b, &s.c); err != nil {
+		if err := decodeCatalogJSON(b, &s.c); err != nil {
 			return nil, fmt.Errorf("catalog.json is damaged: %w", err)
 		}
 	case errors.Is(readErr, fs.ErrNotExist):

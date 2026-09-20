@@ -1,4 +1,5 @@
 import { scope, media, items, activity, searchItems, operationLabel } from './fixtures.mjs';
+import { catalogMode, renderCatalog } from './catalog-ui.mjs';
 
 // All content is assigned as text, including synthetic hostile-looking filenames.
 const el = (tag, text, attrs = {}) => {
@@ -31,7 +32,7 @@ for (const button of document.querySelectorAll('[data-mode]')) button.addEventLi
   document.querySelector('#disclosure').value = button.dataset.mode;
   state.disclosure = button.dataset.mode;
   render();
-  demo('Disclosure only; permissions and preservation guarantees never change. Unshown mode layouts are not specified by the export.');
+  if (!catalogMode) demo('Disclosure only; permissions and preservation guarantees never change. Unshown mode layouts are not specified by the export.');
 });
 function field(label, values, value, change) {
   const wrapper = el('label', label);
@@ -111,6 +112,7 @@ function collection(find) {
   refresh();
 }
 function render() {
+  if (catalogMode) { renderCatalog(); return; }
   const projectView = location.hash === '#smith-wedding';
   const index = routes.findIndex(name => `#${slug(name)}` === location.hash);
   const route = index < 0 ? 0 : index;

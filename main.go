@@ -54,6 +54,14 @@ const (
 )
 
 func main() {
+	// Dedicated preview command exits before defaults, configuration or production startup.
+	if len(os.Args) > 1 && os.Args[1] == "--gui-catalog-readonly" {
+		if err := runGUICatalog(os.Args[2:], os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	listen := flag.String("listen", "127.0.0.1:7821", "listen address host:port. Default is localhost-only; use 0.0.0.0:7821 in a container (which then REQUIRES an auth token).")
 	port := flag.Int("port", 0, "DEPRECATED: listen port on 127.0.0.1 (use -listen). When set, overrides the port of -listen.")
 	dataDir := flag.String("data", defaultDataDir(), "data directory (catalog.json, config.json)")

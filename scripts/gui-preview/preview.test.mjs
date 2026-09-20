@@ -40,7 +40,7 @@ test('Fixture/browser modules have no I/O adapter or unsafe HTML insertion', asy
     assert.doesNotMatch(source, /\b(fetch|XMLHttpRequest|WebSocket|EventSource|localStorage|sessionStorage|indexedDB|sendBeacon|innerHTML|outerHTML|insertAdjacentHTML|eval)\b/);
     assert.doesNotMatch(source, /node:|\/api\//);
     const imports = [...source.matchAll(/\bimport\b[^;]+;/g)].map(m => m[0]);
-    assert.deepEqual(imports, file === 'fixtures.mjs' ? [] : ["import { scope, media, items, activity, searchItems, operationLabel } from './fixtures.mjs';"]);
+    assert.deepEqual(imports, file === 'fixtures.mjs' ? [] : ["import { scope, media, items, activity, searchItems, operationLabel } from './fixtures.mjs';", "import { catalogMode, renderCatalog } from './catalog-ui.mjs';"]);
   }
 });
 test('Actual server binds loopback, serves only fixed assets and rejects API/device/mutation routes', async () => {
