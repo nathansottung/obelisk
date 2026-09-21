@@ -1411,3 +1411,65 @@ Owner authorization recorded 2026-09-21T15:13:11.3614995-04:00. Implementation: 
 Source destination solely https://github.com/nathansottung/obelisk.git refs/heads/feat/gui-multi-snapshot-readonly. Receipt: C:\Users\nsott\AppData\Local\ObeliskDev\gui-multi-snapshot-publish-20260921-151311\publication-receipt.md. Frozen ZIP SHA-256 f25125c46acca5635b2297305d849888fbded129281708875a64289c4b22c5de remains unchanged and does not contain the new multi-snapshot feature. PUBLIC_BINARY_DISTRIBUTION: NOT_AUTHORIZED / NOT_PERFORMED. Prompt19, TOOLS-A and scope reconciliation are complete/reused; Prompt20 remains DEFERRED_BY_OWNER. Owner dogfood is not inferred complete. Production/platform/scale/ACL/power-loss/security/media qualification and existing architecture/LTO-8-first/separate-Blu-ray directions remain unchanged.
 
 ONE next action after verified source publication: owner selects and separately authorizes the next bounded milestone using the actual evidence SHA from the receipt. No automatic package refresh, registry/comparison feature, audit, second-machine request or implementation.
+
+## Recorded snapshot comparison author candidate — 2026-09-21
+
+**GUI_RECORDED_SNAPSHOT_COMPARISON_READY_FOR_REVIEW**, uncommitted on
+`feat/gui-recorded-snapshot-comparison`, parent/HEAD
+`4abbfa566470b9f25e59c3eb190c801b622b613c`.
+See [the implementation report](reviews/GUI-RECORDED-SNAPSHOT-COMPARISON-IMPLEMENTATION-2026-09-21.md).
+Evidence: `C:\Users\nsott\AppData\Local\ObeliskDev\gui-recorded-comparison-20260921-153523`.
+
+Two fixed generated snapshots now support explicitly selected reference and
+accepted relative-root alignment, exact-key five-way recorded comparison,
+filterable rows and two-sided exact evidence. Both native readers must enumerate
+complete adopted sets; no current source paths are opened. Unsupported/ambiguous
+frames refuse comparison while browsing remains available. Scope/time remain
+per input; recorded agreement/absence is not backup health or independent copies.
+
+Fresh author validation: native 28 top-level plus 242 subtests, no failures/skips;
+38 Node tests; 13 initial browser sessions plus one final 22-check browser session
+after control-spacing changes. Build/vet/format and exclusive-lock/read-only plus
+stdin-open split-stop controls passed. Full candidate hashes and starting/final
+source copies are external; historical review results remain separate.
+
+Next: one substantive review of this uncommitted candidate. No automatic review,
+publication or package refresh. Prompt20 remains **DEFERRED_BY_OWNER**. Frozen ZIP
+SHA-256 remains `f25125c46acca5635b2297305d849888fbded129281708875a64289c4b22c5de`.
+No staging/commits/pushes, production scanning, live verification, native migration,
+registry/history, media or second-machine work. Generation-independent buffering,
+LTO-8 as first target (not generation limit), other-backend qualification and separate
+Blu-ray workflow remain planning directions. The existing external scope matrix
+is retained; no duplicate matrix is created for the absent historical repository
+matrix. This entry is the current bounded feature/status update.
+
+## Owner accepted recorded comparison source — 2026-09-21
+
+The owner authorized scoped source publication following the clean substantive
+review. Implementation: `87b4fcf3443bf18bd64671896f911c73dcbdc22a`, parent
+`4abbfa566470b9f25e59c3eb190c801b622b613c`, branch
+`feat/gui-recorded-snapshot-comparison`. This supersedes the prior pending-review
+next action; historical reports remain intact.
+
+[Acceptance and compatibility record](reviews/GUI-RECORDED-SNAPSHOT-COMPARISON-SOURCE-ACCEPTANCE-2026-09-21.md).
+Destination solely `https://github.com/nathansottung/obelisk.git`,
+`refs/heads/feat/gui-recorded-snapshot-comparison`. Actual evidence-commit SHA
+and verified live result belong in
+`C:\Users\nsott\AppData\Local\ObeliskDev\gui-recorded-comparison-publish-20260921-172333\publication-receipt.md`.
+
+Accepted scope: two fixed generated snapshots, explicit reference/root alignment,
+exact-path recorded classification, complete stored sets, exact two-sided identity,
+separate scope/time and strict failure/stale-response/read-only behavior. Closing
+reviewer native28/242, Node38, browser15 and independent probes are historical
+here; this publication runs identity/documentation/Git checks only. Same-session
+AI-assisted provenance and evidence-helper retry remain disclosed.
+
+Frozen ZIP unchanged at SHA-256
+`f25125c46acca5635b2297305d849888fbded129281708875a64289c4b22c5de`; it gains neither
+multi-snapshot nor comparison functionality. No public binary distribution.
+Prompt20 remains **DEFERRED_BY_OWNER**. Production/live-source, durable identity,
+registry/history, migration, recovery, platform/scale/ACL/power-loss/media limits
+and generation-independent/LTO-8-first/separate-Blu-ray directions are unchanged.
+
+ONE next action after verified publication: owner selects and separately authorizes
+the next bounded milestone using the final receipt SHA. No automatic follow-on.
