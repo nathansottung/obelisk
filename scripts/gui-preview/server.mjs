@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { startCatalog, startCatalogSession } from './catalog-adapter.mjs';
 import { createStopParser } from './stop-command.mjs';
+import { compareRecorded } from './recorded-comparison.mjs';
 
 // Deliberately outside Go's embedded ui tree. No application imports or proxy.
 const assets = new Map([
@@ -13,6 +14,8 @@ const assets = new Map([
   ['/catalog-ui.mjs', ['catalog-ui.mjs', 'text/javascript']],
   ['/catalog-protocol.mjs', ['catalog-protocol.mjs', 'text/javascript']],
   ['/catalog-names.mjs', ['catalog-names.mjs', 'text/javascript']],
+  ['/recorded-comparison.mjs', ['recorded-comparison.mjs', 'text/javascript']],
+  ['/comparison-ui.mjs', ['comparison-ui.mjs', 'text/javascript']],
 ]);
 export async function startPreview(port = 0, catalogOptions = null) {
   const contents = new Map(await Promise.all([...assets].map(async ([route, [file, type]]) =>
@@ -27,6 +30,20 @@ export async function startPreview(port = 0, catalogOptions = null) {
     const expectedHost = `127.0.0.1:${server.address().port}`;
     if (req.headers.host !== expectedHost) { res.writeHead(403).end('Loopback host required'); return; }
     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405, { Allow: 'GET, HEAD' }).end(); return; }
+    if(req.url==='/catalog-compare'||req.url.startsWith('/catalog-compare?')) {
+      if(!multi||req.method!=='GET'||req.url.length>512){res.writeHead(400).end();return;}
+      if(!reader.mode.ok){res.writeHead(503,{'Content-Type':'application/json'}).end(JSON.stringify({ok:false,error:'Required reader unavailable. Relaunch the pair; no complete comparison.'}));return;}
+      const p=new URL(req.url,'http://127.0.0.1').searchParams;
+      const reference=p.get('reference'),counterpart=p.get('counterpart'),request=p.get('request');
+      if([...p.keys()].some(k=>!['reference','counterpart','request'].includes(k))||['reference','counterpart','request'].some(k=>p.getAll(k).length!==1)||!(/^[a-f0-9-]{36}$/).test(request??'')||reference===counterpart||![reference,counterpart].every(h=>reader.mode.snapshots?.some(s=>s.handle===h))){res.writeHead(400).end();return;}
+      try {
+        const snapshots=await reader.enumerate();
+        let result;
+        try {result=compareRecorded(snapshots,reference,counterpart,request);}catch(error){res.writeHead(422,{'Content-Type':'application/json'}).end(JSON.stringify({ok:false,reference,counterpart,request,error:error.message}));return;}
+        res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(result));
+      }catch {res.writeHead(503,{'Content-Type':'application/json'}).end(JSON.stringify({ok:false,reference,counterpart,request,error:'Required reader/enumeration unavailable. No complete comparison; relaunch the pair.'}));}
+      return;
+    }
     if (reader && (req.url === '/catalog-query' || req.url.startsWith('/catalog-query?'))) {
       if (req.method !== 'GET' || req.url.length > 16384) { res.writeHead(400).end(); return; }
       try { decodeURIComponent(req.url); } catch { res.writeHead(400).end(); return; }

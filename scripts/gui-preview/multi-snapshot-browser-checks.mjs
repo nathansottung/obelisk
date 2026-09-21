@@ -1,7 +1,9 @@
 // Real installed-browser controls; the delayed fetch below is explicitly a client
 // response-order seam. Normal controls still use the native readers end to end.
 import { sourceLabelChecks } from './source-label-browser-checks.mjs';
+import { comparisonChecks } from './comparison-browser-checks.mjs';
 export async function multiSnapshotChecks({check,evaluate,cdp,screenshot,route,expected}) {
+ if(expected.startsWith('compare-'))return comparisonChecks({check,evaluate,cdp,screenshot,route,expected});
  if(expected.startsWith('multi-labels'))return sourceLabelChecks({check,evaluate,cdp,screenshot,route});
  const until=expr=>evaluate(`new Promise((resolve,reject)=>{let n=0;const t=setInterval(()=>{if(${expr}){clearInterval(t);resolve(true)}else if(++n>300){clearInterval(t);reject(Error('Multi browser timeout: '+${JSON.stringify(expr)}))}},15)})`);
  const settled=()=>until("document.querySelector('#catalog-results-status')?.textContent.includes('recorded file record(s)')");

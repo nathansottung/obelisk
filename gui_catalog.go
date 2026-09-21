@@ -286,7 +286,13 @@ func (s *guiCatalogSnapshot) projection() map[string]any {
 	if scope != nil {
 		recordedAt = c.Audit[0].At // Existing validated inventory event, not session load time.
 	}
-	return map[string]any{"schema": c.SchemaVersion, "idMax": strconv.Itoa(int(^uint(0) >> 1)), "digest": s.digest, "loadedAt": s.loaded, "recordedAt": recordedAt, "collections": collections, "volumes": volumes, "files": files, "inventoryScope": scope}
+	// Preview-only frame: no host path interpretation or source-file access.
+	// Multiple recorded roots remain browsable, but cannot be aligned implicitly.
+	var frame any
+	if len(c.Folders) == 1 && len(c.Collections) == 1 && c.Folders[0].Path != "" {
+		frame = map[string]any{"convention": "slash-relative-v1", "root": c.Folders[0].Path, "recordCount": len(c.Files)}
+	}
+	return map[string]any{"schema": c.SchemaVersion, "idMax": strconv.Itoa(int(^uint(0) >> 1)), "digest": s.digest, "loadedAt": s.loaded, "recordedAt": recordedAt, "collections": collections, "volumes": volumes, "files": files, "inventoryScope": scope, "comparisonFrame": frame}
 }
 
 func runGUICatalog(args []string, input io.Reader, output io.Writer) error {
@@ -306,13 +312,32 @@ func runGUICatalog(args []string, input io.Reader, output io.Writer) error {
 	scanner.Buffer(make([]byte, 1024), 32768) // Bounded escaped exact names; legacy requests still capped below.
 	for scanner.Scan() {
 		var q struct {
-			Text  string  `json:"text"`
-			Hash  string  `json:"hash"`
-			Exact *string `json:"exact,omitempty"`
+			Text      string  `json:"text"`
+			Hash      string  `json:"hash"`
+			Exact     *string `json:"exact,omitempty"`
+			Enumerate *bool   `json:"enumerate,omitempty"`
 		}
 		if validateGUIJSON(scanner.Bytes()) != nil || json.Unmarshal(scanner.Bytes(), &q) != nil || len(q.Text) > 256 || len(q.Hash) > 64 ||
 			(q.Exact == nil && len(scanner.Bytes()) > 4096) || (q.Exact != nil && (len(*q.Exact) > 4096 || q.Text != "" || q.Hash != "")) {
 			if err = enc.Encode(map[string]any{"ok": false, "error": "invalid bounded search"}); err != nil {
+				return err
+			}
+			continue
+		}
+		if q.Enumerate != nil {
+			if !*q.Enumerate || q.Text != "" || q.Hash != "" || q.Exact != nil {
+				if err = enc.Encode(map[string]any{"ok": false, "error": "invalid enumeration"}); err != nil {
+					return err
+				}
+				continue
+			}
+			// Enumerate every validated stored file, including retired collections.
+			// This is deliberately independent of Search's filters and result limit.
+			all := []string{}
+			for _, f := range s.store.c.Files {
+				all = append(all, strconv.Itoa(f.ID))
+			}
+			if err = enc.Encode(map[string]any{"ok": true, "ids": all, "complete": true, "count": len(all), "digest": s.digest}); err != nil {
 				return err
 			}
 			continue

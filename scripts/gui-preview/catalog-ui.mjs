@@ -1,6 +1,7 @@
 import mode from './mode.mjs';
 import { validateCatalog, validateIDs, validateSnapshots, validateMatches } from './catalog-protocol.mjs';
 import { parseExactName, displayName, validUnicode } from './catalog-names.mjs';
+import { renderComparison, cancelComparison } from './comparison-ui.mjs';
 export const catalogMode = mode.enabled;
 const notice = mode.multi ? 'Disposable catalog mode — reading two synthetic catalog snapshots. No source/media files are opened. The selected catalogs are not modified.' : 'Disposable catalog mode — reading a synthetic catalog snapshot. No source/media files are opened. The selected catalog is not modified.';
 const node = (tag, text, attrs = {}) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; for (const [k,v] of Object.entries(attrs)) e.setAttribute(k,v); return e; };
@@ -18,10 +19,12 @@ if (catalogMode && mode.ok) {
 }
 
 export function renderCatalog() {
+  cancelComparison();
   const content = document.querySelector('#content');
   content.classList.toggle('multi-snapshot', Boolean(mode.multi));
   const find = location.hash === '#find';
-  const title = find ? 'Find' : location.hash === '#library' || !location.hash ? 'Library' : 'Catalog view unavailable';
+  const comparing=mode.multi&&location.hash==='#compare';
+  const title = comparing ? 'Compare recorded snapshots' : find ? 'Find' : location.hash === '#library' || !location.hash ? 'Library' : 'Catalog view unavailable';
   document.querySelector('h1').textContent = title;
   document.querySelector('#purpose').hidden = false;
   document.querySelector('#purpose').textContent = 'Recorded catalog evidence only. Availability, capacity, parity and verification performed now: unavailable.';
@@ -39,6 +42,7 @@ export function renderCatalog() {
   for (const link of document.querySelectorAll('nav a')) { if (link.textContent === title) link.setAttribute('aria-current','page'); else link.removeAttribute('aria-current'); }
   content.replaceChildren(); epoch++; clearTimeout(timer);
   if (!mode.ok || failure) { content.append(node('p', 'Catalog load refused — ' + (failure || mode.error) + '. Relaunch the preview to read a catalog.', {role:'alert',class:'error panel'})); return; }
+  if(mode.multi)content.append(node('a','Compare recorded snapshots',{href:'#compare'}),node('p','Comparison aligns recorded relative roots only after you choose a reference; it does not establish independent copies.'));
   const shown = snapshotFilter === 'all' ? snapshots : snapshots.filter(s=>s.handle===snapshotFilter);
   const data = shown[0].catalog;
   if(mode.multi) {
@@ -68,6 +72,7 @@ export function renderCatalog() {
   card.append(node('p',`${data.files.length} loaded recorded entries in this snapshot; not unique content or verified copies.`));
   content.append(card);
   }
+  if(comparing){renderComparison(content,snapshots,sourceLabel);return;}
   if (title === 'Catalog view unavailable') { content.append(node('p','This workspace has no supported catalog projection. Use Library or Find.')); return; }
   if (!find) {
     const projects = node('section',undefined,{class:'panel'}); projects.append(node('h2','Recorded collections'));

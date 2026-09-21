@@ -22,3 +22,8 @@ nav a{font-weight:500;min-height:38px}.brand{margin-bottom:28px}.modes button{fo
 
 /* Keep session qualifiers visible while long catalog basenames wrap. */
 #content.multi-snapshot{overflow-wrap:anywhere}#content.multi-snapshot .split{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}#content.multi-snapshot #snapshot-filter{max-width:100%}
+
+#recorded-comparison > label { display: block; margin: 16px 0; }
+#recorded-comparison > label > select, #recorded-comparison > label > input[type=search] { display: block; margin-top: 6px; max-width: 100%; width: 100%; }
+#comparison-run { margin: 8px 0; }
+#comparison-detail > section { margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--border, #ddd); }

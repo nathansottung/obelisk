@@ -1,5 +1,47 @@
 # Isolated GUI preview
 
+## Accepted recorded comparison source — 2026-09-21
+
+The reviewed `feat/gui-recorded-snapshot-comparison` source adds **Compare
+recorded snapshots** to the existing two-input session. Select a reference,
+inspect both full A/B labels, roots, recorded times and scopes, and explicitly
+accept relative-root alignment. No input is authoritative by default.
+
+```powershell
+$comparison = 'C:\Users\nsott\AppData\Local\ObeliskDev\gui-recorded-comparison-20260921-153523'
+node scripts/gui-preview/server.mjs 0 --catalog "$comparison\comparison-inputs\a.json" --catalog "$comparison\comparison-inputs\b.json" --adapter "$comparison\output\reader.exe"
+# Open the printed loopback URL, then Compare recorded snapshots.
+# Type stop and press Enter; wait for the server and both reader exits.
+```
+
+These are controlled, native-validated synthetic evidence fixtures, including
+foreign-name and large-number cases; they are not observations of real media.
+For two new producer-generated observations, substitute `off-0.json` and
+`off-1.json` from the same directory. No recorded source path is opened.
+
+Comparison requires one recorded collection/root per input and unique exact
+slash-relative keys. Case, Unicode sequences, control characters and internal
+literal backslashes remain distinct. Ambiguous/unsupported frames are refused;
+Library/Find remain available. Both readers must freshly enumerate their full
+adopted sets; a failure or truncation cannot become one-sided success.
+
+The relative-key union partitions into recorded checksum agreement, difference,
+inconclusive, reference-only and counterpart-only. Only full typed SHA-256 and
+exact decimal sizes supply supported content evidence. Equal checksum with
+unequal size is inconclusive. Scope and observation time remain separate;
+one-sided means recorded-set absence, never current physical absence. Filters
+and two-sided details retain exact native IDs, paths, sizes and full digests.
+The view describes historical evidence, not backup health or independent copies.
+
+Comparison responses are capped at 8 MiB within unchanged native/adoption limits.
+The substantive review found no material blocker; the owner authorized scoped
+source publication. This does not update the frozen Windows ZIP. The
+[acceptance record](../../docs/development/reviews/GUI-RECORDED-SNAPSHOT-COMPARISON-SOURCE-ACCEPTANCE-2026-09-21.md)
+separates that source milestone from package qualification. See the [implementation report](../../docs/development/reviews/GUI-RECORDED-SNAPSHOT-COMPARISON-IMPLEMENTATION-2026-09-21.md)
+for the contract, fresh execution, screenshots, identities and limitations.
+Earlier sections below describe their own accepted milestones; their absence
+of comparison describes those earlier sources. Prompt20 remains DEFERRED_BY_OWNER.
+
 ## Two generated snapshots — uncommitted author candidate, 2026-09-21
 
 The development server now accepts exactly two fixed startup inputs. This does

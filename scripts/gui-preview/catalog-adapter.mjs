@@ -71,7 +71,7 @@ export async function startCatalog({ catalog, adapter }) {
     const exit = await stopped; clearTimeout(timer);
     return { pid: child.pid, ...exit, stderr };
   })();
-  return { get mode() { return mode; }, close, query: async (text, hash, exact) => {
+  return { get mode() { return mode; }, close, query: async (text, hash, exact, enumerate = false) => {
     if (!mode.ok || dead || closing || pending) throw new Error('Reader unavailable or busy');
     const data = mode.catalog;
     const response = receive(value => {
@@ -80,9 +80,11 @@ export async function startCatalog({ catalog, adapter }) {
         if (typeof value.error !== 'string') throw new Error('Invalid failure envelope');
         return { ok: false, error: 'Catalog query refused' };
       }
-      return { ok: true, ids: validateIDs(value.ids, data) };
+      const ids=validateIDs(value.ids, data);
+      if(enumerate && (value.complete!==true || value.digest!==data.digest || value.count!==data.files.length || ids.length!==data.files.length))throw Error('Incomplete recorded enumeration');
+      return { ok: true, ids };
     });
-    child.stdin.write(JSON.stringify({ text, hash, ...(exact === undefined ? {} : { exact }) }) + '\n');
+    child.stdin.write(JSON.stringify(enumerate ? {enumerate:true} : { text, hash, ...(exact === undefined ? {} : { exact }) }) + '\n');
     const result = await response;
     if (dead) throw new Error('Catalog reader unavailable');
     return result;
@@ -113,6 +115,16 @@ export async function startCatalogSession({ catalogs, adapter }) {
   };
   return {
     get mode() { return mode(); }, close,
+    async enumerate() {
+      if(!mode().ok || closing || busy)throw Error('Session unavailable or busy');
+      busy=true;
+      try {
+        const results=await Promise.all(readers.map(r=>r.query('','',undefined,true)));
+        if(results.some(r=>!r.ok)||!mode().ok)throw Error('Incomplete enumeration');
+        return snapshots;
+      } catch(error) {failure='Recorded enumeration failed; no complete comparison';await close();throw error;}
+      finally {busy=false;}
+    },
     async query(text, hash, exact, filter) {
       if (!mode().ok || closing || busy) throw new Error('Session unavailable or busy');
       const selected = filter === 'all' ? snapshots : snapshots.filter(s => s.handle === filter);
