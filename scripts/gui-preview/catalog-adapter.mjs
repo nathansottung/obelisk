@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { realpath } from 'node:fs/promises';
-import { validateCatalog, validateIDs } from './catalog-protocol.mjs';
+import { validateCatalog, validateIDs, validateSnapshots, validateMatches } from './catalog-protocol.mjs';
+import { randomBytes } from 'node:crypto';
 import { decodeCatalogResponse } from './catalog-names.mjs';
 
 export async function startCatalog({ catalog, adapter }) {
@@ -86,4 +87,49 @@ export async function startCatalog({ catalog, adapter }) {
     if (dead) throw new Error('Catalog reader unavailable');
     return result;
   } };
+}
+
+export async function startCatalogSession({ catalogs, adapter }) {
+  if (!Array.isArray(catalogs) || catalogs.length !== 2) throw new Error('Exactly two explicit catalogs required');
+  const readers = [];
+  let snapshots, failure = '', busy = false, closing;
+  const close = () => closing ??= Promise.all(readers.map(r => r.close()));
+  try {
+    // Sequential startup limits outstanding adoption work; no successful partial session.
+    for (const catalog of catalogs) {
+      const reader = await startCatalog({ catalog, adapter }); readers.push(reader);
+      if (!reader.mode.ok) throw new Error(`Selected snapshot ${readers.length} could not be loaded`);
+    }
+    if (readers[0].mode.catalog.digest === readers[1].mode.catalog.digest) throw new Error('Duplicate snapshot artifact refused (identical catalog bytes)');
+    const files = readers.reduce((n,r) => n+r.mode.catalog.files.length,0);
+    const copies = readers.reduce((n,r) => n+r.mode.catalog.files.reduce((m,f) => m+f.copies.length,0),0);
+    if (files > 1000 || copies > 1000) throw new Error('Two-snapshot aggregate limit exceeded: 1000 records / 1000 copy occurrences');
+    snapshots = validateSnapshots(readers.map((r, i) => ({ handle: randomBytes(16).toString('hex'), label: path.basename(catalogs[i]), catalog: r.mode.catalog })));
+    if (Buffer.byteLength(JSON.stringify(snapshots)) > 32 * 1024 * 1024) throw new Error('Session projection too large');
+  } catch (error) { failure = error.message; await close(); }
+  const mode = () => {
+    if (!failure && readers.some(r => !r.mode.ok)) { failure = 'A snapshot reader is unavailable; relaunch the pair'; void close(); }
+    return failure ? { enabled: true, multi: true, ok: false, error: failure } : { enabled: true, multi: true, ok: true, snapshots };
+  };
+  return {
+    get mode() { return mode(); }, close,
+    async query(text, hash, exact, filter) {
+      if (!mode().ok || closing || busy) throw new Error('Session unavailable or busy');
+      const selected = filter === 'all' ? snapshots : snapshots.filter(s => s.handle === filter);
+      if (!selected.length) throw new Error('Unknown snapshot handle');
+      busy = true;
+      try {
+        const groups = await Promise.all(selected.map(async s => {
+          const result = await readers[snapshots.indexOf(s)].query(text, hash, exact);
+          if (!result.ok) throw new Error('Snapshot query refused');
+          return { snapshot: s.handle, ids: result.ids };
+        }));
+        if (!mode().ok) throw new Error('Snapshot reader failed');
+        const result = { ok: true, groups };
+        validateMatches(result, snapshots, filter);
+        return result;
+      } catch (error) { failure = 'Snapshot query failed; no complete result'; await close(); throw error; }
+      finally { busy = false; }
+    }
+  };
 }

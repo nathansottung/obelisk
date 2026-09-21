@@ -1,5 +1,72 @@
 # Isolated GUI preview
 
+## Two generated snapshots — uncommitted author candidate, 2026-09-21
+
+The development server now accepts exactly two fixed startup inputs. This does
+not update the frozen Windows package. From the repository in PowerShell:
+
+```powershell
+$multi = 'C:\Users\nsott\AppData\Local\ObeliskDev\gui-multi-snapshot-20260921-130125'
+node scripts/gui-preview/server.mjs 0 --catalog "$multi\multi-inputs-v3\a.json" --catalog "$multi\multi-inputs-v3\b.json" --adapter "$multi\output\reader.exe"
+# Type stop and press Enter; wait for both reader exits and listener shutdown.
+```
+
+Both example inputs are unaltered outputs of the native finite producer on new
+synthetic sources. The separate `b-aged.json` is a labeled synthetic historical
+timestamp fixture, not the original producer output. The binary is this new
+candidate's reader, not the packaged dogfood executable.
+
+Library presents two selectable entries. Find's **Snapshot view** selects All
+loaded snapshots or either input. Each result and inspector carries its source;
+native IDs remain exact strings in separate snapshot namespaces. Find's source
+cards disclose scope and artifact details without hiding policy/recorded time.
+New controls are functional choices, not supplied Figma frames.
+
+Source labels now begin with **Snapshot A** or **Snapshot B**, followed by the
+original catalog basename. These qualifiers are assigned to startup handles
+once per session and remain consistent in Library, Find, scope summaries,
+counts and the inspector. Reversing inputs on a new launch reverses the A/B
+assignment; these are display labels, not durable catalog/device identities.
+Long basenames wrap in result/source content, keeping the qualifier first.
+
+The server issues random process-local handles, validates them against the
+startup allowlist, and binds results as separate snapshot/record fields. Catalog
+digests identify artifacts, not independent physical copies. Identical-byte
+inputs (including renamed copies) are refused; overlapping records in different
+artifacts are retained. No persistent recents, merge, registration or comparison.
+
+Both readers must validate before a successful session. All queries require both
+results; failure clears/latches the view without demo or one-input fallback.
+There are at most two readers, one outstanding aggregate query, existing 5-second
+reader response deadlines and stop/EOF with a 500ms forced-termination fallback.
+Per-input native limits are unchanged. Aggregate adoption is capped at 1000 file
+records and 1000 copy occurrences; each reader response is capped at 16MiB and
+the serialized pair projection at 32MiB. There is no truncation at supported
+scale: native queries limit at 1000 against at most 1000 loaded records. Counts
+are returned recorded entries, not merged scope, unique content or verified copies.
+
+`recordedAt` projects the existing validated inventory Audit event timestamp
+(including its offset); absent historical event time stays unknown. Load time
+remains separate. OFF/ON/UNKNOWN and each snapshot's exclusion counts remain
+independent. Source/media paths remain text. Browser filter/query changes discard
+old selection and late responses; no browser file picker or arbitrary path route.
+
+Original launches remain supported:
+
+```powershell
+node scripts/gui-preview/server.mjs 0
+node scripts/gui-preview/server.mjs 0 --catalog "$multi\multi-inputs-v3\a.json" --adapter "$multi\output\reader.exe"
+```
+
+See [the implementation and author validation report](../../docs/development/reviews/GUI-MULTI-SNAPSHOT-READONLY-IMPLEMENTATION-2026-09-21.md).
+The [focused recheck](../../docs/development/reviews/GUI-MULTI-SNAPSHOT-READONLY-FOCUSED-RECHECK-2026-09-21.md)
+closed R1's same-basename ambiguity. The owner accepted this bounded source
+milestone on 2026-09-21; the [acceptance record](../../docs/development/reviews/GUI-MULTI-SNAPSHOT-SOURCE-ACCEPTANCE-2026-09-21.md)
+separates source publication from the unchanged frozen package. Prompt20 remains
+DEFERRED_BY_OWNER, with second-machine qualification pending.
+
+## Earlier accepted single/static preview and historical evidence
+
 Library and the Smith Wedding comparison now use the supplied PDF references (pages 1 and 4) with a provisional teal/light treatment. Pages 2 and 3 remain unused visual alternatives, not disclosure modes. This is a synthetic design preview, not a final theme decision or production UI.
 
 Requires preinstalled Node.js 24 (executed here with 24.19.0). No package install, Go backend, build step, configuration, catalog or device is needed.

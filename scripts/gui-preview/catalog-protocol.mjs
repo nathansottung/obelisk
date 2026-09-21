@@ -11,6 +11,7 @@ const date = value => typeof value === 'string' && value.length <= 64 && Number.
 export function validateCatalog(data) {
   requireValue(data && data.schema === 8 && ['2147483647', int64Max].includes(data.idMax));
   requireValue(typeof data.digest === 'string' && /^[a-f0-9]{64}$/.test(data.digest) && date(data.loadedAt));
+  requireValue(data.recordedAt === undefined || data.recordedAt === null || date(data.recordedAt));
   const scope = data.inventoryScope;
   if (scope !== undefined && scope !== null) {
     requireValue(scope && Object.keys(scope).sort().join(',') === 'complete,entries,excludedFiles,includedFiles,policy,readBytes,regularFiles,version');
@@ -51,4 +52,33 @@ export function validateIDs(ids, data) {
     requireValue(exactDecimal(id, data.idMax) && known.has(id) && !seen.has(id)); seen.add(id);
   }
   return ids;
+}
+
+// Session handles are process-local authority, not medium or durable identities.
+export function validateSnapshots(snapshots) {
+  requireValue(Array.isArray(snapshots) && snapshots.length === 2);
+  const handles = new Set(), digests = new Set();
+  let files = 0, copies = 0;
+  for (const s of snapshots) {
+    requireValue(s && typeof s.handle === 'string' && /^[a-f0-9]{32}$/.test(s.handle) && !handles.has(s.handle) && text(s.label));
+    validateCatalog(s.catalog);
+    requireValue(!digests.has(s.catalog.digest));
+    handles.add(s.handle); digests.add(s.catalog.digest);
+    files += s.catalog.files.length;
+    copies += s.catalog.files.reduce((n, f) => n + f.copies.length, 0);
+  }
+  requireValue(files <= 1000 && copies <= 1000);
+  return snapshots;
+}
+
+export function validateMatches(result, snapshots, filter) {
+  validateSnapshots(snapshots);
+  const requested = filter === 'all' ? snapshots : snapshots.filter(s => s.handle === filter);
+  requireValue(requested.length > 0 && result?.ok === true && Array.isArray(result.groups) && result.groups.length === requested.length);
+  const seen = new Set();
+  return result.groups.flatMap(group => {
+    const snapshot = requested.find(s => s.handle === group?.snapshot);
+    requireValue(snapshot && !seen.has(group.snapshot)); seen.add(group.snapshot);
+    return validateIDs(group.ids, snapshot.catalog).map(id => ({ snapshot: snapshot.handle, id }));
+  });
 }

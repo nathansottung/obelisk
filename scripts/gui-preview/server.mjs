@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { startCatalog } from './catalog-adapter.mjs';
+import { startCatalog, startCatalogSession } from './catalog-adapter.mjs';
 import { createStopParser } from './stop-command.mjs';
 
 // Deliberately outside Go's embedded ui tree. No application imports or proxy.
@@ -15,9 +15,10 @@ const assets = new Map([
   ['/catalog-names.mjs', ['catalog-names.mjs', 'text/javascript']],
 ]);
 export async function startPreview(port = 0, catalogOptions = null) {
-  const reader = catalogOptions ? await startCatalog(catalogOptions) : null;
   const contents = new Map(await Promise.all([...assets].map(async ([route, [file, type]]) =>
     [route, { body: await readFile(new URL(file, import.meta.url)), type }])));
+  const multi = Boolean(catalogOptions?.catalogs);
+  const reader = catalogOptions ? await (multi ? startCatalogSession(catalogOptions) : startCatalog(catalogOptions)) : null;
   const server = http.createServer(async (req, res) => {
     res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -30,8 +31,9 @@ export async function startPreview(port = 0, catalogOptions = null) {
       if (req.method !== 'GET' || req.url.length > 16384) { res.writeHead(400).end(); return; }
       try { decodeURIComponent(req.url); } catch { res.writeHead(400).end(); return; }
       const params = new URL(req.url, 'http://127.0.0.1').searchParams;
-      if ([...params.keys()].some(k => !['text', 'hash', 'exact'].includes(k)) || params.getAll('text').length > 1 || params.getAll('hash').length > 1 || params.getAll('exact').length > 1 || (params.get('text') ?? '').length > 256 || (params.get('hash') ?? '').length > 64 || (!params.has('exact') && req.url.length > 2048) || (params.has('exact') && (params.has('text') || params.has('hash') || Buffer.byteLength(params.get('exact'),'utf8') > 4096))) { res.writeHead(400).end(); return; }
-      try { const result = await reader.query(params.get('text') ?? '', params.get('hash') ?? '', params.has('exact') ? params.get('exact') : undefined); res.writeHead(result.ok ? 200 : 422, { 'Content-Type': 'application/json' }).end(JSON.stringify(result)); }
+      if ([...params.keys()].some(k => !['text', 'hash', 'exact', ...(multi ? ['snapshot'] : [])].includes(k)) || params.getAll('text').length > 1 || params.getAll('hash').length > 1 || params.getAll('exact').length > 1 || (params.get('text') ?? '').length > 256 || (params.get('hash') ?? '').length > 64 || (!params.has('exact') && req.url.length > 2048) || (params.has('exact') && (params.has('text') || params.has('hash') || Buffer.byteLength(params.get('exact'),'utf8') > 4096))) { res.writeHead(400).end(); return; }
+      if (multi && (params.getAll('snapshot').length !== 1 || (params.get('snapshot') !== 'all' && !reader.mode.snapshots?.some(s => s.handle === params.get('snapshot'))))) { res.writeHead(400).end(); return; }
+      try { const result = await reader.query(params.get('text') ?? '', params.get('hash') ?? '', params.has('exact') ? params.get('exact') : undefined, params.get('snapshot')); res.writeHead(result.ok ? 200 : 422, { 'Content-Type': 'application/json' }).end(JSON.stringify(result)); }
       catch { res.writeHead(503, { 'Content-Type': 'application/json' }).end(JSON.stringify({ ok: false, error: 'Catalog query unavailable; no results presented' })); }
       return;
     }
@@ -51,10 +53,10 @@ export async function startPreview(port = 0, catalogOptions = null) {
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
-  if (![0, 1, 5].includes(args.length) || (args[0] && !/^\d+$/.test(args[0])) || (args.length === 5 && (args[1] !== '--catalog' || args[3] !== '--adapter'))) throw new Error('Usage: node scripts/gui-preview/server.mjs [port] [--catalog absolute-file --adapter absolute-exe]');
+  if (![0, 1, 5, 7].includes(args.length) || (args[0] && !/^\d+$/.test(args[0])) || (args.length === 5 && (args[1] !== '--catalog' || args[3] !== '--adapter')) || (args.length === 7 && (args[1] !== '--catalog' || args[3] !== '--catalog' || args[5] !== '--adapter'))) throw new Error('Usage: node scripts/gui-preview/server.mjs [port] [--catalog absolute-A [--catalog absolute-B] --adapter absolute-exe]');
   const port = Number(args[0] ?? 0);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Port must be 0..65535');
-  const server = await startPreview(port, args.length === 5 ? { catalog: args[2], adapter: args[4] } : null);
+  const server = await startPreview(port, args.length === 7 ? { catalogs: [args[2], args[4]], adapter: args[6] } : args.length === 5 ? { catalog: args[2], adapter: args[4] } : null);
   console.log(`Preview — synthetic data only: http://127.0.0.1:${server.address().port}/`);
   console.log('Press Ctrl+C or send stop on stdin to stop. Automatic shutdown after 60 minutes.');
   let stopping = false;

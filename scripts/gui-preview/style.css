@@ -19,3 +19,6 @@ nav a{font-weight:500;min-height:38px}.brand{margin-bottom:28px}.modes button{fo
 .controls .exact-name-toggle input{display:inline-block;width:auto;margin:0}
 #name-entry-help{flex-basis:100%;margin:0;color:var(--muted);font-size:12px}
 #name-entry-error:empty{display:none}
+
+/* Keep session qualifiers visible while long catalog basenames wrap. */
+#content.multi-snapshot{overflow-wrap:anywhere}#content.multi-snapshot .split{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}#content.multi-snapshot #snapshot-filter{max-width:100%}

@@ -282,7 +282,11 @@ func (s *guiCatalogSnapshot) projection() map[string]any {
 	}
 	// Preserve native signed-int IDs and int64 sizes before any JavaScript parsing.
 	scope, _ := inventoryScope(&c) // The complete snapshot was validated at adoption.
-	return map[string]any{"schema": c.SchemaVersion, "idMax": strconv.Itoa(int(^uint(0) >> 1)), "digest": s.digest, "loadedAt": s.loaded, "collections": collections, "volumes": volumes, "files": files, "inventoryScope": scope}
+	var recordedAt any
+	if scope != nil {
+		recordedAt = c.Audit[0].At // Existing validated inventory event, not session load time.
+	}
+	return map[string]any{"schema": c.SchemaVersion, "idMax": strconv.Itoa(int(^uint(0) >> 1)), "digest": s.digest, "loadedAt": s.loaded, "recordedAt": recordedAt, "collections": collections, "volumes": volumes, "files": files, "inventoryScope": scope}
 }
 
 func runGUICatalog(args []string, input io.Reader, output io.Writer) error {
