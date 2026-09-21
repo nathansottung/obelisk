@@ -85,3 +85,30 @@ push-time items (CI, tag) after pushing; everything else is verified in-repo.
 - [x] **Go module path matches the repo** — `go.mod` is now
   `github.com/nathansottung/obelisk` (no internal imports referenced it, so the
   rename is inert to the build; verified with `go build`/`go vet`/`go test`).
+
+
+## 2026-09-20 - local inventory developer-alpha packaging checkpoint
+
+This scoped entry supersedes no historical release/schema/test claims above. Native inventory preview remains schema 8; this is an unsigned generated-source PACKAGING CANDIDATE, not a v0.9.0 release or backup/archive product release candidate. Branch feat/windows-inventory-alpha-package, HEAD bfbce891df78d529c6be2d2912dc8443597c007e, uncommitted/unstaged.
+
+- [x] One local Windows amd64 package built from accepted committed runtime; external Node 24 x64/browser prerequisites declared.
+- [x] Exact 20-entry ZIP/manifests, source versus uncommitted script identities, linked dependency notices and exclusions recorded.
+- [x] Two same-workstation extractions/relocations, seven corrected package tests plus one separate missing-input test, five completed browser sessions, split stop/reopen and two ConsoleHost paths recorded with retained setup failures.
+- [ ] Substantive package review and owner acceptance.
+- [ ] Clean Windows VM/second-machine and broader terminal testing.
+- [ ] Original security-alert classification; public signing/reputation/SmartScreen, distribution/privacy/license review and separate publication authorization.
+- [ ] Production/scale/other-platform/media/backup/recovery qualification; not implied by packaging.
+
+See [the package implementation report](docs/development/reviews/WINDOWS-INVENTORY-ALPHA-PACKAGE-IMPLEMENTATION-2026-09-20.md). No tags, CI/release workflow, uploads, installs or security controls were changed. ONE next action: substantive package review.
+
+
+## 2026-09-21 - accepted local package; source checkpoint only
+
+- [x] Owner accepted the bounded local unsigned Windows package after the substantive review.
+- [x] Reviewed packaging source committed as 082ae8375130bdb9943d31d7432c87a3c53fbbb8; original ZIP unchanged (SHA-256 f25125c46acca5635b2297305d849888fbded129281708875a64289c4b22c5de).
+- [x] Historical author/reviewer validation preserved separately; no new build/runtime tests for this checkpoint.
+- [ ] Live source publication: final evidence SHA/result recorded in the external receipt after verification.
+- [ ] Clean/second-machine and downloaded-file policy qualification; broader console/runtime/browser/platform coverage.
+- [ ] Original-alert classification and separate public signing/reputation/distribution authorization. No binary upload/release/tag is authorized here.
+
+See [owner acceptance and frozen artifact identities](docs/development/reviews/WINDOWS-INVENTORY-ALPHA-PACKAGE-ACCEPTANCE-2026-09-21.md). ONE proposed next action after source publication: separately authorize rehearsal of this exact ZIP on a clean/second Windows machine.
