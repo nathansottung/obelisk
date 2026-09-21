@@ -224,3 +224,12 @@ node scripts/gui-preview/server.mjs 0 --catalog "$task\snapshots\on.json" --adap
 ```
 
 The OFF, ON-zero, empty, all-excluded and legacy snapshots are also retained in that directory. Do not rerun a producer over an existing output. See [the S1-R1 follow-up](../../docs/development/reviews/GUI-DISPOSABLE-INVENTORY-SCOPE-S1-R1-FOLLOWUP-2026-09-20.md) for exact source/binary identities, raw adversarial fixtures, tests, screenshots and the next review gate.
+
+
+## 2026-09-20 - owner acceptance of reviewed disposable inventory
+
+Publication closeout documentation: owner accepted the bounded Windows milestone at 2026-09-20 21:21:07 America/New_York (2026-09-21T01:21:07.268Z). Corrected implementation: 8eb178bcb6f8f7367d2cb9aa75d2f4059d92a85c. F1/F2 remain previously closed; S1-R1 is closed and S1 is implemented and verified by the [closing recheck](../../docs/development/reviews/GUI-DISPOSABLE-INVENTORY-SCOPE-S1-R1-FOCUSED-RECHECK-2026-09-20.md). Earlier candidate/pending wording above is historical. This notice is added in the separate documentation commit; it does not change any command, launcher, schema or runtime behavior.
+
+Newly scoped catalogs require the corrected compatible inventory/preview reader from implementation 8eb178bcb6f8f7367d2cb9aa75d2f4059d92a85c. The previously identified pre-correction uncommitted reader (SHA-256 bc7e1fc73ec1121fa8c4523b8ae3b6917db91abf1760138089cd82433b374a69) refuses populated Audit scope; this documented refusal is not corruption or universal backward compatibility. Supported older unscoped catalogs remain readable with scope UNKNOWN, never inferred OFF/zero. Pair outputs and readers by their documented source/build identities; an earlier prepared executable is not automatically suitable. Do not remove or rewrite scope metadata to make an older reader accept a catalog. No automatic catalog migration is performed.
+
+Use the retained corrected reader and output identities in the closing report, or build this exact implementation with the already documented go build -o <new-reader-output.exe> . command and isolated offline build environment. The finite producer syntax and new-output prerequisites above remain unchanged. Never overwrite retained binaries or snapshots. No executable was rebuilt during this publication. The final evidence tip and live remote verification are recorded in C:\Users\nsott\AppData\Local\ObeliskDev\gui-inventory-publish-20260920-212106\publication-receipt.md.
