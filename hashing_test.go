@@ -3,11 +3,26 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+type failedHashReader struct{}
+
+func (failedHashReader) Read(p []byte) (int, error) {
+	return copy(p, "partial bytes"), io.ErrUnexpectedEOF
+}
+
+func TestHashReaderBothRefusesPartialError(t *testing.T) {
+	sha, b3, err := hashReaderBoth(failedHashReader{})
+	if !errors.Is(err, io.ErrUnexpectedEOF) || sha != "" || b3 != "" {
+		t.Fatalf("partial read became content evidence: %q %q %v", sha, b3, err)
+	}
+}
 
 // TestHashFileBothMatchesSHA256 proves the dual hasher returns the SAME SHA-256 a
 // stranger would compute with sha256sum, plus a non-empty, distinct BLAKE3.

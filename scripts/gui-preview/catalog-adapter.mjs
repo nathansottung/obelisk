@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { validateCatalog, validateIDs } from './catalog-protocol.mjs';
+import { decodeCatalogResponse } from './catalog-names.mjs';
 
 export async function startCatalog({ catalog, adapter }) {
   if (!path.isAbsolute(catalog) || !path.isAbsolute(adapter)) throw new Error('Absolute catalog and adapter paths required');
@@ -31,7 +32,7 @@ export async function startCatalog({ catalog, adapter }) {
     if (dead || closing) return;
     if (!pending) { abort('Unexpected reader response'); return; }
     try {
-      const value = JSON.parse(raw.toString('utf8'));
+      const value = decodeCatalogResponse(raw);
       const result = pending.validate(value);
       const p = pending; pending = null; clearTimeout(p.timer); p.resolve(result);
     } catch { abort('Invalid catalog reader response'); }
@@ -69,7 +70,7 @@ export async function startCatalog({ catalog, adapter }) {
     const exit = await stopped; clearTimeout(timer);
     return { pid: child.pid, ...exit, stderr };
   })();
-  return { get mode() { return mode; }, close, query: async (text, hash) => {
+  return { get mode() { return mode; }, close, query: async (text, hash, exact) => {
     if (!mode.ok || dead || closing || pending) throw new Error('Reader unavailable or busy');
     const data = mode.catalog;
     const response = receive(value => {
@@ -80,7 +81,7 @@ export async function startCatalog({ catalog, adapter }) {
       }
       return { ok: true, ids: validateIDs(value.ids, data) };
     });
-    child.stdin.write(JSON.stringify({ text, hash }) + '\n');
+    child.stdin.write(JSON.stringify({ text, hash, ...(exact === undefined ? {} : { exact }) }) + '\n');
     const result = await response;
     if (dead) throw new Error('Catalog reader unavailable');
     return result;

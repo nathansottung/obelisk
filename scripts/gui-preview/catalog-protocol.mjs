@@ -1,15 +1,24 @@
 // Validate only the preview response contract, never the persisted native schema.
+import { validUnicode } from './catalog-names.mjs';
 const int64Max = '9223372036854775807';
 const requireValue = condition => { if (!condition) throw new Error('Invalid catalog response'); };
 export function exactDecimal(value, max, zero = false) {
   return typeof value === 'string' && (zero ? /^(0|[1-9][0-9]*)$/ : /^[1-9][0-9]*$/).test(value)
     && (value.length < max.length || (value.length === max.length && value <= max));
 }
-const text = value => typeof value === 'string' && value.length <= 4096;
+const text = value => validUnicode(value) && new TextEncoder().encode(value).length <= 4096;
 const date = value => typeof value === 'string' && value.length <= 64 && Number.isFinite(Date.parse(value));
 export function validateCatalog(data) {
   requireValue(data && data.schema === 8 && ['2147483647', int64Max].includes(data.idMax));
   requireValue(typeof data.digest === 'string' && /^[a-f0-9]{64}$/.test(data.digest) && date(data.loadedAt));
+  const scope = data.inventoryScope;
+  if (scope !== undefined && scope !== null) {
+    requireValue(scope && Object.keys(scope).sort().join(',') === 'complete,entries,excludedFiles,includedFiles,policy,readBytes,regularFiles,version');
+    requireValue(scope.version === 1 && scope.complete === true && ['include-all','ignore-exact-ds-store'].includes(scope.policy));
+    for (const [key,max] of [['entries',128],['regularFiles',64],['includedFiles',64],['excludedFiles',64],['readBytes',32*1024*1024]]) requireValue(Number.isSafeInteger(scope[key]) && scope[key]>=0 && scope[key]<=max);
+    requireValue(scope.regularFiles <= scope.entries && scope.includedFiles + scope.excludedFiles === scope.regularFiles && scope.includedFiles === data.files?.length && (scope.policy !== 'include-all' || scope.excludedFiles === 0));
+    requireValue(Array.isArray(data.files) && data.files.every(f=>typeof f.bytes==='string' && /^(0|[1-9][0-9]*)$/.test(f.bytes) && BigInt(f.bytes)<=8388608n) && data.files.reduce((n,f)=>n+BigInt(f.bytes),0n)===BigInt(scope.readBytes));
+  }
   for (const [key, limit] of [['collections',100], ['volumes',100], ['files',1000]]) {
     requireValue(Array.isArray(data[key]) && data[key].length <= limit);
     const ids = new Set();

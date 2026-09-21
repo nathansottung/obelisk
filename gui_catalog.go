@@ -57,6 +57,12 @@ func loadGUICatalog(name string, read func(string) ([]byte, error)) (*guiCatalog
 		return nil, errors.New("catalog must contain 1..4194304 bytes")
 	}
 	var c catalog
+	if err := validateGUIJSON(raw); err != nil {
+		return nil, fmt.Errorf("catalog encoding refused: %w", err)
+	}
+	if err := validateGUIInventoryScopeEncoding(raw); err != nil {
+		return nil, err
+	}
 	if err := decodeCatalogJSON(raw, &c); err != nil {
 		return nil, errors.New("native catalog JSON is malformed")
 	}
@@ -88,6 +94,9 @@ func loadGUICatalog(name string, read func(string) ([]byte, error)) (*guiCatalog
 }
 
 func validateGUICatalog(c *catalog) error {
+	if _, err := inventoryScope(c); err != nil {
+		return err
+	}
 	if len(c.Collections) > 100 || len(c.Folders) > 100 || len(c.Chunks) > 100 || len(c.Volumes) > 100 || len(c.Locations) > 100 {
 		return errors.New("catalog exceeds 100 rows per ancillary table")
 	}
@@ -101,7 +110,7 @@ func validateGUICatalog(c *catalog) error {
 		return errors.New("catalog exceeds 1000 potential copy occurrences")
 	}
 	// Refuse advanced populated sections rather than partially presenting their meaning.
-	allowed := map[string]bool{"SchemaVersion": true, "NextID": true, "Collections": true, "Folders": true, "Files": true, "Chunks": true, "Volumes": true, "Locations": true}
+	allowed := map[string]bool{"SchemaVersion": true, "NextID": true, "Collections": true, "Folders": true, "Files": true, "Chunks": true, "Volumes": true, "Locations": true, "Audit": true}
 	v := reflect.ValueOf(*c)
 	for i := 0; i < v.NumField(); i++ {
 		if !allowed[v.Type().Field(i).Name] && v.Field(i).Len() > 0 {
@@ -272,7 +281,8 @@ func (s *guiCatalogSnapshot) projection() map[string]any {
 		files = append(files, map[string]any{"id": strconv.Itoa(f.ID), "collection": names[f.CollectionID], "path": f.RelPath, "sourceFolder": folders[f.FolderID], "bytes": strconv.FormatInt(f.SizeBytes, 10), "hash": f.Hash, "algorithm": f.HashAlg, "firstSeen": f.FirstSeen, "copies": copies})
 	}
 	// Preserve native signed-int IDs and int64 sizes before any JavaScript parsing.
-	return map[string]any{"schema": c.SchemaVersion, "idMax": strconv.Itoa(int(^uint(0) >> 1)), "digest": s.digest, "loadedAt": s.loaded, "collections": collections, "volumes": volumes, "files": files}
+	scope, _ := inventoryScope(&c) // The complete snapshot was validated at adoption.
+	return map[string]any{"schema": c.SchemaVersion, "idMax": strconv.Itoa(int(^uint(0) >> 1)), "digest": s.digest, "loadedAt": s.loaded, "collections": collections, "volumes": volumes, "files": files, "inventoryScope": scope}
 }
 
 func runGUICatalog(args []string, input io.Reader, output io.Writer) error {
@@ -289,13 +299,15 @@ func runGUICatalog(args []string, input io.Reader, output io.Writer) error {
 		return err
 	}
 	scanner := bufio.NewScanner(input)
-	scanner.Buffer(make([]byte, 1024), 4096)
+	scanner.Buffer(make([]byte, 1024), 32768) // Bounded escaped exact names; legacy requests still capped below.
 	for scanner.Scan() {
 		var q struct {
-			Text string `json:"text"`
-			Hash string `json:"hash"`
+			Text  string  `json:"text"`
+			Hash  string  `json:"hash"`
+			Exact *string `json:"exact,omitempty"`
 		}
-		if json.Unmarshal(scanner.Bytes(), &q) != nil || len(q.Text) > 256 || len(q.Hash) > 64 {
+		if validateGUIJSON(scanner.Bytes()) != nil || json.Unmarshal(scanner.Bytes(), &q) != nil || len(q.Text) > 256 || len(q.Hash) > 64 ||
+			(q.Exact == nil && len(scanner.Bytes()) > 4096) || (q.Exact != nil && (len(*q.Exact) > 4096 || q.Text != "" || q.Hash != "")) {
 			if err = enc.Encode(map[string]any{"ok": false, "error": "invalid bounded search"}); err != nil {
 				return err
 			}
@@ -305,6 +317,23 @@ func runGUICatalog(args []string, input io.Reader, output io.Writer) error {
 			return errors.New("invalid hash")
 		}
 		ids := []string{}
+		if q.Exact != nil {
+			// Exact name is an explicit preview operation, not production Search's
+			// trimmed/case-insensitive substring key. Identity remains the native ID.
+			retired := map[int]bool{}
+			for _, c := range s.store.c.Collections {
+				retired[c.ID] = c.Retired
+			}
+			for _, f := range s.store.c.Files {
+				if !retired[f.CollectionID] && f.RelPath == *q.Exact {
+					ids = append(ids, strconv.Itoa(f.ID))
+				}
+			}
+			if err = enc.Encode(map[string]any{"ok": true, "ids": ids}); err != nil {
+				return err
+			}
+			continue
+		}
 		for _, r := range s.store.Search(SearchQuery{Text: q.Text, Hash: q.Hash, Limit: 1000}) {
 			ids = append(ids, strconv.Itoa(r["file_id"].(int)))
 		}

@@ -7,6 +7,8 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { startPreview } from './server.mjs';
 import { catalogChecks } from './catalog-browser-checks.mjs';
+import { inventoryChecks } from './inventory-browser-checks.mjs';
+import { inventoryCorrectionChecks } from './inventory-correction-browser-checks.mjs';
 
 const [browser, evidence, catalog, adapter, expected] = process.argv.slice(2);
 if (!browser || !evidence || !path.isAbsolute(evidence)) throw new Error('Provide preinstalled browser path and absolute new evidence directory');
@@ -55,7 +57,9 @@ try {
   const screenshot = async name => { const r = await cdp('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }); await writeFile(path.join(evidence, name + '.png'), Buffer.from(r.data, 'base64')); };
   const route = async slug => { await evaluate(`location.hash=${JSON.stringify('#' + slug)}`); await evaluate('new Promise(resolve => setTimeout(resolve, 60))'); };
   if (catalog) {
-    await catalogChecks({ check, evaluate, cdp, screenshot, route, expected, evidence, writeFile, path });
+    if (expected === 'inventory-correction') await inventoryCorrectionChecks({ check, evaluate, cdp, screenshot, evidence, writeFile, path });
+    else if (expected === 'inventory') await inventoryChecks({ check, evaluate, cdp, screenshot, evidence, writeFile, path });
+    else await catalogChecks({ check, evaluate, cdp, screenshot, route, expected, evidence, writeFile, path });
   } else {
   // Real keyboard skip-link regression; setup focuses the first primary-nav link,
   // then Shift+Tab reaches the application's skip link (never direct main focus).

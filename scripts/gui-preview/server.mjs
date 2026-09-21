@@ -12,6 +12,7 @@ const assets = new Map([
   ['/style.css', ['style.css', 'text/css']],
   ['/catalog-ui.mjs', ['catalog-ui.mjs', 'text/javascript']],
   ['/catalog-protocol.mjs', ['catalog-protocol.mjs', 'text/javascript']],
+  ['/catalog-names.mjs', ['catalog-names.mjs', 'text/javascript']],
 ]);
 export async function startPreview(port = 0, catalogOptions = null) {
   const reader = catalogOptions ? await startCatalog(catalogOptions) : null;
@@ -26,10 +27,11 @@ export async function startPreview(port = 0, catalogOptions = null) {
     if (req.headers.host !== expectedHost) { res.writeHead(403).end('Loopback host required'); return; }
     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405, { Allow: 'GET, HEAD' }).end(); return; }
     if (reader && (req.url === '/catalog-query' || req.url.startsWith('/catalog-query?'))) {
-      if (req.method !== 'GET' || req.url.length > 2048) { res.writeHead(400).end(); return; }
+      if (req.method !== 'GET' || req.url.length > 16384) { res.writeHead(400).end(); return; }
+      try { decodeURIComponent(req.url); } catch { res.writeHead(400).end(); return; }
       const params = new URL(req.url, 'http://127.0.0.1').searchParams;
-      if ([...params.keys()].some(k => !['text', 'hash'].includes(k)) || params.getAll('text').length > 1 || params.getAll('hash').length > 1 || (params.get('text') ?? '').length > 256 || (params.get('hash') ?? '').length > 64) { res.writeHead(400).end(); return; }
-      try { const result = await reader.query(params.get('text') ?? '', params.get('hash') ?? ''); res.writeHead(result.ok ? 200 : 422, { 'Content-Type': 'application/json' }).end(JSON.stringify(result)); }
+      if ([...params.keys()].some(k => !['text', 'hash', 'exact'].includes(k)) || params.getAll('text').length > 1 || params.getAll('hash').length > 1 || params.getAll('exact').length > 1 || (params.get('text') ?? '').length > 256 || (params.get('hash') ?? '').length > 64 || (!params.has('exact') && req.url.length > 2048) || (params.has('exact') && (params.has('text') || params.has('hash') || Buffer.byteLength(params.get('exact'),'utf8') > 4096))) { res.writeHead(400).end(); return; }
+      try { const result = await reader.query(params.get('text') ?? '', params.get('hash') ?? '', params.has('exact') ? params.get('exact') : undefined); res.writeHead(result.ok ? 200 : 422, { 'Content-Type': 'application/json' }).end(JSON.stringify(result)); }
       catch { res.writeHead(503, { 'Content-Type': 'application/json' }).end(JSON.stringify({ ok: false, error: 'Catalog query unavailable; no results presented' })); }
       return;
     }
