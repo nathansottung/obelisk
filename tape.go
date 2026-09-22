@@ -226,7 +226,7 @@ func (a *App) TapeCheck(deviceOverride string) (*TapeHealth, error) {
 	var outs [][]byte
 	for _, argv := range def.Commands(dev) {
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-		out, err := exec.CommandContext(ctx, bin, argv...).Output()
+		out, err := helperCommandContext(ctx, bin, argv...).Output()
 		cancel()
 		if err != nil && len(out) == 0 {
 			a.Store.Log("tape", fmt.Sprintf("%s %v on %s: %v", def.Name, argv, dev, err))

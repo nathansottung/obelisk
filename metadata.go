@@ -12,7 +12,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"os/exec"
 	"strings"
 	"time"
 )
@@ -89,7 +88,7 @@ func (a *App) extractMediaMeta(path, role string, cfg Config) (time.Time, string
 func probeCreated(bin, path string) time.Time {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, "-v", "quiet", "-print_format", "json", "-show_format", path).Output()
+	out, err := helperCommandContext(ctx, bin, "-v", "quiet", "-print_format", "json", "-show_format", path).Output()
 	if err != nil {
 		return time.Time{}
 	}

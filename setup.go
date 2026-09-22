@@ -287,7 +287,7 @@ func (a *App) setupResult(cfg Config) SetupResult {
 		targets = []string{TargetDrives}
 	}
 	return SetupResult{
-		Config:       cfg,
+		Config:       redactConfig(cfg),
 		Template:     starterTemplateFor(cfg.DataKind),
 		Vocabulary:   vocabularyFor(cfg.DataKind),
 		ArchiveKind:  archiveKindForLocation(cfg.PrimaryLocation),

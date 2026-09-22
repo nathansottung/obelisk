@@ -5,7 +5,6 @@ package main
 import (
 	"bufio"
 	"os"
-	"os/exec"
 	"strings"
 )
 
@@ -42,7 +41,7 @@ func ltfsFromProcMounts() ([]string, bool) {
 // "devname on /Volumes/tape (ltfs, local, ...)" or Linux:
 // "devname on /mnt/tape type ltfs (rw,...)".
 func ltfsFromMountCmd() []string {
-	raw, err := exec.Command("mount").CombinedOutput()
+	raw, err := helperCommand("mount").CombinedOutput()
 	if err != nil {
 		return nil
 	}

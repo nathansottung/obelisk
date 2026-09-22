@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -24,7 +23,7 @@ func smartDeviceNode(path string) (string, error) {
 		`(@(Get-Partition -DriveLetter %s | Get-Disk)[0]).Number`, letter)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", script).Output()
+	out, err := helperCommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", script).Output()
 	if err != nil {
 		return "", fmt.Errorf("resolving disk number for %s: %v", letter, err)
 	}

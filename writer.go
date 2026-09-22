@@ -10,11 +10,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 type RingStats struct {
@@ -352,7 +352,7 @@ func (a *App) WriteChunk(id int, destDir string, bufferGB float64, blockMB int, 
 	// stagedFail: the staged artifact itself is corrupt (its bytes no longer hash
 	// to enc_hash). That IS a package-level FAILED.
 	stagedFail := func(err error) (map[string]any, error) {
-		c.Status, c.Error = "FAILED", err.Error()
+		c.Status, c.Error = "FAILED", storedErrorText(err.Error())
 		a.Store.UpdateChunk(c)
 		return nil, err
 	}
@@ -708,7 +708,7 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	if err != nil {
 		return nil, err
 	}
-	gpg := exec.Command(gpgBin, "--batch", "--yes", "--pinentry-mode", "loopback",
+	gpg := helperCommand(gpgBin, "--batch", "--yes", "--pinentry-mode", "loopback",
 		"--passphrase-fd", "0", "-d", enc)
 	gpg.Stdin = strings.NewReader(pass)
 	pipe, err := gpg.StdoutPipe()
@@ -717,7 +717,7 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	}
 	targs := []string{"-xf", "-", "-C", outputDir, "--"} // "--": member names are never options
 	targs = append(targs, members...)
-	tarc := exec.Command(tarBin, targs...)
+	tarc := helperCommand(tarBin, targs...)
 	tarc.Stdin = pipe
 	var tarErr strings.Builder
 	tarc.Stderr = &tarErr
@@ -754,11 +754,16 @@ func restoreResult(c *Chunk, outputDir string, repaired bool, warnings []string)
 	return res
 }
 
+// tail keeps the last n bytes of helper output, cut on a character boundary and
+// cleaned for storage (see cleanToolText).
 func tail(s string, n int) string {
 	if len(s) > n {
-		return s[len(s)-n:]
+		s = s[len(s)-n:]
+		for len(s) > 0 && !utf8.RuneStart(s[0]) {
+			s = s[1:]
+		}
 	}
-	return s
+	return cleanToolText(s, n)
 }
 
 func copyFile(src, dst string) error {

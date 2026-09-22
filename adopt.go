@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -174,7 +173,7 @@ func (a *App) payloadTOC(payloadPath, keyRef string, encrypted bool) ([]ChunkFil
 		return nil, err
 	}
 	if !encrypted {
-		out, err := exec.Command(tarBin, "-tvf", payloadPath).CombinedOutput()
+		out, err := helperCommand(tarBin, "-tvf", payloadPath).CombinedOutput()
 		if err != nil {
 			return nil, fmt.Errorf("tar -tvf failed: %v: %s", err, tail(string(out), 300))
 		}
@@ -191,13 +190,13 @@ func (a *App) payloadTOC(payloadPath, keyRef string, encrypted bool) ([]ChunkFil
 	if err != nil {
 		return nil, err
 	}
-	gpg := exec.Command(gpgBin, "--batch", "--yes", "--pinentry-mode", "loopback", "--passphrase-fd", "0", "-d", payloadPath)
+	gpg := helperCommand(gpgBin, "--batch", "--yes", "--pinentry-mode", "loopback", "--passphrase-fd", "0", "-d", payloadPath)
 	gpg.Stdin = strings.NewReader(pass)
 	pipe, err := gpg.StdoutPipe()
 	if err != nil {
 		return nil, err
 	}
-	tarc := exec.Command(tarBin, "-tvf", "-")
+	tarc := helperCommand(tarBin, "-tvf", "-")
 	tarc.Stdin = pipe
 	var out, tarErr bytes.Buffer
 	tarc.Stdout, tarc.Stderr = &out, &tarErr

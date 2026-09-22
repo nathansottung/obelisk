@@ -193,24 +193,24 @@ func authMiddleware(next http.Handler, token string) http.Handler {
 }
 
 // apiGuard is the cross-origin / CSRF gate in front of every /api/ route. It is
-// independent of token auth (which protects non-localhost binds): it defends the
-// default localhost bind against a malicious web page in the user's browser making
-// requests to 127.0.0.1 (CSRF), including via DNS rebinding.
+// independent of token auth (which protects non-localhost binds). It checks, in
+// order:
 //
-// The core move: require a custom request header (X-Requested-By) on every /api
-// call. A cross-origin page cannot set a custom header on a fetch/XHR without a
-// CORS preflight — and we never emit an Access-Control-Allow-* header, so that
-// preflight is never granted. So the header's presence proves the request came
-// from our own same-origin UI (whose fetch wrapper sets it globally).
+//   - Host: when the connection arrived on a loopback address, the Host header
+//     must name loopback (127.0.0.1, localhost or [::1]) on the port the
+//     connection arrived on. A page served under any other name is refused, even
+//     if that name resolves to 127.0.0.1.
+//   - Origin/Referer, for state-changing methods: if either header is present,
+//     its host:port must equal the request's Host.
+//   - The X-Requested-By handshake header. A cross-origin page cannot set a custom
+//     header on a fetch/XHR without a CORS preflight, and we never emit an
+//     Access-Control-Allow-* header, so that preflight is never granted.
 //
-// One carve-out and one extra check:
-//   - A genuine same-origin top-level navigation — a GET opened in a new tab to
-//     download a label, report, or structure export — cannot carry a custom header.
-//     It is allowed only when the browser marks it as a real navigation
-//     (Sec-Fetch-Mode: navigate) AND it is not cross-origin: such a GET changes no
-//     state and can't be read back by a cross-origin attacker.
-//   - State-changing methods additionally get an Origin/Referer host check: if
-//     either header is present and its host differs from the bound host, refuse.
+// One carve-out: a same-origin top-level navigation (a GET opened in a new tab to
+// download a label, report, or structure export) cannot carry a custom header. It
+// is allowed only when the browser marks it as a navigation (Sec-Fetch-Mode:
+// navigate), Sec-Fetch-Site (when sent) is same-origin or none, and no Origin or
+// Referer names another host.
 //
 // We deliberately never write CORS headers anywhere, so a browser that tries to
 // preflight simply fails. This gate runs regardless of whether token auth is on.
@@ -220,7 +220,11 @@ func apiGuard(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// State-changing methods: a present Origin/Referer must name the bound host.
+		if !loopbackHostAllowed(r) {
+			forbidCSRF(w, "host not allowed — /api answers only to the loopback address it is bound to")
+			return
+		}
+		// State-changing methods: a present Origin/Referer must name the request's host.
 		if !isSafeMethod(r.Method) && crossOriginRequest(r) {
 			forbidCSRF(w, "cross-origin request refused")
 			return
@@ -233,7 +237,7 @@ func apiGuard(next http.Handler) http.Handler {
 		}
 		// A genuine same-origin top-level navigation (new-tab download) can't set the
 		// header — allow that, and nothing else.
-		if isSafeMethod(r.Method) && r.Header.Get("Sec-Fetch-Mode") == "navigate" && !crossOriginRequest(r) {
+		if isSafeMethod(r.Method) && r.Header.Get("Sec-Fetch-Mode") == "navigate" && navigationSiteAllowed(r) && !crossOriginRequest(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -244,7 +248,7 @@ func apiGuard(next http.Handler) http.Handler {
 func isSafeMethod(m string) bool { return m == http.MethodGet || m == http.MethodHead }
 
 // crossOriginRequest reports whether the request's Origin (or, absent that,
-// Referer) names a host different from the one we are bound to. A missing Origin
+// Referer) names a host different from the request's Host. A missing Origin
 // AND Referer is treated as NOT cross-origin (a same-origin navigation or a
 // non-browser client) — the header rule still gates those.
 func crossOriginRequest(r *http.Request) bool {
@@ -332,7 +336,17 @@ func jsonOut(w http.ResponseWriter, v any) {
 func jsonErr(w http.ResponseWriter, code int, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": storedErrorText(err.Error())})
+}
+
+// configResponse is the /api/config body. The auth token is never returned; the
+// UI learns only whether one is set.
+func configResponse(cfg Config, keystoreStatus map[string]any) map[string]any {
+	return map[string]any{
+		"config":          redactConfig(cfg),
+		"auth_token_set":  cfg.AuthToken != "",
+		"keystore_status": keystoreStatus,
+	}
 }
 
 func body(r *http.Request) map[string]any {
@@ -583,7 +597,7 @@ func runJob(app *App, kind, label string, fn func(progress func(float64, string)
 			// fn's error already carries any final catalog-flush failure, folded in by
 			// endBatchInto, so a job whose work succeeded but whose catalog write did
 			// not lands here as FAILED rather than as COMPLETED.
-			if serr := app.Store.FinishJob(j.ID, -1, label+" — ERROR: "+err.Error(), "FAILED", nil, nil); serr != nil {
+			if serr := app.Store.FinishJob(j.ID, -1, label+" — ERROR: "+storedErrorText(err.Error()), "FAILED", nil, nil); serr != nil {
 				app.noteUnrecordedJob(j.ID, "FAILED", serr)
 			}
 			return
@@ -766,7 +780,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 503, cfgErr)
 			return
 		}
-		jsonOut(w, map[string]any{"config": cfg, "keystore_status": app.KeystoreStatus()})
+		jsonOut(w, configResponse(cfg, app.KeystoreStatus()))
 	})
 	mux.HandleFunc("PUT /api/config", func(w http.ResponseWriter, r *http.Request) {
 		update, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
@@ -788,7 +802,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, err)
 			return
 		}
-		jsonOut(w, map[string]any{"config": cfg, "keystore_status": app.KeystoreStatus()})
+		jsonOut(w, configResponse(cfg, app.KeystoreStatus()))
 	})
 	// First-run setup interview (see setup.go). GET returns the derived state for the
 	// current config (summary + scoped checklist facts); POST applies answers coherently.

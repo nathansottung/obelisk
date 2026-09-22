@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -38,7 +37,7 @@ func smartDeviceNode(path string) (string, error) {
 func smartNodeLinux(abs string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "lsblk", "-J", "-o", "NAME,MOUNTPOINT,TYPE").Output()
+	out, err := helperCommandContext(ctx, "lsblk", "-J", "-o", "NAME,MOUNTPOINT,TYPE").Output()
 	if err != nil {
 		return "", fmt.Errorf("lsblk: %v", err)
 	}

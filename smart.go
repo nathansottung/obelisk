@@ -17,7 +17,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"time"
 )
 
@@ -186,7 +185,7 @@ func (a *App) volumeHealth(vol *Volume, path string, cfg Config) (*SmartSnapshot
 	defer cancel()
 	// -a: all SMART data; -j: JSON. A non-zero exit is NORMAL (smartctl encodes
 	// disk-health bits in its exit code), so we parse stdout regardless of err.
-	out, runErr := exec.CommandContext(ctx, bin, "-j", "-a", dev).Output()
+	out, runErr := helperCommandContext(ctx, bin, "-j", "-a", dev).Output()
 	snap, perr := parseSmart(out)
 	if perr != nil {
 		a.Store.Log("smart", fmt.Sprintf("%s (%s): %v", vol.Label, dev, perr))

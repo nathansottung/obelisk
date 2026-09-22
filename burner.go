@@ -150,7 +150,10 @@ func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, 
 	if disc == nil {
 		return nil, fmt.Errorf("no PENDING discs left in %q", q.Name)
 	}
-	set := func(st, detail string) { disc.Status, disc.Detail = st, detail; a.Store.UpdateBurnQueue(q) }
+	set := func(st, detail string) {
+		disc.Status, disc.Detail = st, storedErrorText(detail)
+		a.Store.UpdateBurnQueue(q)
+	}
 
 	c := a.Store.Chunk(disc.ChunkID)
 	if c == nil {
@@ -314,13 +317,12 @@ func runShell(cmdline string) error {
 	} else {
 		cmd = exec.Command("sh", "-c", cmdline)
 	}
+	// The burn command is user-written and may call any installed program, so it
+	// keeps the caller's PATH; every other variable follows the helper allowlist.
+	cmd.Env = helperEnv(cmd.Path, true)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t := string(out)
-		if len(t) > 700 {
-			t = t[len(t)-700:]
-		}
-		return fmt.Errorf("%v: %s", err, strings.TrimSpace(t))
+		return fmt.Errorf("%v: %s", err, toolOutputTail(out))
 	}
 	return nil
 }

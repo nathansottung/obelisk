@@ -42,7 +42,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -186,7 +185,7 @@ func gitArchiveSource(version string) ([]byte, error) {
 	prefix := "obelisk-" + fsSafe(version) + "/"
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "archive", "--format=tar.gz", "--prefix="+prefix, "HEAD")
+	cmd := helperCommandContext(ctx, "git", "archive", "--format=tar.gz", "--prefix="+prefix, "HEAD")
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
