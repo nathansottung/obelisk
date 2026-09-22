@@ -38,7 +38,7 @@ Prompt20 remains deferred by the owner; local relocation is not second-machine
 qualification. Pipe-based stop and any actual-console observations are recorded
 separately in this candidate's report; earlier console passes are not new evidence.
 
-The full binary embeds the existing production UI and development escrow placeholder because the accepted Go source does. Neither is activated by the launcher; it is not a minimal-command sandbox or a release escrow bundle. Third-party helper executables are not bundled. Licensing notices cover linked dependencies and the Go runtime; public redistribution/signing/reputation review remains pending. Source/build hashes identify bytes, not safety certification.
+The packaged binary is launcher-only. It is built with `-tags guionly` and contains only `--gui-disposable-inventory` and `--gui-catalog-readonly`; every other argument is refused with exit status 2. The legacy HTTP server, embedded web UI and backend routes are not compiled in. It is not a release escrow bundle, and the launcher is not a sandbox. Third-party helper executables are not bundled. Licensing notices cover linked dependencies and the Go runtime; public redistribution/signing/reputation review remains pending. Source/build hashes identify bytes, not safety certification.
 
 An owner-reported negative scan does not classify the earlier detection or certify this host/package. Protection must stay enabled. A new detection, quarantine or permission block must be investigated without retries in alternate forms. No security exclusion, policy change, administrator operation or automatic sample upload is part of this tutorial.
 

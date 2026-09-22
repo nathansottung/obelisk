@@ -59,6 +59,24 @@ test('Explicit ZIP allowlist, independent .NET extraction and manifest identitie
   assert.deepEqual([...artifact.entries].sort(),expected);
   for(const pkg of packages){const r=await finite(ps,['-NoProfile','-File',path.join(scriptRoot,'extract.ps1'),artifact.zipPath,pkg]);assert.deepEqual(JSON.parse(r.stdout).sort(),expected);const manifest=JSON.parse(await fs.readFile(path.join(pkg,'package-manifest.json'),'utf8'));assert.equal(sha(await fs.readFile(path.join(pkg,'package-manifest.json'))),artifact.manifestSHA256);for(const f of manifest.files)assert.equal(sha(await fs.readFile(path.join(pkg,f.path))),f.sha256);const check=await launch(pkg,['check']);assert.match(check.stdout,/filesVerified/);}
 });
+test('Packaged binary is launcher-only: other modes refuse, no port opens, manifest records the build', async()=>{
+  const net=await import('node:net');
+  const bin=path.join(packages[0],'bin','obelisk.exe');
+  const port=await new Promise((resolve,reject)=>{const s=net.createServer();s.once('error',reject);s.listen(0,'127.0.0.1',()=>{const p=s.address().port;s.close(()=>resolve(p));});});
+  const data=path.join(evidence,'launcher-only-data');
+  for(const args of [[],['-listen','127.0.0.1:'+port],['-init-config'],['-data',data,'-init-config','-listen','127.0.0.1:'+port],['--help'],['-h'],['--gui-disposable-inventoryx'],['serve']]){
+    const c=child(bin,args);c.proc.stdin.end();
+    const probe=new Promise(resolve=>{const sock=net.connect(port,'127.0.0.1');sock.once('connect',()=>{sock.destroy();resolve(true);});sock.once('error',()=>resolve(false));});
+    const r=await c.ended;assert.equal(r.forced,false);assert.equal(r.code,2,JSON.stringify(args)+r.stderr);
+    assert.match(r.stderr,/only --gui-disposable-inventory and --gui-catalog-readonly/);
+    assert.equal(await probe,false,'a refused mode accepted a connection on port '+port);
+  }
+  await assert.rejects(fs.access(data));
+  const manifest=JSON.parse(await fs.readFile(path.join(packages[0],'package-manifest.json'),'utf8'));
+  assert.match(manifest.packageID,/^0\.9\.2-dev-comparison\.[0-9a-f]{12}-windows-amd64-local$/);
+  assert.match(manifest.binary,/launcher-only/);assert.ok(manifest.build.flags.includes('guionly'));assert.equal(manifest.build.GOPROXY,'off');
+  assert.match(manifest.sourceCommit,/^[0-9a-f]{40}$/);assert.equal(manifest.acceptedRuntimeImplementation,undefined);
+});
 test('Default help is inert and missing Node gives a prerequisite failure', async()=>{
   const before=await tree(packages[0]);const r=await launch(packages[0],[]);assert.match(r.stdout,/Actions/);assert.deepEqual(await tree(packages[0]),before);
   const missing=await launch(packages[0],['check'],1,{PATH:path.join(process.env.SystemRoot,'System32')});assert.match(missing.stderr,/Node.js 24 x64 is required/);

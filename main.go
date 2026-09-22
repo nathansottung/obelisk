@@ -1,3 +1,5 @@
+//go:build !guionly
+
 package main
 
 // main.go — HTTP server + REST API + embedded UI. One binary, no installs.

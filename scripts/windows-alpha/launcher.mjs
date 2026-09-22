@@ -22,7 +22,8 @@ Choose a new workspace beneath your LOCALAPPDATA/ObeliskDev. Generation,
 inventory (which reads generated source files), and viewing are separate actions.
 The viewer reads but does not modify the selected catalog; recorded source/media
 paths are not opened. See QUICKSTART.md for limits, compatibility and stop/reopen.
-The full binary contains other Obelisk commands. This launcher is not a sandbox.`;
+The packaged binary contains only the inventory and read-only viewer modes.
+This launcher is not a sandbox.`;
 
 async function verifyPackage() {
   const manifest = JSON.parse(await fs.readFile(path.join(root, 'package-manifest.json'), 'utf8'));

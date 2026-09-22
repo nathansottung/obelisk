@@ -1,6 +1,6 @@
 # Local Windows comparison developer-alpha packaging candidate
 
-This new unsigned package is a local candidate for generated-source inventory, one/two-snapshot browsing and recorded comparison. It is separate from the earlier accepted inventory-only ZIP and awaits its own package review. It is not a released backup/archive product. The included full Obelisk executable has other commands; this tutorial launcher selects only the accepted inventory/reader modes and is not a security sandbox.
+This new unsigned package is a local candidate for generated-source inventory, one/two-snapshot browsing and recorded comparison. It is separate from the earlier accepted inventory-only ZIP and awaits its own package review. It is not a released backup/archive product. The included Obelisk executable is launcher-only: it contains only the inventory and read-only viewer modes and refuses every other command. It has no HTTP server, web UI or backup/archive routes. The launcher is still not a security sandbox.
 
 Prerequisites: Windows x64, **existing Node.js 24 x64** on PATH, Windows PowerShell, and an existing browser (Chrome is the rehearsal target). Go, Git, a compiler and the source checkout are not needed by testers. No runtime is downloaded or bundled. `package-manifest.json` records exact source, script and binary identities; hashes are not signatures or malware-free certification.
 
