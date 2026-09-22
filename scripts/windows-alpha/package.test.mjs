@@ -92,7 +92,8 @@ test('Launch.cmd is plain ASCII with CRLF, replaces the PowerShell launcher, and
   const bytes=await fs.readFile(path.join(packages[1],'Launch.cmd'));
   assert.ok(bytes.every(b=>b<0x80),'Launch.cmd must be ASCII');
   const text=bytes.toString('latin1');assert.equal(text.split('\r\n').length-1,text.split('\n').length-1,'Launch.cmd must use CRLF only');
-  assert.doesNotMatch(text,/powershell|ExecutionPolicy/i);
+  const commands=text.split('\r\n').filter(l=>l.trim()&&!/^rem\b/i.test(l.trim())).join('\n');
+  assert.doesNotMatch(commands,/powershell|ExecutionPolicy/i);
   await assert.rejects(fs.access(path.join(packages[1],'Launch.ps1')));
   // The relocated package path contains spaces, non-ASCII, &, ', + and %.
   const ok=await launch(packages[1],['check']);assert.equal(JSON.parse(ok.stdout.trim().split('\n').at(-1)).root,packages[1]);
