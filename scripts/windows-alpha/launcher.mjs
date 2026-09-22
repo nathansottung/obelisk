@@ -10,7 +10,7 @@ const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const within = (parent, child) => { const r = path.relative(parent, child); return r === '' || (!r.startsWith('..') && !path.isAbsolute(r)); };
 const help = `Unsigned Windows developer-alpha PACKAGING CANDIDATE; generated sources only.
 Existing Node.js 24 x64 and a browser are required. No downloads or installation.
-Actions (run through Launch.ps1, or node launcher.mjs):
+Actions (run through Launch.cmd, or node launcher.mjs):
   help
   check
   generate ABS_NEW_WORKSPACE
@@ -96,7 +96,8 @@ async function main() {
   if (action === 'help' && args.length === 0) { console.log(help); return; }
   if (!['check', 'generate', 'generate-pair', 'inventory', 'view', 'static'].includes(action)) throw Error(help);
   const manifest = await verifyPackage();
-  if (action === 'check' && args.length === 0) { console.log(JSON.stringify({ packageID: manifest.packageID, node: process.version, arch: process.arch, root, filesVerified: manifest.files.length })); return; }
+  console.log(`Obelisk developer alpha ${manifest.version} (package ${manifest.packageID}); native binary reports its version on inventory and viewer output.`);
+  if (action === 'check' && args.length === 0) { console.log(JSON.stringify({ packageID: manifest.packageID, version: manifest.version, node: process.version, arch: process.arch, root, filesVerified: manifest.files.length })); return; }
   if (action === 'generate' && args.length === 1) { await generate(args[0]); return; }
   if (action === 'generate-pair' && args.length === 1) { await generatePair(args[0]); return; }
   const adapter = path.join(root, 'bin', 'obelisk.exe');

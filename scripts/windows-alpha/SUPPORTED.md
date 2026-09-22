@@ -3,7 +3,7 @@
 | Area | Candidate boundary |
 |---|---|
 | Target | One Windows amd64 build; same-workstation relocation is not a clean VM/second-machine result |
-| Runtime | External Node 24 x64, Windows PowerShell and browser; no Go/Git/compiler required for use |
+| Runtime | External Node 24 x64 and browser; `Launch.cmd` runs in the built-in Command Prompt; no PowerShell, execution-policy change, Go, Git or compiler required for use |
 | Input | Small, quiescent, explicitly generated expendable sources on ordinary fixed local storage |
 | Catalog | Existing preview subset of native schema 8; current records and supported copy relationships, strict original encoding and canonical inventory scope |
 | Viewer | One or two fixed generated snapshots; Library/Find/A/B/All, exact-name representation, exact native IDs and two-sided comparison evidence; recorded source paths are text only |
@@ -35,10 +35,11 @@ an earlier inventory-only executable/asset set is not interchangeable. The nativ
 format remains schema 8, including strict scope compatibility and historical
 UNKNOWN. No public release or replacement of the earlier frozen ZIP is implied.
 Prompt20 remains deferred by the owner; local relocation is not second-machine
-qualification. Pipe-based stop and any actual-console observations are recorded
-separately in this candidate's report; earlier console passes are not new evidence.
+qualification. Pipe-based stop and any actual-console observations are recorded in
+the package review records under `docs/development/reviews/` in the source
+repository, not in this package; earlier console passes are not new evidence.
 
-The packaged binary is launcher-only. It is built with `-tags guionly` and contains only `--gui-disposable-inventory` and `--gui-catalog-readonly`; every other argument is refused with exit status 2. The legacy HTTP server, embedded web UI and backend routes are not compiled in. It is not a release escrow bundle, and the launcher is not a sandbox. Third-party helper executables are not bundled. Licensing notices cover linked dependencies and the Go runtime; public redistribution/signing/reputation review remains pending. Source/build hashes identify bytes, not safety certification.
+The packaged binary is launcher-only. It is built with `-tags guionly` and contains only `--gui-disposable-inventory` and `--gui-catalog-readonly`; any other first argument is refused with exit status 2. The executable reports its version (`0.9.2-dev-comparison.<commit>`, also in `package-manifest.json`) in each inventory result, in the viewer's reader line and footer, and in its refusal message. `main.go` (the legacy HTTP server, embedded web UI and backend routes) is not compiled in, and the remaining backend code is not linked. The executable links no code to listen on a port, make HTTP requests or start other programs; its build tests check the linked symbols against a full-build control. It is not a release escrow bundle, and the launcher is not a sandbox. Third-party helper executables are not bundled. Licensing notices cover linked dependencies and the Go runtime; public redistribution/signing/reputation review remains pending. Source/build hashes identify bytes, not safety certification.
 
 An owner-reported negative scan does not classify the earlier detection or certify this host/package. Protection must stay enabled. A new detection, quarantine or permission block must be investigated without retries in alternate forms. No security exclusion, policy change, administrator operation or automatic sample upload is part of this tutorial.
 

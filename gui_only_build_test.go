@@ -1,11 +1,14 @@
 package main
 
 // gui_only_build_test.go — the launcher-only build (-tags guionly) contains the two
-// GUI adapter modes and nothing that serves HTTP: no route table, no embedded UI,
-// no server loop. It refuses every other argument without binding a port or
-// touching a data directory. Its copies of main.go helpers must not drift.
+// GUI adapter modes and nothing that serves HTTP, dials, spawns processes or
+// carries the escrow payload: no route table, no embedded UI, no server loop. It
+// refuses every other argument without binding a port or touching a data
+// directory, and it reports the version stamped with -X main.appVersion. Its
+// copies of main.go helpers must not drift.
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -23,6 +26,8 @@ import (
 	"time"
 )
 
+const guiTestVersion = "0.0.0-gui-only-test.0123456789ab"
+
 func goTool() string {
 	ext := ""
 	if runtime.GOOS == "windows" {
@@ -31,7 +36,7 @@ func goTool() string {
 	return filepath.Join(runtime.GOROOT(), "bin", "go"+ext)
 }
 
-func buildBinary(t *testing.T, dir, name string, tags ...string) string {
+func buildBinary(t *testing.T, dir, name, version string, tags ...string) string {
 	t.Helper()
 	out := filepath.Join(dir, name)
 	if runtime.GOOS == "windows" {
@@ -40,6 +45,9 @@ func buildBinary(t *testing.T, dir, name string, tags ...string) string {
 	args := []string{"build", "-mod=readonly", "-trimpath"}
 	if len(tags) > 0 {
 		args = append(args, "-tags", strings.Join(tags, ","))
+	}
+	if version != "" {
+		args = append(args, "-ldflags", "-X main.appVersion="+version)
 	}
 	args = append(args, "-o", out, ".")
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -73,12 +81,22 @@ func hasSymbol(nm, sym string) bool {
 
 func TestGUIOnlyBinary(t *testing.T) {
 	dir := t.TempDir()
-	gui := buildBinary(t, dir, "obelisk-gui", "guionly")
-	full := buildBinary(t, dir, "obelisk-full")
+	gui := buildBinary(t, dir, "obelisk-gui", guiTestVersion, "guionly")
+	full := buildBinary(t, dir, "obelisk-full", guiTestVersion)
 
-	t.Run("no server, routes or UI linked", func(t *testing.T) {
+	t.Run("no server, routes, UI, network, processes or escrow linked", func(t *testing.T) {
 		guiNM, fullNM := symbolsOf(t, gui), symbolsOf(t, full)
-		absent := []string{"main.api", "main.uiFS", "main.runJob", "net/http.(*Server).Serve", "net/http.(*conn).serve"}
+		absent := []string{
+			// HTTP server, route table, embedded UI and job runner (main.go).
+			"main.api", "main.uiFS", "main.runJob",
+			"net/http.(*Server).Serve", "net/http.(*conn).serve",
+			// Listening, outbound HTTP and helper processes.
+			"net.Listen", "net.(*TCPListener).Accept",
+			"net/http.(*Transport).RoundTrip",
+			"os/exec.Command", "os/exec.(*Cmd).Start",
+			// Escrow payload embedded by escrow.go.
+			"main.embeddedObeliskSource", "main.escrowManifestJSON",
+		}
 		for _, sym := range absent {
 			if !hasSymbol(fullNM, sym) {
 				t.Fatalf("control: full build lacks %s, so this check proves nothing", sym)
@@ -87,21 +105,39 @@ func TestGUIOnlyBinary(t *testing.T) {
 				t.Errorf("launcher-only build links %s", sym)
 			}
 		}
-		for _, sym := range []string{"main.runGUIInventory", "main.runGUICatalog"} {
+		for _, sym := range []string{"main.runGUIInventory", "main.runGUICatalog", "main.appVersion"} {
 			if !hasSymbol(guiNM, sym) {
 				t.Errorf("launcher-only build lacks %s", sym)
 			}
 		}
 		guiBytes, _ := os.ReadFile(gui)
 		fullBytes, _ := os.ReadFile(full)
-		// Strings that exist only in the embedded UI or the route table.
-		for _, marker := range []string{"instrument of negentropy", "Paranoid mode", "X-Requested-By", "/api/keys"} {
-			if !bytes.Contains(fullBytes, []byte(marker)) {
-				t.Fatalf("control: full build lacks %q, so this check proves nothing", marker)
+		markers := [][]byte{
+			// Strings that exist only in the embedded UI or the route table.
+			[]byte("instrument of negentropy"), []byte("Paranoid mode"), []byte("X-Requested-By"), []byte("/api/keys"),
+		}
+		// The embedded escrow files, byte for byte.
+		for _, name := range []string{"escrow/obelisk-src.tar.gz", "escrow_manifest.json"} {
+			b, err := os.ReadFile(name)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if bytes.Contains(guiBytes, []byte(marker)) {
-				t.Errorf("launcher-only build contains %q", marker)
+			markers = append(markers, b)
+		}
+		for _, marker := range markers {
+			label := string(marker)
+			if len(label) > 40 {
+				label = label[:40] + "…"
 			}
+			if !bytes.Contains(fullBytes, marker) {
+				t.Fatalf("control: full build lacks %q, so this check proves nothing", label)
+			}
+			if bytes.Contains(guiBytes, marker) {
+				t.Errorf("launcher-only build contains %q", label)
+			}
+		}
+		if !bytes.Contains(guiBytes, []byte(guiTestVersion)) {
+			t.Errorf("launcher-only build does not carry the -X version %q", guiTestVersion)
 		}
 	})
 
@@ -115,18 +151,23 @@ func TestGUIOnlyBinary(t *testing.T) {
 		data := filepath.Join(t.TempDir(), "data")
 		for _, args := range [][]string{
 			nil,
+			{""},
 			{"-listen", addr},
 			{"-init-config"},
 			{"-data", data, "-init-config", "-listen", addr},
 			{"--help"},
 			{"-h"},
+			{"version"},
+			{"--version"},
+			{"serve"},
 			{"gui-catalog-readonly"},
 			{"--gui-disposable-inventoryx"},
+			{"--GUI-CATALOG-READONLY"},
 		} {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			cmd := exec.CommandContext(ctx, gui, args...)
-			var stderr bytes.Buffer
-			cmd.Stderr = &stderr
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
 			err := cmd.Run()
 			timedOut := ctx.Err() == context.DeadlineExceeded
 			cancel()
@@ -137,22 +178,27 @@ func TestGUIOnlyBinary(t *testing.T) {
 			if !errorsAs(err, &exit) || exit.ExitCode() != 2 {
 				t.Errorf("%q: err=%v, want exit status 2", args, err)
 			}
-			if !strings.Contains(stderr.String(), "only --gui-disposable-inventory and --gui-catalog-readonly") {
+			want := "Obelisk " + guiTestVersion + ": this build contains only --gui-disposable-inventory and --gui-catalog-readonly"
+			if !strings.Contains(stderr.String(), want) {
 				t.Errorf("%q: refusal message missing: %q", args, stderr.String())
+			}
+			if stdout.Len() != 0 {
+				t.Errorf("%q: refusal wrote stdout: %q", args, stdout.String())
+			}
+			// Nothing may hold the port after the refused run.
+			l, err := net.Listen("tcp", addr)
+			if err != nil {
+				t.Errorf("%q: port %s is not free after the refused run: %v", args, addr, err)
+			} else {
+				l.Close()
 			}
 		}
 		if _, err := os.Stat(data); !os.IsNotExist(err) {
 			t.Errorf("a refused mode created the data directory (stat err=%v)", err)
 		}
-		l, err = net.Listen("tcp", addr)
-		if err != nil {
-			t.Errorf("port %s is not free after the refused runs: %v", addr, err)
-		} else {
-			l.Close()
-		}
 	})
 
-	t.Run("inventory mode still works", func(t *testing.T) {
+	t.Run("inventory and catalog modes work and report the version", func(t *testing.T) {
 		root := t.TempDir()
 		src, out := filepath.Join(root, "source"), filepath.Join(root, "out")
 		for _, d := range []string{src, out} {
@@ -170,13 +216,46 @@ func TestGUIOnlyBinary(t *testing.T) {
 		}
 		lines := strings.Split(strings.TrimSpace(string(b)), "\n")
 		var res struct {
-			Published bool `json:"published"`
+			Version   string `json:"version"`
+			Published bool   `json:"published"`
 		}
 		if err := json.Unmarshal([]byte(lines[len(lines)-1]), &res); err != nil || !res.Published {
 			t.Fatalf("inventory mode did not publish: %s", b)
 		}
-		if _, err := os.Stat(catalog); err != nil {
+		if res.Version != guiTestVersion {
+			t.Errorf("inventory reports version %q, want %q", res.Version, guiTestVersion)
+		}
+
+		cmd := exec.Command(gui, "--gui-catalog-readonly", catalog)
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
 			t.Fatal(err)
+		}
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		first, err := bufio.NewReader(stdout).ReadBytes('\n')
+		stdin.Close()
+		if werr := cmd.Wait(); werr != nil {
+			t.Errorf("catalog reader exit: %v", werr)
+		}
+		if err != nil {
+			t.Fatalf("catalog reader gave no first response: %v", err)
+		}
+		var hello struct {
+			OK      bool            `json:"ok"`
+			Version string          `json:"version"`
+			Catalog json.RawMessage `json:"catalog"`
+		}
+		if err := json.Unmarshal(first, &hello); err != nil || !hello.OK || len(hello.Catalog) == 0 {
+			t.Fatalf("catalog reader did not load: %s", first)
+		}
+		if hello.Version != guiTestVersion {
+			t.Errorf("catalog reader reports version %q, want %q", hello.Version, guiTestVersion)
 		}
 	})
 }

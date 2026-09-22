@@ -1,3 +1,5 @@
+//go:build !guionly
+
 package main
 
 // integration_test.go — the manual audit, frozen as tests. Each case spins up

@@ -24,19 +24,23 @@ const sha = b => createHash('sha256').update(b).digest('hex');
 const events = []; let sequence = 0;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function save() { await fs.writeFile(path.join(evidence, 'commands.json'), JSON.stringify(events, null, 2)); }
-function child(exe, args, overrides = {}) {
+function child(exe, args, overrides = {}, verbatim = false) {
   const event = { sequence: ++sequence, exe, args, cwd, started: new Date().toISOString(), forced: false };
-  const proc = spawn(exe, args, { cwd, env: { ...env, ...overrides }, windowsHide: true, stdio: ['pipe','pipe','pipe'], shell: false });
+  const proc = spawn(exe, args, { cwd, env: { ...env, ...overrides }, windowsHide: true, stdio: ['pipe','pipe','pipe'], shell: false, windowsVerbatimArguments: verbatim });
   let stdout = '', stderr = ''; proc.stdout.on('data', b => stdout += b); proc.stderr.on('data', b => stderr += b);
-  const timeout = setTimeout(() => { event.forced = true; proc.kill(); }, 30000);
+  // Launch.cmd runs Node under cmd.exe; end the whole tree, not only cmd.exe.
+  const timeout = setTimeout(() => { event.forced = true; childProcess.spawnSync(path.join(process.env.SystemRoot, 'System32/taskkill.exe'), ['/pid', String(proc.pid), '/t', '/f']); }, 30000);
   const ended = new Promise((resolve, reject) => { proc.once('error', reject); proc.once('close', async (code, signal) => { clearTimeout(timeout); Object.assign(event, { code, signal, finished: new Date().toISOString(), stdout, stderr }); events.push(event); await save(); resolve(event); }); });
   return { proc, ended, text: () => stdout, event };
 }
-async function finite(exe, args, expected = 0, overrides) { const c = child(exe, args, overrides); c.proc.stdin.end(); const r = await c.ended; assert.equal(r.code, expected, r.stderr + r.stdout); assert.equal(r.forced, false); return r; }
-const launch = (pkg, args, expected = 0, overrides) => finite(ps, ['-NoProfile','-File',path.join(pkg,'Launch.ps1'),...args], expected, overrides);
+async function finite(exe, args, expected = 0, overrides, verbatim = false) { const c = child(exe, args, overrides, verbatim); c.proc.stdin.end(); const r = await c.ended; assert.equal(r.code, expected, r.stderr + r.stdout); assert.equal(r.forced, false); return r; }
+// The same command line a tester types in Command Prompt: "…\Launch.cmd" "arg" …
+const cmdExe = path.join(process.env.SystemRoot, 'System32/cmd.exe');
+const cmdLine = (pkg, args) => ['/d', '/s', '/c', '"' + [path.join(pkg, 'Launch.cmd'), ...args].map(a => '"' + a + '"').join(' ') + '"'];
+const launch = (pkg, args, expected = 0, overrides) => finite(cmdExe, cmdLine(pkg, args), expected, overrides, true);
 async function tree(root) { const result = {}; async function visit(dir) { for (const e of await fs.readdir(dir, { withFileTypes: true })) { const p = path.join(dir,e.name); if(e.isDirectory())await visit(p);else result[path.relative(root,p)] = sha(await fs.readFile(p)); } } await visit(root); return result; }
 async function start(pkg, args) {
-  const c = child(ps, ['-NoProfile','-File',path.join(pkg,'Launch.ps1'),...args]);
+  const c = child(cmdExe, cmdLine(pkg, args), {}, true);
   for(let i=0;i<600;i++){const m=c.text().match(/http:\/\/127\.0\.0\.1:\d+\//);if(m)return {...c,url:m[0]};if(c.proc.exitCode!==null)throw Error(c.text());await delay(20);}
   throw Error('No packaged viewer URL');
 }
@@ -59,23 +63,51 @@ test('Explicit ZIP allowlist, independent .NET extraction and manifest identitie
   assert.deepEqual([...artifact.entries].sort(),expected);
   for(const pkg of packages){const r=await finite(ps,['-NoProfile','-File',path.join(scriptRoot,'extract.ps1'),artifact.zipPath,pkg]);assert.deepEqual(JSON.parse(r.stdout).sort(),expected);const manifest=JSON.parse(await fs.readFile(path.join(pkg,'package-manifest.json'),'utf8'));assert.equal(sha(await fs.readFile(path.join(pkg,'package-manifest.json'))),artifact.manifestSHA256);for(const f of manifest.files)assert.equal(sha(await fs.readFile(path.join(pkg,f.path))),f.sha256);const check=await launch(pkg,['check']);assert.match(check.stdout,/filesVerified/);}
 });
-test('Packaged binary is launcher-only: other modes refuse, no port opens, manifest records the build', async()=>{
+test('Packaged binary is launcher-only: other modes refuse promptly, hold no port, write nothing; manifest records the build', async()=>{
   const net=await import('node:net');
   const bin=path.join(packages[0],'bin','obelisk.exe');
-  const port=await new Promise((resolve,reject)=>{const s=net.createServer();s.once('error',reject);s.listen(0,'127.0.0.1',()=>{const p=s.address().port;s.close(()=>resolve(p));});});
-  const data=path.join(evidence,'launcher-only-data');
-  for(const args of [[],['-listen','127.0.0.1:'+port],['-init-config'],['-data',data,'-init-config','-listen','127.0.0.1:'+port],['--help'],['-h'],['--gui-disposable-inventoryx'],['serve']]){
-    const c=child(bin,args);c.proc.stdin.end();
-    const probe=new Promise(resolve=>{const sock=net.connect(port,'127.0.0.1');sock.once('connect',()=>{sock.destroy();resolve(true);});sock.once('error',()=>resolve(false));});
-    const r=await c.ended;assert.equal(r.forced,false);assert.equal(r.code,2,JSON.stringify(args)+r.stderr);
-    assert.match(r.stderr,/only --gui-disposable-inventory and --gui-catalog-readonly/);
-    assert.equal(await probe,false,'a refused mode accepted a connection on port '+port);
-  }
-  await assert.rejects(fs.access(data));
   const manifest=JSON.parse(await fs.readFile(path.join(packages[0],'package-manifest.json'),'utf8'));
+  const port=await new Promise((resolve,reject)=>{const s=net.createServer();s.once('error',reject);s.listen(0,'127.0.0.1',()=>{const p=s.address().port;s.close(()=>resolve(p));});});
+  const free=()=>new Promise(resolve=>{const s=net.createServer();s.once('error',()=>resolve(false));s.listen(port,'127.0.0.1',()=>s.close(()=>resolve(true)));});
+  const home=path.join(evidence,'launcher-only-profile');
+  // An existing legacy data directory is the case in which the full executable starts its server.
+  for(const d of ['.obelisk','.mnemo']){await fs.mkdir(path.join(home,d),{recursive:true});await fs.writeFile(path.join(home,d,'config.json'),JSON.stringify({listen:'127.0.0.1:'+port}));}
+  const profileBefore=await tree(home),data=path.join(evidence,'launcher-only-data');
+  for(const args of [[],[''],['-listen','127.0.0.1:'+port],['-init-config'],['-data',data,'-init-config','-listen','127.0.0.1:'+port],['-data',path.join(home,'.obelisk')],['--help'],['-h'],['version'],['--version'],['serve'],['--gui-disposable-inventoryx'],['gui-catalog-readonly']]){
+    const started=Date.now(),c=child(bin,args,{USERPROFILE:home,HOME:home});c.proc.stdin.end();
+    const r=await c.ended;assert.equal(r.forced,false);assert.ok(Date.now()-started<5000,JSON.stringify(args)+' did not exit promptly');
+    assert.equal(r.code,2,JSON.stringify(args)+r.stderr);assert.equal(r.stdout,'');
+    assert.ok(r.stderr.includes('Obelisk '+manifest.version+': this build contains only --gui-disposable-inventory and --gui-catalog-readonly'),r.stderr);
+    assert.equal(await free(),true,JSON.stringify(args)+' left port '+port+' in use');
+  }
+  await assert.rejects(fs.access(data));assert.deepEqual(await tree(home),profileBefore);
   assert.match(manifest.packageID,/^0\.9\.2-dev-comparison\.[0-9a-f]{12}-windows-amd64-local$/);
-  assert.match(manifest.binary,/launcher-only/);assert.ok(manifest.build.flags.includes('guionly'));assert.equal(manifest.build.GOPROXY,'off');
+  assert.equal(manifest.version,'0.9.2-dev-comparison.'+manifest.sourceCommit.slice(0,12));assert.equal(manifest.packageID,manifest.version+'-windows-amd64-local');
+  assert.match(manifest.binary,/launcher-only/);assert.ok(manifest.build.flags.includes('guionly'));assert.ok(manifest.build.flags.includes('-X main.appVersion='+manifest.version));assert.equal(manifest.build.GOPROXY,'off');
+  assert.equal(manifest.build.toolchain,'go1.27.0');assert.equal(manifest.build.goVersion,'go version go1.27.0 windows/amd64');
   assert.match(manifest.sourceCommit,/^[0-9a-f]{40}$/);assert.equal(manifest.acceptedRuntimeImplementation,undefined);
+  assert.equal(manifest.prerequisites.powershell,undefined);
+});
+test('Launch.cmd is plain ASCII with CRLF, replaces the PowerShell launcher, and passes the exit code through', async()=>{
+  const bytes=await fs.readFile(path.join(packages[1],'Launch.cmd'));
+  assert.ok(bytes.every(b=>b<0x80),'Launch.cmd must be ASCII');
+  const text=bytes.toString('latin1');assert.equal(text.split('\r\n').length-1,text.split('\n').length-1,'Launch.cmd must use CRLF only');
+  assert.doesNotMatch(text,/powershell|ExecutionPolicy/i);
+  await assert.rejects(fs.access(path.join(packages[1],'Launch.ps1')));
+  // The relocated package path contains spaces, non-ASCII, &, ', + and %.
+  const ok=await launch(packages[1],['check']);assert.equal(JSON.parse(ok.stdout.trim().split('\n').at(-1)).root,packages[1]);
+  await launch(packages[1],['no-such-action'],1);
+});
+test('Packaged executable reports the manifest version to the launcher, inventory results and the viewer', async()=>{
+  const manifest=JSON.parse(await fs.readFile(path.join(packages[0],'package-manifest.json'),'utf8')),version=manifest.version;
+  const check=await launch(packages[0],['check']);
+  assert.ok(check.stdout.includes('Obelisk developer alpha '+version+' (package '+manifest.packageID+')'),check.stdout);
+  assert.equal(JSON.parse(check.stdout.trim().split('\n').at(-1)).version,version);
+  const ws=path.join(evidence,'version-workspace');await launch(packages[0],['generate',ws]);
+  const inv=await launch(packages[0],['inventory',ws,'off.json']);
+  const result=JSON.parse(inv.stdout.trim().split('\n').find(l=>l.startsWith('{"version"')));assert.equal(result.version,version);assert.equal(result.published,true);
+  const c=await start(packages[0],['view',path.join(ws,'catalogs','off.json')]);
+  try{for(let i=0;i<100&&!c.text().includes('Native catalog reader version: '+version);i++)await delay(20);assert.ok(c.text().includes('Native catalog reader version: '+version),c.text());assert.equal((await mode(c)).readerVersion,version);}finally{await stop(c);}
 });
 test('Default help is inert and missing Node gives a prerequisite failure', async()=>{
   const before=await tree(packages[0]);const r=await launch(packages[0],[]);assert.match(r.stdout,/Actions/);assert.deepEqual(await tree(packages[0]),before);
@@ -153,6 +185,7 @@ test('Extracted ALPHA/BETA tutorial, independent classes, scope, reversal and tw
       const c=await start(pkg,['view',left,right]);
       try {
         const m=await mode(c);assert.equal(m.ok,true);assert.equal(m.multi,true);assert.equal(m.snapshots.length,2);
+        assert.equal(m.readerVersion,JSON.parse(await fs.readFile(path.join(pkg,'package-manifest.json'),'utf8')).version);
         for(const [j,file]of [left,right].entries())assert.equal(m.snapshots[j].catalog.digest,sha(await fs.readFile(file)));
         const all=await(await fetch(c.url+'catalog-query?text=&hash=&snapshot=all')).json();assert.equal(all.groups.length,2);assert.equal(all.groups[0].ids.length,11);assert.equal(all.groups[1].ids.length,policy==='on'?9:11);
         for(const reverse of [false,true]) {

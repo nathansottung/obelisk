@@ -4,6 +4,9 @@
 // HEAD. Untracked files cannot enter the package.
 // Prerequisite: GOPROXY=off, so ABS_EXISTING_MODULE_CACHE must already hold every
 // module in go.sum (for example from an earlier online `go mod download`).
+// The Go executable must be exactly the `toolchain` named in go.mod at HEAD; the
+// module cache is checked with `go mod verify` and the launcher-only source is
+// vetted before it is built.
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -47,6 +50,11 @@ fs.writeFileSync(path.join(output, 'build-source.json'), JSON.stringify(sourceMa
 const env = { ...process.env, GOTOOLCHAIN: 'local', GOPROXY: 'off', GOSUMDB: 'off', GOFLAGS: '-mod=readonly', CGO_ENABLED: '0', GOOS: 'windows', GOARCH: 'amd64', GOMODCACHE: moduleCache, GOCACHE: path.join(output, 'go-cache'), TEMP: path.join(output, 'go-temp'), TMP: path.join(output, 'go-temp') }; delete env.GOTMPDIR;
 fs.mkdirSync(env.TEMP);
 const goVersion = command(go, ['version'], source, env).toString().trim();
+const toolchain = git('show', base + ':go.mod').toString().match(/^toolchain (go\d+\.\d+\.\d+)\r?$/m)?.[1];
+assert.ok(toolchain, 'go.mod at HEAD must name an exact toolchain line');
+assert.equal(goVersion, `go version ${toolchain} windows/amd64`, `Build requires exactly ${toolchain}; got: ${goVersion}`);
+command(go, ['mod', 'verify'], source, env);
+command(go, ['vet', '-tags', 'guionly', '.'], source, env);
 const label = '0.9.2-dev-comparison.' + base.slice(0, 12);
 fs.mkdirSync(path.join(stage, 'bin'));
 const buildFlags = ['-trimpath', '-buildvcs=false', '-tags', 'guionly', '-ldflags', '-X main.appVersion=' + label];
@@ -63,7 +71,7 @@ notices += 'Go standard library/toolchain runtime\n' + fs.readFileSync(path.reso
 write(stage, 'THIRD-PARTY-NOTICES.txt', Buffer.from(notices)); entries.push('THIRD-PARTY-NOTICES.txt');
 const scriptNames = [...launcherFiles, 'build.mjs', 'zip.mjs', 'package-files.mjs'];
 const scriptIdentities = scriptNames.map(name => ({ path: 'scripts/windows-alpha/' + name, sha256: sha(git('show', base + ':scripts/windows-alpha/' + name)), revision: base }));
-const manifest = { packageID: label + '-windows-amd64-local', unsigned: true, status: 'DEVELOPER_ALPHA_PACKAGING_CANDIDATE', sourceCommit: base, binary: 'launcher-only (-tags guionly): --gui-disposable-inventory and --gui-catalog-readonly; no HTTP server, UI or backend routes', scriptIdentities, target: 'windows/amd64', build: { goVersion, node: process.version, host: os.release(), flags: buildFlags, CGO_ENABLED: '0', GOPROXY: 'off' }, prerequisites: { node: '24.x x64, externally installed', browser: 'externally installed modern browser; Chrome exercised', powershell: 'Windows PowerShell for Launch.ps1; obey existing script policy' }, files: entries.map(name => { const bytes = fs.readFileSync(path.join(stage, name)); return { path: name, bytes: bytes.length, sha256: sha(bytes) }; }) };
+const manifest = { packageID: label + '-windows-amd64-local', version: label, unsigned: true, status: 'DEVELOPER_ALPHA_PACKAGING_CANDIDATE', sourceCommit: base, binary: 'launcher-only (-tags guionly): --gui-disposable-inventory and --gui-catalog-readonly; no HTTP server, UI or backend routes; reports ' + label + ' in inventory results, the reader handshake and its refusal message', scriptIdentities, target: 'windows/amd64', build: { goVersion, toolchain, node: process.version, host: os.release(), flags: buildFlags, CGO_ENABLED: '0', GOPROXY: 'off' }, prerequisites: { node: '24.x x64, externally installed', browser: 'externally installed modern browser; Chrome exercised', shell: 'Launch.cmd through the built-in Windows Command Prompt; no PowerShell or execution-policy change' }, files: entries.map(name => { const bytes = fs.readFileSync(path.join(stage, name)); return { path: name, bytes: bytes.length, sha256: sha(bytes) }; }) };
 write(stage, 'package-manifest.json', Buffer.from(JSON.stringify(manifest, null, 2))); entries.push('package-manifest.json');
 const zip = makeZip(entries.map(name => ({ name, data: fs.readFileSync(path.join(stage, name)) })));
 const zipPath = path.join(output, manifest.packageID + '.zip'); fs.writeFileSync(zipPath, zip, { flag: 'wx' });

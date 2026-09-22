@@ -1,55 +1,79 @@
 # Local Windows comparison developer-alpha packaging candidate
 
-This new unsigned package is a local candidate for generated-source inventory, one/two-snapshot browsing and recorded comparison. It is separate from the earlier accepted inventory-only ZIP and awaits its own package review. It is not a released backup/archive product. The included Obelisk executable is launcher-only: it contains only the inventory and read-only viewer modes and refuses every other command. It has no HTTP server, web UI or backup/archive routes. The launcher is still not a security sandbox.
+This unsigned package is a local candidate for generated-source inventory, one/two-snapshot browsing and recorded comparison. It supersedes the accepted comparison package (ZIP SHA-256 `33d1d9e5…`) for the same tutorial content, and it is separate from the earlier accepted inventory-only ZIP (`f25125c4…`). Both earlier ZIPs stay frozen and unchanged. This package awaits its own package review. It is not a released backup/archive product.
 
-Prerequisites: Windows x64, **existing Node.js 24 x64** on PATH, Windows PowerShell, and an existing browser (Chrome is the rehearsal target). Go, Git, a compiler and the source checkout are not needed by testers. No runtime is downloaded or bundled. `package-manifest.json` records exact source, script and binary identities; hashes are not signatures or malware-free certification.
+The included Obelisk executable is launcher-only. It contains only the inventory and read-only viewer modes and refuses every other command. The executable has no HTTP server, web UI or backup/archive routes. The `view` action runs the package's own Node.js viewer, which listens on 127.0.0.1 only and asks the executable for catalog data. The launcher is not a security sandbox.
 
-Unpack the ZIP into a **new ordinary fixed-local directory**, separate from your tutorial workspace. In PowerShell, change to that extracted directory. These commands are relative to the package:
+Prerequisites: Windows x64, **existing Node.js 24 x64** on PATH, and an existing browser (Chrome is the rehearsal target). `Launch.cmd` runs in the built-in Command Prompt. PowerShell, Go, Git, a compiler and the source checkout are not needed by testers. No runtime is downloaded or bundled. `package-manifest.json` records exact source, script and binary identities; hashes are not signatures or malware-free certification. See TESTING.md for what to run, what to report and what never to use.
 
-```powershell
-Get-Command node.exe -CommandType Application
+## Before extracting: unblock the downloaded ZIP
+
+Windows marks downloaded files as coming from the internet and copies that mark to every extracted file. Remove it once, from the ZIP, **before** extracting:
+
+1. Right-click the ZIP and choose **Properties**.
+2. On the **General** tab, tick **Unblock** next to "This file came from another computer…", then choose **OK**. If there is no Unblock checkbox, the ZIP is not marked; continue.
+3. Extract the ZIP into a **new ordinary fixed-local directory**, separate from your tutorial workspace.
+
+What Windows may still show:
+
+- **Skipped Unblock and double-clicked `Launch.cmd`:** an "Open File - Security Warning" dialog saying the publisher could not be verified (Unknown Publisher, type Windows Command Script). Choose **Cancel**, unblock the ZIP, and extract it again into a new directory. Do not choose Run to get past it.
+- **Running `Launch.cmd` from Command Prompt:** no Windows prompt is expected, whether or not the ZIP was unblocked. Microsoft Defender may still scan the unsigned executable on first use, which can briefly delay the first command.
+- **A Defender detection, quarantine, SmartScreen "Windows protected your PC" screen or permission block:** stop and report it (see below).
+
+Loopback-only listening is not expected to produce a firewall prompt. If one appears, choose Cancel and report it.
+
+## Check the prerequisites
+
+Open **Command Prompt** (Start menu → type `cmd`) and change to the extracted directory, for example `cd /d "%USERPROFILE%\Downloads\obelisk-package"`. These commands are relative to the package:
+
+```bat
+where node
 node --version
-.\Launch.ps1 check
-.\Launch.ps1 help
+Launch.cmd check
+Launch.cmd help
 ```
 
-If Node is missing or not version 24 x64, stop and ask the tester coordinator to resolve the prerequisite. If a security detection or permission/script-policy block occurs, stop and report it for investigation. Do not disable protections, add exclusions, allow a detection, restore quarantine, change execution policy or try alternate execution forms to get past it. Unsigned status does not make a warning harmless.
+Every action except `help` first prints a line naming the package version, for example `Obelisk developer alpha 0.9.2-dev-comparison.<commit>`. Include that line in any report.
 
-Choose a **new**, expendable workspace beneath your own `LOCALAPPDATA\ObeliskDev`. The accepted viewer requires that boundary. The immediate parent must exist; the generator may create the `ObeliskDev` root if absent. A prior workspace, even empty, is refused. Keep the directory quiescent and use a fixed local drive; no user archives, NAS, removable media or existing evidence folders.
+If Node is missing or not version 24 x64, stop and ask the tester coordinator to resolve the prerequisite. If a security detection or permission block occurs, stop and report it for investigation. Do not disable protections, add exclusions, allow a detection, restore quarantine or try alternate execution forms to get past it. Unsigned status does not make a warning harmless.
 
-```powershell
-$workspace = Join-Path $env:LOCALAPPDATA 'ObeliskDev\Alpha tutorial cafe 01'
-.\Launch.ps1 generate $workspace
-.\Launch.ps1 inventory $workspace off.json
-.\Launch.ps1 inventory $workspace on.json --ignore-ds-store
+## Single-snapshot walkthrough
+
+Choose a **new**, expendable workspace beneath your own `%LOCALAPPDATA%\ObeliskDev`. The accepted viewer requires that boundary. The immediate parent must exist; the generator may create the `ObeliskDev` root if absent. A prior workspace, even empty, is refused. Keep the directory quiescent and use a fixed local drive; no user archives, NAS, removable media or existing evidence folders.
+
+```bat
+set "workspace=%LOCALAPPDATA%\ObeliskDev\Alpha tutorial cafe 01"
+Launch.cmd generate "%workspace%"
+Launch.cmd inventory "%workspace%" off.json
+Launch.cmd inventory "%workspace%" on.json --ignore-ds-store
 ```
 
-Generation, inventory and viewing are separate deliberate actions. The generator writes ten synthetic files only into the new workspace's `source` directory. The producer reads those selected sources and creates snapshots in the disjoint `catalogs` directory. Default OFF includes ten files; ON includes eight and excludes two exact regular `.DS_Store` files. The near name, sidecar and content below the same-named directory remain included. Equal bytes at two paths remain distinct records. Check both process exit and `published`; an error after publication may still say `published:true`. Do not delete a final catalog to pretend publication was rolled back.
+Keep the quotation marks around paths. Command Prompt expands `%NAME%` inside them; that is how `%LOCALAPPDATA%` and `%workspace%` work.
 
-```powershell
-$off = Join-Path $workspace 'catalogs\off.json'
-$on = Join-Path $workspace 'catalogs\on.json'
-.\Launch.ps1 view $off
+Generation, inventory and viewing are separate deliberate actions. The generator writes ten synthetic files only into the new workspace's `source` directory. The producer reads those selected sources and creates snapshots in the disjoint `catalogs` directory. Default OFF includes ten files; ON includes eight and excludes two exact regular `.DS_Store` files. The near name, sidecar and content below the same-named directory remain included. Equal bytes at two paths remain distinct records. Each inventory result line reports `version` (the executable's version), `published` and counts. Check both process exit and `published`; an error after publication may still say `published:true`. Do not delete a final catalog to pretend publication was rolled back.
+
+```bat
+Launch.cmd view "%workspace%\catalogs\off.json"
 ```
 
-Open the printed `http://127.0.0.1:<port>/` URL. Library shows recorded collections and scope. Find searches recorded paths/hashes; select a result for the inspector. Try `café` and `same-`. For an exact name, enable **Exact name (JSON string)** and enter `"nested/O'Brien & +%# note.txt"`. Names/IDs are not normalized. The catalog is read but not modified, and recorded source/media paths are not opened. Historical recorded evidence is not current availability, a backup copy or verification.
+The viewer prints `Native catalog reader version: …`, then a `http://127.0.0.1:<port>/` URL. Open that URL. The page footer also shows the reader version. Library shows recorded collections and scope. Find searches recorded paths/hashes; select a result for the inspector. Try `café` and `same-`. For an exact name, enable **Exact name (JSON string)** and enter `"nested/O'Brien & +%# note.txt"`. Names/IDs are not normalized. The catalog is read but not modified, and recorded source/media paths are not opened. Historical recorded evidence is not current availability, a backup copy or verification.
 
-In the launching terminal type **stop**, press Enter, and wait for both `Preview stopped ... catalog reader waited` and `Packaged child waited`. Confirm both exit codes are zero and that the former URL no longer responds. Ctrl+C uses the existing console signal path; interactive-console qualification remains a distinct owner check until recorded as passed. Closing a browser tab alone does not stop the viewer. Automatic shutdown remains 60 minutes.
+In the launching window type **stop**, press Enter, and wait for both `Preview stopped ... catalog reader waited` and `Packaged child waited`. Confirm both exit codes are zero and that the former URL no longer responds. Ctrl+C uses the existing console signal path. Command Prompt may then ask `Terminate batch job (Y/N)?`; the viewer has already stopped, so either answer is fine. Interactive-console qualification remains a distinct owner check until recorded as passed. Closing a browser tab alone does not stop the viewer. Automatic shutdown remains 60 minutes.
 
-```powershell
-# After stopping the previous viewer:
-.\Launch.ps1 view $on
-# Type stop and wait, then reopen the retained snapshot without regeneration:
-.\Launch.ps1 view $off
+```bat
+rem After stopping the previous viewer:
+Launch.cmd view "%workspace%\catalogs\on.json"
+rem Type stop and wait, then reopen the retained snapshot without regeneration:
+Launch.cmd view "%workspace%\catalogs\off.json"
 ```
 
-Repeating `inventory $workspace off.json` must refuse without replacing its bytes. For another observation, explicitly choose a new name such as `off-2.json`. Generation never merges or cleans a prior run. No catalog migration is performed.
+Repeating `inventory "%workspace%" off.json` must refuse without replacing its bytes. For another observation, explicitly choose a new name such as `off-2.json`. Generation never merges or cleans a prior run. No catalog migration is performed.
 
-Intentional static samples are separate: `.\Launch.ps1 static`. This action visibly uses synthetic demo records, not your catalog. Missing/invalid catalogs, adapters or assets must not fall back to static success. No browser filesystem/executable picker or producer endpoint exists; operational controls remain disabled/demo-only.
+Intentional static samples are separate: `Launch.cmd static`. This action visibly uses synthetic demo records, not your catalog. Missing/invalid catalogs, adapters or assets must not fall back to static success. No browser filesystem/executable picker or producer endpoint exists; operational controls remain disabled/demo-only.
 
 New scoped catalogs require the compatible corrected reader included in this package. The previously identified pre-correction reader refuses populated scope. Supported older unscoped catalogs remain UNKNOWN, never inferred OFF/zero. Pair outputs with the documented source/binary identities. Never strip/rewrite scope metadata for compatibility.
 
-See SUPPORTED.md for exact limits and pending distribution gates, LICENSE and THIRD-PARTY-NOTICES.txt for included notices, and BUG-REPORT.md for optional redacted reporting. There is no telemetry or automatic upload.
+See SUPPORTED.md for exact limits and pending distribution gates, TESTING.md for the tester checklist, LICENSE and THIRD-PARTY-NOTICES.txt for included notices, and BUG-REPORT.md for optional redacted reporting. There is no telemetry or automatic upload.
 
 ## Two-snapshot ALPHA/BETA walkthrough
 
@@ -58,20 +82,18 @@ extracted package**. Choose a different unused workspace name for each rehearsal
 Keep this ordinary local workspace separate from the package. Generation creates
 two small expendable source trees; it does not scan or create catalogs.
 
-```powershell
-$pair = Join-Path $env:LOCALAPPDATA 'ObeliskDev\Comparison tutorial 01'
-.\Launch.ps1 generate-pair $pair
-$alpha = Join-Path $pair 'ALPHA'
-$beta = Join-Path $pair 'BETA'
-.\Launch.ps1 inventory $alpha off.json
-.\Launch.ps1 inventory $beta off.json
-.\Launch.ps1 inventory $beta on.json --ignore-ds-store
-$a = Join-Path $alpha 'catalogs\off.json'
-$b = Join-Path $beta 'catalogs\off.json'
-$bOn = Join-Path $beta 'catalogs\on.json'
-.\Launch.ps1 view $a
-# Type stop and Enter; wait for Preview stopped and Packaged child waited.
-.\Launch.ps1 view $a $b
+```bat
+set "pair=%LOCALAPPDATA%\ObeliskDev\Comparison tutorial 01"
+Launch.cmd generate-pair "%pair%"
+Launch.cmd inventory "%pair%\ALPHA" off.json
+Launch.cmd inventory "%pair%\BETA" off.json
+Launch.cmd inventory "%pair%\BETA" on.json --ignore-ds-store
+set "a=%pair%\ALPHA\catalogs\off.json"
+set "b=%pair%\BETA\catalogs\off.json"
+set "bOn=%pair%\BETA\catalogs\on.json"
+Launch.cmd view "%a%"
+rem Type stop and Enter; wait for Preview stopped and Packaged child waited.
+Launch.cmd view "%a%" "%b%"
 ```
 
 Each OFF snapshot is an actual native inventory of 11 generated files. BETA ON
@@ -98,15 +120,15 @@ verdict. Only-recorded means absence from that complete recorded set, not physic
 deletion. The ordinary producer supplies full hashes, so this tutorial has no
 inconclusive pair; supported missing/conflicting evidence is not fabricated here.
 
-```powershell
-# Stop and wait between each session; these commands reuse retained snapshots.
-.\Launch.ps1 view $b
-.\Launch.ps1 view $b $a
-# BETA is now Snapshot A. Choose either reference deliberately in the GUI.
-.\Launch.ps1 view $a $bOn
-# With ALPHA as reference: agreement 7, difference 1, reference-only 3,
-# counterpart-only 1; union 12. The .DS_Store rows retain scope qualification.
-.\Launch.ps1 view $a $b
+```bat
+rem Stop and wait between each session; these commands reuse retained snapshots.
+Launch.cmd view "%b%"
+Launch.cmd view "%b%" "%a%"
+rem BETA is now Snapshot A. Choose either reference deliberately in the GUI.
+Launch.cmd view "%a%" "%bOn%"
+rem With ALPHA as reference: agreement 7, difference 1, reference-only 3,
+rem counterpart-only 1; union 12. The .DS_Store rows retain scope qualification.
+Launch.cmd view "%a%" "%b%"
 ```
 
 Argument order assigns A/B for that session, never an authoritative original.

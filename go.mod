@@ -2,6 +2,10 @@ module github.com/nathansottung/obelisk
 
 go 1.22.2
 
+// Release and package builds use exactly this toolchain; the Windows package
+// builder refuses any other `go version`.
+toolchain go1.27.0
+
 require (
 	// Code128 barcode rendering for printable volume labels. Small, pure-Go, no
 	// CGO or transitive deps — the same "one static binary, hand-restorable"

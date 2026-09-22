@@ -1,3 +1,5 @@
+//go:build !guionly
+
 package main
 
 // durable_completion_test.go — OB-002 / PR-03: a completion acknowledgment must be

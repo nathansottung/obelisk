@@ -40,7 +40,7 @@ func main() {
 			return
 		}
 	}
-	fmt.Fprintln(os.Stderr, "this Obelisk build contains only --gui-disposable-inventory and --gui-catalog-readonly; use Launch.ps1")
+	fmt.Fprintf(os.Stderr, "Obelisk %s: this build contains only --gui-disposable-inventory and --gui-catalog-readonly; use Launch.cmd\n", appVersion)
 	os.Exit(2)
 }
 

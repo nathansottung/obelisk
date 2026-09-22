@@ -1,3 +1,5 @@
+//go:build !guionly
+
 package main
 
 // rename_compat_test.go — pins the permanent Mnemosyne -> Obelisk read-compatibility

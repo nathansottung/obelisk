@@ -31,7 +31,7 @@ export function renderCatalog() {
   document.querySelector('#scope').hidden = false;
   document.querySelector('#scope').textContent = notice;
   document.querySelector('footer span').textContent = notice;
-  document.querySelector('footer strong').textContent = 'Read-only snapshot';
+  document.querySelector('footer strong').textContent = mode.readerVersion ? 'Read-only snapshot · reader ' + mode.readerVersion : 'Read-only snapshot';
   document.querySelector('#header-actions').replaceChildren();
   document.querySelector('#breadcrumb').replaceChildren();
   document.querySelector('#demo-message').textContent = '';

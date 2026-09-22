@@ -1,3 +1,5 @@
+//go:build !guionly
+
 package main
 
 import (

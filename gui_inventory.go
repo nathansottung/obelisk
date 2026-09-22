@@ -25,6 +25,7 @@ type inventoryLimits struct {
 var disposableInventoryLimits = inventoryLimits{64, 128, 8, 512, 8 << 20, 32 << 20}
 
 type inventoryResult struct {
+	Version   string `json:"version"` // producing binary's appVersion
 	Published bool   `json:"published"`
 	Output    string `json:"output"`
 	Files     int    `json:"processedFiles"`
@@ -454,6 +455,7 @@ func runGUIInventory(args []string, output, diagnostics io.Writer) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	result, err := produceGUIInventory(ctx, args[0], args[1], disposableInventoryLimits, inventoryIO{ignoreDSStore: ignore}, diagnostics)
+	result.Version = appVersion
 	encodeErr := json.NewEncoder(output).Encode(result)
 	if encodeErr != nil {
 		return errors.Join(err, fmt.Errorf("status output failed (published=%t, catalog=%q): %w", result.Published, result.Output, encodeErr))

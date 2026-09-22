@@ -1,3 +1,5 @@
+//go:build !guionly
+
 package main
 
 // durable_completion_followup_test.go — OB-002 / PR-03 follow-up: the recording-state
