@@ -40,6 +40,8 @@ separately in this candidate's report; earlier console passes are not new eviden
 
 The full binary embeds the existing production UI and development escrow placeholder because the accepted Go source does. Neither is activated by the launcher; it is not a minimal-command sandbox or a release escrow bundle. Third-party helper executables are not bundled. Licensing notices cover linked dependencies and the Go runtime; public redistribution/signing/reputation review remains pending. Source/build hashes identify bytes, not safety certification.
 
+Do not run `bin/obelisk.exe` directly. It contains the full legacy server, which this preview does not cover. Use `Launch.ps1` only.
+
 An owner-reported negative scan does not classify the earlier detection or certify this host/package. Protection must stay enabled. A new detection, quarantine or permission block must be investigated without retries in alternate forms. No security exclusion, policy change, administrator operation or automatic sample upload is part of this tutorial.
 
 PR-04, external-tar Unicode containment, broader persistence/concurrency and other-platform qualification remain separate. LTO-8 is the first physical qualification target, not a generation limit; tape/ring buffer and Blu-ray are separate workstreams.

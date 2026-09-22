@@ -136,3 +136,9 @@ The new candidate is uncommitted on feat/windows-comparison-alpha-package at e3d
 - [ ] Historical alert classification, broader runtime/platform/console scope and separately authorized public signing/distribution.
 
 See [comparison package acceptance](docs/development/reviews/WINDOWS-COMPARISON-ALPHA-PACKAGE-ACCEPTANCE-2026-09-21.md). Package-input docs and historical reports retain their reviewed bytes; this later non-packaged entry records acceptance.
+
+
+## Draft prerelease state — 2026-09-22
+
+- [x] Draft prerelease assets uploaded 2026-09-21; not published. The draft holds the comparison ZIP (SHA-256 33d1d9e5087c35aca23606957777f3d13ff8267de798c9848c79ada4697f00d2), `SHA256SUMS.txt` and `TESTING.md`.
+- [ ] Publication is not authorized. The earlier entries' "no upload" lines describe their own checkpoints and stay unchanged.
