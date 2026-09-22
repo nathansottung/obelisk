@@ -417,3 +417,44 @@ and generation-independent/LTO-8-first/separate-Blu-ray directions are unchanged
 
 ONE next action after verified publication: owner selects and separately authorizes
 the next bounded milestone using the final receipt SHA. No automatic follow-on.
+
+
+## Windows comparison package candidate — 2026-09-21
+
+**WINDOWS_COMPARISON_ALPHA_PACKAGE_READY_FOR_REVIEW** on
+`feat/windows-comparison-alpha-package`, unchanged parent
+`e3d9bef998a20dff78dc67463dfb8f848aad76ce`; packaging changes remain uncommitted/unstaged.
+The new unsigned local comparison ZIP is distinct from the accepted inventory ZIP.
+New ZIP SHA-256: `33d1d9e5087c35aca23606957777f3d13ff8267de798c9848c79ada4697f00d2`.
+Accepted runtime source and the original ZIP remain unchanged.
+Current execution: extracted-package tests 10/10, missing-input boundary 1/1,
+9 normally stopped browser sessions, actual console typed stop, and the final
+22-source-file lock / induced second-reader failure / reopen probe passed. Two
+supplemental probe harness failures and corrections are retained separately.
+Historical native/browser/reviewer results are not new package coverage.
+See [implementation and artifact identities](reviews/WINDOWS-COMPARISON-ALPHA-PACKAGE-IMPLEMENTATION-2026-09-21.md).
+Prompt20 remains **DEFERRED_BY_OWNER**; unresolved prior alert classification,
+second-machine/downloaded-file policy and broader qualification gates remain separate.
+**One next action:** substantive package-delta review of the exact new ZIP and
+uncommitted candidate. No acceptance/publication/package replacement is implied.
+
+
+## Owner-accepted comparison package source checkpoint — 2026-09-21
+
+The owner accepted the reviewed local unsigned generated-data comparison package
+through separately submitted Prompt30. Implementation: `be6f60f178c793835cdbad82c9f774f61fd4071d`
+(parent `e3d9bef998a20dff78dc67463dfb8f848aad76ce`). Both archives remain unchanged; new ZIP
+SHA-256 `33d1d9e5087c35aca23606957777f3d13ff8267de798c9848c79ada4697f00d2`,
+older inventory ZIP `f25125c46acca5635b2297305d849888fbded129281708875a64289c4b22c5de`.
+Historical author/reviewer tests remain separately attributed; no runtime tests,
+package sessions or builds were rerun for this checkpoint. The empty-EOF reviewer
+harness diagnostic is retained; supported stop-token behavior is unchanged.
+See [acceptance and source/artifact mapping](reviews/WINDOWS-COMPARISON-ALPHA-PACKAGE-ACCEPTANCE-2026-09-21.md).
+The final evidence SHA and live publication verification are in the external
+receipt at `C:\Users\nsott\AppData\Local\ObeliskDev\windows-comparison-publish-20260921-200052\publication-receipt.md`.
+Prompt20 remains **DEFERRED_BY_OWNER**; second-machine qualification is pending.
+Reader compatibility, generated-data/recorded-evidence limits, unresolved alert
+classification and public distribution/signing gates remain separate. No binary
+upload or package replacement. ONE suggested next activity after verified source
+publication: owner dogfood with fresh generated workspaces, if not already done.
+No owner session or automatic next task is implied.

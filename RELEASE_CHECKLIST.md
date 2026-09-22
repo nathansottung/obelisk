@@ -112,3 +112,27 @@ See [the package implementation report](docs/development/reviews/WINDOWS-INVENTO
 - [ ] Original-alert classification and separate public signing/reputation/distribution authorization. No binary upload/release/tag is authorized here.
 
 See [owner acceptance and frozen artifact identities](docs/development/reviews/WINDOWS-INVENTORY-ALPHA-PACKAGE-ACCEPTANCE-2026-09-21.md). ONE proposed next action after source publication: separately authorize rehearsal of this exact ZIP on a clean/second Windows machine.
+
+
+## New local comparison package candidate — 2026-09-21
+
+- [x] Fresh accepted-runtime build; new distinct 22-entry unsigned ZIP.
+- [x] Two extracted relocations, native generated ALPHA/BETA OFF/ON, browser comparison, pipe split-stop and real console typed stop checked.
+- [x] Accepted runtime and original frozen inventory ZIP preserved.
+- [ ] Substantive package-delta review and separate owner acceptance.
+- [ ] Second-machine/downloaded-file qualification: Prompt20 remains DEFERRED_BY_OWNER.
+- [ ] Public signing/distribution and unresolved prior alert classification remain separate gates.
+
+The new candidate is uncommitted on feat/windows-comparison-alpha-package at e3d9bef998a20dff78dc67463dfb8f848aad76ce. See [new implementation report](docs/development/reviews/WINDOWS-COMPARISON-ALPHA-PACKAGE-IMPLEMENTATION-2026-09-21.md) for exact identities, scoped results and retained harness failures. Earlier package acceptance does not cover this archive.
+
+
+## Comparison package owner acceptance — 2026-09-21
+
+- [x] Bounded substantive review and separately submitted owner acceptance.
+- [x] Reviewed implementation committed as be6f60f178c793835cdbad82c9f774f61fd4071d; original comparison ZIP unchanged at 33d1d9e5087c35aca23606957777f3d13ff8267de798c9848c79ada4697f00d2.
+- [x] Older frozen inventory ZIP preserved separately; no rebuild or runtime test for this checkpoint.
+- [ ] Source publication: actual evidence SHA and live verification recorded in the external receipt, without self-referential commit text.
+- [ ] Second/clean-machine and downloaded-file qualification; Prompt20 remains DEFERRED_BY_OWNER.
+- [ ] Historical alert classification, broader runtime/platform/console scope and separately authorized public signing/distribution.
+
+See [comparison package acceptance](docs/development/reviews/WINDOWS-COMPARISON-ALPHA-PACKAGE-ACCEPTANCE-2026-09-21.md). Package-input docs and historical reports retain their reviewed bytes; this later non-packaged entry records acceptance.
