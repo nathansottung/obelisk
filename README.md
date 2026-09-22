@@ -1,6 +1,6 @@
 # Obelisk — an instrument of negentropy
 
-**Back up your data, verify it forever.** &nbsp;*(formerly Mnemosyne)*
+**Back up your data, and re-verify it on a schedule.** &nbsp;*(formerly Mnemosyne)*
 
 [![CI](https://github.com/nathansottung/obelisk/actions/workflows/ci.yml/badge.svg)](https://github.com/nathansottung/obelisk/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/nathansottung/obelisk?logo=github&color=2e5e4e)](https://github.com/nathansottung/obelisk/releases/latest)
@@ -10,9 +10,12 @@
 [![Restore: par2 · gpg · tar](https://img.shields.io/badge/restore-par2%20%C2%B7%20gpg%20%C2%B7%20tar-informational)](docs/RESTORE_RUNBOOK.md)
 
 **Obelisk turns folders of files into self-contained archival *packages* and
-writes them onto LTO tape, hard drives, or optical discs — each package
-restorable decades from now with three stock, open-source tools (`par2`,
-`gpg`, `tar`) even if this program no longer exists.** It is one small Go
+writes them onto hard drives, and is designed to write them onto LTO tape and
+optical discs. Each package is designed to be restorable decades from now with
+three stock, open-source tools (`par2`, `gpg`, `tar`), even if this program no
+longer exists.** Tape and optical writing are not yet qualified on real
+hardware, and a test that restores a package with only those three tools is
+still pending. It is one small Go
 binary — no installer, no runtime, no database service. It's a local web app
 that catalogs your files and packages them at a size that fits your chosen
 medium, encrypting each package and adding error-correction. It writes every
@@ -71,8 +74,10 @@ and every drive there re-counts at a stroke — no per-drive bookkeeping. So eve
 
 ## Source safety guarantee
 
-**Obelisk never modifies your source data. This is an enforced invariant, not a
-promise you have to trust.**
+**Obelisk is designed never to modify your source data.** Checks exist to
+enforce this, but they are not yet complete, and known gaps are being fixed.
+Until that work lands, do not point Obelisk at the only copy of data you cannot
+replace.
 
 - **Sources are only ever opened for reading.** Scanning, hashing, the `tar`
   archive step (`tar -c` reads, never writes what it archives), drift rescans,
@@ -80,20 +85,18 @@ promise you have to trust.**
   only things that change are the catalog and the copies you write to *media* —
   never the originals. Each such read path carries a `SOURCE READ-ONLY:` audit
   comment in the code.
-- **Every writable destination is validated against your source roots.** Before
-  Obelisk writes anything, the target is checked by a single central guard
-  (`AssertOutsideSources`). If a destination resolves to a path *inside* any
-  registered Archive source folder, the operation is refused with:
+- **Write destinations are checked against your source roots.** Before most
+  writes, a central guard (`AssertOutsideSources`) checks the target. If a
+  destination resolves to a path *inside* any registered Archive source folder,
+  the operation is refused with:
 
   > `refusing: <path> is inside source root <root>; Obelisk never writes into source data`
 
-  This covers the **staging folder** (set-time and build-time), **write / span /
-  burn destinations**, **restore output**, the **recovery-kit output**, and even
-  **keystore paths** (keystores get rewritten, so they must stay out of source
-  data too).
-- **The only thing that ever changes your originals is you.** Delete or move a
-  source file yourself and drift will report it — but Obelisk's own code has no
-  path that writes into a source root.
+  The check applies to the **staging folder**, **write / span / burn
+  destinations**, **restore output**, the **recovery-kit output**, and
+  **keystore paths**. The check is not yet complete; known gaps are being fixed.
+- **Drift reports changes to your originals.** Delete or move a source file
+  yourself and drift will report it.
 
 ---
 
@@ -103,7 +106,8 @@ Prebuilt, self-contained binaries for every release are on the
 **[Releases page](https://github.com/nathansottung/obelisk/releases/latest)** —
 pick the zip for your OS/architecture.
 
-**Supported platforms:** Windows (x64, ARM), Linux (x64, ARM — Raspberry Pi), macOS (Intel, Apple Silicon).
+**Builds for:** Windows (x64, ARM), Linux (x64, ARM — Raspberry Pi), macOS (Intel, Apple Silicon).
+**Tested on:** Windows x64 (developer machine only). The other builds compile but have not been tested on those systems.
 
 | Zip | Platform |
 |-----|----------|
@@ -237,11 +241,12 @@ how to get any that are missing.
 | 1 | **Vault → Create archive** (name it "Personal") | an *Archive* is a body of work you keep together |
 | 2 | **Scan folder…** and point at a directory | every file is walked and SHA-256 hashed into the catalog |
 | 3 | **Plan packages…**, pick a media size (e.g. BD-R25), set redundancy | files are grouped into media-sized *packages* |
-| 4 | **Build** a package, then **Write…** to a drive/mount/folder | tar → (encrypt) → par2, streamed to media and **read-back verified** |
+| 4 | **Build** a package, then **Write…** to a drive/mount/folder | tar → (encrypt) → par2, streamed to media, then **read back and hashed** |
 | 5 | **Register the Volume** (barcode + location like "office safe") | now you know *where the bytes physically live* |
 
-That's a verified copy on real media. Do it again to a second volume in a
-different location and the package is fully protected.
+That's a copy on real media, read back and hashed after writing. Do it again to
+a second volume in a different location for a second copy. Known gaps in how
+write and verify results are recorded are being fixed.
 
 > **Fastest first run:** encryption is ON by default and requires two
 > registered keystores (see [Security](#security--privacy)). To try the flow
@@ -316,12 +321,12 @@ Obelisk backs up two ways, and they are peers — every archive can have both:
 - **Multi-volume at once** — mirror to several drives concurrently, one job per
   volume, *because filling three parents'-house drives shouldn't be three
   sequential waits.* Writes honor the **throttle (MB/s)** to keep drives cool.
-- **Mirrors are copies too** — each mirrored file is recorded as a **verified
-  file-level copy** on its volume, the *same record* an adopted mirror produces,
-  so **drift and coverage count mirrors and packages identically**. Two verified
-  copies in two locations is the goal whether they're sealed tapes or live
-  drives. The volume's inventory sidecar is refreshed so the medium
-  self-documents.
+- **Mirrors are copies too** — each mirrored file is read back and hashed, then
+  recorded as a **file-level copy** on its volume, the *same record* an adopted
+  mirror produces, so **drift and coverage count mirrors and packages
+  identically**. Two copies in two locations is the goal whether they're sealed
+  tapes or live drives. Known gaps in how copies are recorded are being fixed.
+  The volume's inventory sidecar is refreshed so the medium self-documents.
 - *Packages are the sealed, verified, encrypted form for cold media; mirrors are
   the live, browsable form for the spinning drive on the shelf.* Use whichever
   fits the medium — or both, for belt-and-suspenders.
@@ -337,8 +342,8 @@ Obelisk backs up two ways, and they are peers — every archive can have both:
 
 ### ✓ Verify
 
-Every hop of the custody chain is now independently proven — nothing is trusted
-transitively:
+Each hop of the custody chain has its own check. Each write is read back and
+hashed; known gaps in how the results are recorded are being fixed:
 
 ```
 source → [contents-verified] tar → [roundtrip-verified] ciphertext
@@ -1088,8 +1093,9 @@ not dependence on it** — and the distinction is the whole point:
 | In the restore story? | **yes** — QR card, paper key, keystore all carry it | **no** — the drive key lives entirely outside Obelisk |
 | If the key is lost | the package is one of *N* verified copies; other layers stand | the tape is **scrap** — `gpg`, `tar`, and `par2` all fail; par2 can't even see the data to repair it |
 
-gpg is the **portable** layer: the ciphertext is an ordinary file, and multiple
-independent implementations (GnuPG, Sequoia) can open it on any machine, forever.
+gpg is the **portable** layer: the ciphertext is an ordinary file in a widely
+supported OpenPGP format. Decrypt tests with Sequoia and with older GnuPG
+releases are still pending.
 Drive-level AES is a hardware property of one key in one drive family — powerful,
 but a decade-scale single point of failure that no amount of par2 or gpg can undo.
 

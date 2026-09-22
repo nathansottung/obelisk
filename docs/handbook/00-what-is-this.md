@@ -4,8 +4,8 @@ Obelisk (say it "neh-MOSS-uh-nee") is a program that helps you **back up files
 you never want to lose** — photos, videos, scans, a lifetime of work — and prove,
 years from now, that every copy is still perfect.
 
-It is built for one job: to keep your files **safe and provable for decades**,
-not just until next week.
+It is built for one job: to help keep your files **safe and provable for
+decades**, not just until next week.
 
 ## What it does, in one page
 
