@@ -72,7 +72,7 @@ and every drive there re-counts at a stroke — no per-drive bookkeeping. So eve
 
 ---
 
-## Source safety guarantee
+## Source safety
 
 **Obelisk is designed never to modify your source data.** Checks exist to
 enforce this, but they are not yet complete, and known gaps are being fixed.
