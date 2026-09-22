@@ -11,3 +11,13 @@ export const tutorialFiles = Object.freeze({
   'directory/.DS_Store/keep.txt': 'Traverse a same-named directory\n',
   'nested/photo.xmp': 'Synthetic sidecar must remain\n',
 });
+
+// Versioned generated-source pair, not prepared catalog observations. The same
+// native producer records each new tree; timestamps/roots/checksums are not edited.
+export const comparisonTutorialFiles = Object.freeze({
+  ALPHA: Object.freeze({ ...tutorialFiles, 'ALPHA-only.txt': 'Only generated in ALPHA\n' }),
+  BETA: Object.freeze({ ...tutorialFiles,
+    "nested/O'Brien & +%# note.txt": 'Deliberately different BETA content\n',
+    'BETA-only.txt': 'Only generated in BETA\n',
+  }),
+});

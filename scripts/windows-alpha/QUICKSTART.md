@@ -1,6 +1,6 @@
-# Local Windows developer-alpha packaging candidate
+# Local Windows comparison developer-alpha packaging candidate
 
-This unsigned package is a developer rehearsal of generated-source inventory and a read-only viewer. It is not a released backup/archive product. The included full Obelisk executable has other commands; this tutorial launcher selects only the accepted inventory/reader modes and is not a security sandbox.
+This new unsigned package is a local candidate for generated-source inventory, one/two-snapshot browsing and recorded comparison. It is separate from the earlier accepted inventory-only ZIP and awaits its own package review. It is not a released backup/archive product. The included full Obelisk executable has other commands; this tutorial launcher selects only the accepted inventory/reader modes and is not a security sandbox.
 
 Prerequisites: Windows x64, **existing Node.js 24 x64** on PATH, Windows PowerShell, and an existing browser (Chrome is the rehearsal target). Go, Git, a compiler and the source checkout are not needed by testers. No runtime is downloaded or bundled. `package-manifest.json` records exact source, script and binary identities; hashes are not signatures or malware-free certification.
 
@@ -50,3 +50,77 @@ Intentional static samples are separate: `.\Launch.ps1 static`. This action visi
 New scoped catalogs require the compatible corrected reader included in this package. The previously identified pre-correction reader refuses populated scope. Supported older unscoped catalogs remain UNKNOWN, never inferred OFF/zero. Pair outputs with the documented source/binary identities. Never strip/rewrite scope metadata for compatibility.
 
 See SUPPORTED.md for exact limits and pending distribution gates, LICENSE and THIRD-PARTY-NOTICES.txt for included notices, and BUG-REPORT.md for optional redacted reporting. There is no telemetry or automatic upload.
+
+## Two-snapshot ALPHA/BETA walkthrough
+
+After the prerequisite/check steps above, run these commands from the **new
+extracted package**. Choose a different unused workspace name for each rehearsal.
+Keep this ordinary local workspace separate from the package. Generation creates
+two small expendable source trees; it does not scan or create catalogs.
+
+```powershell
+$pair = Join-Path $env:LOCALAPPDATA 'ObeliskDev\Comparison tutorial 01'
+.\Launch.ps1 generate-pair $pair
+$alpha = Join-Path $pair 'ALPHA'
+$beta = Join-Path $pair 'BETA'
+.\Launch.ps1 inventory $alpha off.json
+.\Launch.ps1 inventory $beta off.json
+.\Launch.ps1 inventory $beta on.json --ignore-ds-store
+$a = Join-Path $alpha 'catalogs\off.json'
+$b = Join-Path $beta 'catalogs\off.json'
+$bOn = Join-Path $beta 'catalogs\on.json'
+.\Launch.ps1 view $a
+# Type stop and Enter; wait for Preview stopped and Packaged child waited.
+.\Launch.ps1 view $a $b
+```
+
+Each OFF snapshot is an actual native inventory of 11 generated files. BETA ON
+contains nine records and excludes two regular `.DS_Store` files. Near name
+`.DS_Store.bak`, the sidecar and `directory/.DS_Store/keep.txt` remain included.
+All excluded files stay on disk. Existing workspaces/catalogs refuse replacement.
+
+In the two-input session, Library/Find provide **Snapshot view** A/B/All. Both
+inputs deliberately share basename `off.json`; the A/B qualifiers distinguish
+their session identities. Open **Compare recorded snapshots**, explicitly choose
+ALPHA's Snapshot A as reference, inspect both recorded roots/scopes/times, then
+click **Accept root alignment and compare recorded snapshots**. Alignment is a
+chosen relative-root frame, not proof of physical equivalence or independent copies.
+
+Independent OFF/OFF expectation: 12 exact keys in the union, 11 recorded on each
+side; **9 recorded checksum agreements, 1 difference, 0 inconclusive, 1 only in
+reference, 1 only in counterpart**. The difference is `nested/O'Brien & +%# note.txt`;
+one-sided paths are `ALPHA-only.txt` and `BETA-only.txt`. Equal bytes at different
+paths remain separate. Try the class filter, literal `café` filter and exact JSON
+path `"nested/O'Brien & +%# note.txt"`; select a row to inspect both sides.
+
+Agreement concerns full recorded checksums, not a current read or backup-health
+verdict. Only-recorded means absence from that complete recorded set, not physical
+deletion. The ordinary producer supplies full hashes, so this tutorial has no
+inconclusive pair; supported missing/conflicting evidence is not fabricated here.
+
+```powershell
+# Stop and wait between each session; these commands reuse retained snapshots.
+.\Launch.ps1 view $b
+.\Launch.ps1 view $b $a
+# BETA is now Snapshot A. Choose either reference deliberately in the GUI.
+.\Launch.ps1 view $a $bOn
+# With ALPHA as reference: agreement 7, difference 1, reference-only 3,
+# counterpart-only 1; union 12. The .DS_Store rows retain scope qualification.
+.\Launch.ps1 view $a $b
+```
+
+Argument order assigns A/B for that session, never an authoritative original.
+Changing reference reverses side attribution and one-sided classes. No reference
+or alignment is accepted automatically. Unknown historical scope/time remain
+unknown, never inferred from load time. Duplicate identical artifacts, unsupported
+frames, malformed inputs and either reader failure are refused without a partial
+successful comparison. For reader failure, stop/wait and relaunch valid inputs;
+for ambiguous comparison frames, ordinary browsing may remain available.
+
+`view` accepts exactly one or two existing absolute catalog paths. Missing values,
+third inputs, invalid option combinations and missing package components fail
+explicitly. Identical input paths refuse before startup; identical-byte artifacts
+under different names are refused by the accepted runtime. No-argument help is
+inert; static samples require the explicit `static` action. The viewer's generated
+data boundary remains beneath LOCALAPPDATA/ObeliskDev. Do not supply private or
+production catalogs/sources. The wrapper is convenience, not a security sandbox.

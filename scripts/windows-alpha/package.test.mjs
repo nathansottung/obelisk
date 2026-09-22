@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { runtimeFiles, launcherFiles } from './package-files.mjs';
 
 const scriptRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -44,7 +44,12 @@ async function stop(c, readerCode = 0) {
   c.proc.stdin.write('st'); await delay(80); assert.equal((await fetch(c.url)).status,200);
   c.proc.stdin.write('op\n'); // Keep stdin open until decisive natural exit.
   const event = await c.ended; assert.equal(event.code,0,event.stderr);assert.equal(event.forced,false);assert.match(event.stdout,/Preview stopped \(stdin stop\)/);assert.match(event.stdout,/Packaged child waited:.*"code":0/);await assert.rejects(fetch(c.url));
-  if(!event.stdout.includes('catalog reader waited: null'))assert.ok(event.stdout.split('\n').some(line=>line.includes('catalog reader waited:')&&line.includes('"code":'+readerCode)));
+  if(!event.stdout.includes('catalog reader waited: null')) {
+    const value=JSON.parse(event.stdout.match(/catalog reader waited: (.+)/)[1]);
+    const exits=Array.isArray(value)?value:[value];
+    assert.deepEqual(exits.map(e=>e.code),Array.isArray(readerCode)?readerCode:[readerCode]);
+    assert.ok(exits.every(e=>Number.isInteger(e.pid)&&e.signal===null));
+  }
 }
 async function mode(c) { return JSON.parse((await(await fetch(c.url+'mode.mjs')).text()).slice(15,-1)); }
 
@@ -105,4 +110,57 @@ test('Actual packaged reader exit invalidates query state; static mode remains i
   try{const initial=JSON.parse((await(await fetch(url+'mode.mjs')).text()).slice(15,-1));assert.equal(initial.ok,true,'Fault probe requires a successfully loaded reader');const exited=new Promise(resolve=>reader.once('exit',resolve));assert.equal(reader.kill(),true);await exited;await delay(50);const m=JSON.parse((await(await fetch(url+'mode.mjs')).text()).slice(15,-1));assert.equal(m.ok,false);assert.equal(m.catalog,undefined);const response=await fetch(url+'catalog-query?text=');assert.equal(response.status,503);assert.equal((await response.json()).ok,false);}
   finally{await new Promise(resolve=>{server.close(resolve);server.closeAllConnections();});const exit=await server.catalogStopped;await fs.writeFile(path.join(evidence,'intentional-reader-fault.json'),JSON.stringify({reason:'Test-induced termination of captured task-owned reader; not normal shutdown',exit},null,2));await assert.rejects(fetch(url));}
   const c=await start(packages[1],['static']);try{assert.equal((await mode(c)).enabled,false);assert.match(c.text(),/INTENTIONAL STATIC DEMO/);assert.equal((await fetch(c.url+'catalog-query?text=')).status,404);}finally{await stop(c);}
+});
+
+test('Invalid pair launcher forms and missing inputs refuse without generation or demo fallback',async()=>{
+  const pkg=packages[0],catalog=path.join(workspaces[0],'catalogs/off.json'),before=await tree(workspaces[0]);
+  for(const args of [['view'],['view',catalog,catalog,catalog],['view',catalog,'relative.json'],['view',catalog,catalog],['view',catalog,path.join(evidence,'absent.json')],['static',catalog],['generate-pair'],['inventory',workspaces[0],'bad.json','--unknown']]) {
+    const r=await launch(pkg,args,1);assert.doesNotMatch(r.stdout,/http:\/\/|Generated/);
+  }
+  assert.deepEqual(await tree(workspaces[0]),before);
+});
+
+test('Extracted ALPHA/BETA tutorial, independent classes, scope, reversal and two-reader stop/reopen',async()=>{
+  const pairs=[];
+  for(let i=0;i<packages.length;i++) {
+    const pkg=packages[i],ws=path.join(evidence,i?'pair café O\'Brien & +%#':'pair-one');
+    await launch(pkg,['generate-pair',ws]);const generated=await tree(ws);await launch(pkg,['generate-pair',ws],1);assert.deepEqual(await tree(ws),generated);
+    const alpha=path.join(ws,'ALPHA'),beta=path.join(ws,'BETA');
+    const sourceA=await tree(path.join(alpha,'source')),sourceB=await tree(path.join(beta,'source'));
+    await launch(pkg,['inventory',alpha,'off.json']);await launch(pkg,['inventory',beta,'off.json']);await launch(pkg,['inventory',beta,'on.json','--ignore-ds-store']);
+    const a=path.join(alpha,'catalogs/off.json'),b=path.join(beta,'catalogs/off.json'),on=path.join(beta,'catalogs/on.json');
+    const catalogsBefore=[await tree(path.join(alpha,'catalogs')),await tree(path.join(beta,'catalogs'))];
+    await launch(pkg,['inventory',alpha,'off.json'],1);
+    for(const [left,right,policy]of [[a,b,'off'],[b,a,'reverse'],[a,on,'on'],[a,b,'reopen']]) {
+      const c=await start(pkg,['view',left,right]);
+      try {
+        const m=await mode(c);assert.equal(m.ok,true);assert.equal(m.multi,true);assert.equal(m.snapshots.length,2);
+        for(const [j,file]of [left,right].entries())assert.equal(m.snapshots[j].catalog.digest,sha(await fs.readFile(file)));
+        const all=await(await fetch(c.url+'catalog-query?text=&hash=&snapshot=all')).json();assert.equal(all.groups.length,2);assert.equal(all.groups[0].ids.length,11);assert.equal(all.groups[1].ids.length,policy==='on'?9:11);
+        for(const reverse of [false,true]) {
+          const [ref,other]=reverse?[...m.snapshots].reverse():m.snapshots;
+          const response=await fetch(c.url+'catalog-compare?'+new URLSearchParams({reference:ref.handle,counterpart:other.handle,request:randomUUID()}));const result=await response.json();assert.equal(response.status,200);
+          const expected=policy==='on'?{agreement:7,difference:1,inconclusive:0,referenceOnly:reverse?1:3,counterpartOnly:reverse?3:1}:{agreement:9,difference:1,inconclusive:0,referenceOnly:1,counterpartOnly:1};
+          assert.deepEqual(result.counts,expected);assert.equal(result.totals.union,12);assert.equal(result.rows.find(r=>r.key==="nested/O'Brien & +%# note.txt").kind,'difference');
+          assert.equal(result.rows.find(r=>r.key==='same-one.txt').kind,'agreement');assert.equal(result.rows.find(r=>r.key==='nested/same-two.txt').kind,'agreement');
+          if(policy==='on')assert.match(result.rows.find(r=>r.key==='.DS_Store').scopeNote,/outside/);
+        }
+        for(const target of ['package-manifest.json','bin/obelisk.exe','launcher.mjs','api/scan','tutorial-fixtures.mjs'])assert.equal((await fetch(c.url+target)).status,404);
+      } finally {await stop(c,[0,0]);}
+    }
+    assert.deepEqual(await tree(path.join(alpha,'catalogs')),catalogsBefore[0]);assert.deepEqual(await tree(path.join(beta,'catalogs')),catalogsBefore[1]);
+    assert.deepEqual(await tree(path.join(alpha,'source')),sourceA);assert.deepEqual(await tree(path.join(beta,'source')),sourceB);
+    pairs.push({workspace:ws,a,b,on});
+  }
+  const inputs=JSON.parse(await fs.readFile(path.join(evidence,'rehearsal-inputs.json'),'utf8'));inputs.pairs=pairs;
+  await fs.writeFile(path.join(evidence,'rehearsal-inputs.json'),JSON.stringify(inputs,null,2));
+});
+
+test('Duplicate artifact and bad second reader refuse the complete pair, followed by clean reopen',async()=>{
+  const inputs=JSON.parse(await fs.readFile(path.join(evidence,'rehearsal-inputs.json'),'utf8')),a=inputs.pairs[0].a,b=inputs.pairs[0].b;
+  const duplicate=path.join(evidence,'protocol-inputs','renamed-copy.json');await fs.copyFile(a,duplicate);
+  for(const [other,codes]of [[duplicate,[0,0]],[path.join(inputs.inputs,'scope-refused.json'),[0,1]]]) {
+    const c=await start(packages[0],['view',a,other]);try {const m=await mode(c);assert.equal(m.ok,false);assert.equal(m.snapshots,undefined);const response=await fetch(c.url+'catalog-compare?reference=invalid');assert.equal(response.status,503);assert.equal((await response.json()).ok,false);}finally{await stop(c,codes);}
+  }
+  const c=await start(packages[0],['view',a,b]);try{assert.equal((await mode(c)).ok,true);}finally{await stop(c,[0,0]);}
 });

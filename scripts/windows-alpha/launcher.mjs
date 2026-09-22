@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { tutorialFiles } from './tutorial-fixtures.mjs';
+import { tutorialFiles, comparisonTutorialFiles } from './tutorial-fixtures.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -14,8 +14,9 @@ Actions (run through Launch.ps1, or node launcher.mjs):
   help
   check
   generate ABS_NEW_WORKSPACE
+  generate-pair ABS_NEW_WORKSPACE
   inventory ABS_WORKSPACE NEW_NAME.json [--ignore-ds-store]
-  view ABS_SYNTHETIC_CATALOG
+  view ABS_SYNTHETIC_CATALOG [ABS_SECOND_SYNTHETIC_CATALOG]
   static
 Choose a new workspace beneath your LOCALAPPDATA/ObeliskDev. Generation,
 inventory (which reads generated source files), and viewing are separate actions.
@@ -52,20 +53,27 @@ async function workspacePath(value, creating = false) {
   return selected;
 }
 
-async function generate(value) {
+async function generate(value, definitions = tutorialFiles, variant = 'single-v1') {
   const workspace = await workspacePath(value, true);
   await fs.mkdir(workspace); // EEXIST refuses even an empty previous workspace.
   await fs.mkdir(path.join(workspace, 'source'));
   await fs.mkdir(path.join(workspace, 'catalogs'));
   const files = [];
-  for (const [name, text] of Object.entries(tutorialFiles)) {
+  for (const [name, text] of Object.entries(definitions)) {
     const target = path.join(workspace, 'source', name), bytes = Buffer.from(text);
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(target, bytes, { flag: 'wx' });
     files.push({ path: name, bytes: bytes.length, sha256: sha(bytes) });
   }
-  await fs.writeFile(path.join(workspace, 'tutorial-workspace.json'), JSON.stringify({ kind: 'obelisk-generated-tutorial-v1', files }, null, 2), { flag: 'wx' });
+  await fs.writeFile(path.join(workspace, 'tutorial-workspace.json'), JSON.stringify({ kind: 'obelisk-generated-tutorial-v1', variant, files }, null, 2), { flag: 'wx' });
   console.log(`Generated ${files.length} expendable files in ${workspace}. No inventory has run.`);
+}
+
+async function generatePair(value) {
+  const workspace = await workspacePath(value, true);
+  await fs.mkdir(workspace); // Never merge, replace or clean an earlier pair.
+  for (const variant of ['ALPHA', 'BETA']) await generate(path.join(workspace, variant), comparisonTutorialFiles[variant], 'comparison-v1-' + variant);
+  console.log('ALPHA and BETA generated. Explicit inventory actions are still required; no catalog or comparison has run.');
 }
 
 async function run(executable, args) {
@@ -85,10 +93,11 @@ async function main() {
   const [action = 'help', ...args] = process.argv.slice(2);
   if (process.platform !== 'win32' || process.arch !== 'x64' || Number(process.versions.node.split('.')[0]) !== 24) throw Error('Supported prerequisite: Windows x64 with existing Node.js 24 x64. No automatic installation.');
   if (action === 'help' && args.length === 0) { console.log(help); return; }
-  if (!['check', 'generate', 'inventory', 'view', 'static'].includes(action)) throw Error(help);
+  if (!['check', 'generate', 'generate-pair', 'inventory', 'view', 'static'].includes(action)) throw Error(help);
   const manifest = await verifyPackage();
   if (action === 'check' && args.length === 0) { console.log(JSON.stringify({ packageID: manifest.packageID, node: process.version, arch: process.arch, root, filesVerified: manifest.files.length })); return; }
   if (action === 'generate' && args.length === 1) { await generate(args[0]); return; }
+  if (action === 'generate-pair' && args.length === 1) { await generatePair(args[0]); return; }
   const adapter = path.join(root, 'bin', 'obelisk.exe');
   if (action === 'inventory' && (args.length === 2 || (args.length === 3 && args[2] === '--ignore-ds-store'))) {
     const workspace = await workspacePath(args[0]);
@@ -99,10 +108,20 @@ async function main() {
     await run(adapter, ['--gui-disposable-inventory', ...(args[2] ? ['--ignore-ds-store'] : []), path.join(workspace, 'source'), path.join(workspace, 'catalogs', args[1])]);
     return;
   }
-  if ((action === 'view' && args.length === 1 && path.isAbsolute(args[0])) || (action === 'static' && args.length === 0)) {
+  if ((action === 'view' && [1, 2].includes(args.length) && args.every(p => path.isAbsolute(p))) || (action === 'static' && args.length === 0)) {
+    if (action === 'view') {
+      const selected = new Set();
+      for (const file of args) {
+        const info = await fs.lstat(file);
+        if (!info.isFile() || info.isSymbolicLink()) throw Error('Select an existing regular synthetic catalog file, not a link');
+        const actual = (await fs.realpath(file)).toLowerCase();
+        if (selected.has(actual)) throw Error('Duplicate catalog input refused; choose two different recorded artifacts');
+        selected.add(actual);
+      }
+    }
     if (action === 'view') console.log('Read-only VIEWER: selected synthetic catalog is read, not modified; recorded source/media paths are not opened.');
     else console.log('INTENTIONAL STATIC DEMO: all records are synthetic samples, not a loaded catalog.');
-    await run(process.execPath, [path.join(root, 'preview', 'server.mjs'), '0', ...(action === 'view' ? ['--catalog', args[0], '--adapter', adapter] : [])]);
+    await run(process.execPath, [path.join(root, 'preview', 'server.mjs'), '0', ...(action === 'view' ? [...args.flatMap(file => ['--catalog', file]), '--adapter', adapter] : [])]);
     return;
   }
   throw Error(help);

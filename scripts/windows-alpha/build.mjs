@@ -10,7 +10,7 @@ import { runtimeFiles, launcherFiles, dependencies } from './package-files.mjs';
 import { makeZip } from './zip.mjs';
 
 const scripts = path.dirname(fileURLToPath(import.meta.url)), repo = path.resolve(scripts, '../..');
-const base = 'bfbce891df78d529c6be2d2912dc8443597c007e', implementation = '8eb178bcb6f8f7367d2cb9aa75d2f4059d92a85c';
+const base = 'e3d9bef998a20dff78dc67463dfb8f848aad76ce', implementation = '87b4fcf3443bf18bd64671896f911c73dcbdc22a';
 const [output, go, moduleCache] = process.argv.slice(2);
 if (process.argv.length !== 5 || [output, go, moduleCache].some(p => !p || !path.isAbsolute(p))) throw Error('Usage: node build.mjs ABS_NEW_TASK_BUILD ABS_INSTALLED_GO_EXE ABS_EXISTING_MODULE_CACHE');
 assert.equal(process.platform, 'win32'); assert.equal(process.arch, 'x64');
@@ -42,7 +42,7 @@ fs.writeFileSync(path.join(output, 'build-source.json'), JSON.stringify(sourceMa
 const env = { ...process.env, GOTOOLCHAIN: 'local', GOPROXY: 'off', GOSUMDB: 'off', GOFLAGS: '-mod=readonly', CGO_ENABLED: '0', GOOS: 'windows', GOARCH: 'amd64', GOMODCACHE: moduleCache, GOCACHE: path.join(output, 'go-cache'), TEMP: path.join(output, 'go-temp'), TMP: path.join(output, 'go-temp') }; delete env.GOTMPDIR;
 fs.mkdirSync(env.TEMP);
 const goVersion = command(go, ['version'], source, env).toString().trim();
-const label = '0.9.0-dev-inventory-package.' + base.slice(0, 12);
+const label = '0.9.0-dev-comparison-package.' + base.slice(0, 12);
 fs.mkdirSync(path.join(stage, 'bin'));
 command(go, ['build', '-trimpath', '-buildvcs=false', '-ldflags', '-X main.appVersion=' + label, '-o', path.join(stage, 'bin/obelisk.exe'), '.'], source, env);
 const buildInfo = command(go, ['version', '-m', path.join(stage, 'bin/obelisk.exe')], source, env).toString();
