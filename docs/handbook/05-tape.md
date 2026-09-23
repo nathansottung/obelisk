@@ -1,6 +1,6 @@
 # Backing up to LTO tape
 
-This guide shows you how to back up your work onto LTO tape. Take it slow. Obelisk is designed to only read your source folders, never to change, move, or delete them. The checks that enforce this are not yet complete; known gaps are tracked as OB-004. Keep another copy of anything you cannot replace. Obelisk never sends anything over the internet. Tape writing is not yet tested on real tape hardware.
+This guide shows you how to back up your work onto LTO tape. Take it slow. Obelisk is designed to only read your source folders, never to change, move, or delete them. The checks that enforce this are not yet complete; known gaps are being fixed. Keep another copy of anything you cannot replace. Obelisk never sends anything over the internet. Tape writing is not yet tested on real tape hardware.
 
 Some words you'll see:
 

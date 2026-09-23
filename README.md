@@ -75,9 +75,9 @@ and every drive there re-counts at a stroke — no per-drive bookkeeping. So eve
 ## Source safety
 
 **Obelisk is designed never to modify your source data.** Checks exist to
-enforce this, but they are not yet complete. Known gaps are tracked as OB-004 in
-[`docs/development/OB_STATUS.md`](docs/development/OB_STATUS.md). Until that work
-lands, do not point Obelisk at the only copy of data you cannot replace.
+enforce this, but they are not yet complete, and known gaps are being fixed.
+Until that work lands, do not point Obelisk at the only copy of data you cannot
+replace.
 
 - **Sources are only ever opened for reading.** Scanning, hashing, the `tar`
   archive step (`tar -c` reads, never writes what it archives), drift rescans,
@@ -94,8 +94,7 @@ lands, do not point Obelisk at the only copy of data you cannot replace.
 
   The check applies to the **staging folder**, **write / span / burn
   destinations**, **restore output**, the **recovery-kit output**, and
-  **keystore paths**. The check is not yet complete; known gaps are tracked as
-  OB-004.
+  **keystore paths**. The check is not yet complete; known gaps are being fixed.
 - **Drift reports changes to your originals.** Delete or move a source file
   yourself and drift will report it.
 
