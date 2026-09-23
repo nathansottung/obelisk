@@ -120,12 +120,15 @@ jobs:
           "GNUPG_BIN=$($gpg.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       # System32 tar (bsdtar) first; Git's MSYS tar, gpg, bash and coreutils are
-      # not on PATH. The exit code is judged by the known-failure gate below.
+      # not on PATH. Node stays on PATH so the tests that run ui/index.html's job
+      # views execute instead of skipping. The exit code is judged by the
+      # known-failure gate below.
       - name: go test (System32 tar, no MSYS tools)
         shell: pwsh
         run: |
           $goBin = Split-Path (Get-Command go.exe).Source
-          $env:Path = @("$env:SystemRoot\System32", $env:SystemRoot, "$env:SystemRoot\System32\Wbem", $env:GNUPG_BIN, (Join-Path $env:RUNNER_TEMP 'par2'), $goBin) -join ';'
+          $nodeBin = Split-Path (Get-Command node.exe).Source
+          $env:Path = @("$env:SystemRoot\System32", $env:SystemRoot, "$env:SystemRoot\System32\Wbem", $env:GNUPG_BIN, (Join-Path $env:RUNNER_TEMP 'par2'), $goBin, $nodeBin) -join ';'
           $msys = $env:Path -split ';' | Where-Object { $_ -match '\\Git\\|msys|mingw|cygwin' }
           if ($msys) { throw "MSYS/Git directories on PATH: $msys" }
           foreach ($t in 'tar', 'gpg', 'par2', 'go') { "{0} -> {1}" -f $t, (Get-Command "$t.exe").Source }
