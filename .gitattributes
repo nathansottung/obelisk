@@ -17,3 +17,7 @@
 # would compile a corrupted archive.
 *.tar.gz binary
 *.gz     binary
+
+# The Windows package launcher is committed byte-exact with CRLF: the package
+# builder copies committed blobs, which never get working-tree conversion.
+*.cmd -text

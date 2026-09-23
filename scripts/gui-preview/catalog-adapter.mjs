@@ -5,6 +5,14 @@ import { validateCatalog, validateIDs, validateSnapshots, validateMatches } from
 import { randomBytes } from 'node:crypto';
 import { decodeCatalogResponse } from './catalog-names.mjs';
 
+// The reader reports the producing binary's version on its first response. It is
+// display-only provenance: absent on older readers, and never used for decisions.
+const readerVersion = value => {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !/^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$/.test(value)) throw new Error('Invalid reader version');
+  return value;
+};
+
 export async function startCatalog({ catalog, adapter }) {
   if (!path.isAbsolute(catalog) || !path.isAbsolute(adapter)) throw new Error('Absolute catalog and adapter paths required');
   const root = await realpath(path.join(process.env.LOCALAPPDATA, 'ObeliskDev'));
@@ -59,11 +67,11 @@ export async function startCatalog({ catalog, adapter }) {
   child.stdin.on('error', () => { if (!closing) abort('Catalog reader transport failed'); });
   child.stderr.on('data', b => { stderr = (stderr + b).slice(0, 4096); });
   try {
-    const data = await receive(value => {
+    const loaded = await receive(value => {
       if (!value || value.ok !== true) throw new Error('Catalog load refused');
-      return validateCatalog(value.catalog);
+      return { version: readerVersion(value.version), catalog: validateCatalog(value.catalog) };
     });
-    if (!dead) mode = { enabled: true, ok: true, catalog: data };
+    if (!dead) mode = { enabled: true, ok: true, ...(loaded.version ? { readerVersion: loaded.version } : {}), catalog: loaded.catalog };
   } catch { /* Failure has already invalidated the entire mode. */ }
   const close = () => closePromise ??= (async () => {
     closing = true; fail('Catalog reader stopped'); child.stdin.end();
@@ -111,7 +119,8 @@ export async function startCatalogSession({ catalogs, adapter }) {
   } catch (error) { failure = error.message; await close(); }
   const mode = () => {
     if (!failure && readers.some(r => !r.mode.ok)) { failure = 'A snapshot reader is unavailable; relaunch the pair'; void close(); }
-    return failure ? { enabled: true, multi: true, ok: false, error: failure } : { enabled: true, multi: true, ok: true, snapshots };
+    const versions = [...new Set(readers.map(r => r.mode.readerVersion).filter(Boolean))];
+    return failure ? { enabled: true, multi: true, ok: false, error: failure } : { enabled: true, multi: true, ok: true, ...(versions.length ? { readerVersion: versions.join(' / ') } : {}), snapshots };
   };
   return {
     get mode() { return mode(); }, close,

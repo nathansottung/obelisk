@@ -61,6 +61,7 @@ export async function startPreview(port = 0, catalogOptions = null) {
     res.writeHead(200, { 'Content-Type': `${asset.type}; charset=utf-8` });
     res.end(req.method === 'HEAD' ? undefined : asset.body);
   });
+  server.readerMode = () => reader?.mode;
   server.catalogStopped = new Promise(resolve => server.once('close', async () => resolve(reader ? await reader.close() : null)));
   try { await new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -75,6 +76,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Port must be 0..65535');
   const server = await startPreview(port, args.length === 7 ? { catalogs: [args[2], args[4]], adapter: args[6] } : args.length === 5 ? { catalog: args[2], adapter: args[4] } : null);
   console.log(`Preview — synthetic data only: http://127.0.0.1:${server.address().port}/`);
+  const reader = server.readerMode?.();
+  if (reader?.readerVersion) console.log('Native catalog reader version: ' + reader.readerVersion);
   console.log('Press Ctrl+C or send stop on stdin to stop. Automatic shutdown after 60 minutes.');
   let stopping = false;
   const stop = async reason => {

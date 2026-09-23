@@ -1,3 +1,5 @@
+//go:build !guionly
+
 package main
 
 // hardening_test.go — the local API Host and navigation-site rules, config

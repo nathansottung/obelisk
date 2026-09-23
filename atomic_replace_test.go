@@ -1,3 +1,5 @@
+//go:build !guionly
+
 package main
 
 // atomic_replace_test.go — OB-003: publishing a replacement must never destroy the

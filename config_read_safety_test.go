@@ -1,3 +1,5 @@
+//go:build !guionly
+
 package main
 
 // This file also compiles unchanged at the pinned parent. It exercises real

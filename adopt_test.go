@@ -1,3 +1,5 @@
+//go:build !guionly
+
 package main
 
 // adopt_test.go — bringing pre-existing media into the catalog. Covers a

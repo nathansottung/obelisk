@@ -1,6 +1,7 @@
 # Optional developer-alpha report
 
 - Package ID and external ZIP SHA-256:
+- Version line printed by `Launch.cmd` and the reader version in the viewer footer:
 - Windows version/build/architecture; Node and browser versions:
 - Action and expected result:
 - Actual result, exit code and `published` value if applicable:

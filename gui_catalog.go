@@ -305,7 +305,7 @@ func runGUICatalog(args []string, input io.Reader, output io.Writer) error {
 		_ = enc.Encode(map[string]any{"ok": false, "error": err.Error()})
 		return err
 	}
-	if err = enc.Encode(map[string]any{"ok": true, "catalog": s.projection()}); err != nil {
+	if err = enc.Encode(map[string]any{"ok": true, "version": appVersion, "catalog": s.projection()}); err != nil {
 		return err
 	}
 	scanner := bufio.NewScanner(input)

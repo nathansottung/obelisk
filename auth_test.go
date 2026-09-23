@@ -1,3 +1,5 @@
+//go:build !guionly
+
 package main
 
 // auth_test.go — the container-deployment guardrails: localhost detection and the
