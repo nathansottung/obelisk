@@ -10,7 +10,9 @@
 # the three external tools the restore story depends on (tar, gpg, par2).
 
 # ---- build ----------------------------------------------------------------
-FROM golang:1.22-alpine AS build
+# GO_VERSION must equal the `toolchain` line in go.mod; CI checks this.
+ARG GO_VERSION=1.27.0
+FROM golang:${GO_VERSION}-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

@@ -2,8 +2,10 @@ module github.com/nathansottung/obelisk
 
 go 1.22.2
 
-// Release and package builds use exactly this toolchain; the Windows package
-// builder refuses any other `go version`.
+// The Go toolchain for CI, release binaries, the container image and the Windows
+// package. The CI and release workflows read this line, CI checks that the
+// Dockerfile's GO_VERSION default matches it, and the Windows package builder
+// refuses any other `go version`.
 toolchain go1.27.0
 
 require (
