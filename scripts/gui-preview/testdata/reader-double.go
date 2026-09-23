@@ -31,6 +31,12 @@ func main() {
 	case "timeout":
 		time.Sleep(10 * time.Second)
 		return
+	case "refused-exit":
+		// The native reader's refusal path: one well-formed failure response,
+		// then exit status 1 on its own a moment later.
+		fmt.Println(`{"ok":false,"error":"synthetic refusal"}`)
+		time.Sleep(300 * time.Millisecond)
+		os.Exit(1)
 	case "numeric-startup":
 		projection = []byte(strings.Replace(string(projection), `"id":"1"`, `"id":1`, 1))
 	}

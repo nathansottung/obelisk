@@ -13,6 +13,10 @@ const readerVersion = value => {
   return value;
 };
 
+// A well-formed {"ok":false,"error":...} load response: the reader's own refusal,
+// after which it exits by itself.
+class ReaderRefusal extends Error {}
+
 export async function startCatalog({ catalog, adapter }) {
   if (!path.isAbsolute(catalog) || !path.isAbsolute(adapter)) throw new Error('Absolute catalog and adapter paths required');
   const root = await realpath(path.join(process.env.LOCALAPPDATA, 'ObeliskDev'));
@@ -32,7 +36,16 @@ export async function startCatalog({ catalog, adapter }) {
     pieces = []; bytes = 0;
     if (pending) { const p = pending; pending = null; clearTimeout(p.timer); p.reject(new Error(message)); }
   };
-  const abort = message => { fail(message); if (child.exitCode === null && child.signalCode === null) child.kill(); };
+  const alive = () => child.exitCode === null && child.signalCode === null;
+  const abort = message => { fail(message); if (alive()) child.kill(); };
+  // After a refusal the reader has answered and is exiting with its own status.
+  // Killing it now would race that exit and record a signal instead, so the mode
+  // fails at once and the reader gets a bounded grace period to exit.
+  const refused = message => {
+    fail(message);
+    const timer = setTimeout(() => { if (alive()) child.kill(); }, 2000);
+    stopped.then(() => clearTimeout(timer));
+  };
   const receive = validate => new Promise((resolve, reject) => {
     if (dead || pending || closing) return reject(new Error('Reader unavailable or busy'));
     pending = { resolve, reject, validate, timer: setTimeout(() => abort('Catalog reader timeout'), 5000) };
@@ -44,7 +57,10 @@ export async function startCatalog({ catalog, adapter }) {
       const value = decodeCatalogResponse(raw);
       const result = pending.validate(value);
       const p = pending; pending = null; clearTimeout(p.timer); p.resolve(result);
-    } catch { abort('Invalid catalog reader response'); }
+    } catch (error) {
+      if (error instanceof ReaderRefusal) refused(error.message);
+      else abort('Invalid catalog reader response');
+    }
   };
   // Commit only complete newline-terminated responses. EOF is not a successful
   // final line; cap accumulated bytes before allocation/parsing.
@@ -68,6 +84,7 @@ export async function startCatalog({ catalog, adapter }) {
   child.stderr.on('data', b => { stderr = (stderr + b).slice(0, 4096); });
   try {
     const loaded = await receive(value => {
+      if (value && value.ok === false && typeof value.error === 'string') throw new ReaderRefusal('Catalog load refused');
       if (!value || value.ok !== true) throw new Error('Catalog load refused');
       return { version: readerVersion(value.version), catalog: validateCatalog(value.catalog) };
     });

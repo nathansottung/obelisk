@@ -55,6 +55,16 @@ test('Initial and bootstrap-then-exit failures invalidate the real server mode w
     }finally{t.diagnostic(name+': '+JSON.stringify(await close(s)));}
   }
 });
+test('A well-formed load refusal fails the mode at once and keeps the reader\'s own exit status',async t=>{
+  // The reader refuses, then exits 1 by itself 300ms later. Killing it on the
+  // refusal would record a signal instead of that status.
+  const s=await start('refused-exit');let exit;
+  try {
+    await waitFor(async()=>!(await mode(s)).ok);const m=await mode(s);assert.equal(m.enabled,true);assert.equal(m.catalog,undefined);
+    assert.equal((await fetch(base(s)+'/catalog-query')).status,503);
+  }finally{exit=await close(s);t.diagnostic(JSON.stringify(exit));}
+  assert.equal(exit.code,1);assert.equal(exit.signal,null);
+});
 test('Query failures and invalid exact identities settle pending work and invalidate mode',async t=>{
   for(const name of ['query-failed','invalid-id','unknown-id','duplicate-id','out-of-range','negative-id','zero-id','leading-zero','exponent-id']) {
     const s=await start(name);
