@@ -183,7 +183,7 @@ func resolveConfigTool(name string, cfg Config) (string, error) {
 func toolVersionLine(path string) string {
 	ch := make(chan string, 1) // buffered: the goroutine never blocks even if we stop waiting
 	go func() {
-		v, err := exec.Command(path, "--version").CombinedOutput()
+		v, err := helperCommand(path, "--version").CombinedOutput()
 		if err != nil {
 			ch <- ""
 			return
@@ -928,7 +928,7 @@ func verifyTarContents(tarPath string, files []ChunkFileRef) error {
 // returns the hash of the decrypted stream. Used to prove the ciphertext
 // actually decrypts back to the verified tar (compare against tar_hash).
 func decryptRoundtripHash(gpgBin, ciphertext, pass string) (string, error) {
-	cmd := exec.Command(gpgBin, "--batch", "--yes", "--pinentry-mode", "loopback",
+	cmd := helperCommand(gpgBin, "--batch", "--yes", "--pinentry-mode", "loopback",
 		"--passphrase-fd", "0", "-d", ciphertext)
 	cmd.Stdin = strings.NewReader(pass)
 	var errb strings.Builder
@@ -1015,7 +1015,10 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 		}
 	}
 
-	setStatus := func(st, msg string) error { c.Status, c.Error = st, msg; return a.Store.UpdateChunkErr(c) }
+	setStatus := func(st, msg string) error {
+		c.Status, c.Error = st, storedErrorText(msg)
+		return a.Store.UpdateChunkErr(c)
+	}
 	// Interim status writes (BUILDING/FAILED) are best-effort: they're progress
 	// signals, not durability guarantees, and losing one doesn't misrepresent the
 	// medium. Only the terminal STAGED write is gated below.
@@ -1271,17 +1274,13 @@ func isUnknownOptionErr(err error) bool {
 }
 
 func run(bin, stdin string, args ...string) error {
-	cmd := exec.Command(bin, args...)
+	cmd := helperCommand(bin, args...)
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		tail := string(out)
-		if len(tail) > 700 {
-			tail = tail[len(tail)-700:]
-		}
-		return fmt.Errorf("%s failed: %v: %s", filepath.Base(bin), err, tail)
+		return fmt.Errorf("%s failed: %v: %s", filepath.Base(bin), err, toolOutputTail(out))
 	}
 	return nil
 }

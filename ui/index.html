@@ -3367,7 +3367,7 @@ function ccRender(res,path,job){
 
 async function vSettings(){
   const [c,ivdata,prof]=await Promise.all([api('GET','/api/config'),api('GET','/api/integrity'),api('GET','/api/profiles').catch(()=>[])]);
-  const cfg=c.config||{};const ks=c.keystore_status||{};
+  const cfg=c.config||{};const ks=c.keystore_status||{};const tokSet=!!c.auth_token_set;
   _ivPresets={};for(const q of (ivdata.presets||[]))_ivPresets[q.name]=q;
   _ivEff=ivdata.effective||ivdata.global||{};
   const wants=t=>(cfg.backup_targets||['drives']).some(x=>String(x).toLowerCase()===t);
@@ -3493,7 +3493,7 @@ async function vSettings(){
   h+=`<div class="panel"><h2>Advanced</h2>
     ${advOpen('Advanced settings — network, privacy, sealing, escrow, discs')}
     <label>Access token (for reaching the app from another machine)</label>
-    <input id="atok" class="full" style="font:12px var(--mono)" value="${esc(cfg.auth_token||'')}" placeholder="a long random secret">
+    <input id="atok" class="full" style="font:12px var(--mono)" value="" autocomplete="off" placeholder="${tokSet?'a token is set — leave blank to keep it, or type a new one':'a long random secret'}">
     <div class="help">Only needed when the app is reached from off-box. It binds to localhost by default; the listen address is set with the <span class="mono">-listen</span> flag at startup, and a non-localhost bind refuses to run without a token.</div>
     <label class="row" style="gap:8px;align-items:center;margin-top:14px"><input id="upd" type="checkbox" ${cfg.update_check?'checked':''}> Remind me to check for updates</label>
     <div class="help">Shows a small "a newer release may be available" reminder with a link to the releases page. <b>The app never downloads anything or contacts the network on its own.</b></div>
@@ -3774,7 +3774,8 @@ async function saveCfg(){
   put('buffer_gb',num('bg',8));put('block_mb',int('bm',64));put('throttle_mbps',num('tm',0));
   put('hash_accel',gc('ha'));
   put('barcode_scheme',gt('bs')||'NSP');put('label_size',gt('lsz'));
-  put('auth_token',gt('atok'));put('update_check',gc('upd'));put('private_media',gc('pm'));
+  const atok=gt('atok');if(atok)body.auth_token=atok; // blank keeps the stored token; the server never sends it back
+  put('update_check',gc('upd'));put('private_media',gc('pm'));
   put('par2_extra_args',gt('pe'));put('versions_retained',int('vr',0));put('tape_device',gt('td'));
   put('escrow_on_media',gv('eom'));put('escrow_include_readers',gc('eir'));
   put('finalize_verify_days',int('fvd',30));put('buffer_pct',num('bpc',5));put('smart_block_finalize',gc('sbf'));

@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -74,7 +73,7 @@ func (a *App) ReadMediumManifest(chunkID int, mountPath string) (map[string]any,
 }
 
 func gpgDecryptToMem(gpgBin, pass, path string) ([]byte, error) {
-	cmd := exec.Command(gpgBin, "--batch", "--yes", "--pinentry-mode", "loopback", "--passphrase-fd", "0", "-d", path)
+	cmd := helperCommand(gpgBin, "--batch", "--yes", "--pinentry-mode", "loopback", "--passphrase-fd", "0", "-d", path)
 	cmd.Stdin = strings.NewReader(pass)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb

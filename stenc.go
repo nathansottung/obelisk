@@ -33,7 +33,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -244,7 +243,7 @@ func (a *App) driveEncryptionStatus(deviceOverride string, cfg Config) (*DriveEn
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	// `stenc -f <device>` with no set options prints the current status.
-	out, runErr := exec.CommandContext(ctx, bin, "-f", dev).CombinedOutput()
+	out, runErr := helperCommandContext(ctx, bin, "-f", dev).CombinedOutput()
 	st, perr := parseStenc(out)
 	if perr != nil {
 		if runErr != nil {
@@ -320,7 +319,7 @@ func (a *App) ClearDriveKey(deviceOverride string) error {
 func (a *App) runStenc(bin string, args []string, dev string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, args...).CombinedOutput()
+	out, err := helperCommandContext(ctx, bin, args...).CombinedOutput()
 	if err != nil {
 		tail := strings.TrimSpace(string(out))
 		if len(tail) > 400 {
