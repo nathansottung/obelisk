@@ -115,8 +115,11 @@ jobs:
 
       # The official installer is unpacked with 7-Zip rather than run: its silent
       # mode never exits on a hosted runner. An empty gpgconf.ctl beside gpg.exe
-      # is GnuPG's portable mode, so it resolves its components and default home
-      # inside the unpacked folder.
+      # is GnuPG's portable mode, so it resolves its components, default home and
+      # agent socket inside the unpacked folder. The installer would create the
+      # home and socket folders; unpacking does not, and without them gpg-agent
+      # cannot start, so they are created here and the agent is started once as a
+      # check, then stopped so the tests start it fresh.
       - name: Install GnuPG 2.5.22 (official installer unpacked with 7-Zip, SHA-256 checked)
         shell: pwsh
         timeout-minutes: 5
@@ -133,9 +136,19 @@ jobs:
           $bin = Join-Path $dir 'bin'
           if (-not (Test-Path (Join-Path $bin 'gpg.exe'))) { throw 'gpg.exe not found in the unpacked installer' }
           Set-Content -Path (Join-Path $bin 'gpgconf.ctl') -Value '' -NoNewline
+          New-Item -ItemType Directory -Path (Join-Path $dir 'home'), (Join-Path $dir 'gnupg') -Force | Out-Null
           $version = & (Join-Path $bin 'gpg.exe') --version
           if ($LASTEXITCODE -ne 0) { throw "gpg --version exit code $LASTEXITCODE" }
           $version[0]
+          $env:GNUPGHOME = $null
+          # gpg-connect-agent reports progress on stderr; read it as text.
+          $ErrorActionPreference = 'Continue'
+          $agent = & (Join-Path $bin 'gpg-connect-agent.exe') '/echo agent-ok' '/bye' 2>&1 | ForEach-Object { "$_" }
+          $ErrorActionPreference = 'Stop'
+          $agent
+          if ($LASTEXITCODE -ne 0 -or -not ($agent -match 'agent-ok')) { throw 'gpg-agent did not start from the unpacked GnuPG' }
+          & (Join-Path $bin 'gpgconf.exe') --kill gpg-agent
+          if ($LASTEXITCODE -ne 0) { throw "gpgconf --kill exit code $LASTEXITCODE" }
           "GNUPG_BIN=$bin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       # System32 tar (bsdtar) first; Git's MSYS tar, gpg, bash and coreutils are
