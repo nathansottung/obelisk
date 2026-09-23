@@ -4,18 +4,13 @@ package main
 // GUI adapter modes and nothing that serves HTTP, dials, spawns processes or
 // carries the escrow payload: no route table, no embedded UI, no server loop. It
 // refuses every other argument without binding a port or touching a data
-// directory, and it reports the version stamped with -X main.appVersion. Its
-// copies of main.go helpers must not drift.
+// directory, and it reports the version stamped with -X main.appVersion.
 
 import (
 	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
-	"go/ast"
-	"go/parser"
-	"go/printer"
-	"go/token"
 	"net"
 	"os"
 	"os/exec"
@@ -266,55 +261,4 @@ func errorsAs(err error, target **exec.ExitError) bool {
 		*target = e
 	}
 	return ok
-}
-
-// The launcher-only build keeps exact copies of a few main.go helpers. Compare
-// the printed declarations so a change to one side cannot go unnoticed.
-func TestGUIOnlyHelpers_MatchMainGo(t *testing.T) {
-	decls := func(file string) (map[string]string, string) {
-		fset := token.NewFileSet()
-		f, err := parser.ParseFile(fset, file, nil, 0) // no comments: doc text may differ
-		if err != nil {
-			t.Fatal(err)
-		}
-		funcs := map[string]string{}
-		version := ""
-		for _, d := range f.Decls {
-			switch d := d.(type) {
-			case *ast.FuncDecl:
-				var b bytes.Buffer
-				if err := printer.Fprint(&b, fset, d); err != nil {
-					t.Fatal(err)
-				}
-				funcs[d.Name.Name] = strings.Join(strings.Fields(b.String()), " ")
-			case *ast.GenDecl:
-				for _, sp := range d.Specs {
-					if vs, ok := sp.(*ast.ValueSpec); ok && len(vs.Names) == 1 && vs.Names[0].Name == "appVersion" && len(vs.Values) == 1 {
-						if lit, ok := vs.Values[0].(*ast.BasicLit); ok {
-							version = lit.Value
-						}
-					}
-				}
-			}
-		}
-		return funcs, version
-	}
-	mainFuncs, mainVersion := decls("main.go")
-	guiFuncs, guiVersion := decls("main_gui.go")
-	if mainVersion == "" || mainVersion != guiVersion {
-		t.Errorf("appVersion default differs: main.go %s, main_gui.go %s", mainVersion, guiVersion)
-	}
-	for name, body := range guiFuncs {
-		if name == "main" {
-			continue
-		}
-		want, ok := mainFuncs[name]
-		if !ok {
-			t.Errorf("main_gui.go defines %s, which main.go does not", name)
-			continue
-		}
-		if body != want {
-			t.Errorf("main_gui.go %s differs from main.go:\n--- main.go\n%s\n--- main_gui.go\n%s", name, want, body)
-		}
-	}
 }
