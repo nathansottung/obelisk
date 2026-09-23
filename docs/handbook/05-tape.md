@@ -1,6 +1,6 @@
 # Backing up to LTO tape
 
-This guide shows you how to back up your work onto LTO tape. Take it slow. You cannot hurt your originals — Obelisk only ever reads your source folders. It never changes, moves, or deletes them, and it never sends anything over the internet.
+This guide shows you how to back up your work onto LTO tape. Take it slow. Obelisk is designed to only read your source folders, never to change, move, or delete them. The checks that enforce this are not yet complete; known gaps are being fixed. Keep another copy of anything you cannot replace. Obelisk never sends anything over the internet. Tape writing is not yet tested on real tape hardware.
 
 Some words you'll see:
 
@@ -79,7 +79,7 @@ If a Package fits on one tape, this is all you do.
 
 ![Jobs tab showing a tape write in progress with MB/s and ETA](../img/05-tape-write.png)
 
-You should now see the job finish, then automatically verify (re-read and re-check the fingerprint). When it says the copy is verified, that tape holds a proven-good copy.
+You should now see the job finish, then automatically verify (re-read and re-check the fingerprint). When it says the copy is verified, the tape was read back and its fingerprint matched. Known gaps in how these results are recorded are being fixed.
 
 5. Take the tape out and write the package name on the cartridge label with a marker, so you can find it later.
 
@@ -102,7 +102,7 @@ A spanned package shows a **Write next segment →** button. Here is the rhythm:
 
 ![Packages tab showing the Write next segment button for a spanned package](../img/05-tape-span.png)
 
-You should now see each tape verified one by one, and the package marked complete when the last segment passes.
+You should now see each tape verified one by one, and the package marked complete when the last segment passes. Known gaps in how these results are recorded are being fixed.
 
 **About the recovery tape:** a spanned set may include an extra **par2 recovery tape**. Par2 is repair data — if one tape later gets a bad spot, this recovery tape can help rebuild the missing pieces. Keep it with the set and label it clearly (for example, "Family Photos — recovery tape").
 
@@ -111,11 +111,11 @@ You should now see each tape verified one by one, and the package marked complet
 ## How to know it worked
 
 - Settings shows that an LTFS tape is detected.
-- Each tape's write job on the **Jobs** tab finished and then verified.
+- Each tape's write job on the **Jobs** tab finished and then verified (read back, fingerprint matched).
 - For a spanned package, every segment verified, and the package shows complete.
 - Each physical tape is labeled with a marker, in order, including any recovery tape.
 
-If all of these are true, you have proven-good tape copies of your work.
+If all of these are true, each tape was read back and matched when written. Known gaps in how these results are recorded are being fixed, so keep another copy of anything you cannot replace.
 
 ## If something went wrong
 
