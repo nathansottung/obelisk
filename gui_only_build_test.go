@@ -134,6 +134,25 @@ func TestGUIOnlyBinary(t *testing.T) {
 		if !bytes.Contains(guiBytes, []byte(guiTestVersion)) {
 			t.Errorf("launcher-only build does not carry the -X version %q", guiTestVersion)
 		}
+		// main.go's "0.9.0-dev" default stays in the full build even when -X
+		// overrides it; the launcher-only build declares no default at all.
+		if !bytes.Contains(fullBytes, []byte("0.9.0-dev")) {
+			t.Fatal("control: full build lacks the 0.9.0-dev default, so this check proves nothing")
+		}
+		if bytes.Contains(guiBytes, []byte("0.9.0-dev")) {
+			t.Error("launcher-only build contains the unused 0.9.0-dev default version")
+		}
+	})
+
+	t.Run("an unstamped build reports unstamped", func(t *testing.T) {
+		bare := buildBinary(t, t.TempDir(), "obelisk-gui-unstamped", "", "guionly")
+		var stderr bytes.Buffer
+		cmd := exec.Command(bare)
+		cmd.Stderr = &stderr
+		_ = cmd.Run()
+		if !strings.Contains(stderr.String(), "Obelisk unstamped: this build contains only") {
+			t.Errorf("unstamped refusal: %q", stderr.String())
+		}
 	})
 
 	t.Run("refuses every other mode without binding or writing", func(t *testing.T) {

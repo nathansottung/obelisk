@@ -16,9 +16,15 @@ import (
 	"os"
 )
 
-var appVersion = "0.9.0-dev"
+// appVersion is set only by -X main.appVersion at build time. It has no literal
+// default, so no unused version string is left in the binary; an unstamped
+// build reports "unstamped".
+var appVersion string
 
 func main() {
+	if appVersion == "" {
+		appVersion = "unstamped"
+	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "--gui-disposable-inventory":
