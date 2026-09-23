@@ -13,9 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -311,16 +309,7 @@ func (a *App) carryEccToNextDisc(q *BurnQueue, current *BurnDisc, c *Chunk, eccP
 // runShell runs a burn command line through the platform shell. Exit code 0
 // (nil error) is success; anything else fails the disc with the tail of output.
 func runShell(cmdline string) error {
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/C", cmdline)
-	} else {
-		cmd = exec.Command("sh", "-c", cmdline)
-	}
-	// The burn command is user-written and may call any installed program, so it
-	// keeps the caller's PATH; every other variable follows the helper allowlist.
-	cmd.Env = helperEnv(cmd.Path, true)
-	out, err := cmd.CombinedOutput()
+	out, err := burnShellCommand(cmdline).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%v: %s", err, toolOutputTail(out))
 	}
