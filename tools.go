@@ -37,15 +37,19 @@ func pickOS(win, mac, linux string) string {
 }
 
 // ToolsView resolves the whole catalog against the current machine + config.
-func (a *App) ToolsView() []ToolInfo {
-	cfg := a.LoadConfig()
+func (a *App) ToolsView() ([]ToolInfo, error) {
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
+
 	out := []ToolInfo{}
 
 	// generic PATH/config-resolved tools (stored in the Tools map).
 	generic := func(name string, required bool, adds, win, mac, linux string) ToolInfo {
 		ti := ToolInfo{Name: name, Required: required, Adds: adds,
 			SaveKey: "tools:" + name, Configured: cfg.Tools[name], Download: pickOS(win, mac, linux)}
-		if p, err := a.tool(name); err == nil {
+		if p, err := resolveConfigTool(name, cfg); err == nil {
 			ti.Detected, ti.Path = true, p
 			ti.Version = toolVersionLine(p)
 		}
@@ -84,7 +88,7 @@ func (a *App) ToolsView() []ToolInfo {
 		Adds:    "Manages the tape drive's built-in AES encryption key (Linux only).",
 		SaveKey: "tools:stenc", Configured: cfg.Tools["stenc"],
 		Download: "https://github.com/scsitape/stenc"}
-	if st := a.StencStatus(); st != nil {
+	if st := a.stencStatus(cfg); st != nil {
 		if av, _ := st["available"].(bool); av {
 			stenc.Detected = true
 			if b, ok := st["bin"].(string); ok {
@@ -103,7 +107,7 @@ func (a *App) ToolsView() []ToolInfo {
 		Adds:    "Reads tape-drive health, cleaning status, hours, and bytes written (read-only).",
 		SaveKey: "tape_tool", Configured: cfg.TapeTool,
 		Download: "https://www.ibm.com/support/pages/ibm-tape-diagnostic-tool-itdt"}
-	if ts := a.TapeToolStatus(); ts != nil {
+	if ts := a.tapeToolStatus(cfg); ts != nil {
 		if av, _ := ts["available"].(bool); av {
 			tape.Detected = true
 			if b, ok := ts["bin"].(string); ok {
@@ -116,5 +120,5 @@ func (a *App) ToolsView() []ToolInfo {
 	}
 	out = append(out, tape)
 
-	return out
+	return out, nil
 }

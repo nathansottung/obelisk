@@ -10,7 +10,9 @@
 # the three external tools the restore story depends on (tar, gpg, par2).
 
 # ---- build ----------------------------------------------------------------
-FROM golang:1.22-alpine AS build
+# GO_VERSION must equal the `toolchain` line in go.mod; CI checks this.
+ARG GO_VERSION=1.27.0
+FROM golang:${GO_VERSION}-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -34,7 +36,8 @@ EXPOSE 7821
 
 # Binding 0.0.0.0 makes the UI reachable off-box, which the binary REFUSES unless
 # an auth token is set (env OBELISK_AUTH_TOKEN or config.json auth_token). Set one.
-#   docker run -e OBELISK_AUTH_TOKEN=... -p 7821:7821 -v mnemo-data:/data ...
+# See README "One-time container initialization" for the explicit bootstrap,
+# then normal startup on the same /data. Never add -init-config permanently here.
 ENTRYPOINT ["obelisk"]
 CMD ["-listen", "0.0.0.0:7821", "-data", "/data"]
 

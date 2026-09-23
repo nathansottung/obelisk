@@ -50,7 +50,7 @@ func newTestApp(t *testing.T, tools map[string]string) (*App, string) {
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	app := &App{DataDir: dataDir, Store: store}
+	app := initializedTestApp(t, &App{DataDir: dataDir, Store: store})
 	staging := t.TempDir()
 	ks1 := filepath.Join(t.TempDir(), "keystore1.json")
 	ks2 := filepath.Join(t.TempDir(), "keystore2.json")

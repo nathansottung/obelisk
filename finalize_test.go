@@ -1,3 +1,5 @@
+//go:build !guionly
+
 package main
 
 import (
@@ -16,7 +18,7 @@ func finalizeApp(t *testing.T) (*App, *Volume, *Chunk, string) {
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	app := &App{DataDir: filepath.Dir(st.path), Store: st}
+	app := initializedTestApp(t, &App{DataDir: filepath.Dir(st.path), Store: st})
 	// Disable the free-space buffer so the space precondition never flakes.
 	if _, err := app.SaveConfig(map[string]any{"buffer_pct": 0}); err != nil {
 		t.Fatalf("SaveConfig: %v", err)

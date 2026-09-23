@@ -108,7 +108,10 @@ func (a *App) gatherMembers(includeKeys bool) ([]rawMember, error) {
 	members = append(members, rawMember{"catalog.json", catalog})
 
 	// config.json — scrub the auth token so a deployment secret never travels.
-	cfg := a.LoadConfig()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	cfg.AuthToken = ""
 	cfgBytes, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -136,6 +139,9 @@ func (a *App) gatherMembers(includeKeys bool) ([]rawMember, error) {
 			name := "keystores/" + filepath.Base(ksPath)
 			if seen[name] { // two keystores with the same basename — disambiguate
 				name = fmt.Sprintf("keystores/%d-%s", len(members), filepath.Base(ksPath))
+			}
+			if !validAppBackupMemberName(name) {
+				return nil, fmt.Errorf("keystore filename %q is not portable in an app backup; rename it before exporting", filepath.Base(ksPath))
 			}
 			seen[name] = true
 			members = append(members, rawMember{name, b})
@@ -262,6 +268,24 @@ func (a *App) ExportAppBackup(destDir string, includeKeys bool) (ExportResult, e
 
 // ---- restore -------------------------------------------------------------
 
+// App backups use literal state-file names and flat keystores/<filename> entries
+// (both the current and legacy exporters). Do not clean or case-fold names: that
+// would let validation and extraction select different payloads for one file.
+// Portable leaf spelling also excludes Windows separators, streams and trailing
+// dot/space aliases. This is a format check, not filesystem/symlink containment.
+func validAppBackupMemberName(name string) bool {
+	switch name {
+	case "MANIFEST.json", "catalog.json", "config.json", "jobs.json", "formats.json":
+		return true
+	}
+	if !strings.HasPrefix(name, "keystores/") {
+		return false
+	}
+	leaf := strings.TrimPrefix(name, "keystores/")
+	return leaf != "" && leaf != "." && leaf != ".." &&
+		!strings.ContainsAny(leaf, "/\\:") && strings.TrimRight(leaf, " .") == leaf
+}
+
 // readTarMembers reads every member of a tar into memory, keyed by name.
 func readTarMembers(tarPath string) (map[string][]byte, error) {
 	f, err := os.Open(tarPath)
@@ -281,6 +305,12 @@ func readTarMembers(tarPath string) (map[string][]byte, error) {
 		}
 		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA {
 			continue
+		}
+		if !validAppBackupMemberName(hdr.Name) {
+			return nil, fmt.Errorf("unsupported app-backup member name %q; use canonical state-file names or flat keystores/<filename> entries", hdr.Name)
+		}
+		if _, exists := out[hdr.Name]; exists {
+			return nil, fmt.Errorf("duplicate app-backup member %q; restore requires one payload per name", hdr.Name)
 		}
 		b, err := io.ReadAll(tr)
 		if err != nil {
@@ -334,7 +364,15 @@ func verifyAppBackup(tarPath string) (appBackupManifest, map[string][]byte, erro
 			man.SchemaVersion, currentSchemaVersion)
 	}
 	// Every member hash must match the manifest (tamper / corruption detection).
+	seen := make(map[string]bool, len(man.Members))
 	for _, m := range man.Members {
+		if !validAppBackupMemberName(m.Name) || m.Name == "MANIFEST.json" {
+			return man, nil, fmt.Errorf("unsupported app-backup manifest member %q", m.Name)
+		}
+		if seen[m.Name] {
+			return man, nil, fmt.Errorf("duplicate app-backup manifest member %q", m.Name)
+		}
+		seen[m.Name] = true
 		b, ok := members[m.Name]
 		if !ok {
 			return man, nil, fmt.Errorf("backup is incomplete — member %q is missing", m.Name)
@@ -344,6 +382,13 @@ func verifyAppBackup(tarPath string) (appBackupManifest, map[string][]byte, erro
 		}
 		if int64(len(b)) != m.Size {
 			return man, nil, fmt.Errorf("integrity check failed on %q — size mismatch", m.Name)
+		}
+	}
+	// A correctly hashed member can still be an invalid job board. Refuse it
+	// before restore publishes it and leaves the running Store holding stale rows.
+	if b, ok := members["jobs.json"]; ok {
+		if _, err := decodeJobBoard(b); err != nil {
+			return man, nil, fmt.Errorf("backup job board: %w", err)
 		}
 	}
 	return man, members, nil
@@ -368,7 +413,38 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 
 	// Preserve the current machine's auth token when the backup's is blank (we scrub on
 	// export) — never lock a running deployment out of its own API.
-	curToken := a.LoadConfig().AuthToken
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return RestoreResult{}, cfgErr
+	}
+	curToken := cfg.AuthToken
+
+	// Validate and prepare the config member before any restore mutation. Restore
+	// remains a multi-file operation; a later publication failure can leave a
+	// partial restore and must reach its caller without a success result.
+	var restoredConfig []byte
+	if cfgBytes, ok := members["config.json"]; ok {
+		restored, fields, e := decodeConfig(cfgBytes)
+		if e != nil {
+			return RestoreResult{}, fmt.Errorf("restored configuration is invalid: %w", e)
+		}
+		if restored.AuthToken == "" {
+			restored.AuthToken = curToken
+		}
+		var paths []string
+		for _, m := range man.Members {
+			if strings.HasPrefix(m.Name, "keystores/") {
+				paths = append(paths, filepath.Join(a.DataDir, "keystores", filepath.Base(m.Name)))
+			}
+		}
+		if len(paths) > 0 {
+			restored.KeystorePaths = paths
+		}
+		restoredConfig, e = encodeConfig(restored, fields)
+		if e != nil {
+			return RestoreResult{}, e
+		}
+	}
 
 	// (4) Back up the current records first, so the restore is itself reversible.
 	stamp := time.Now().UTC().Format("20060102-150405")
@@ -393,9 +469,17 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 		if err := os.WriteFile(tmp, b, 0o644); err != nil {
 			return err
 		}
-		return atomicRename(tmp, dest)
+		if err := atomicRename(tmp, dest); err != nil {
+			// atomicRename leaves the existing dest untouched, so the live file is still
+			// good. Best-effort cleanup of this operation's staging file: the removal can
+			// fail too (its error is deliberately discarded here), and unlinking a path is
+			// not secure erasure of the bytes behind it. Either way the original
+			// publication error is what gets returned.
+			_ = os.Remove(tmp)
+			return err
+		}
+		return nil
 	}
-	var restoredKeystores []string
 	for _, m := range man.Members {
 		b := members[m.Name]
 		switch {
@@ -406,7 +490,6 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 			if err := writeFile(dest, b); err != nil {
 				return RestoreResult{}, fmt.Errorf("restore %s: %w", m.Name, err)
 			}
-			restoredKeystores = append(restoredKeystores, dest)
 		default: // catalog.json, jobs.json, formats.json
 			if err := writeFile(filepath.Join(a.DataDir, m.Name), b); err != nil {
 				return RestoreResult{}, fmt.Errorf("restore %s: %w", m.Name, err)
@@ -414,22 +497,12 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 		}
 	}
 
-	// Config, patched: keep the current auth token if the backup's is blank, and point
-	// KeystorePaths at any keystores we just restored.
-	if cfgBytes, ok := members["config.json"]; ok {
-		var cfg Config
-		if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
-			return RestoreResult{}, fmt.Errorf("restored config is unreadable: %w", err)
-		}
-		if cfg.AuthToken == "" {
-			cfg.AuthToken = curToken
-		}
-		if len(restoredKeystores) > 0 {
-			cfg.KeystorePaths = restoredKeystores
-		}
-		out, _ := json.MarshalIndent(cfg, "", "  ")
-		if err := writeFile(a.configPath(), out); err != nil {
-			return RestoreResult{}, fmt.Errorf("restore config.json: %w", err)
+	if restoredConfig != nil {
+		a.configMu.Lock()
+		_, e := a.publishConfig(restoredConfig, false)
+		a.configMu.Unlock()
+		if e != nil {
+			return RestoreResult{}, fmt.Errorf("restore config.json (other members may already be restored): %w", e)
 		}
 	}
 
@@ -437,7 +510,10 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	// bringing an older backup forward — and swap it in.
 	ns, err := OpenStore(a.DataDir)
 	if err != nil {
-		return RestoreResult{}, fmt.Errorf("reopen catalog after restore: %w", err)
+		// Other members may already have changed. If the on-disk board is now
+		// rejected, prevent this retained Store from publishing its stale history.
+		a.Store.checkJobsAfterFailedReopen()
+		return RestoreResult{}, fmt.Errorf("reopen catalog after restore (members may already be restored): %w", err)
 	}
 	a.Store = ns
 
@@ -495,7 +571,10 @@ func autoExportCadenceLabel(cadence string) string {
 // and this period's file is not already present. Keys are never included in an
 // automated export. Best-effort: returns nil when there is nothing to do.
 func (a *App) maybeAutoExport(now time.Time) error {
-	cfg := a.LoadConfig()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return cfgErr
+	}
 	dir := strings.TrimSpace(cfg.AutoExportDir)
 	if dir == "" {
 		return nil

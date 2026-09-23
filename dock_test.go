@@ -22,7 +22,7 @@ func dockApp(t *testing.T) *App {
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	return &App{DataDir: dataDir, Store: store}
+	return initializedTestApp(t, &App{DataDir: dataDir, Store: store})
 }
 
 // writeTree writes rel->content files under root.

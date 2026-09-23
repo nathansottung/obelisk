@@ -82,7 +82,7 @@ func TestDeviceIdentityAndLabel_SystemDisk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := &App{DataDir: t.TempDir(), Store: st}
+	app := initializedTestApp(t, &App{DataDir: t.TempDir(), Store: st})
 	v := st.AddVolume(Volume{Label: "SYS-DISK", Kind: "SSD"})
 	if _, changed := app.resolveVolumeIdentity(v, wd); !changed {
 		t.Fatal("resolveVolumeIdentity reported no change though identity resolved")

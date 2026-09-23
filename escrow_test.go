@@ -16,7 +16,7 @@ func escrowApp(t *testing.T) *App {
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	return &App{DataDir: filepath.Dir(st.path), Store: st}
+	return initializedTestApp(t, &App{DataDir: filepath.Dir(st.path), Store: st})
 }
 
 // seedEscrowCache writes non-empty placeholder files into the default escrow
@@ -24,7 +24,7 @@ func escrowApp(t *testing.T) *App {
 // writer only copies bytes, so the exact content is irrelevant here.
 func seedEscrowCache(t *testing.T, a *App, opts struct{ binaries, toolchain, readers bool }) {
 	t.Helper()
-	cache := a.escrowCacheDir()
+	cache := a.escrowCacheDir(mustConfig(t, a))
 	verDir := filepath.Join(cache, fsSafe(appVersion))
 	write := func(dir, name string) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -92,7 +92,7 @@ func TestPlanBinariesOnlyVsFull(t *testing.T) {
 	seedEscrowCache(t, a, struct{ binaries, toolchain, readers bool }{binaries: true, toolchain: true})
 	census := Census{} // no reader-triggering formats
 
-	bin := a.planEscrow(EscrowBinariesOnly, false, census)
+	bin := a.planEscrow(EscrowBinariesOnly, false, census, mustConfig(t, a))
 	if bin.MissingCount != 0 {
 		t.Fatalf("binaries-only should be complete with a seeded cache, missing: %v", bin.MissingNames)
 	}
@@ -105,7 +105,7 @@ func TestPlanBinariesOnlyVsFull(t *testing.T) {
 		t.Fatal("binaries-only should carry the binary payloads")
 	}
 
-	full := a.planEscrow(EscrowFull, false, census)
+	full := a.planEscrow(EscrowFull, false, census, mustConfig(t, a))
 	if !hasKind(full.Components, "obelisk-source") {
 		t.Error("full must include the Obelisk source tarball")
 	}
@@ -123,17 +123,17 @@ func TestPlanReaderSelectionAndGating(t *testing.T) {
 
 	rawCensus := Census{Rows: []CensusRow{{Ext: ".nef"}, {Ext: ".jpg"}}}
 	// readers off → no reader components even though a .nef is present.
-	off := a.planEscrow(EscrowFull, false, rawCensus)
+	off := a.planEscrow(EscrowFull, false, rawCensus, mustConfig(t, a))
 	if hasKind(off.Components, "reader-source") {
 		t.Error("reader source must be gated by escrow_include_readers")
 	}
 	// readers on + a RAW format present → LibRaw/dcraw pulled in.
-	on := a.planEscrow(EscrowFull, true, rawCensus)
+	on := a.planEscrow(EscrowFull, true, rawCensus, mustConfig(t, a))
 	if !hasKind(on.Components, "reader-source") {
 		t.Error("a .nef census with readers enabled should include a reader source")
 	}
 	// readers on but NO matching format → still no reader component.
-	plain := a.planEscrow(EscrowFull, true, Census{Rows: []CensusRow{{Ext: ".txt"}}})
+	plain := a.planEscrow(EscrowFull, true, Census{Rows: []CensusRow{{Ext: ".txt"}}}, mustConfig(t, a))
 	if hasKind(plain.Components, "reader-source") {
 		t.Error("no RAW/JP2 in census → no reader source, even with readers enabled")
 	}
@@ -143,7 +143,7 @@ func TestWriteBundleAssemblesAndVerifies(t *testing.T) {
 	a := escrowApp(t)
 	seedEscrowCache(t, a, struct{ binaries, toolchain, readers bool }{binaries: true, toolchain: true})
 	dest := t.TempDir()
-	plan := a.planEscrow(EscrowFull, false, Census{})
+	plan := a.planEscrow(EscrowFull, false, Census{}, mustConfig(t, a))
 	sum, err := a.WriteEscrowBundle(dest, plan, nil)
 	if err != nil {
 		t.Fatalf("WriteEscrowBundle: %v", err)
@@ -187,7 +187,7 @@ func TestWriteBundleAssemblesAndVerifies(t *testing.T) {
 func TestWriteBundleOffIsSkipped(t *testing.T) {
 	a := escrowApp(t)
 	dest := t.TempDir()
-	plan := a.planEscrow(EscrowOff, false, Census{})
+	plan := a.planEscrow(EscrowOff, false, Census{}, mustConfig(t, a))
 	sum, err := a.WriteEscrowBundle(dest, plan, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -203,8 +203,8 @@ func TestWriteBundleOffIsSkipped(t *testing.T) {
 func TestSidecarEscrowBudgetsHonestly(t *testing.T) {
 	a := escrowApp(t)
 	seedEscrowCache(t, a, struct{ binaries, toolchain, readers bool }{binaries: true})
-	cfg := a.LoadConfig() // default binaries-only
-	plan := a.planEscrow(EscrowBinariesOnly, false, Census{})
+	cfg := mustConfig(t, a) // default binaries-only
+	plan := a.planEscrow(EscrowBinariesOnly, false, Census{}, mustConfig(t, a))
 	est := plan.estimatedBundleBytes()
 
 	// Not enough free space → skipped gracefully, nothing written, honest note.

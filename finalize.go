@@ -172,7 +172,10 @@ func (a *App) FinalizeVolume(v *Volume, mountPath, by string, force bool, forceR
 	if v.Sealed {
 		return nil, fmt.Errorf("%s is already SEALED — unseal it first if you need to re-finalize", v.Label)
 	}
-	cfg := a.LoadConfig()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	as := a.AssessFinalize(v, mountPath, cfg)
 
 	var overrides []string
@@ -361,7 +364,7 @@ func (a *App) writeSidecarEscrow(sidecarDir string, census Census, freeBytes int
 	if mode == EscrowOff {
 		return "Not written (`escrow_on_media` = off). The full Escrow Bundle lives in the Recovery Kit."
 	}
-	plan := a.planEscrow(mode, cfg.EscrowIncludeReaders, census)
+	plan := a.planEscrow(mode, cfg.EscrowIncludeReaders, census, cfg)
 	est := plan.estimatedBundleBytes()
 
 	// Budget honestly BEFORE writing. Unknown free space (0) is treated as "cannot

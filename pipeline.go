@@ -139,54 +139,27 @@ type App struct {
 	pfMu  sync.Mutex
 	pfAt  time.Time
 	pfVal map[string]any
+	// Per-instance test seams; nil in production. Configure only before use.
+	keystoreReadFile         func(string) ([]byte, error)
+	keystoreMutationObserver func(string)
+	configMu                 sync.Mutex
+	configIO                 configHooks
 }
 
 func (a *App) configPath() string { return filepath.Join(a.DataDir, "config.json") }
 
-func (a *App) LoadConfig() Config {
-	cfg := defaultConfig()
-	if b, err := os.ReadFile(a.configPath()); err == nil {
-		_ = json.Unmarshal(b, &cfg)
-	}
-	if cfg.Tools == nil {
-		cfg.Tools = map[string]string{}
-	}
-	return cfg
-}
-
-func (a *App) SaveConfig(in map[string]any) (Config, error) {
-	cfg := a.LoadConfig()
-	b, _ := json.Marshal(in)
-	if err := json.Unmarshal(b, &cfg); err != nil {
-		return cfg, err
-	}
-	// Source-safety invariant: staging is written into during builds and keystores
-	// are rewritten on key generation — neither may live inside source data.
-	if err := a.Store.AssertOutsideSources(cfg.StagingDir); err != nil {
-		return cfg, err
-	}
-	for _, ks := range cfg.KeystorePaths {
-		if err := a.Store.AssertOutsideSources(ks); err != nil {
-			return cfg, err
-		}
-	}
-	if cfg.AutoExportDir != "" {
-		if err := a.Store.AssertOutsideSources(cfg.AutoExportDir); err != nil {
-			return cfg, err
-		}
-	}
-	out, _ := json.MarshalIndent(cfg, "", "  ")
-	if err := os.WriteFile(a.configPath(), out, 0o644); err != nil {
-		return cfg, err
-	}
-	setHashAccel(cfg.HashAccel) // apply runtime preferences that live outside the request path
-	return cfg, nil
-}
-
 // ---- tools ---------------------------------------------------------------
 
 func (a *App) tool(name string) (string, error) {
-	cfg := a.LoadConfig()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return "", cfgErr
+	}
+	return resolveConfigTool(name, cfg)
+}
+
+// Resolve from a previously validated snapshot; optional probes must not swallow a new config read.
+func resolveConfigTool(name string, cfg Config) (string, error) {
 	if p := cfg.Tools[name]; p != "" {
 		if _, err := os.Stat(p); err == nil {
 			return p, nil
@@ -210,7 +183,7 @@ func (a *App) tool(name string) (string, error) {
 func toolVersionLine(path string) string {
 	ch := make(chan string, 1) // buffered: the goroutine never blocks even if we stop waiting
 	go func() {
-		v, err := exec.Command(path, "--version").CombinedOutput()
+		v, err := helperCommand(path, "--version").CombinedOutput()
 		if err != nil {
 			ch <- ""
 			return
@@ -242,6 +215,9 @@ func detectLTFSMountsBounded(d time.Duration) []string {
 // single-flight so the Settings view and the 20s status lamp never both stall on
 // a slow tool probe.
 func (a *App) Preflight() map[string]any {
+	if _, err := a.LoadConfig(); err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
 	a.pfMu.Lock()
 	defer a.pfMu.Unlock()
 	if a.pfVal != nil && time.Since(a.pfAt) < 8*time.Second {
@@ -252,6 +228,10 @@ func (a *App) Preflight() map[string]any {
 }
 
 func (a *App) computePreflight() map[string]any {
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
 	out := map[string]any{}
 	hints := []string{}
 	allOK := true
@@ -260,7 +240,7 @@ func (a *App) computePreflight() map[string]any {
 		"gpg":  "Windows: install Gpg4win (gpg4win.org). Linux: apt install gnupg. macOS: brew install gnupg.",
 		"par2": "Windows: choco install par2cmdline. Linux: apt install par2. macOS: brew install par2.",
 	} {
-		p, err := a.tool(name)
+		p, err := resolveConfigTool(name, cfg)
 		item := map[string]any{"ok": err == nil, "path": p}
 		if err == nil {
 			if line := toolVersionLine(p); line != "" {
@@ -282,7 +262,7 @@ func (a *App) computePreflight() map[string]any {
 	// smartctl (drive-mortality signals) is OPTIONAL — informational only, never
 	// affects "ok". Present = the Media health card lights up on volumes; absent =
 	// the feature hides behind an install hint. It complements hash verification.
-	sp, serr := a.tool("smartctl")
+	sp, serr := resolveConfigTool("smartctl", cfg)
 	smart := map[string]any{"ok": serr == nil, "path": sp}
 	if serr != nil {
 		smart["hint"] = smartInstallHint
@@ -293,7 +273,7 @@ func (a *App) computePreflight() map[string]any {
 	// musician's or filmmaker's library clusters into sessions by date the way a
 	// photographer's does via EXIF); absent = those fields stay empty, ingest still
 	// succeeds. It complements, never replaces, hash verification.
-	fp, ferr := a.tool("ffprobe")
+	fp, ferr := resolveConfigTool("ffprobe", cfg)
 	ffprobe := map[string]any{"ok": ferr == nil, "path": fp}
 	if ferr != nil {
 		ffprobe["hint"] = ffprobeInstallHint
@@ -302,7 +282,7 @@ func (a *App) computePreflight() map[string]any {
 	// dvdisaster (disc-level ECC) — OPTIONAL and informational; never affects "ok".
 	// Present = the Burn tab can auto-generate a per-disc .ecc after verify; absent =
 	// the feature hides behind an install hint. It complements par2, never replaces it.
-	dp, derr := a.tool("dvdisaster")
+	dp, derr := resolveConfigTool("dvdisaster", cfg)
 	dvd := map[string]any{"ok": derr == nil, "path": dp}
 	if derr != nil {
 		dvd["hint"] = dvdisasterInstallHint
@@ -312,10 +292,10 @@ func (a *App) computePreflight() map[string]any {
 	// affects "ok". Present = the Tape Drive panel can read/manage the drive key;
 	// absent (or non-Linux) = hidden behind an OS-aware hint. It is OUTSIDE the gpg
 	// restore story — awareness, not dependence.
-	out["stenc"] = a.StencStatus()
+	out["stenc"] = a.stencStatus(cfg)
 	// Tape diagnostics tool (ITDT / tapeinfo / sg_logs / HPE L&TT) — OPTIONAL and
 	// informational; never affects "ok". Reads drive health only.
-	out["tape_tool"] = a.TapeToolStatus()
+	out["tape_tool"] = a.tapeToolStatus(cfg)
 	out["ok"] = allOK && ks["ok"].(bool)
 	out["hints"] = hints
 	return out
@@ -355,6 +335,14 @@ func readStore(path string) (*keystoreFile, error) {
 }
 
 func writeStore(path string, ks *keystoreFile) error {
+	return writeStoreObserved(path, ks, nil)
+}
+
+// Observe the actual mutation boundary, before even creating a parent directory.
+func writeStoreObserved(path string, ks *keystoreFile, observe func(string)) error {
+	if observe != nil {
+		observe(path)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -368,56 +356,21 @@ func writeStore(path string, ks *keystoreFile) error {
 }
 
 func (a *App) KeystoreStatus() map[string]any {
-	cfg := a.LoadConfig()
-	stores := []map[string]any{}
-	sets := []map[string]bool{}
-	reachable := true
-	for _, p := range cfg.KeystorePaths {
-		e := map[string]any{"path": p, "reachable": false, "key_count": 0}
-		ks, err := readStore(p)
-		if err == nil {
-			e["reachable"] = true
-			e["key_count"] = len(ks.Keys)
-			set := map[string]bool{}
-			for _, k := range ks.Keys {
-				if r, ok := k["key_ref"].(string); ok {
-					set[r] = true
-				}
-			}
-			sets = append(sets, set)
-		} else {
-			e["error"] = err.Error()
-			reachable = false
-		}
-		stores = append(stores, e)
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return map[string]any{"ok": false, "reason": err.Error(), "min_required": MinKeystores, "stores": []map[string]any{}}
 	}
-	consistent := true
-	for i := 1; i < len(sets); i++ {
-		if len(sets[i]) != len(sets[0]) {
-			consistent = false
-			break
-		}
-		for k := range sets[0] {
-			if !sets[i][k] {
-				consistent = false
-			}
-		}
-	}
-	ok := len(cfg.KeystorePaths) >= MinKeystores && reachable && consistent
-	reason := ""
-	switch {
-	case len(cfg.KeystorePaths) < MinKeystores:
-		reason = fmt.Sprintf("Only %d keystore path(s) registered; %d required, on different physical devices.", len(cfg.KeystorePaths), MinKeystores)
-	case !reachable:
-		reason = "One or more keystores are unreachable."
-	case !consistent:
-		reason = "Keystores hold different key sets — run key sync."
-	}
-	return map[string]any{"ok": ok, "reason": reason, "min_required": MinKeystores, "stores": stores}
+	return a.keystoreStatus(cfg.KeystorePaths, false)
 }
 
 func (a *App) GenerateKey(note string) (ref, passphrase, fpr string, err error) {
-	st := a.KeystoreStatus()
+	// Generation retains the existing first-use workflow; ordinary sync never
+	// treats absence as enrollment. The same conflict checks still apply.
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return "", "", "", cfgErr
+	}
+	st := a.keystoreStatus(cfg.KeystorePaths, true)
 	if !st["ok"].(bool) {
 		return "", "", "", fmt.Errorf("keystore requirement not met: %s", st["reason"])
 	}
@@ -433,7 +386,6 @@ func (a *App) GenerateKey(note string) (ref, passphrase, fpr string, err error) 
 	fpr = hex.EncodeToString(sum[:])
 	rec := map[string]any{"key_ref": ref, "algorithm": "GPG-AES256", "passphrase": passphrase,
 		"created_at": time.Now().UTC().Format(time.RFC3339), "note": note}
-	cfg := a.LoadConfig()
 	for _, p := range cfg.KeystorePaths {
 		ks, e := readStore(p)
 		if e != nil {
@@ -448,48 +400,66 @@ func (a *App) GenerateKey(note string) (ref, passphrase, fpr string, err error) 
 	return
 }
 
+// Passphrase tolerates unavailable replicas for offline recovery, but checks
+// every readable, valid participant for ambiguity in the requested reference.
+// Success proves availability, not complete replica consistency.
 func (a *App) Passphrase(ref string) (string, error) {
-	cfg := a.LoadConfig()
-	for _, p := range cfg.KeystorePaths {
-		ks, err := readStore(p)
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return "", cfgErr
+	}
+	paths := append([]string(nil), cfg.KeystorePaths...)
+	var pass string
+	found := false
+	for _, p := range paths {
+		ks, err := a.readExistingKeystore(p, false)
 		if err != nil {
 			continue
 		}
 		for _, k := range ks.Keys {
-			if k["key_ref"] == ref {
-				if s, ok := k["passphrase"].(string); ok {
-					return s, nil
-				}
+			if k["key_ref"] != ref {
+				continue
 			}
+			secret := k["passphrase"].(string) // validated by readExistingKeystore
+			if found && pass != secret {
+				return "", fmt.Errorf("conflicting secret material for the requested key; reconcile the keystores before recovery")
+			}
+			pass, found = secret, true
 		}
 	}
-	return "", fmt.Errorf("key %s not found in any keystore", ref)
+	if !found {
+		return "", fmt.Errorf("requested key not found in any readable valid keystore")
+	}
+	return pass, nil
 }
 
+// SyncKeystores validates one participant snapshot before the first mutation.
+// Publication remains sequential: later errors do not roll back earlier stores.
+// This is not a lock against another process changing files after validation.
 func (a *App) SyncKeystores() (int, error) {
-	cfg := a.LoadConfig()
-	merged := map[string]map[string]any{}
-	for _, p := range cfg.KeystorePaths {
-		if ks, err := readStore(p); err == nil {
-			for _, k := range ks.Keys {
-				if r, ok := k["key_ref"].(string); ok {
-					merged[r] = k
-				}
-			}
-		}
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return 0, cfgErr
 	}
-	out := &keystoreFile{Marker: 1}
-	for _, k := range merged {
-		out.Keys = append(out.Keys, k)
+	paths := append([]string(nil), cfg.KeystorePaths...)
+	if len(paths) == 0 {
+		return 0, fmt.Errorf("no keystores configured for synchronization")
 	}
-	sort.Slice(out.Keys, func(i, j int) bool {
-		a1, _ := out.Keys[i]["created_at"].(string)
-		b1, _ := out.Keys[j]["created_at"].(string)
-		return a1 < b1
-	})
-	for _, p := range cfg.KeystorePaths {
-		if err := writeStore(p, out); err != nil {
+	stores := make([]*keystoreFile, 0, len(paths))
+	for _, p := range paths {
+		ks, err := a.readExistingKeystore(p, false)
+		if err != nil {
 			return 0, err
+		}
+		stores = append(stores, ks)
+	}
+	out, err := mergeKeystores(stores)
+	if err != nil {
+		return 0, err
+	}
+	for _, p := range paths {
+		if err := writeStoreObserved(p, out, a.keystoreMutationObserver); err != nil {
+			return 0, fmt.Errorf("keystore synchronization publication failed; earlier participants may already have been updated: %w", err)
 		}
 	}
 	return len(out.Keys), nil
@@ -507,7 +477,11 @@ type ScanProblem struct {
 	Err  string `json:"err"`
 }
 
-func (a *App) ScanFolder(collectionID int, root string, progress func(float64, string)) (int, []ScanProblem, error) {
+func (a *App) ScanFolder(collectionID int, root string, progress func(float64, string)) (count int, problems []ScanProblem, err error) {
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return 0, nil, cfgErr
+	}
 	// SOURCE READ-ONLY: scanning only WalkDir-traverses and hashes (os.Open
 	// O_RDONLY via hashFileHex). It registers `root` as a source root and writes
 	// nothing back into it — the catalog is the only thing mutated.
@@ -517,14 +491,15 @@ func (a *App) ScanFolder(collectionID int, root string, progress func(float64, s
 	}
 	// Batch catalog writes for the duration of the scan (idempotent re-run).
 	a.Store.BeginBatch()
-	defer a.Store.EndBatch()
-	a.Store.SetVersionsRetained(a.LoadConfig().VersionsRetained) // cap file-version history per config
+	defer endBatchInto(a.Store, &err)
+	a.Store.SetVersionsRetained(cfg.VersionsRetained) // cap file-version history per config
 	folder := a.Store.AddFolder(collectionID, root)
 
 	// Problems are appended from both the WalkDir callback (single goroutine) and the
 	// parallelHash workers (many), so guard the slice.
 	var pmu sync.Mutex
-	var problems []ScanProblem
+	// problems is the named result (see the signature); it starts nil exactly as the
+	// local declaration did, and every return statement below is unchanged.
 	addProblem := func(path, kind, msg string) {
 		pmu.Lock()
 		problems = append(problems, ScanProblem{Path: path, Kind: kind, Err: msg})
@@ -558,7 +533,7 @@ func (a *App) ScanFolder(collectionID int, root string, progress func(float64, s
 			role, _ := classifyRole(reg, rel)
 			f := File{CollectionID: collectionID, FolderID: folder.ID,
 				RelPath: filepath.ToSlash(rel), SizeBytes: size, HashAlg: "SHA256", Hash: sha, Blake3: b3, ModTime: mtime, Role: role}
-			f.ShotAt, f.CameraSerial = a.extractMediaMeta(p, role)
+			f.ShotAt, f.CameraSerial = a.extractMediaMeta(p, role, cfg)
 			a.Store.UpsertFile(f)
 			atomic.AddInt64(&scanned, 1)
 		}
@@ -668,9 +643,12 @@ type PlanResult struct {
 }
 
 func (a *App) Plan(collectionID int, mediaKind string, targetGB float64, par2 int, encrypted bool, scopePrefix string) (*PlanResult, error) {
-	cfg := a.LoadConfig()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	if par2 <= 0 {
-		par2 = a.effectiveIntegrity(collectionID).Par2Redundancy // archive override, else global preset
+		par2 = a.effectiveIntegrity(collectionID, cfg).Par2Redundancy // archive override, else global preset
 	}
 	target := MediaPresets[mediaKind]
 	if targetGB > 0 {
@@ -824,6 +802,68 @@ var (
 	buildDecryptPassphraseHook func(pass string) string
 )
 
+// buildUsesWindowsExternalTarHook lets a test exercise the OBX-006 containment on
+// any platform by stating whether this build would construct the archive with the
+// external tar helper on Windows. nil in production, where the answer is simply
+// runtime.GOOS — same guarding rule as the fault-injection hooks above: it is wired
+// only from *_test.go in this package, and a nil value (the only value a shipped
+// binary ever has) means the real platform decides.
+var buildUsesWindowsExternalTarHook func() bool
+
+func buildUsesWindowsExternalTar() bool {
+	if buildUsesWindowsExternalTarHook != nil {
+		return buildUsesWindowsExternalTarHook()
+	}
+	// Every package today is constructed by the configured external tar; there is no
+	// native writer yet. When one lands (OBX-006 §8 option 1), this is the predicate
+	// that stops applying to the paths it replaces.
+	return runtime.GOOS == "windows"
+}
+
+// windowsTarUnverifiedBuildRefusal is the operator-facing reason a Windows build at
+// the "none" tier is refused. It says what to change, why the restriction exists, and
+// — explicitly — that turning verification on does not make Unicode filenames work.
+const windowsTarUnverifiedBuildRefusal = "refusing to build without content verification on Windows: " +
+	"build verify is %q for this archive, and Windows builds temporarily require %q or %q. " +
+	"The external tar this path uses can misread the member list in the host ANSI code page and " +
+	"archive a DIFFERENT, similarly-named file while reporting success — café.txt requested, " +
+	"cafÃ©.txt archived — and content verification is what catches that. " +
+	"Set build verify to Contents or Full for this archive (or globally) and build again. " +
+	"This is a temporary restriction on the Windows external-tar path (OBX-006); it does NOT fix " +
+	"Unicode filename support, which still fails on this path with verification enabled."
+
+// assertWindowsTarBuildVerifiable is the OBX-006 containment: on the Windows
+// external-tar construction path, refuse a build whose EFFECTIVE tier switches off
+// package-content verification.
+//
+// Why refusing is the conservative choice. verifyTarContents is the only thing that
+// compares the archive's members against the catalog, and OBX-006 demonstrated this
+// path can exit 0 having archived the wrong file. At the "none" tier nothing compares
+// them, so a wrongly named package could be staged, written and read back — every one
+// of those checks passing — and still not contain what the catalog says it does.
+// Helper success, content verification, encryption round-trip and media read-back are
+// four different guarantees; none substitutes for another, and only the second catches
+// this.
+//
+// iv must be the normalised EFFECTIVE integrity for the archive being built, not a
+// preset label and not a raw config string. Nothing here reads or rewrites saved
+// settings: a refused build leaves the operator's global and per-archive configuration
+// exactly as they set it.
+//
+// Deliberately narrow: it restricts the current Windows external-tar path, and asserts
+// nothing about other platforms or about which tar binaries share the defect. It is not
+// keyed off the helper's version string, and there is no bypass.
+func assertWindowsTarBuildVerifiable(iv Integrity) error {
+	if !buildUsesWindowsExternalTar() {
+		return nil
+	}
+	if normBuildVerify(iv.BuildVerify) != BuildVerifyNone {
+		return nil
+	}
+	return fmt.Errorf(windowsTarUnverifiedBuildRefusal,
+		BuildVerifyNone, BuildVerifyContents, BuildVerifyFull)
+}
+
 // verifyTarContents streams the staged tar with Go's stdlib archive/tar reader
 // (no extraction to disk, no external tool), hashes every regular-file member,
 // and compares each against the catalog's source-file hash for that rel_path.
@@ -888,7 +928,7 @@ func verifyTarContents(tarPath string, files []ChunkFileRef) error {
 // returns the hash of the decrypted stream. Used to prove the ciphertext
 // actually decrypts back to the verified tar (compare against tar_hash).
 func decryptRoundtripHash(gpgBin, ciphertext, pass string) (string, error) {
-	cmd := exec.Command(gpgBin, "--batch", "--yes", "--pinentry-mode", "loopback",
+	cmd := helperCommand(gpgBin, "--batch", "--yes", "--pinentry-mode", "loopback",
 		"--passphrase-fd", "0", "-d", ciphertext)
 	cmd.Stdin = strings.NewReader(pass)
 	var errb strings.Builder
@@ -913,7 +953,10 @@ func decryptRoundtripHash(gpgBin, ciphertext, pass string) (string, error) {
 }
 
 func (a *App) BuildChunk(id int, progress func(float64, string)) error {
-	cfg := a.LoadConfig()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return cfgErr
+	}
 	c := a.Store.Chunk(id)
 	if c == nil {
 		return fmt.Errorf("package %d not found", id)
@@ -922,9 +965,20 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 		return fmt.Errorf("package %s is %s; only PLANNED/FAILED can build", c.Name, c.Status)
 	}
 	if c.Encrypted {
-		if st := a.KeystoreStatus(); !st["ok"].(bool) {
+		// An encrypted build can be the first key-generation operation. Keep
+		// that initialization workflow separate from strict replica status/sync.
+		if st := a.keystoreStatus(cfg.KeystorePaths, true); !st["ok"].(bool) {
 			return fmt.Errorf("refusing to encrypt: %s", st["reason"])
 		}
+	}
+	// The EFFECTIVE integrity for this archive (its own override, else the global
+	// preset), already normalised by effectiveIntegrity. Read here — before any tool
+	// is resolved, any staging directory is made, any key is generated and any tar is
+	// invoked — so the OBX-006 containment below decides on exactly the same value the
+	// rest of the build then uses, rather than on a preset label or a raw config string.
+	iv := a.effectiveIntegrity(c.CollectionID, cfg)
+	if err := assertWindowsTarBuildVerifiable(iv); err != nil {
+		return err
 	}
 	tarBin, err := a.tool("tar")
 	if err != nil {
@@ -961,7 +1015,10 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 		}
 	}
 
-	setStatus := func(st, msg string) error { c.Status, c.Error = st, msg; return a.Store.UpdateChunkErr(c) }
+	setStatus := func(st, msg string) error {
+		c.Status, c.Error = st, storedErrorText(msg)
+		return a.Store.UpdateChunkErr(c)
+	}
 	// Interim status writes (BUILDING/FAILED) are best-effort: they're progress
 	// signals, not durability guarantees, and losing one doesn't misrepresent the
 	// medium. Only the terminal STAGED write is gated below.
@@ -1003,7 +1060,9 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	// The build-verify tier comes from this archive's EFFECTIVE integrity (its own
 	// override, else the global preset), and the resulting attestation records the
 	// full effective settings so the medium self-documents its assurance level.
-	iv := a.effectiveIntegrity(c.CollectionID)
+	// iv was read at the top of this function, before anything was resolved or
+	// created, so the OBX-006 containment there and the attestation here cannot
+	// disagree about which tier this build ran at.
 	mode := iv.BuildVerify
 	bv := &BuildVerified{Mode: mode, Preset: iv.Preset, Par2Percent: c.Par2,
 		RoutineVerifyLevel: iv.RoutineVerifyLevel, VerifyDueMonths: iv.VerifyDueMonths, ReadbackAfterWrite: true}
@@ -1215,17 +1274,13 @@ func isUnknownOptionErr(err error) bool {
 }
 
 func run(bin, stdin string, args ...string) error {
-	cmd := exec.Command(bin, args...)
+	cmd := helperCommand(bin, args...)
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		tail := string(out)
-		if len(tail) > 700 {
-			tail = tail[len(tail)-700:]
-		}
-		return fmt.Errorf("%s failed: %v: %s", filepath.Base(bin), err, tail)
+		return fmt.Errorf("%s failed: %v: %s", filepath.Base(bin), err, toolOutputTail(out))
 	}
 	return nil
 }

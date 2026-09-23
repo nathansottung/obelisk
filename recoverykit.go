@@ -31,6 +31,10 @@ const recoveryKitWarning = "This kit contains key QR codes whose payloads ARE th
 // returns a summary. It never fails the whole job over one unreachable key —
 // those are recorded as warnings so the rest of the kit still gets written.
 func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string)) (map[string]any, error) {
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	if strings.TrimSpace(outputDir) == "" {
 		return nil, fmt.Errorf("output_dir required")
 	}
@@ -112,8 +116,7 @@ func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string))
 	// belt-and-suspenders home. Never fail the kit over it: a missing cache just
 	// means a smaller bundle plus a recorded note.
 	progress(0.66, "escrow bundle")
-	cfg := a.LoadConfig()
-	escrowPlan := a.planEscrow(EscrowFull, cfg.EscrowIncludeReaders, a.FormatCensus(0))
+	escrowPlan := a.planEscrow(EscrowFull, cfg.EscrowIncludeReaders, a.FormatCensus(0), cfg)
 	escrowSummary, escErr := a.WriteEscrowBundle(kit, escrowPlan, func(f float64, m string) { progress(0.66+0.02*f, m) })
 	if escErr != nil {
 		warnings = append(warnings, "escrow bundle: "+escErr.Error())

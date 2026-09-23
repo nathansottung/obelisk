@@ -40,8 +40,12 @@ type DataMap struct {
 }
 
 // DataMap builds the honesty report from live config + catalog. Read-only.
-func (a *App) DataMap() DataMap {
-	cfg := a.LoadConfig()
+func (a *App) DataMap() (DataMap, error) {
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return DataMap{}, cfgErr
+	}
+
 	catalog := filepath.Join(a.DataDir, "catalog.json")
 
 	var dm DataMap
@@ -129,7 +133,7 @@ func (a *App) DataMap() DataMap {
 		"TestQuarantine_AbsentOnAdoptedAndRefusedForSources (quarantine_test.go) — quarantine never appears on adopted or source data.",
 		"Store.AssertOutsideSources (store.go) — the one guard every write path calls.",
 	}
-	return dm
+	return dm, nil
 }
 
 // adoptedDriveLabels lists the drives the tool has inventoried (from their offline

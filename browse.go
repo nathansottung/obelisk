@@ -19,7 +19,11 @@ import (
 // browseRoots returns the picker's starting points: the real drives/root, the
 // operator's home, the configured staging folder, and each registered source
 // root — the places a path is actually likely to live.
-func (a *App) browseRoots() []map[string]any {
+func (a *App) browseRoots() ([]map[string]any, error) {
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	out := []map[string]any{}
 	seen := map[string]bool{}
 	add := func(name, p string) {
@@ -45,12 +49,12 @@ func (a *App) browseRoots() []map[string]any {
 	if home, err := os.UserHomeDir(); err == nil {
 		add("Home", home)
 	}
-	cfg := a.LoadConfig()
+
 	add("Staging", cfg.StagingDir)
 	for _, r := range a.Store.SourceRoots() {
 		add("Source · "+filepath.Base(r), r)
 	}
-	return out
+	return out, nil
 }
 
 // Browse lists the immediate subdirectories of path (read-only). An empty path
@@ -64,7 +68,11 @@ func (a *App) BrowseWithFiles(path string) (map[string]any, error) { return a.br
 
 func (a *App) browse(path string, includeFiles bool) (map[string]any, error) {
 	if strings.TrimSpace(path) == "" {
-		return map[string]any{"path": "", "parent": "", "roots": true, "dirs": a.browseRoots()}, nil
+		roots, err := a.browseRoots()
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"path": "", "parent": "", "roots": true, "dirs": roots}, nil
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {

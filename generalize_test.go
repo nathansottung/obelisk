@@ -17,7 +17,7 @@ func TestMusicianProject_RolesCriticalAndRouting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := &App{DataDir: dataDir, Store: store}
+	app := initializedTestApp(t, &App{DataDir: dataDir, Store: store})
 	reg := app.formatRegistry()
 
 	// (1) A synthetic music project's file kinds classify into the neutral taxonomy,

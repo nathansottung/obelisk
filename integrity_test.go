@@ -1,3 +1,5 @@
+//go:build !guionly
+
 package main
 
 import (
@@ -5,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -27,18 +30,18 @@ func TestEffectiveIntegrityArchiveOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	app := &App{DataDir: filepath.Dir(st.path), Store: st}
+	app := initializedTestApp(t, &App{DataDir: filepath.Dir(st.path), Store: st})
 	coll := st.AddCollection("A")
 
 	// Default (no override) is the global ARCHIVAL preset.
-	if iv := app.effectiveIntegrity(coll.ID); iv.Preset != "ARCHIVAL" || iv.BuildVerify != BuildVerifyFull {
+	if iv := app.effectiveIntegrity(coll.ID, mustConfig(t, app)); iv.Preset != "ARCHIVAL" || iv.BuildVerify != BuildVerifyFull {
 		t.Fatalf("default should be ARCHIVAL/full, got %+v", iv)
 	}
 	// Override to FAST.
 	if _, err := app.applyArchiveIntegrity(coll.ID, map[string]any{"preset": "FAST"}); err != nil {
 		t.Fatalf("apply FAST: %v", err)
 	}
-	iv := app.effectiveIntegrity(coll.ID)
+	iv := app.effectiveIntegrity(coll.ID, mustConfig(t, app))
 	if iv.Preset != "FAST" || iv.BuildVerify != BuildVerifyNone || iv.Par2Redundancy != 5 || iv.VerifyDueMonths != 24 {
 		t.Fatalf("archive should be FAST, got %+v", iv)
 	}
@@ -49,14 +52,14 @@ func TestEffectiveIntegrityArchiveOverride(t *testing.T) {
 	if _, err := app.applyArchiveIntegrity(coll.ID, map[string]any{"build_verify": "contents"}); err != nil {
 		t.Fatalf("edit knob: %v", err)
 	}
-	if iv := app.effectiveIntegrity(coll.ID); iv.Preset != "Custom" || iv.Par2Redundancy != 5 {
+	if iv := app.effectiveIntegrity(coll.ID, mustConfig(t, app)); iv.Preset != "Custom" || iv.Par2Redundancy != 5 {
 		t.Fatalf("edited FAST should be Custom keeping par2 5, got %+v", iv)
 	}
 	// Clear → back to global ARCHIVAL.
 	if _, err := app.applyArchiveIntegrity(coll.ID, map[string]any{"clear": true}); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
-	if iv := app.effectiveIntegrity(coll.ID); iv.Preset != "ARCHIVAL" {
+	if iv := app.effectiveIntegrity(coll.ID, mustConfig(t, app)); iv.Preset != "ARCHIVAL" {
 		t.Fatalf("cleared override should inherit global ARCHIVAL, got %+v", iv)
 	}
 }
@@ -81,6 +84,24 @@ func TestFastArchiveAttestsReducedIntegrity(t *testing.T) {
 	plan := s.obj("POST", "/api/plan", map[string]any{"collection_id": cid, "media_kind": "CUSTOM", "target_gb": 1.0, "encrypted": false})
 	pkg := plan["chunks_created"].([]any)[0].(map[string]any)
 	pid := int(pkg["id"].(float64))
+
+	// INTENTIONAL BEHAVIOUR CHANGE (OBX-006 containment, 2026-09-07): on the Windows
+	// external-tar path a FAST archive can no longer be BUILT, so there is no built
+	// package to attest. Everything above — the override, its effective FAST/none
+	// configuration and the 5% par2 it plans — is platform-independent and still
+	// asserted. What changes here is only the outcome of the build itself, which must
+	// now be an explicit refusal rather than an unverified success.
+	if buildUsesWindowsExternalTar() {
+		label := s.jobFailure(s.obj("POST", fmt.Sprintf("/api/chunks/%d/build", pid), nil))
+		if !strings.Contains(label, "refusing to build without content verification on Windows") {
+			t.Fatalf("a FAST build on Windows must be refused by the OBX-006 containment, got: %s", label)
+		}
+		if chunk := s.obj("GET", fmt.Sprintf("/api/chunks/%d", pid), nil); chunk["status"] == "STAGED" {
+			t.Error("a refused FAST build must not leave the package STAGED")
+		}
+		return
+	}
+
 	s.job(s.obj("POST", fmt.Sprintf("/api/chunks/%d/build", pid), nil))
 	chunk := s.obj("GET", fmt.Sprintf("/api/chunks/%d", pid), nil)
 

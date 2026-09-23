@@ -2,6 +2,12 @@ module github.com/nathansottung/obelisk
 
 go 1.22.2
 
+// The Go toolchain for CI, release binaries, the container image and the Windows
+// package. The CI and release workflows read this line, CI checks that the
+// Dockerfile's GO_VERSION default matches it, and the Windows package builder
+// refuses any other `go version`.
+toolchain go1.27.0
+
 require (
 	// Code128 barcode rendering for printable volume labels. Small, pure-Go, no
 	// CGO or transitive deps — the same "one static binary, hand-restorable"

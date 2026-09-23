@@ -14,7 +14,7 @@ func TestSampleLevelMissesMiddleCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	app := &App{DataDir: filepath.Dir(st.path), Store: st}
+	app := initializedTestApp(t, &App{DataDir: filepath.Dir(st.path), Store: st})
 	coll := st.AddCollection("Mirrors")
 	vol := st.AddVolume(Volume{Label: "MIR-01", Kind: "HDD"})
 
@@ -96,7 +96,7 @@ func TestSampleLevelMissesMiddleCorruption(t *testing.T) {
 // copy becomes B-verified (the only level that qualifies for protection).
 func TestLevelBSatisfiesFullVerify(t *testing.T) {
 	st, _ := OpenStore(t.TempDir())
-	app := &App{DataDir: filepath.Dir(st.path), Store: st}
+	app := initializedTestApp(t, &App{DataDir: filepath.Dir(st.path), Store: st})
 	coll := st.AddCollection("Mirrors")
 	vol := st.AddVolume(Volume{Label: "MIR-02", Kind: "HDD"})
 	medium := t.TempDir()

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Obelisk · Synthetic preview</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.mjs"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <aside>
+    <div class="brand"><span class="logo">O</span><div><strong>Obelisk</strong><span>Archival Workspace</span></div></div>
+    <nav aria-label="Primary navigation"></nav>
+  </aside>
+  <main id="main" tabindex="-1">
+    <header><div id="breadcrumb"></div><div class="titlebar"><h1 tabindex="-1">Library</h1><div class="modes" aria-label="Display disclosure"><button data-mode="Guided">Guided</button><button data-mode="Studio" aria-pressed="true">Studio</button><button data-mode="Expert">Expert</button></div><select id="disclosure" aria-label="How much to show" hidden><option>Guided</option><option selected>Studio</option><option>Expert</option></select><div id="header-actions"></div></div><p id="purpose"></p></header>
+    <p id="scope" class="notice"></p>
+    <section id="content" aria-label="Preview content"></section>
+    <footer><span><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3A9 9 0 1 0 12 21A9 9 0 1 0 12 3M12 10V17M12 6V7"/></svg> &nbsp; Demo data — no files are read or written</span><strong>Design preview</strong></footer>
+    <p id="demo-message" role="status" aria-live="polite"></p>
+  </main>
+</body>
+</html>

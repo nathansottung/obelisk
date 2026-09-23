@@ -24,6 +24,14 @@ new folder called `Obelisk` in your Documents.
 Running it starts a small **local web server** — a program on your own computer
 that serves a web page only to you. Nothing is exposed to the internet.
 
+On the first launch only, explicitly create the configuration: on Windows,
+open PowerShell in the program folder and run `.\obelisk.exe -init-config`;
+on Mac/Linux, append `-init-config` to the command for your downloaded binary.
+After that first launch, use the normal commands below. A missing configuration
+on an existing installation can mean disconnected storage: restore access to
+the saved settings instead of initializing a replacement. Damaged existing
+settings are refused even with `-init-config`.
+
 - **Windows:** double-click `obelisk.exe`. If Windows shows a blue "Windows
   protected your PC" box (because the file is new and unsigned), click **More
   info → Run anyway**. You should now see a small black window with a line like:
@@ -37,6 +45,71 @@ that serves a web page only to you. Nothing is exposed to the internet.
 
 That web address — `http://127.0.0.1:7821` — always means "this same computer."
 `127.0.0.1` is the standard address a computer uses to talk to itself.
+
+### If you run Docker or Compose
+
+Use the image built from this corrected source checkout, not an older release
+that may lack this initialization behavior. From the checkout directory:
+
+```bash
+docker build -t ghcr.io/nathansottung/obelisk:latest .
+```
+
+Put your long random token in a private `.env` file as `OBELISK_AUTH_TOKEN=` followed
+by the token; keep it out of version control. Choose ONE storage mapping below.
+First-use publication requires a filesystem supporting hard links; unsupported
+storage is refused without replacing anything.
+
+For **Docker run**, initialize the same named volumes that normal startup will use:
+
+```bash
+docker run --rm --name obelisk-init --pull never --env-file .env \
+  -v mnemo-data:/data -v mnemo-staging:/staging \
+  ghcr.io/nathansottung/obelisk:latest \
+  -listen 127.0.0.1:7821 -data /data -init-config
+```
+
+Initialization keeps serving. This bootstrap publishes no ports and binds to
+container loopback. After the ready message, run `docker stop obelisk-init` from
+another terminal and wait for the foreground command to return. Then run normally:
+
+```bash
+docker run -d --name obelisk --pull never --env-file .env -p 7821:7821 \
+  -v mnemo-data:/data -v mnemo-staging:/staging \
+  ghcr.io/nathansottung/obelisk:latest \
+  -listen 0.0.0.0:7821 -data /data
+```
+
+For **Compose**, use the repository's `docker-compose.yml` and its `obelisk` service.
+Adjust its example read-only source mounts to your actual datasets first. Keep
+using the same project directory and `.env`; `/data` is bound to `./data`, not to
+the named volume in the Docker-run example. Before the first `up`, bootstrap with:
+
+```bash
+docker compose run --rm --no-deps --pull never --name obelisk-init obelisk \
+  -listen 127.0.0.1:7821 -data /data -init-config
+```
+
+Do not add `--service-ports`: this one-off launch publishes no ports. `--rm`
+overrides the service restart policy for bootstrap. After the ready message, run
+`docker stop obelisk-init` in another terminal, wait for the foreground command to
+return, then start the normal service:
+
+```bash
+docker compose up -d --pull never --no-build obelisk
+```
+
+Both routes keep the data volume/bind mount. The normal command omits
+`-init-config`; never add it permanently to CMD, Compose commands or restart
+scripts. A CMD override replaces ALL arguments, so supply the full data/listen
+arguments shown above. For normal service access use the container host's address
+on port 7821 and the token from `.env`.
+
+Missing or damaged settings on an existing installation require reconnecting or
+restoring the original configuration. Deliberate defaults alongside existing
+catalog/key state do not recover the original auth token, helper paths, keystore
+paths or staging choices. Choosing defaults is a separate setup decision, not a
+recovery shortcut. Do not remove the data volume to work around an error.
 
 ## 3. Open the page
 

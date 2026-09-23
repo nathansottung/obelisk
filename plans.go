@@ -664,7 +664,11 @@ type PlanExecResult struct {
 // reads (a mismatch flags the drive as differing from its snapshot and skips the
 // file). Any-order and resumable: a hash already satisfied by an earlier drive is
 // confirmed, not recopied. Sources are read-only; only the destination is written.
-func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progress func(float64, string)) (*PlanExecResult, error) {
+func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progress func(float64, string)) (out *PlanExecResult, err error) {
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	plan := a.Store.Plan(planID)
 	if plan == nil {
 		return nil, fmt.Errorf("plan not found")
@@ -706,7 +710,7 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 	}
 	a.ensurePlanDestVolume(plan)
 	a.Store.BeginBatch()
-	defer a.Store.EndBatch()
+	defer endBatchInto(a.Store, &err)
 	if plan.Status == PlanCompiled {
 		plan.Status = PlanExecuting
 	}
@@ -715,7 +719,7 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 	}
 
 	res := &PlanExecResult{PlanID: plan.ID, VolumeID: vol.ID, Drive: vol.Label}
-	th := &throttler{bps: a.LoadConfig().ThrottleMbps * 1e6, start: time.Now()}
+	th := &throttler{bps: cfg.ThrottleMbps * 1e6, start: time.Now()}
 	var refs []ChunkFileRef
 	// Deterministic order so resume is stable and progress reads sensibly.
 	work := append([]SnapFile(nil), snap.Files...)

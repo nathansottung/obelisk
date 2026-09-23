@@ -72,8 +72,12 @@ func spaceVerdict(free, need int64) string {
 //     single largest package's staging peak — the real binding constraint.
 //
 // The staging block (path + free space) is always present.
-func (a *App) SpaceAdvice(collectionID, chunkID int, dest string) map[string]any {
-	cfg := a.LoadConfig()
+func (a *App) SpaceAdvice(collectionID, chunkID int, dest string) (map[string]any, error) {
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
+
 	out := map[string]any{}
 
 	// Staging: always reported. pathFree walks to the nearest existing ancestor,
@@ -94,7 +98,7 @@ func (a *App) SpaceAdvice(collectionID, chunkID int, dest string) map[string]any
 		c := a.Store.Chunk(chunkID)
 		if c == nil {
 			out["error"] = fmt.Sprintf("package %d not found", chunkID)
-			return out
+			return out, nil
 		}
 		peak := packageStagingPeak(c.DataBytes, c.Par2, c.Encrypted, cfg.DeleteTarAfterEncrypt)
 		out["package"] = map[string]any{
@@ -112,7 +116,7 @@ func (a *App) SpaceAdvice(collectionID, chunkID int, dest string) map[string]any
 			}
 			out["dest"] = d
 		}
-		return out
+		return out, nil
 	}
 
 	// Plan-level: aggregate the packages that will consume staging. Adopted
@@ -148,5 +152,5 @@ func (a *App) SpaceAdvice(collectionID, chunkID int, dest string) map[string]any
 		"verdict": spaceVerdict(stagingFree, largestPeak),
 		"fits":    stagingExists && stagingFree >= largestPeak,
 	}
-	return out
+	return out, nil
 }

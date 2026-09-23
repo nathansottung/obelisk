@@ -721,15 +721,27 @@ func (s *Store) RecomputeProtection(progress func(float64, string)) map[string]a
 // toast — never silent. Recompute is a fast in-memory pass, so it runs inline and
 // the job row lands COMPLETED immediately (Jobs shows it happened).
 func (a *App) recomputeJob() map[string]any {
-	j := a.Store.NewJob("recompute", "Recompute protection status")
+	j, jerr := a.Store.NewJob("recompute", "Recompute protection status")
+	if jerr != nil {
+		// The board could not record the job. Recompute is a pure in-memory pass over
+		// state the catalog already holds, so the totals below are still correct and
+		// worth returning — but no job_id is handed back, because there is no recorded
+		// job to look up, and the reason is reported instead (OB-002).
+		res := a.Store.RecomputeProtection(func(float64, string) {})
+		res["job_error"] = jerr.Error()
+		return res
+	}
 	res := a.Store.RecomputeProtection(func(p float64, msg string) {
 		l := "Recompute protection status"
 		if msg != "" {
 			l += " — " + msg
 		}
-		a.Store.SetJob(j.ID, p, l, "")
+		_ = a.Store.SetJob(j.ID, p, l, "") // progress only: in-memory, never persisted
 	})
-	a.Store.SetJob(j.ID, 1, "Recompute protection status", "COMPLETED")
+	if serr := a.Store.SetJob(j.ID, 1, "Recompute protection status", "COMPLETED"); serr != nil {
+		a.noteUnrecordedJob(j.ID, "COMPLETED", serr)
+		res["job_error"] = serr.Error()
+	}
 	res["job_id"] = j.ID
 	return res
 }

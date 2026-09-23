@@ -1,8 +1,10 @@
 # Obelisk — the NAS-side brain (catalog / plan / build packages / mirror).
 #
-#   1. Put a strong secret in .env:   OBELISK_AUTH_TOKEN=$(openssl rand -hex 32)
-#   2. docker compose up -d
-#   3. Open http://<nas-ip>:7821 and paste the token when prompted.
+#   1. Put a long random OBELISK_AUTH_TOKEN value in a private .env file.
+#   2. Follow README "One-time container initialization" before the first up.
+#      Stop the foreground bootstrap before normal service startup; retain ./data.
+#   3. Normal startup: docker compose up -d (no -init-config).
+#   4. Open http://<nas-ip>:7821 and paste the token when prompted.
 #
 # Tape/optical burning, the docking flow, and SMART are hardware-in-the-loop and
 # belong on a NATIVE binary next to the drive — see the README.

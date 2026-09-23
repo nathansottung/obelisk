@@ -51,15 +51,21 @@ func hashFileBoth(path string) (sha256hex, blake3hex string, err error) {
 		return "", "", err
 	}
 	defer f.Close()
+	return hashReaderBoth(f)
+}
+
+// hashReaderBoth is the pure streaming core. Callers own opening, bounds,
+// cancellation and closing; it neither follows a path nor changes a catalog.
+func hashReaderBoth(r io.Reader) (sha256hex, blake3hex string, err error) {
 	sh := sha256.New()
 	if !hashAccelOn.Load() {
-		if _, err := io.CopyBuffer(sh, f, make([]byte, hashBufSize)); err != nil {
+		if _, err := io.CopyBuffer(sh, r, make([]byte, hashBufSize)); err != nil {
 			return "", "", err
 		}
 		return hex.EncodeToString(sh.Sum(nil)), "", nil
 	}
 	bh := blake3.New()
-	if _, err := io.CopyBuffer(io.MultiWriter(sh, bh), f, make([]byte, hashBufSize)); err != nil {
+	if _, err := io.CopyBuffer(io.MultiWriter(sh, bh), r, make([]byte, hashBufSize)); err != nil {
 		return "", "", err
 	}
 	return hex.EncodeToString(sh.Sum(nil)), hex.EncodeToString(bh.Sum(nil)), nil

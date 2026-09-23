@@ -24,10 +24,13 @@ import (
 	"testing"
 )
 
-// hostileNames returns tree-relative names that are legal on this OS and awkward for a
-// shell. Windows rejects newlines in filenames and caps paths at MAX_PATH by default,
-// so those two cases are POSIX-only — gated here rather than left to fail on a box the
-// developer is not looking at.
+// hostileNames returns tree-relative names legal for the test platform and awkward for a
+// shell. Windows filename rules exclude TAB and newline, so those fixtures stay in the
+// non-Windows group, where the existing long-path fixture also remains. Unicode, leading
+// dashes, spaces and quotes are valid Windows names and stay unconditional — gated here
+// rather than left to fail on a box the developer is not looking at. Gating is not a
+// softer assertion: a name the platform will not create makes the fixture die in
+// os.WriteFile, so the product code under test never runs at all.
 func hostileNames() []string {
 	names := []string{
 		"ordinary.txt",
@@ -36,12 +39,12 @@ func hostileNames() []string {
 		"-x",                      // short-option shape
 		"ünïcødé★ 日本語.txt",        // non-ASCII, with a space
 		"spaces and 'quotes'.txt", // shell-quoting bait
-		"tab\there.txt",           // a control character that is not a newline
 	}
 	if runtime.GOOS != "windows" {
 		names = append(names,
 			"line\nbreak.txt",          // the -T list splitter
 			"sub/two\nlines\nhere.txt", // more than one split, in a subfolder
+			"tab\there.txt",            // a control character that is not a newline
 			// A path over 260 characters: fine on POSIX (the limit is per component),
 			// but past Windows' default MAX_PATH, so it must not run there.
 			strings.Repeat("d", 80)+"/"+strings.Repeat("e", 80)+"/"+

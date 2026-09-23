@@ -1,3 +1,5 @@
+//go:build !guionly
+
 package main
 
 import (
@@ -36,7 +38,7 @@ func newSWH(t *testing.T) *swhHarness {
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	app := &App{DataDir: dataDir, Store: store}
+	app := initializedTestApp(t, &App{DataDir: dataDir, Store: store})
 	mux := http.NewServeMux()
 	api(mux, app)
 	ts := httptest.NewServer(mux)
@@ -215,8 +217,17 @@ func TestSeeingWhatHappened_InterruptedReconcile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	j := s1.NewJob("scan", "Scan /somewhere") // left RUNNING (goroutine "dies")
-	s1.AppendJobArtifact(j.ID, Artifact{Kind: "catalog", Label: "partial", Count: 5})
+	// OB-002 signature adaptation only: both calls now return their write error, and
+	// this test depends on the RUNNING row actually reaching jobs.json before the
+	// reopen below — so checking them makes the fixture's precondition explicit
+	// instead of assumed. The restart assertions that follow are unchanged.
+	j, err := s1.NewJob("scan", "Scan /somewhere") // left RUNNING (goroutine "dies")
+	if err != nil {
+		t.Fatalf("NewJob: %v", err)
+	}
+	if err := s1.AppendJobArtifact(j.ID, Artifact{Kind: "catalog", Label: "partial", Count: 5}); err != nil {
+		t.Fatalf("AppendJobArtifact: %v", err)
+	}
 
 	s2, err := OpenStore(dir)
 	if err != nil {

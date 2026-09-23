@@ -13,7 +13,14 @@
 # Windows batch files must stay CRLF or cmd.exe can mis-parse them.
 *.bat  text eol=crlf
 
+# Shell scripts also run under bash on Windows CI runners; CRLF would break them.
+*.sh   text eol=lf
+
 # The embedded escrow source tarball is binary — never normalize it or go:embed
 # would compile a corrupted archive.
 *.tar.gz binary
 *.gz     binary
+
+# The Windows package launcher is committed byte-exact with CRLF: the package
+# builder copies committed blobs, which never get working-tree conversion.
+*.cmd -text

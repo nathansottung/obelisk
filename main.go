@@ -1,3 +1,5 @@
+//go:build !guionly
+
 package main
 
 // main.go — HTTP server + REST API + embedded UI. One binary, no installs.
@@ -54,9 +56,25 @@ const (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--gui-disposable-inventory" {
+		if err := runGUIInventory(os.Args[2:], os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	// Dedicated preview command exits before defaults, configuration or production startup.
+	if len(os.Args) > 1 && os.Args[1] == "--gui-catalog-readonly" {
+		if err := runGUICatalog(os.Args[2:], os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	listen := flag.String("listen", "127.0.0.1:7821", "listen address host:port. Default is localhost-only; use 0.0.0.0:7821 in a container (which then REQUIRES an auth token).")
 	port := flag.Int("port", 0, "DEPRECATED: listen port on 127.0.0.1 (use -listen). When set, overrides the port of -listen.")
 	dataDir := flag.String("data", defaultDataDir(), "data directory (catalog.json, config.json)")
+	initConfig := flag.Bool("init-config", false, "explicitly initialize configuration for first use; never overwrite damaged existing settings")
 	flag.Parse()
 
 	addr := *listen
@@ -68,21 +86,29 @@ func main() {
 		addr = net.JoinHostPort(host, strconv.Itoa(*port))
 	}
 
+	startupConfig, err := loadStartupConfig(*dataDir, *initConfig)
+	if err != nil {
+		log.Fatalf("configuration: %v", err)
+	}
 	store, err := OpenStore(*dataDir)
 	if err != nil {
 		log.Fatalf("open catalog: %v", err)
 	}
 	app := &App{DataDir: *dataDir, Store: store, Perf: NewPerfMeter()}
-	setHashAccel(app.LoadConfig().HashAccel) // apply the persisted hash-acceleration preference at startup
+	setHashAccel(startupConfig.HashAccel) // apply the persisted hash-acceleration preference at startup
 
 	// Optional gentle continuity: if an auto-export cadence is configured, write one
 	// app-backup bundle per period. A single hourly ticker suffices — maybeAutoExport
 	// is a cheap no-op when off or when this period's file already exists. Best-effort;
 	// a failed auto-export never affects the running app. See appbackup.go.
 	go func() {
-		_ = app.maybeAutoExport(time.Now())
+		if err := app.maybeAutoExport(time.Now()); err != nil {
+			log.Printf("automatic app backup: %v", err)
+		}
 		for range time.Tick(time.Hour) {
-			_ = app.maybeAutoExport(time.Now())
+			if err := app.maybeAutoExport(time.Now()); err != nil {
+				log.Printf("automatic app backup: %v", err)
+			}
 		}
 	}()
 	if ro, why := store.ReadOnly(); ro {
@@ -98,7 +124,7 @@ func main() {
 		token = strings.TrimSpace(os.Getenv("MNEMO_AUTH_TOKEN"))
 	}
 	if token == "" {
-		token = strings.TrimSpace(app.LoadConfig().AuthToken)
+		token = strings.TrimSpace(startupConfig.AuthToken)
 	}
 	if !isLocalhostAddr(addr) && token == "" {
 		log.Fatalf("refusing to bind non-localhost address %q without an auth token.\n"+
@@ -169,24 +195,24 @@ func authMiddleware(next http.Handler, token string) http.Handler {
 }
 
 // apiGuard is the cross-origin / CSRF gate in front of every /api/ route. It is
-// independent of token auth (which protects non-localhost binds): it defends the
-// default localhost bind against a malicious web page in the user's browser making
-// requests to 127.0.0.1 (CSRF), including via DNS rebinding.
+// independent of token auth (which protects non-localhost binds). It checks, in
+// order:
 //
-// The core move: require a custom request header (X-Requested-By) on every /api
-// call. A cross-origin page cannot set a custom header on a fetch/XHR without a
-// CORS preflight — and we never emit an Access-Control-Allow-* header, so that
-// preflight is never granted. So the header's presence proves the request came
-// from our own same-origin UI (whose fetch wrapper sets it globally).
+//   - Host: when the connection arrived on a loopback address, the Host header
+//     must name loopback (127.0.0.1, localhost or [::1]) on the port the
+//     connection arrived on. A page served under any other name is refused, even
+//     if that name resolves to 127.0.0.1.
+//   - Origin/Referer, for state-changing methods: if either header is present,
+//     its host:port must equal the request's Host.
+//   - The X-Requested-By handshake header. A cross-origin page cannot set a custom
+//     header on a fetch/XHR without a CORS preflight, and we never emit an
+//     Access-Control-Allow-* header, so that preflight is never granted.
 //
-// One carve-out and one extra check:
-//   - A genuine same-origin top-level navigation — a GET opened in a new tab to
-//     download a label, report, or structure export — cannot carry a custom header.
-//     It is allowed only when the browser marks it as a real navigation
-//     (Sec-Fetch-Mode: navigate) AND it is not cross-origin: such a GET changes no
-//     state and can't be read back by a cross-origin attacker.
-//   - State-changing methods additionally get an Origin/Referer host check: if
-//     either header is present and its host differs from the bound host, refuse.
+// One carve-out: a same-origin top-level navigation (a GET opened in a new tab to
+// download a label, report, or structure export) cannot carry a custom header. It
+// is allowed only when the browser marks it as a navigation (Sec-Fetch-Mode:
+// navigate), Sec-Fetch-Site (when sent) is same-origin or none, and no Origin or
+// Referer names another host.
 //
 // We deliberately never write CORS headers anywhere, so a browser that tries to
 // preflight simply fails. This gate runs regardless of whether token auth is on.
@@ -196,7 +222,11 @@ func apiGuard(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// State-changing methods: a present Origin/Referer must name the bound host.
+		if !loopbackHostAllowed(r) {
+			forbidCSRF(w, "host not allowed — /api answers only to the loopback address it is bound to")
+			return
+		}
+		// State-changing methods: a present Origin/Referer must name the request's host.
 		if !isSafeMethod(r.Method) && crossOriginRequest(r) {
 			forbidCSRF(w, "cross-origin request refused")
 			return
@@ -209,7 +239,7 @@ func apiGuard(next http.Handler) http.Handler {
 		}
 		// A genuine same-origin top-level navigation (new-tab download) can't set the
 		// header — allow that, and nothing else.
-		if isSafeMethod(r.Method) && r.Header.Get("Sec-Fetch-Mode") == "navigate" && !crossOriginRequest(r) {
+		if isSafeMethod(r.Method) && r.Header.Get("Sec-Fetch-Mode") == "navigate" && navigationSiteAllowed(r) && !crossOriginRequest(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -220,7 +250,7 @@ func apiGuard(next http.Handler) http.Handler {
 func isSafeMethod(m string) bool { return m == http.MethodGet || m == http.MethodHead }
 
 // crossOriginRequest reports whether the request's Origin (or, absent that,
-// Referer) names a host different from the one we are bound to. A missing Origin
+// Referer) names a host different from the request's Host. A missing Origin
 // AND Referer is treated as NOT cross-origin (a same-origin navigation or a
 // non-browser client) — the header rule still gates those.
 func crossOriginRequest(r *http.Request) bool {
@@ -279,12 +309,6 @@ func resolveDataDir(home string) string {
 	return obelisk
 }
 
-// fileExists reports whether path names an existing regular file.
-func fileExists(path string) bool {
-	fi, err := os.Stat(path)
-	return err == nil && !fi.IsDir()
-}
-
 // ---- helpers ------------------------------------------------------------
 
 // download writes bytes as a named file attachment (export downloads).
@@ -308,7 +332,17 @@ func jsonOut(w http.ResponseWriter, v any) {
 func jsonErr(w http.ResponseWriter, code int, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": storedErrorText(err.Error())})
+}
+
+// configResponse is the /api/config body. The auth token is never returned; the
+// UI learns only whether one is set.
+func configResponse(cfg Config, keystoreStatus map[string]any) map[string]any {
+	return map[string]any{
+		"config":          redactConfig(cfg),
+		"auth_token_set":  cfg.AuthToken != "",
+		"keystore_status": keystoreStatus,
+	}
 }
 
 func body(r *http.Request) map[string]any {
@@ -318,16 +352,6 @@ func body(r *http.Request) map[string]any {
 		m = map[string]any{}
 	}
 	return m
-}
-
-func s(m map[string]any, k string) string {
-	v, _ := m[k].(string)
-	return v
-}
-
-func f(m map[string]any, k string) float64 {
-	v, _ := m[k].(float64)
-	return v
 }
 
 // parseAsOf accepts a date (2006-01-02) or a full RFC3339 timestamp for the
@@ -343,11 +367,6 @@ func parseAsOf(sv string) (time.Time, error) {
 		return t.Add(24*time.Hour - time.Second).UTC(), nil
 	}
 	return time.Time{}, fmt.Errorf("as_of %q: use YYYY-MM-DD or an RFC3339 timestamp", sv)
-}
-
-func bl(m map[string]any, k string) bool {
-	v, _ := m[k].(bool)
-	return v
 }
 
 // strList reads a JSON array of strings from body[key] into []string, trimming
@@ -429,42 +448,50 @@ func resolveVolume(app *App, b map[string]any) int {
 	return 0
 }
 
-// pathFree reports free bytes for the nearest existing ancestor of p, so it
-// works for a destination folder that doesn't exist yet (e.g. a new burn dir).
-func pathFree(p string) (int64, error) {
-	for {
-		if _, err := os.Stat(p); err == nil {
-			return diskFree(p)
-		}
-		parent := filepath.Dir(p)
-		if parent == p {
-			return diskFree(p)
-		}
-		p = parent
-	}
-}
-
-// progBytes formats a progress message that also carries byte counters for live
-// telemetry: runJob parses the "\x1f<done>\x1f<total>\x1f<human>" prefix into
-// MB/s + ETA and displays only the human tail. Byte-moving jobs (write/mirror/
-// span) emit this so the job row shows throughput, not just a percent.
-// progStats encodes structured live telemetry into a progress message: byte
-// counters (for throughput/ETA), file counters (for "X / Y files"), and a human
-// step label — delimited by the unit-separator control char so runJob can parse
-// them out. A plain (unencoded) message is shown verbatim. progBytes is the
-// byte-only wrapper; count-based jobs pass 0 bytes and real file counts.
-func progStats(bytesDone, bytesTotal, filesDone, filesTotal int64, human string) string {
-	return fmt.Sprintf("\x1f%d\x1f%d\x1f%d\x1f%d\x1f%s", bytesDone, bytesTotal, filesDone, filesTotal, human)
-}
-
-func progBytes(done, total int64, human string) string {
-	return progStats(done, total, 0, 0, human)
-}
-
 // runJob executes fn in a goroutine bound to a Job row the UI can poll. fn's
 // returned map is captured as the job's Result so the UI can show the artifact.
-func runJob(app *App, kind, label string, fn func(progress func(float64, string)) (map[string]any, error)) map[string]any {
-	j := app.Store.NewJob(kind, label)
+// started writes the response for a job-start request. It exists so the 20 handlers
+// that used `jsonOut(w, runJob(...))` can keep passing runJob's results straight
+// through now that it returns (response, error): Go forbids mixing a multi-value
+// call with other arguments, but a method on the writer takes the pair exactly.
+type started struct{ w http.ResponseWriter }
+
+func startedOn(w http.ResponseWriter) started { return started{w} }
+
+// write emits the RUNNING acknowledgement, or a truthful 503 when the job board
+// could not record the job — in which case runJob started no work at all, so the
+// client is not left holding an ID for something that may or may not be happening.
+func (s started) write(m map[string]any, err error) {
+	if err != nil {
+		jsonErr(s.w, 503, err)
+		return
+	}
+	jsonOut(s.w, m)
+}
+
+// runJob records a job, then runs fn in the background and publishes its outcome.
+//
+// OB-002 changed two things about truthfulness here:
+//
+//   - It returns an error. If the initial job record cannot be persisted, NO work is
+//     launched and the caller reports the failure, rather than handing back an ID the
+//     system falsely describes as recorded.
+//   - The terminal state is published with the job's artifacts and result in ONE
+//     checked write (FinishJob). If that write fails the job is marked unrecorded in
+//     the same lock hold, so it is never presented as durable COMPLETED history —
+//     not even for the instant between the write failing and this goroutine noticing.
+//
+// The catalog and jobs.json remain two separate files and this does not make them
+// one transaction: fn's own catalog changes are committed by its EndBatch before it
+// returns, and the job record is written afterwards. When the catalog commit
+// succeeds and the job record does not, the data stays and only the bookkeeping is
+// reported as missing — nothing successfully written is rolled back to make the two
+// files agree.
+func runJob(app *App, kind, label string, fn func(progress func(float64, string)) (map[string]any, error)) (map[string]any, error) {
+	j, jerr := app.Store.NewJob(kind, label)
+	if jerr != nil {
+		return nil, jerr
+	}
 	go func() {
 		start := time.Now()
 		var lastDone int64
@@ -491,7 +518,7 @@ func runJob(app *App, kind, label string, fn func(progress func(float64, string)
 			if human != "" {
 				l = label + " — " + human
 			}
-			app.Store.SetJob(j.ID, p, l, "")
+			_ = app.Store.SetJob(j.ID, p, l, "") // progress only: in-memory, never persisted
 			// Telemetry: a recent-window MB/s from byte deltas, ETA from what's left.
 			var rate, eta float64
 			now := time.Now()
@@ -514,21 +541,26 @@ func runJob(app *App, kind, label string, fn func(progress func(float64, string)
 			app.Store.SetJobTelemetry(j.ID, rate, eta, done, total, filesDone, filesTotal)
 		}
 		res, err := fn(prog)
+		app.Store.SetJobTelemetry(j.ID, 0, 0, 0, 0, 0, 0)
 		if err != nil {
-			app.Store.SetJob(j.ID, -1, label+" — ERROR: "+err.Error(), "FAILED")
-			app.Store.SetJobTelemetry(j.ID, 0, 0, 0, 0, 0, 0)
+			// fn's error already carries any final catalog-flush failure, folded in by
+			// endBatchInto, so a job whose work succeeded but whose catalog write did
+			// not lands here as FAILED rather than as COMPLETED.
+			if serr := app.Store.FinishJob(j.ID, -1, label+" — ERROR: "+storedErrorText(err.Error()), "FAILED", nil, nil); serr != nil {
+				app.noteUnrecordedJob(j.ID, "FAILED", serr)
+			}
 			return
 		}
-		app.Store.SetJob(j.ID, 1, "", "COMPLETED")
 		// A job may report its structured artifacts under the "artifacts" key of its
-		// result (the show-the-artifact rule, made structural). Lift them onto the job
-		// record; the rest of the result stays as the free-form summary.
-		if arts, ok := res["artifacts"].([]Artifact); ok && len(arts) > 0 {
-			app.Store.SetJobArtifacts(j.ID, arts)
+		// result (the show-the-artifact rule, made structural). They are published
+		// WITH the terminal status, not after it, so jobs.json never holds a completed
+		// job whose outputs are missing.
+		arts, _ := res["artifacts"].([]Artifact)
+		if serr := app.Store.FinishJob(j.ID, 1, "", "COMPLETED", arts, res); serr != nil {
+			app.noteUnrecordedJob(j.ID, "COMPLETED", serr)
 		}
-		app.Store.SetJobResult(j.ID, res)
 	}()
-	return map[string]any{"job_id": j.ID, "status": "RUNNING", "label": label}
+	return map[string]any{"job_id": j.ID, "status": "RUNNING", "label": label}, nil
 }
 
 // ---- routes ---------------------------------------------------------------
@@ -560,7 +592,8 @@ func api(mux *http.ServeMux, app *App) {
 	// The only live probe (which volumes are connected now) is injected here so the
 	// computation itself stays pure/testable.
 	mux.HandleFunc("GET /api/home", func(w http.ResponseWriter, r *http.Request) {
-		jsonOut(w, app.HomeOverview(app.onlineVolumeIDsCached()))
+		view, viewErr := app.HomeOverview(app.onlineVolumeIDsCached())
+		jsonResult(w, view, viewErr)
 	})
 	mux.HandleFunc("GET /api/media", func(w http.ResponseWriter, r *http.Request) { jsonOut(w, MediaPresets) })
 	mux.HandleFunc("GET /api/pathinfo", func(w http.ResponseWriter, r *http.Request) {
@@ -612,12 +645,14 @@ func api(mux *http.ServeMux, app *App) {
 	// External-tools catalog: every optional helper with its detected status, config
 	// path, and official download link. Manually-browsed binary paths save via config.
 	mux.HandleFunc("GET /api/tools", func(w http.ResponseWriter, r *http.Request) {
-		jsonOut(w, app.ToolsView())
+		view, viewErr := app.ToolsView()
+		jsonResult(w, view, viewErr)
 	})
 	// "Where your data lives": the plain, honest map of everything the tool writes and
 	// what it promises never to touch. Pure surfacing — computed from live config.
 	mux.HandleFunc("GET /api/data-map", func(w http.ResponseWriter, r *http.Request) {
-		jsonOut(w, app.DataMap())
+		view, viewErr := app.DataMap()
+		jsonResult(w, view, viewErr)
 	})
 
 	// Mounted removable media (the card/drive picker for the card check).
@@ -633,7 +668,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("path required (the mounted card or drive)"))
 			return
 		}
-		resp := runJob(app, "cardcheck", "Check card "+p, func(prog func(float64, string)) (map[string]any, error) {
+		resp, jerr := runJob(app, "cardcheck", "Check card "+p, func(prog func(float64, string)) (map[string]any, error) {
 			res, err := app.CardCheck(p, prog)
 			if res == nil {
 				return nil, err
@@ -643,25 +678,48 @@ func api(mux *http.ServeMux, app *App) {
 			_ = json.Unmarshal(bb, &m)
 			return m, err
 		})
+		if jerr != nil {
+			jsonErr(w, 503, jerr)
+			return
+		}
 		jsonOut(w, resp)
 	})
 
 	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
-		cfg := app.LoadConfig()
-		jsonOut(w, map[string]any{"config": cfg, "keystore_status": app.KeystoreStatus()})
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
+		jsonOut(w, configResponse(cfg, app.KeystoreStatus()))
 	})
 	mux.HandleFunc("PUT /api/config", func(w http.ResponseWriter, r *http.Request) {
-		cfg, err := app.SaveConfig(body(r))
+		update, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+		if readErr != nil {
+			jsonErr(w, 400, fmt.Errorf("cannot read configuration update"))
+			return
+		}
+		if _, _, err := decodeConfig(update); err != nil {
+			jsonErr(w, 400, err)
+			return
+		}
+		var patch map[string]any
+		if err := json.Unmarshal(update, &patch); err != nil {
+			jsonErr(w, 400, fmt.Errorf("invalid configuration update"))
+			return
+		}
+		cfg, err := app.SaveConfig(patch)
 		if err != nil {
 			jsonErr(w, 400, err)
 			return
 		}
-		jsonOut(w, map[string]any{"config": cfg, "keystore_status": app.KeystoreStatus()})
+		jsonOut(w, configResponse(cfg, app.KeystoreStatus()))
 	})
 	// First-run setup interview (see setup.go). GET returns the derived state for the
 	// current config (summary + scoped checklist facts); POST applies answers coherently.
 	mux.HandleFunc("GET /api/setup", func(w http.ResponseWriter, r *http.Request) {
-		jsonOut(w, app.SetupState())
+		view, viewErr := app.SetupState()
+		jsonResult(w, view, viewErr)
 	})
 	mux.HandleFunc("POST /api/setup", func(w http.ResponseWriter, r *http.Request) {
 		b := body(r)
@@ -690,7 +748,7 @@ func api(mux *http.ServeMux, app *App) {
 			return
 		}
 		includeKeys := bl(b, "include_keys")
-		jsonOut(w, runJob(app, "appbackup", "Back up app records → "+dest, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "appbackup", "Back up app records → "+dest, func(p func(float64, string)) (map[string]any, error) {
 			p(0.1, "gathering records")
 			res, err := app.ExportAppBackup(dest, includeKeys)
 			if err != nil {
@@ -756,7 +814,8 @@ func api(mux *http.ServeMux, app *App) {
 	// globally or per archive. Individual knobs stay editable (→ "Custom").
 	mux.HandleFunc("GET /api/integrity", func(w http.ResponseWriter, r *http.Request) {
 		cid, _ := strconv.Atoi(r.URL.Query().Get("collection_id"))
-		jsonOut(w, app.integrityView(cid))
+		view, viewErr := app.integrityView(cid)
+		jsonResult(w, view, viewErr)
 	})
 	mux.HandleFunc("PUT /api/integrity", func(w http.ResponseWriter, r *http.Request) {
 		iv, err := app.applyGlobalIntegrity(body(r))
@@ -766,7 +825,8 @@ func api(mux *http.ServeMux, app *App) {
 		}
 		app.Store.Log("integrity", fmt.Sprintf("global → %s (build_verify=%s, par2=%d%%, routine=%s, due=%dmo)",
 			iv.Preset, iv.BuildVerify, iv.Par2Redundancy, iv.RoutineVerifyLevel, iv.VerifyDueMonths))
-		jsonOut(w, app.integrityView(0))
+		view, viewErr := app.integrityView(0)
+		jsonResult(w, view, viewErr)
 	})
 	register(mux, "GET /api/collections/{id}/integrity", func(w http.ResponseWriter, r *http.Request) {
 		id := pathID(r)
@@ -774,7 +834,8 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("archive not found"))
 			return
 		}
-		jsonOut(w, app.integrityView(id))
+		view, viewErr := app.integrityView(id)
+		jsonResult(w, view, viewErr)
 	})
 	register(mux, "PUT /api/collections/{id}/integrity", func(w http.ResponseWriter, r *http.Request) {
 		id := pathID(r)
@@ -789,7 +850,8 @@ func api(mux *http.ServeMux, app *App) {
 			return
 		}
 		app.Store.Log("integrity", fmt.Sprintf("%s → %s (build_verify=%s, par2=%d%%)", c.Name, iv.Preset, iv.BuildVerify, iv.Par2Redundancy))
-		jsonOut(w, app.integrityView(id))
+		view, viewErr := app.integrityView(id)
+		jsonResult(w, view, viewErr)
 	})
 
 	// Space advice — the single source of truth for "do I have room?" so the UI
@@ -798,7 +860,8 @@ func api(mux *http.ServeMux, app *App) {
 		q := r.URL.Query()
 		cid, _ := strconv.Atoi(q.Get("collection_id"))
 		chid, _ := strconv.Atoi(q.Get("chunk_id"))
-		jsonOut(w, app.SpaceAdvice(cid, chid, q.Get("dest")))
+		view, viewErr := app.SpaceAdvice(cid, chid, q.Get("dest"))
+		jsonResult(w, view, viewErr)
 	})
 
 	// collections + scan
@@ -839,10 +902,15 @@ func api(mux *http.ServeMux, app *App) {
 		if strings.EqualFold(s(b, "kind"), ArchiveSourceless) || bl(b, "sourceless") {
 			kind = ArchiveSourceless
 		}
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
 		coll := app.Store.AddCollectionKind(name, kind)
 		// Honor the configured default protection profile (blank = the built-in 3-2-1
 		// default AddCollectionKind already assigned). Best-effort: a bad id is ignored.
-		if dp := strings.TrimSpace(app.LoadConfig().DefaultProfile); dp != "" && dp != DefaultProfileID {
+		if dp := strings.TrimSpace(cfg.DefaultProfile); dp != "" && dp != DefaultProfileID {
 			_ = app.Store.SetAssignment(coll.ID, "", dp)
 		}
 		jsonOut(w, coll)
@@ -947,7 +1015,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("path required"))
 			return
 		}
-		jsonOut(w, runJob(app, "scan", "Scan "+root, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "scan", "Scan "+root, func(p func(float64, string)) (map[string]any, error) {
 			n, problems, err := app.ScanFolder(id, root, p)
 			if err != nil {
 				return nil, err
@@ -980,7 +1048,7 @@ func api(mux *http.ServeMux, app *App) {
 			return
 		}
 		vol := resolveVolume(app, b)
-		jsonOut(w, runJob(app, "adopt-folder", "Adopt drive → "+c.Name, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "adopt-folder", "Adopt drive → "+c.Name, func(p func(float64, string)) (map[string]any, error) {
 			return app.AdoptFolder(path, id, vol, p)
 		}))
 	})
@@ -1000,7 +1068,7 @@ func api(mux *http.ServeMux, app *App) {
 		if disp := app.Store.scopeDisplay(id, scope); disp != "" {
 			label += " — " + disp
 		}
-		jsonOut(w, runJob(app, "reconcile", label, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "reconcile", label, func(p func(float64, string)) (map[string]any, error) {
 			d, err := app.ReconcileCollection(id, scope, p)
 			var res map[string]any
 			if d != nil {
@@ -1089,7 +1157,7 @@ func api(mux *http.ServeMux, app *App) {
 				label = fmt.Sprintf("Mirror %s — %s → %s", coll.Name, scopeDisp, dest)
 			}
 			// One job per volume — they run concurrently (v1's multi-volume copy).
-			resp := runJob(app, "mirror", label, func(p func(float64, string)) (map[string]any, error) {
+			resp, jerr := runJob(app, "mirror", label, func(p func(float64, string)) (map[string]any, error) {
 				mr, err := app.MirrorToVolume(cid, folderIDs, dest, vol, throttle, scope, p)
 				var res map[string]any
 				if mr != nil {
@@ -1097,6 +1165,13 @@ func api(mux *http.ServeMux, app *App) {
 				}
 				return res, err
 			})
+			if jerr != nil {
+				// This volume's job was never recorded and never started. Report it in
+				// place of a job id so the caller cannot mistake it for one running.
+				jobs = append(jobs, map[string]any{"volume_id": vol, "dest_dir": dest,
+					"status": "NOT_STARTED", "error": jerr.Error()})
+				continue
+			}
 			resp["volume_id"] = vol
 			resp["dest_dir"] = dest
 			jobs = append(jobs, resp)
@@ -1149,7 +1224,7 @@ func api(mux *http.ServeMux, app *App) {
 		if disp := app.Store.scopeDisplay(id, scope); disp != "" {
 			label = fmt.Sprintf("Back up changes — %s → %s", disp, volLabel)
 		}
-		resp := runJob(app, "incremental", label, func(p func(float64, string)) (map[string]any, error) {
+		resp, jerr := runJob(app, "incremental", label, func(p func(float64, string)) (map[string]any, error) {
 			res, err := app.BackupChanges(id, folderIDs, vol, base, mode, dest, throttle, scope, p)
 			if res == nil {
 				return nil, err
@@ -1158,6 +1233,10 @@ func api(mux *http.ServeMux, app *App) {
 				"name": res.Name, "session_id": res.SessionID, "sidecar": res.Sidecar, "planned": res.Planned,
 				"message": res.Message, "dest": res.Dest, "changed": res.Changed, "failed": res.Failed}, err
 		})
+		if jerr != nil {
+			jsonErr(w, 503, jerr)
+			return
+		}
 		resp["volume_id"] = vol
 		jsonOut(w, resp)
 	})
@@ -1615,7 +1694,7 @@ func api(mux *http.ServeMux, app *App) {
 	// Offer at execution setup: adopt an already-partially-populated destination.
 	mux.HandleFunc("POST /api/plans/{id}/adopt-destination", func(w http.ResponseWriter, r *http.Request) {
 		id := pathID(r)
-		jsonOut(w, runJob(app, "plan", "Adopt destination", func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "plan", "Adopt destination", func(p func(float64, string)) (map[string]any, error) {
 			return app.AdoptDestination(id, p)
 		}))
 	})
@@ -1628,7 +1707,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("mount_path (the docked source drive) required"))
 			return
 		}
-		jsonOut(w, runJob(app, "plan", "Execute plan from "+mount, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "plan", "Execute plan from "+mount, func(p func(float64, string)) (map[string]any, error) {
 			res, err := app.ExecutePlanFromDrive(id, mount, serial, p)
 			if err != nil {
 				return nil, err
@@ -1770,7 +1849,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("output_dir required"))
 			return
 		}
-		jsonOut(w, runJob(app, "bagit-export", "BagIt export → "+out, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "bagit-export", "BagIt export → "+out, func(p func(float64, string)) (map[string]any, error) {
 			return app.ExportBag(id, out, p)
 		}))
 	})
@@ -1786,7 +1865,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("output_dir required"))
 			return
 		}
-		jsonOut(w, runJob(app, "bagit-export", "BagIt export → "+out, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "bagit-export", "BagIt export → "+out, func(p func(float64, string)) (map[string]any, error) {
 			return app.ExportPackageBag(id, out, p)
 		}))
 	})
@@ -1824,7 +1903,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("package not found"))
 			return
 		}
-		jsonOut(w, runJob(app, "build", "Build "+c.Name, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "build", "Build "+c.Name, func(p func(float64, string)) (map[string]any, error) {
 			if err := app.BuildChunk(id, p); err != nil {
 				return nil, err
 			}
@@ -1869,7 +1948,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 409, err)
 			return
 		}
-		jsonOut(w, runJob(app, "write", "Write "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "write", "Write "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {
 			return app.WriteChunk(id, dest, f(b, "buffer_gb"), int(f(b, "block_mb")), f(b, "throttle_mbps"), vol, p)
 		}))
 	})
@@ -1890,7 +1969,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 409, err)
 			return
 		}
-		jsonOut(w, runJob(app, "write", "Re-write "+c.Name+" copy", func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "write", "Re-write "+c.Name+" copy", func(p func(float64, string)) (map[string]any, error) {
 			return app.RewriteCopy(id, vol, f(b, "buffer_gb"), int(f(b, "block_mb")), f(b, "throttle_mbps"), p)
 		}))
 	})
@@ -1912,7 +1991,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 409, err)
 			return
 		}
-		jsonOut(w, runJob(app, "write", "Span-write next segment of "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "write", "Span-write next segment of "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {
 			return app.SpanWriteNext(id, dest, f(b, "buffer_gb"), int(f(b, "block_mb")), f(b, "throttle_mbps"), vol, p)
 		}))
 	})
@@ -1943,7 +2022,7 @@ func api(mux *http.ServeMux, app *App) {
 			return
 		}
 		level := s(b, "level")
-		jsonOut(w, runJob(app, "verify", "Verify campaign — "+dest, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "verify", "Verify campaign — "+dest, func(p func(float64, string)) (map[string]any, error) {
 			return app.VerifyCampaign(dest, level, p)
 		}))
 	})
@@ -1967,7 +2046,7 @@ func api(mux *http.ServeMux, app *App) {
 		deep, _ := b["deep"].(bool)
 		// Adoption result (adopted / skipped-duplicate / unreadable) is surfaced via
 		// the job's final label and the refreshed Packages/Volumes views.
-		jsonOut(w, runJob(app, "adopt", "Adopt media — "+mount, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "adopt", "Adopt media — "+mount, func(p func(float64, string)) (map[string]any, error) {
 			return app.AdoptMedia(mount, cid, vol, deep, p)
 		}))
 	})
@@ -1992,7 +2071,7 @@ func api(mux *http.ServeMux, app *App) {
 				}
 			}
 		}
-		jsonOut(w, runJob(app, "restore", "Restore "+c.Name, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "restore", "Restore "+c.Name, func(p func(float64, string)) (map[string]any, error) {
 			return app.RestoreChunk(id, s(b, "source_dir"), out, members, p)
 		}))
 	})
@@ -2040,7 +2119,7 @@ func api(mux *http.ServeMux, app *App) {
 			}
 			sel.AsOf = &t
 		}
-		jsonOut(w, runJob(app, "restore", fmt.Sprintf("Restore file %d", id), func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "restore", fmt.Sprintf("Restore file %d", id), func(p func(float64, string)) (map[string]any, error) {
 			return app.RestoreFileVersion(id, sel, s(b, "source_dir"), out, p)
 		}))
 	})
@@ -2101,7 +2180,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("burn queue not found"))
 			return
 		}
-		jsonOut(w, runJob(app, "burn", "Burn next disc in "+q.Name, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "burn", "Burn next disc in "+q.Name, func(p func(float64, string)) (map[string]any, error) {
 			return app.BurnNext(id, p)
 		}))
 	})
@@ -2121,9 +2200,13 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("output_dir required"))
 			return
 		}
-		resp := runJob(app, "recoverykit", "Recovery Kit → "+out, func(p func(float64, string)) (map[string]any, error) {
+		resp, jerr := runJob(app, "recoverykit", "Recovery Kit → "+out, func(p func(float64, string)) (map[string]any, error) {
 			return app.BuildRecoveryKit(out, p)
 		})
+		if jerr != nil {
+			jsonErr(w, 503, jerr)
+			return
+		}
 		resp["warning"] = recoveryKitWarning
 		jsonOut(w, resp)
 	})
@@ -2158,24 +2241,36 @@ func api(mux *http.ServeMux, app *App) {
 	// explicit (network-touching) cache fetch. Writing bundles never hits the
 	// network; this endpoint is how the cache gets populated.
 	mux.HandleFunc("GET /api/escrow", func(w http.ResponseWriter, r *http.Request) {
-		cfg := app.LoadConfig()
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
 		census := app.FormatCensus(0)
-		full := app.planEscrow(EscrowFull, cfg.EscrowIncludeReaders, census)
-		bin := app.planEscrow(EscrowBinariesOnly, cfg.EscrowIncludeReaders, census)
+		full := app.planEscrow(EscrowFull, cfg.EscrowIncludeReaders, census, cfg)
+		bin := app.planEscrow(EscrowBinariesOnly, cfg.EscrowIncludeReaders, census, cfg)
 		jsonOut(w, map[string]any{
 			"version": appVersion, "fetchable": looksLikeReleaseTag(appVersion),
-			"cache_dir": app.escrowCacheDir(), "policy": normEscrowMode(cfg.EscrowOnMedia),
+			"cache_dir": app.escrowCacheDir(cfg), "policy": normEscrowMode(cfg.EscrowOnMedia),
 			"include_readers": cfg.EscrowIncludeReaders,
 			"full":            map[string]any{"present_bytes": full.PresentBytes, "estimated_bytes": full.estimatedBundleBytes(), "missing": full.MissingNames, "components": full.Components},
 			"binaries_only":   map[string]any{"present_bytes": bin.PresentBytes, "estimated_bytes": bin.estimatedBundleBytes(), "missing": bin.MissingNames},
 		})
 	})
 	mux.HandleFunc("POST /api/escrow/fetch", func(w http.ResponseWriter, r *http.Request) {
-		cfg := app.LoadConfig()
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
 		census := app.FormatCensus(0)
-		resp := runJob(app, "escrow-fetch", "Fetch escrow cache", func(p func(float64, string)) (map[string]any, error) {
+		resp, jerr := runJob(app, "escrow-fetch", "Fetch escrow cache", func(p func(float64, string)) (map[string]any, error) {
 			return app.FetchEscrowCache(cfg.EscrowIncludeReaders, census, p)
 		})
+		if jerr != nil {
+			jsonErr(w, 503, jerr)
+			return
+		}
 		jsonOut(w, resp)
 	})
 
@@ -2306,14 +2401,24 @@ func api(mux *http.ServeMux, app *App) {
 			jsonOut(w, map[string]any{"volume": v, "assigned": false, "barcode": v.Barcode})
 			return
 		}
-		v.Barcode = app.Store.NextBarcode(app.LoadConfig().BarcodeScheme)
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
+		v.Barcode = app.Store.NextBarcode(cfg.BarcodeScheme)
 		app.Store.UpdateVolume(v)
 		app.Store.Log("volume", fmt.Sprintf("%s: assigned barcode %s", v.Label, v.Barcode))
 		jsonOut(w, map[string]any{"volume": v, "assigned": true, "barcode": v.Barcode})
 	})
 	// Preview the next barcode the scheme would assign (no mutation).
 	mux.HandleFunc("GET /api/volumes/next-barcode", func(w http.ResponseWriter, r *http.Request) {
-		jsonOut(w, map[string]any{"next": app.Store.NextBarcode(app.LoadConfig().BarcodeScheme)})
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
+		jsonOut(w, map[string]any{"next": app.Store.NextBarcode(cfg.BarcodeScheme)})
 	})
 	// Printable HTML label (opens in a new tab, print-ready at common sizes).
 	mux.HandleFunc("GET /api/volumes/{id}/label", func(w http.ResponseWriter, r *http.Request) {
@@ -2322,7 +2427,12 @@ func api(mux *http.ServeMux, app *App) {
 			http.Error(w, "volume not found", 404)
 			return
 		}
-		lw, lh := labelSizeParts(app.LoadConfig().LabelSize)
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
+		lw, lh := labelSizeParts(cfg.LabelSize)
 		htmlPage, err := volumeLabelHTML(v, v.Barcode, lw, lh)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -2385,8 +2495,13 @@ func api(mux *http.ServeMux, app *App) {
 		// smart_available drives whether the volume view shows the Media health card
 		// with a "Check now" action or the install hint. The volume itself carries
 		// its SMART snapshot history (Volume.SmartHistory).
-		out := map[string]any{"volume": v, "chunks": rows, "smart_available": app.smartAvailable()}
-		if !app.smartAvailable() {
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
+		out := map[string]any{"volume": v, "chunks": rows, "smart_available": app.smartAvailable(cfg)}
+		if !app.smartAvailable(cfg) {
 			out["smart_hint"] = smartInstallHint
 		}
 		if snap := app.Store.VolumeSnapshot(v.ID); snap != nil {
@@ -2406,7 +2521,12 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("volume not found"))
 			return
 		}
-		if !app.smartAvailable() {
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
+		if !app.smartAvailable(cfg) {
 			jsonOut(w, map[string]any{"available": false, "hint": smartInstallHint})
 			return
 		}
@@ -2415,7 +2535,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("mount_path required (where the drive is mounted, e.g. E:\\ or /mnt/disk)"))
 			return
 		}
-		snap, err := app.VolumeHealth(v, mp)
+		snap, err := app.volumeHealth(v, mp, cfg)
 		if err != nil {
 			// Silent-but-logged in VolumeHealth; surface a soft error to the UI.
 			jsonOut(w, map[string]any{"available": true, "error": err.Error(), "history": v.SmartHistory})
@@ -2476,7 +2596,7 @@ func api(mux *http.ServeMux, app *App) {
 		}
 		b := body(r)
 		mount, level := s(b, "mount"), s(b, "level")
-		jsonOut(w, runJob(app, "verify", fmt.Sprintf("Mirror re-verify (%s) — %s", levelTag(level), v.Label), func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "verify", fmt.Sprintf("Mirror re-verify (%s) — %s", levelTag(level), v.Label), func(p func(float64, string)) (map[string]any, error) {
 			return app.VerifyMirrorVolume(v.ID, mount, level, p)
 		}))
 	})
@@ -2490,7 +2610,12 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("volume not found"))
 			return
 		}
-		as := app.AssessFinalize(v, r.URL.Query().Get("mount_path"), app.LoadConfig())
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
+		as := app.AssessFinalize(v, r.URL.Query().Get("mount_path"), cfg)
 		jsonOut(w, map[string]any{"assessment": as, "sealed": v.Sealed})
 	})
 	mux.HandleFunc("POST /api/volumes/{id}/finalize", func(w http.ResponseWriter, r *http.Request) {
@@ -2531,7 +2656,12 @@ func api(mux *http.ServeMux, app *App) {
 		jsonOut(w, st)
 	})
 	mux.HandleFunc("POST /api/tape/check", func(w http.ResponseWriter, r *http.Request) {
-		if !app.TapeAvailable() {
+		available, availableErr := app.TapeAvailable()
+		if availableErr != nil {
+			jsonErr(w, 503, availableErr)
+			return
+		}
+		if !available {
 			jsonOut(w, app.TapeToolStatus()) // {available:false, hints:[...]}
 			return
 		}
@@ -2561,7 +2691,12 @@ func api(mux *http.ServeMux, app *App) {
 	// movement). Explicitly gated: the caller must pass confirm:true, having shown
 	// the operator the warning. This is OUTSIDE the gpg restore story; never silent.
 	mux.HandleFunc("POST /api/tape/drive-key", func(w http.ResponseWriter, r *http.Request) {
-		if !app.stencAvailable() {
+		cfg, cfgErr := app.LoadConfig()
+		if cfgErr != nil {
+			jsonErr(w, 503, cfgErr)
+			return
+		}
+		if !app.stencAvailable(cfg) {
 			jsonOut(w, map[string]any{"available": false, "hint": stencInstallHint()})
 			return
 		}
@@ -2645,7 +2780,7 @@ func api(mux *http.ServeMux, app *App) {
 		}
 		serial, label, mode, level := s(b, "serial"), s(b, "label"), s(b, "mode"), s(b, "level")
 		confirm := bl(b, "confirm") // proceed past the SMART failure gate (operator acknowledged)
-		jsonOut(w, runJob(app, "dock", "Ingest "+mount, func(p func(float64, string)) (map[string]any, error) {
+		startedOn(w).write(runJob(app, "dock", "Ingest "+mount, func(p func(float64, string)) (map[string]any, error) {
 			return app.IngestDrive(id, mount, serial, label, mode, level, confirm, p)
 		}))
 	})
@@ -2823,6 +2958,27 @@ func api(mux *http.ServeMux, app *App) {
 		jsonOut(w, app.recomputeJob())
 	})
 
+	// Both job endpoints below serialise the whole Job, so both carry the OB-002
+	// recording-state contract, identically and from the same snapshot:
+	//
+	//   "unrecorded": true    — the terminal snapshot in this very response has NOT
+	//                           been written to jobs.json. `status` still says what the
+	//                           work did; the bookkeeping is what is missing. Present
+	//                           only when true (omitempty).
+	//   "persist_error": "…"  — the cause of the most recent recording failure. It is
+	//                           HISTORY and outlives recovery, so its presence alone
+	//                           does NOT mean the record is missing now: read it with
+	//                           "unrecorded", never instead of it.
+	//
+	// Both fields are additive; a clean job's JSON is byte-for-byte what it was.
+	//
+	// The compatibility limit, stated plainly because adding a field does not repair
+	// an existing client: anything that branches on `status == "COMPLETED"` alone
+	// keeps compiling, keeps working, and keeps being WRONG about the unrecorded case
+	// — it will read a finished-but-unrecorded job as an ordinary success. Every
+	// in-tree consumer (ui/index.html's job list, job detail, waitJob and the
+	// card-check poll) has been updated to read the snapshot rather than the status.
+	// External clients have not been, and cannot be by us; they must add the check.
 	mux.HandleFunc("GET /api/jobs", func(w http.ResponseWriter, r *http.Request) { jsonOut(w, app.Store.Jobs()) })
 	// One job with its full artifact list — the job detail view's source.
 	register(mux, "GET /api/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -2833,13 +2989,6 @@ func api(mux *http.ServeMux, app *App) {
 		}
 		jsonOut(w, j)
 	})
-}
-
-func offsiteWord(off bool) string {
-	if off {
-		return "offsite"
-	}
-	return "onsite"
 }
 
 // profileFromBody reads the editable profile fields from a request body.
@@ -2853,4 +3002,13 @@ func profileFromBody(b map[string]any) Profile {
 		MediaKindsAllowed:          strList(b, "media_kinds_allowed"),
 		VerifyDueMonths:            int(f(b, "verify_due_months")),
 	}
+}
+
+// jsonResult preserves a non-success HTTP result for a fallible read view.
+func jsonResult[T any](w http.ResponseWriter, value T, err error) {
+	if err != nil {
+		jsonErr(w, 503, err)
+		return
+	}
+	jsonOut(w, value)
 }

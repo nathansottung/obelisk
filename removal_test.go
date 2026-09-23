@@ -13,7 +13,7 @@ func removalApp(t *testing.T) *App {
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	return &App{DataDir: dir, Store: st, Perf: NewPerfMeter()}
+	return initializedTestApp(t, &App{DataDir: dir, Store: st, Perf: NewPerfMeter()})
 }
 
 // TestRetireRoundTrip exercises both retire tiers and unretire (all reversible).

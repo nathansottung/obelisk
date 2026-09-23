@@ -10,7 +10,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -711,6 +713,36 @@ type Job struct {
 	// answer "what did I make, and where can I see it?" (the show-the-artifact rule,
 	// made structural). See Artifact.
 	Artifacts []Artifact `json:"artifacts,omitempty"`
+	// Unrecorded and PersistError are the OB-002 recording-state contract. They are
+	// two DIFFERENT facts and must not be collapsed into one:
+	//
+	//   Unrecorded   — CURRENT state. True means THIS terminal snapshot (the status,
+	//                  artifacts and result now in memory) has not been successfully
+	//                  written to jobs.json. Status still describes what the WORK did;
+	//                  Unrecorded says the bookkeeping did not land. It is cleared the
+	//                  moment an ordinary jobs write successfully serialises this row —
+	//                  see saveJobs, which clears it BEFORE marshalling so the bytes
+	//                  and the in-memory row always agree.
+	//   PersistError — HISTORY. The cause of the most recent recording failure. It is
+	//                  retained after recovery, so "this completion was once at risk"
+	//                  stays discoverable without claiming the record is still missing.
+	//
+	// So the three states a reader must be able to tell apart are:
+	//
+	//   unrecorded=true,  persist_error set   → not recorded right now (warn)
+	//   unrecorded=false, persist_error set   → recorded, with an earlier failure (history)
+	//   unrecorded=false, persist_error empty → ordinary recorded completion
+	//
+	// Both are additive and omitempty, so an ordinary job serialises exactly as
+	// before. A record written by an older build has neither field, which decodes to
+	// the third row above — correct, because a row that is IN the file is recorded.
+	//
+	// Unrecorded is never true in a successfully written file (saveJobs clears it
+	// before the bytes are produced), and loadJobs clears it again on open for the
+	// same reason. PersistError IS written and read back: it is history, and history
+	// survives.
+	Unrecorded   bool   `json:"unrecorded,omitempty"`
+	PersistError string `json:"persist_error,omitempty"`
 }
 
 // Artifact is one concrete output a Job produced. The Show* fields locate it in
@@ -1077,11 +1109,28 @@ type Store struct {
 	// consulted at the top of writeCatalog so a test can simulate a disk-write failure
 	// and prove persistence errors propagate instead of being silently dropped.
 	failSave func() error
-	jobs     struct {
-		mu   sync.Mutex
-		next int
-		rows []*Job
-		path string // jobs.json sidecar (persists the board across restarts)
+	// failSaveJobs is the same seam for the JOBS sidecar: nil in production, consulted
+	// at the top of saveJobs. It is a per-Store field rather than a package global on
+	// purpose — OB-002's regressions run concurrent jobs, and a shared mutable hook
+	// would let one test's injected fault reach another's store.
+	failSaveJobs func() error
+	// persistObserver is a test-only OBSERVATION seam: nil in production, installed
+	// only through openStore. Every attempted authority write reports itself here via
+	// notePersist BEFORE the gates that could turn it into an early return, so a test
+	// can prove a refused startup attempted no write at all — an absent catalog.json.tmp
+	// proves nothing, because a successful rename removes that name too. Covers
+	// writeCatalog, dailyBackup (create and prune) and backupBeforeMigrate. Jobs-sidecar
+	// writes are outside this observer's scope: loadJobs can call saveJobs during startup
+	// reconciliation, but a rejected catalog read returns before loadJobs is reached. The
+	// dataDir MkdirAll precedes the read and is also outside this observer's scope.
+	persistObserver func(op, path string)
+	jobs            struct {
+		mu      sync.Mutex
+		next    int
+		rows    []*Job
+		loaded  bool   // a validated or successfully published sidecar has existed
+		loadErr error  // refused reload: blocks every later jobs publication
+		path    string // jobs.json sidecar (persists the board across restarts)
 	}
 }
 
@@ -1106,22 +1155,76 @@ func (s *Store) buildFileIndexLocked() {
 // OpenStore performs before returning. nil in production. See the failSave field.
 var openStoreFailSave func() error
 
+// decodeCatalogJSON is the shared pure native decoder. Startup policy stays in openStore.
+func decodeCatalogJSON(raw []byte, c *catalog) error { return json.Unmarshal(raw, c) }
+
 func OpenStore(dataDir string) (*Store, error) {
+	return openStore(dataDir, os.ReadFile, nil)
+}
+
+// openStore is OpenStore with its two boundaries injected, so a test can drive the
+// REAL decision logic below instead of standing in a mock that already behaves.
+// readFile supplies the catalog and jobs read RESULTS — bytes and error together — that the
+// classification switches on, so an injected failure and a genuine one travel the
+// identical branch. persistObserver, when non-nil, records attempted authority
+// writes (see the Store field). Production has exactly one caller, OpenStore, which
+// passes os.ReadFile and nil. Keeping these as parameters rather than package-level
+// hooks means no shared mutable test state, no cleanup, and no way for one test's
+// injected fault to reach another.
+func openStore(dataDir string, readFile func(string) ([]byte, error), persistObserver func(op, path string)) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, err
 	}
 	s := &Store{path: filepath.Join(dataDir, "catalog.json")}
 	s.failSave = openStoreFailSave
+	s.persistObserver = persistObserver
 	s.jobs.path = filepath.Join(dataDir, "jobs.json")
 	s.c.NextID = map[string]int{}
 	existed := false
 	var raw []byte
-	if b, err := os.ReadFile(s.path); err == nil {
-		existed = len(b) > 0
+	// Catalog-read classification (OB-001). Three outcomes, deliberately distinct,
+	// because only ONE of them may end in a new catalog:
+	//
+	//   read succeeded  -> this is the existing catalog; parse it.
+	//   not-found       -> the only case that may initialize a new one.
+	//   anything else   -> refuse to start.
+	//
+	// The last branch is the fix. Permission denial, an I/O error, a directory in the
+	// way, a share held by a backup agent or antivirus, a data dir whose mount is not
+	// up: every one of those used to fall through here with err != nil and leave an
+	// EMPTY in-memory catalog. Seeding below then set recovered=true and saved, which
+	// renames a three-profile empty catalog over the unread original — and dailyBackup
+	// went on to spend a backup slot on those empty bytes. An unavailable authority
+	// must not be replaced by an apparently new one.
+	b, readErr := readFile(s.path)
+	switch {
+	case readErr == nil:
+		// A zero-length catalog is the classic torn-write/power-loss artifact. Treating
+		// it as "brand new" (the old len(b) > 0 test) skipped the schema gate and the
+		// pre-migration backup and then overwrote it. It is damaged input, not consent.
+		if len(b) == 0 {
+			return nil, fmt.Errorf("%s is empty (0 bytes) — that is a damaged catalog, not a new one. "+
+				"Recover it from a catalog.json.bak-YYYYMMDD sidecar in the same folder, or move the "+
+				"empty file aside if you really do want to start a new catalog here. "+
+				"Refusing to overwrite it", s.path)
+		}
+		existed = true
 		raw = b
-		if err := json.Unmarshal(b, &s.c); err != nil {
+		if err := decodeCatalogJSON(b, &s.c); err != nil {
 			return nil, fmt.Errorf("catalog.json is damaged: %w", err)
 		}
+	case errors.Is(readErr, fs.ErrNotExist):
+		// Genuinely absent: initialize a new catalog, exactly as before. Note what this
+		// does NOT establish — that the operator INTENDED a new catalog. A previously
+		// initialized data directory whose drive is not mounted also reads as absent.
+		// Telling those apart needs storage identity, which this change does not add;
+		// the residual is recorded against OB-001.
+	default:
+		// Any bytes handed back alongside an error are discarded on purpose: a partial
+		// read must never be parsed as if it were the whole catalog.
+		return nil, fmt.Errorf("cannot read %s: %w — refusing to start so an unreadable "+
+			"catalog is never replaced by a new empty one. Check the file's permissions, "+
+			"and that the drive holding the data folder is connected", s.path, readErr)
 	}
 	if s.c.NextID == nil {
 		s.c.NextID = map[string]int{}
@@ -1219,7 +1322,9 @@ func OpenStore(dataDir string) (*Store, error) {
 	// up and visible with its partial artifacts rather than silently lost. The work
 	// itself isn't auto-resumed; resumable ops (burn, span) are re-triggered by the
 	// operator, and the chunk-status recovery above already reset mid-flight builds.
-	s.loadJobs()
+	if err := s.loadJobsFrom(readFile); err != nil {
+		return nil, fmt.Errorf("open job board: %w", err)
+	}
 	return s, nil
 }
 
@@ -1281,6 +1386,7 @@ func (s *Store) backupBeforeMigrate(raw []byte, from int) {
 		return
 	}
 	name := fmt.Sprintf("%s.pre-schema-v%d-%s", s.path, from, time.Now().Format("20060102-150405"))
+	s.notePersist("pre-schema-backup", name)
 	_ = os.WriteFile(name, raw, 0o644)
 }
 
@@ -1305,6 +1411,9 @@ func (s *Store) save() error {
 }
 
 func (s *Store) writeCatalog() error {
+	// Record the ATTEMPT first — ahead of the fault seam and the read-only gate below,
+	// either of which would otherwise return early and hide it from an observer.
+	s.notePersist("catalog-write", s.path)
 	// Test-only fault-injection seam (nil in production): simulate a write failure so
 	// tests can prove persistence errors propagate rather than being dropped.
 	if s.failSave != nil {
@@ -1386,17 +1495,57 @@ func (s *Store) BeginBatch() {
 	s.batchDepth++
 }
 
-// EndBatch leaves batched-save mode and forces a final write if anything is
-// pending, so the job's result is durable when it returns.
-func (s *Store) EndBatch() {
+// EndBatch leaves batched-save mode and forces the final write if anything is
+// pending, RETURNING the error so a caller cannot report success for work that was
+// never persisted (OB-002).
+//
+// Two deliberate properties:
+//
+//   - The error is returned, not dropped. Coalesced progress is allowed to sit in
+//     memory during a batch, but the moment a job claims completion its catalog
+//     changes must have reached the disk. Every caller folds this into its own error
+//     via endBatchInto.
+//   - It flushes whenever the catalog is dirty, NOT only when the depth reaches
+//     zero. batchDepth is shared by every concurrent job, so the old
+//     `batchDepth == 0` condition meant a job finishing while ANOTHER job still held
+//     a batch wrote nothing and simply hoped that other job would flush later —
+//     someone else's unrelated work became the precondition for this job's
+//     durability. A finishing job now always writes.
+//
+// The tradeoff: when two jobs overlap, the flush also persists the other job's
+// partially-applied state. That is safe — the catalog is one document written under
+// s.mu, so it is always internally consistent, and every batched job is an
+// idempotent re-run (see BeginBatch), so persisting its progress early can only save
+// work on a replay. The cost is one extra full-catalog write per overlapping job.
+func (s *Store) EndBatch() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.batchDepth > 0 {
 		s.batchDepth--
 	}
-	if s.batchDepth == 0 && s.dirty {
-		_ = s.writeCatalog()
+	if !s.dirty {
+		return nil
 	}
+	return s.writeCatalog()
+}
+
+// endBatchInto ends a batched job and folds a failed final catalog write into the
+// caller's error return. Used as `defer endBatchInto(a.Store, &err)` from every
+// batch owner, which is why those functions name their error result.
+//
+// Neither cause is allowed to mask the other (OB-002): if the operation already
+// failed, the flush failure is joined onto it rather than replacing it, and the
+// original error stays unwrapped-to so existing errors.Is/As checks keep working.
+func endBatchInto(s *Store, err *error) {
+	ferr := s.EndBatch()
+	if ferr == nil {
+		return
+	}
+	if *err != nil {
+		*err = fmt.Errorf("%w; additionally, the catalog could not be saved: %v", *err, ferr)
+		return
+	}
+	*err = fmt.Errorf("the work finished but the catalog could not be saved, so it is NOT recorded: %w", ferr)
 }
 
 // dailyBackup writes catalog.json.bak-YYYYMMDD once per calendar day (best
@@ -1409,13 +1558,25 @@ func (s *Store) dailyBackup(b []byte) {
 	s.lastBak = day
 	bak := s.path + ".bak-" + day
 	if _, err := os.Stat(bak); err != nil {
+		s.notePersist("backup-create", bak)
 		_ = os.WriteFile(bak, b, 0o644)
 	}
 	matches, _ := filepath.Glob(s.path + ".bak-*")
 	sort.Strings(matches) // YYYYMMDD suffix sorts chronologically
 	for len(matches) > 14 {
+		s.notePersist("backup-prune", matches[0])
 		_ = os.Remove(matches[0])
 		matches = matches[1:]
+	}
+}
+
+// notePersist reports an attempted authority write to the observer openStore
+// installed. nil in production, so every call site pays one nil check. Callers report
+// the attempt BEFORE performing it, and before any gate that could skip it, so "zero
+// attempts" is a statement about what the code tried, not only about what survived.
+func (s *Store) notePersist(op, path string) {
+	if s.persistObserver != nil {
+		s.persistObserver(op, path)
 	}
 }
 
@@ -3270,77 +3431,147 @@ func (s *Store) KeyMetas() []*KeyMeta {
 // and terminal status — never on progress/telemetry ticks (those fire many times a
 // second and stay in-memory; they carry nothing worth surviving a restart). Caller
 // holds s.jobs.mu.
-func (s *Store) saveJobs() {
-	if s.jobs.path == "" {
-		return
+//
+// OB-002: this RETURNS its error and actually checks every step. It previously
+// swallowed all three failure modes — a marshal error returned silently, a failed
+// temp write skipped the rename without a word, and the rename's own error was
+// discarded — so "the job is COMPLETED" could be a purely in-memory claim while
+// jobs.json still said RUNNING. It now also fsyncs the bytes before the rename, the
+// same durability writeCatalog already had: a rename publishes a directory entry,
+// not the data blocks behind it.
+//
+// A failed publication leaves the PREVIOUS good jobs.json untouched: the file is
+// only ever replaced by a completed, synced temp file.
+//
+// It is also where an earlier recording failure is FORGIVEN. This write serialises
+// every row, so a write that succeeds records the current terminal snapshot of every
+// job on the board — including one whose own terminal write failed earlier. That row
+// is therefore recorded now, and must stop saying otherwise. See writeJobsRows for
+// why the flags are cleared before the bytes are produced rather than after.
+func (s *Store) saveJobs() error {
+	if s.jobs.loadErr != nil {
+		return fmt.Errorf("job board unavailable after refused load: %w", s.jobs.loadErr)
 	}
+	if s.jobs.path == "" {
+		return nil
+	}
+	// Test-only fault-injection seam (nil in production), consulted before any work
+	// so a test can prove the error reaches the caller rather than being dropped.
+	// Checked first, before any flag is touched: a seam failure must leave the board
+	// exactly as it found it.
+	if s.failSaveJobs != nil {
+		if err := s.failSaveJobs(); err != nil {
+			return err
+		}
+	}
+	// Clear the not-recorded qualification on every flagged row BEFORE marshalling,
+	// and put it back if the write fails.
+	//
+	// Clearing first is what keeps the serialised bytes and the published in-memory
+	// state in agreement: if the write lands, the file says "recorded" and so does
+	// memory; if it does not, both say "not recorded". Clearing AFTER a successful
+	// write would leave `unrecorded: true` in the very file that proves otherwise,
+	// and a restart would read that stale claim back.
+	//
+	// This is not optimistic publication. The caller holds s.jobs.mu for the whole
+	// window, and every reader (Job, Jobs) takes the same mutex, so the cleared-but-
+	// unwritten state is not observable outside this function: a reader either blocks
+	// or sees the state from before the attempt. PersistError is deliberately NOT
+	// cleared — that is history, and it is written out with the row.
+	var forgiven []*Job
+	for _, j := range s.jobs.rows {
+		if j.Unrecorded {
+			j.Unrecorded = false
+			forgiven = append(forgiven, j)
+		}
+	}
+	if err := s.writeJobsRows(); err != nil {
+		for _, j := range forgiven {
+			j.Unrecorded = true
+		}
+		return err
+	}
+	return nil
+}
+
+// writeJobsRows is saveJobs' actual file publication: marshal, write to a temp file,
+// fsync, rename. Split out so saveJobs' recording-state bookkeeping wraps exactly the
+// bytes it is responsible for. Caller holds s.jobs.mu.
+//
+// Every error it can return is PRE-publication: the only step that runs after the
+// rename is the parent-directory sync, whose error is deliberately discarded. That is
+// what makes NewJob's row/ID rollback safe — a returned error means nothing landed.
+func (s *Store) writeJobsRows() error {
 	b, err := json.MarshalIndent(struct {
 		Next int    `json:"next"`
 		Rows []*Job `json:"rows"`
 	}{s.jobs.next, s.jobs.rows}, "", " ")
 	if err != nil {
-		return
+		return err
 	}
 	tmp := s.jobs.path + ".tmp"
-	if os.WriteFile(tmp, b, 0o644) == nil {
-		_ = os.Rename(tmp, s.jobs.path)
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
 	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, s.jobs.path); err != nil {
+		return err
+	}
+	// Best-effort, and a no-op on Windows: the bytes are already durable via Sync
+	// above, this only makes the rename itself survive a power loss where supported.
+	_ = syncDir(filepath.Dir(s.jobs.path))
+	s.jobs.loaded = true
+	return nil
 }
 
-// loadJobs restores the board from the sidecar on open. A job still marked RUNNING
-// belonged to a process that has since exited, so it can never complete — flip it
-// to INTERRUPTED (and clear stale live telemetry) so the UI shows it honestly.
-func (s *Store) loadJobs() {
-	if s.jobs.path == "" {
-		return
-	}
-	b, err := os.ReadFile(s.jobs.path)
-	if err != nil || len(b) == 0 {
-		return
-	}
-	var in struct {
-		Next int    `json:"next"`
-		Rows []*Job `json:"rows"`
-	}
-	if json.Unmarshal(b, &in) != nil {
-		return
-	}
+// NewJob creates a job row and PERSISTS it before returning (OB-002). If the board
+// cannot be written the row is rolled back — including the ID counter, so the failed
+// attempt does not burn an ID — and the error is returned, because work must not be
+// launched under an ID the system would then describe as recorded. runJob turns this
+// into a truthful 503 and starts nothing.
+func (s *Store) NewJob(kind, label string) (*Job, error) {
 	s.jobs.mu.Lock()
 	defer s.jobs.mu.Unlock()
-	s.jobs.next = in.Next
-	changed := false
-	for _, j := range in.Rows {
-		if j.Status == "RUNNING" {
-			j.Status = "INTERRUPTED"
-			j.RateMBps, j.ETASeconds = 0, 0
-			changed = true
-		}
-		if j.ID > s.jobs.next {
-			s.jobs.next = j.ID
-		}
+	if s.jobs.loadErr != nil {
+		return nil, fmt.Errorf("job board unavailable after refused load: %w", s.jobs.loadErr)
 	}
-	s.jobs.rows = in.Rows
-	if changed {
-		s.saveJobs()
+	if s.jobs.next == int(^uint(0)>>1) {
+		return nil, fmt.Errorf("job identity counter exhausted; no work was started")
 	}
-}
-
-func (s *Store) NewJob(kind, label string) *Job {
-	s.jobs.mu.Lock()
-	defer s.jobs.mu.Unlock()
 	s.jobs.next++
 	j := &Job{ID: s.jobs.next, Kind: kind, Label: label, Status: "RUNNING", CreatedAt: time.Now().UTC()}
 	s.jobs.rows = append(s.jobs.rows, j)
-	s.saveJobs()
-	return j
+	if err := s.saveJobs(); err != nil {
+		s.jobs.rows = s.jobs.rows[:len(s.jobs.rows)-1]
+		s.jobs.next--
+		return nil, fmt.Errorf("the job board could not be written, so no work was started: %w", err)
+	}
+	return j, nil
 }
 
-func (s *Store) SetJob(id int, progress float64, label, status string) {
+// SetJob updates a job row, persisting only on a terminal transition. It returns
+// that write's error (OB-002): a caller that publishes COMPLETED must know whether
+// the completion was actually recorded. Progress-only calls stay in memory and
+// return nil.
+func (s *Store) SetJob(id int, progress float64, label, status string) error {
 	s.jobs.mu.Lock()
 	defer s.jobs.mu.Unlock()
+	var row *Job
 	terminal := false
 	for _, j := range s.jobs.rows {
 		if j.ID == id {
+			row = j
 			if progress >= 0 {
 				j.Progress = progress
 			}
@@ -3360,36 +3591,169 @@ func (s *Store) SetJob(id int, progress float64, label, status string) {
 	// Persist only when a job reaches a terminal state — progress-only updates stay
 	// in-memory (the sidecar carries outcomes, not live progress).
 	if terminal {
-		s.saveJobs()
+		err := s.saveJobs()
+		// Same rule as FinishJob: the qualification is published in the SAME lock hold
+		// as the terminal status it qualifies, never by a later call.
+		markJobUnrecordedLocked(row, err)
+		return err
 	}
+	return nil
 }
 
+// markJobUnrecordedLocked records that a job's CURRENT terminal snapshot could not be
+// written, in the same critical section that published that snapshot. Caller holds
+// s.jobs.mu.
+//
+// This is the whole of Blocker 1's fix: the status and the qualification of the
+// status become visible together or not at all. It used to be a separate exported
+// call made after the lock was released, which left a window in which GET /api/jobs
+// handed out a plain, unqualified COMPLETED for a job whose record on disk still said
+// RUNNING — exactly the falsehood OB-002 exists to remove.
+//
+// It sets both halves of the contract: Unrecorded (current state) and PersistError
+// (history). It does NOT touch the label — a mutated label cannot be un-mutated when
+// a later write records the row, and appending to it twice would double the prefix.
+// Deliberately does nothing when cause is nil, so the ordinary success path costs a
+// nil check and clears nothing it should not.
+//
+// It never saves and never logs: the sidecar is the thing that just failed, and
+// process logging and the catalog audit fallback belong outside this mutex (see
+// App.noteUnrecordedJob).
+func markJobUnrecordedLocked(j *Job, cause error) {
+	if j == nil || cause == nil {
+		return
+	}
+	j.Unrecorded = true
+	j.PersistError = cause.Error()
+}
+
+// FinishJob publishes a job's terminal state together with the artifacts and result
+// that describe it, in ONE checked sidecar write (OB-002).
+//
+// Ordering matters and is the reason this exists. runJob used to set COMPLETED
+// first and then attach the artifacts and result in two further writes, so a reader
+// could see a completed job whose outputs were not yet recorded, and the terminal
+// write was not the last word about the job. Here the descriptive fields are filled
+// in memory and the status is published with them in a single write, so the record
+// that reaches jobs.json is complete or is not there at all.
+//
+// The error is still the caller's to handle — runJob logs it and attempts the audit
+// fallback — but the row's own truthfulness no longer depends on the caller doing so:
+// when the write fails, this marks the row not-recorded BEFORE releasing the mutex, so
+// no reader can ever observe an unqualified COMPLETED for a job whose record did not
+// land. Everything a reader needs — execution outcome, artifacts, result, current
+// recording state, and any recording-failure qualification — is established inside
+// this one critical section.
+func (s *Store) FinishJob(id int, progress float64, label, status string, arts []Artifact, result map[string]any) error {
+	s.jobs.mu.Lock()
+	defer s.jobs.mu.Unlock()
+	var row *Job
+	found := false
+	for _, j := range s.jobs.rows {
+		if j.ID != id {
+			continue
+		}
+		found = true
+		row = j
+		if progress >= 0 {
+			j.Progress = progress
+		}
+		if label != "" {
+			j.Label = label
+		}
+		if len(arts) > 0 {
+			j.Artifacts = arts
+		}
+		if result != nil {
+			j.Result = result
+		}
+		j.RateMBps, j.ETASeconds = 0, 0
+		if status != "" {
+			j.Status = status
+			now := time.Now().UTC()
+			j.FinishedAt = &now
+		}
+	}
+	if !found {
+		return nil
+	}
+	err := s.saveJobs()
+	// Still inside the same s.jobs.mu hold that published the status above: the
+	// terminal snapshot and its qualification become visible together.
+	markJobUnrecordedLocked(row, err)
+	return err
+}
+
+// There is deliberately no exported "note this job unrecorded" call. It existed, and
+// it was the bug: setting the qualification from outside meant re-taking s.jobs.mu
+// after FinishJob had already published and released, leaving a window in which
+// GET /api/jobs served an unqualified COMPLETED. The qualification is now set by
+// markJobUnrecordedLocked inside the write's own lock hold, and a late external call
+// would be worse than useless — by then an ordinary save may legitimately have
+// recorded the row, and re-flagging it would report a missing record that is present.
+//
+// It is also why nothing retries here. The sidecar is the thing that just failed;
+// writing the failure into it would either fail again or loop. Recovery is ordinary,
+// not scheduled: the next successful jobs write — a new job, another job finishing —
+// serialises the whole board including this row, and saveJobs clears the flag as part
+// of producing those bytes. Until that happens the durable record stays whatever was
+// last written (RUNNING), which loadJobs reports as INTERRUPTED on the next start.
+
 // AppendJobArtifact records one artifact on a running job and persists it, so a
-// job's detail view fills in as the work produces outputs.
-func (s *Store) AppendJobArtifact(id int, a Artifact) {
+// job's detail view fills in as the work produces outputs. The write error is
+// returned; a running job's artifact list is progress, so callers may reasonably
+// ignore it, but no caller is forced to.
+func (s *Store) AppendJobArtifact(id int, a Artifact) error {
 	s.jobs.mu.Lock()
 	defer s.jobs.mu.Unlock()
 	for _, j := range s.jobs.rows {
 		if j.ID == id {
 			j.Artifacts = append(j.Artifacts, a)
-			s.saveJobs()
-			return
+			return s.saveJobs()
 		}
 	}
+	return nil
 }
 
 // SetJobArtifacts replaces a job's artifact list (used when a job reports all its
 // artifacts at once on completion) and persists.
-func (s *Store) SetJobArtifacts(id int, arts []Artifact) {
+func (s *Store) SetJobArtifacts(id int, arts []Artifact) error {
 	s.jobs.mu.Lock()
 	defer s.jobs.mu.Unlock()
 	for _, j := range s.jobs.rows {
 		if j.ID == id {
 			j.Artifacts = arts
-			s.saveJobs()
-			return
+			return s.saveJobs()
 		}
 	}
+	return nil
+}
+
+// snapshot returns a job row a caller can keep and read after s.jobs.mu is released.
+//
+// It is a DEEP copy of the parts that are not plain values. A bare `cp := *j` shares
+// the Result map and the Artifacts backing array with the live row, so the returned
+// "copy" would still be aliasing mutable state the store owns — and the /api/jobs
+// encoder walks exactly those fields after the mutex is gone. No production path
+// mutates a result map or an artifact slice after publication today (FinishJob
+// assigns both wholesale under the lock), so this fixes no live bug; it removes the
+// dependence on that staying true, which is not a property a reader can check.
+//
+// The map's VALUES are not deep-copied: they are the `map[string]any` a job returned
+// once, and no code mutates their interiors after FinishJob publishes them. That is
+// the limit of the isolation this provides, stated rather than implied.
+func (j *Job) snapshot() *Job {
+	cp := *j
+	if j.Artifacts != nil {
+		cp.Artifacts = append([]Artifact(nil), j.Artifacts...)
+	}
+	if j.Result != nil {
+		cp.Result = make(map[string]any, len(j.Result))
+		for k, v := range j.Result {
+			cp.Result[k] = v
+		}
+	}
+	return &cp
 }
 
 // Job returns a single job by ID (nil if unknown).
@@ -3398,8 +3762,7 @@ func (s *Store) Job(id int) *Job {
 	defer s.jobs.mu.Unlock()
 	for _, j := range s.jobs.rows {
 		if j.ID == id {
-			cp := *j
-			return &cp
+			return j.snapshot()
 		}
 	}
 	return nil
@@ -3419,7 +3782,7 @@ func (s *Store) SetJobTelemetry(id int, rateMBps, etaSeconds float64, bytesDone,
 
 // SetJobResult attaches a finished job's artifact/summary so the UI can show it
 // (the "show the artifact" rule) — clearing any live telemetry.
-func (s *Store) SetJobResult(id int, result map[string]any) {
+func (s *Store) SetJobResult(id int, result map[string]any) error {
 	s.jobs.mu.Lock()
 	defer s.jobs.mu.Unlock()
 	for _, j := range s.jobs.rows {
@@ -3428,7 +3791,7 @@ func (s *Store) SetJobResult(id int, result map[string]any) {
 			j.RateMBps, j.ETASeconds = 0, 0
 		}
 	}
-	s.saveJobs()
+	return s.saveJobs()
 }
 
 func (s *Store) Jobs() []*Job {
@@ -3436,11 +3799,12 @@ func (s *Store) Jobs() []*Job {
 	defer s.jobs.mu.Unlock()
 	// Hand out copies, not the live rows: a running job's progress/telemetry is
 	// updated under this lock while a reader (the /api/jobs encoder) is still
-	// walking the result.
+	// walking the result. snapshot copies the Result map and Artifacts slice too, so
+	// what escapes this mutex is genuinely the caller's — including the recording
+	// state, which every row carries with the status it qualifies.
 	out := make([]*Job, 0, len(s.jobs.rows))
 	for _, j := range s.jobs.rows {
-		cp := *j
-		out = append(out, &cp)
+		out = append(out, j.snapshot())
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID > out[j].ID })
 	if len(out) > 100 {

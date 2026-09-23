@@ -68,7 +68,7 @@ func TestBrowseWithFiles(t *testing.T) {
 // renderable (has a plain description, a save key, and a download link).
 func TestToolsCatalog(t *testing.T) {
 	app := newSetupApp(t)
-	tools := app.ToolsView()
+	tools := testValue(app.ToolsView())
 	byName := map[string]ToolInfo{}
 	for _, ti := range tools {
 		byName[ti.Name] = ti
@@ -122,7 +122,7 @@ func TestToolBrowseToBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got ToolInfo
-	for _, ti := range app.ToolsView() {
+	for _, ti := range testValue(app.ToolsView()) {
 		if ti.Name == "rclone" {
 			got = ti
 		}
@@ -165,7 +165,7 @@ func TestHashAccelToggle(t *testing.T) {
 // doesn't disturb the others (the merge contract every Save button relies on).
 func TestSettingsConfigFields(t *testing.T) {
 	app := newSetupApp(t)
-	def := app.LoadConfig()
+	def := mustConfig(t, app)
 	if !def.HashAccel {
 		t.Error("HashAccel should default true")
 	}
@@ -178,7 +178,7 @@ func TestSettingsConfigFields(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	got := app.LoadConfig()
+	got := mustConfig(t, app)
 	if !got.UpdateCheck || got.LabelSize != "4in 2in" || got.DefaultProfile != "single-copy" || got.HashAccel {
 		t.Errorf("round-trip mismatch: %+v", got)
 	}
@@ -191,7 +191,7 @@ func TestSettingsConfigFields(t *testing.T) {
 	if _, err := app.SaveConfig(map[string]any{"barcode_scheme": "ZZZ"}); err != nil {
 		t.Fatal(err)
 	}
-	if g := app.LoadConfig(); g.LabelSize != "4in 2in" || g.DefaultProfile != "single-copy" {
+	if g := mustConfig(t, app); g.LabelSize != "4in 2in" || g.DefaultProfile != "single-copy" {
 		t.Errorf("partial save clobbered unrelated fields: %+v", g)
 	}
 }

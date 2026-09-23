@@ -13,9 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -129,7 +127,10 @@ func (a *App) CreateBurnQueue(collectionID int, mediaKind, name string) (*BurnQu
 // command (with {SRC}/{LABEL} substituted), then optionally hash-verify the
 // burned payload against the chunk's enc_hash before marking DONE.
 func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, error) {
-	cfg := a.LoadConfig()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	if strings.TrimSpace(cfg.BurnCommand) == "" {
 		return nil, fmt.Errorf("burn_command is not configured (Settings)")
 	}
@@ -147,7 +148,10 @@ func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, 
 	if disc == nil {
 		return nil, fmt.Errorf("no PENDING discs left in %q", q.Name)
 	}
-	set := func(st, detail string) { disc.Status, disc.Detail = st, detail; a.Store.UpdateBurnQueue(q) }
+	set := func(st, detail string) {
+		disc.Status, disc.Detail = st, storedErrorText(detail)
+		a.Store.UpdateBurnQueue(q)
+	}
 
 	c := a.Store.Chunk(disc.ChunkID)
 	if c == nil {
@@ -305,19 +309,9 @@ func (a *App) carryEccToNextDisc(q *BurnQueue, current *BurnDisc, c *Chunk, eccP
 // runShell runs a burn command line through the platform shell. Exit code 0
 // (nil error) is success; anything else fails the disc with the tail of output.
 func runShell(cmdline string) error {
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/C", cmdline)
-	} else {
-		cmd = exec.Command("sh", "-c", cmdline)
-	}
-	out, err := cmd.CombinedOutput()
+	out, err := burnShellCommand(cmdline).CombinedOutput()
 	if err != nil {
-		t := string(out)
-		if len(t) > 700 {
-			t = t[len(t)-700:]
-		}
-		return fmt.Errorf("%v: %s", err, strings.TrimSpace(t))
+		return fmt.Errorf("%v: %s", err, toolOutputTail(out))
 	}
 	return nil
 }

@@ -144,7 +144,11 @@ func (a *App) DockCandidates(sessionID int) ([]DockCandidate, error) {
 // detail — BEFORE hashing the whole drive — so the operator can copy critical data
 // off a dying disk first. Re-call with confirm=true to inventory it anyway (the
 // read is non-destructive; nothing is ever written to the drive).
-func (a *App) IngestDrive(sessionID int, mountPath, serial, label, mode, level string, confirm bool, progress func(float64, string)) (map[string]any, error) {
+func (a *App) IngestDrive(sessionID int, mountPath, serial, label, mode, level string, confirm bool, progress func(float64, string)) (res map[string]any, err error) {
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	ds := a.Store.DockSession(sessionID)
 	if ds == nil {
 		return nil, fmt.Errorf("dock session %d not found", sessionID)
@@ -160,7 +164,7 @@ func (a *App) IngestDrive(sessionID int, mountPath, serial, label, mode, level s
 	}
 	// Batch catalog writes across the ingest (idempotent: matched by content hash).
 	a.Store.BeginBatch()
-	defer a.Store.EndBatch()
+	defer endBatchInto(a.Store, &err)
 
 	progress(0.02, "identifying drive")
 	// An explicit serial (from the watcher, which already resolved the candidate,
@@ -198,7 +202,7 @@ func (a *App) IngestDrive(sessionID int, mountPath, serial, label, mode, level s
 	// ingest. Snapshots accrue in the volume's history so trends show across
 	// dock sessions.
 	var health *SmartSnapshot
-	if snap, herr := a.VolumeHealth(vol, mountPath); herr == nil {
+	if snap, herr := a.volumeHealth(vol, mountPath, cfg); herr == nil {
 		health = snap
 	}
 
@@ -231,7 +235,8 @@ func (a *App) IngestDrive(sessionID int, mountPath, serial, label, mode, level s
 	// check of the known mirror instead of the full content re-hash. Adoption and
 	// level B always do the full content match.
 	var drive *DockDrive
-	var err error
+	// err is the named result (see the signature) so a failed final catalog flush can
+	// be folded into it by endBatchInto; it is no longer declared locally here.
 	if effMode == "reverify" && normLevel(level) != VerifyB {
 		drive, err = a.dockReverifyAtLevel(ds, mountPath, vol, normLevel(level), progress)
 	} else {
@@ -274,6 +279,10 @@ func (a *App) IngestDrive(sessionID int, mountPath, serial, label, mode, level s
 // so the inventory lives ONLY in the catalog (the snapshot), unlike tool-written
 // media which still carry a sidecar (see docs/ARCHITECTURE.md on this asymmetry).
 func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode string, health *SmartSnapshot, progress func(float64, string)) (*DockDrive, error) {
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	// Source-safety: refuse to treat a registered source folder as a docked drive.
 	// (We no longer write to the drive at all, but adopting a NAS source AS a drive
 	// would double-count it and is never intended — read-only or not.)
@@ -356,7 +365,7 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 			rel := driveRel(mountPath, p)
 			role, crit := classifyRole(reg, rel)
 			sf := SnapFile{RelPath: rel, SizeBytes: size, ModTime: mtime, Hash: sha, Blake3: b3, Role: role, Critical: crit}
-			sf.ShotAt, sf.CameraSerial = a.extractMediaMeta(p, role)
+			sf.ShotAt, sf.CameraSerial = a.extractMediaMeta(p, role, cfg)
 			mu.Lock()
 			defer mu.Unlock()
 			snapFiles = append(snapFiles, sf)

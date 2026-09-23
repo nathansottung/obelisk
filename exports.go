@@ -336,12 +336,12 @@ func StructureMarkdown(exp StructureExport) string {
 // Structure Export into the current catalog: the archive, its events, the physical
 // volumes/locations, every file (hash/role/event/capture), and content-addressed
 // copies so search and locations answer exactly as on the source machine.
-func (a *App) ImportStructure(exp StructureExport) (map[string]any, error) {
+func (a *App) ImportStructure(exp StructureExport) (res map[string]any, err error) {
 	if exp.Format != structureFormat && exp.Format != structureFormatLegacy {
 		return nil, fmt.Errorf("not an Obelisk structure export")
 	}
 	a.Store.BeginBatch()
-	defer a.Store.EndBatch()
+	defer endBatchInto(a.Store, &err)
 
 	coll := a.Store.AddCollectionKind(exp.Archive, nonEmpty(exp.Kind, ArchiveSourceless))
 
@@ -504,12 +504,12 @@ func (a *App) PlanExport(planID int) (PlanExport, error) {
 // execute) from a Plan Export, so a DIFFERENT machine can carry the move out. Serial
 // binding keeps it safe: a drive only advances the plan when its real serial matches
 // what the export recorded.
-func (a *App) ImportPlan(exp PlanExport) (map[string]any, error) {
+func (a *App) ImportPlan(exp PlanExport) (res map[string]any, err error) {
 	if exp.Format != planFormat && exp.Format != planFormatLegacy {
 		return nil, fmt.Errorf("not an Obelisk plan export")
 	}
 	a.Store.BeginBatch()
-	defer a.Store.EndBatch()
+	defer endBatchInto(a.Store, &err)
 
 	// A template to display the routes (create if absent by name).
 	var tmpl *Template

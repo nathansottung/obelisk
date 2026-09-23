@@ -176,7 +176,7 @@ func TestIncremental_FeedsHomeRecognition(t *testing.T) {
 	if _, err := app.BackupChanges(coll.ID, nil, vol.ID, BaseVolume, ModeMirror, dest, 0, "", func(float64, string) {}); err != nil {
 		t.Fatal(err)
 	}
-	home := app.HomeOverview(nil)
+	home := testValue(app.HomeOverview(nil))
 	found := false
 	for _, inc := range home.Incremental {
 		if inc.VolumeID == vol.ID && inc.ArchiveID == coll.ID {

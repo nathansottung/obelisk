@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -70,7 +69,7 @@ type lsblkNode struct {
 func resolveLinux(abs string) (DeviceIdentity, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "lsblk", "-J", "-b",
+	out, err := helperCommandContext(ctx, "lsblk", "-J", "-b",
 		"-o", "NAME,SERIAL,MODEL,SIZE,MOUNTPOINT,TYPE,TRAN").Output()
 	if err != nil {
 		return DeviceIdentity{}, fmt.Errorf("lsblk: %v", err)
@@ -172,7 +171,7 @@ func resolveDarwin(abs string) (DeviceIdentity, error) {
 func diskutilInfo(target string) (map[string]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "diskutil", "info", target).Output()
+	out, err := helperCommandContext(ctx, "diskutil", "info", target).Output()
 	if err != nil {
 		return nil, fmt.Errorf("diskutil info %s: %v", target, err)
 	}

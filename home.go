@@ -105,7 +105,11 @@ type HomeData struct {
 
 // HomeOverview computes the whole Home picture from the catalog. onlineVolumeIDs is
 // the set of volumes connected RIGHT NOW (may be nil in tests / when not probed).
-func (a *App) HomeOverview(onlineVolumeIDs map[int]bool) HomeData {
+func (a *App) HomeOverview(onlineVolumeIDs map[int]bool) (HomeData, error) {
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return HomeData{}, cfgErr
+	}
 	archives := a.Store.Collections()
 	snapshots := a.Store.VolumeSnapshots()
 	volumes := a.Store.Volumes()
@@ -306,7 +310,7 @@ func (a *App) HomeOverview(onlineVolumeIDs map[int]bool) HomeData {
 		}
 	}
 	data.Health.DriftArchives = len(drifted)
-	months := a.LoadConfig().VerifyDueMonths
+	months := cfg.VerifyDueMonths
 	if months <= 0 {
 		months = 12
 	}
@@ -327,7 +331,7 @@ func (a *App) HomeOverview(onlineVolumeIDs map[int]bool) HomeData {
 	data.Health.OpenConflicts = a.Store.OpenConflictCount(0)
 
 	data.Empty = len(archives) == 0 && len(volumes) == 0 && len(snapshots) == 0
-	return data
+	return data, nil
 }
 
 // detectIncrementalBackups characterizes adopted drives that are near-subsets of a

@@ -42,7 +42,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -104,8 +103,8 @@ func normEscrowMode(s string) string {
 
 // escrowCacheDir resolves where fetched binaries + source tarballs live: the
 // configured override, else <DataDir>/escrow-cache.
-func (a *App) escrowCacheDir() string {
-	if d := strings.TrimSpace(a.LoadConfig().EscrowCacheDir); d != "" {
+func (a *App) escrowCacheDir(cfg Config) string {
+	if d := strings.TrimSpace(cfg.EscrowCacheDir); d != "" {
 		return d
 	}
 	return filepath.Join(a.DataDir, "escrow-cache")
@@ -186,7 +185,7 @@ func gitArchiveSource(version string) ([]byte, error) {
 	prefix := "obelisk-" + fsSafe(version) + "/"
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "archive", "--format=tar.gz", "--prefix="+prefix, "HEAD")
+	cmd := helperCommandContext(ctx, "git", "archive", "--format=tar.gz", "--prefix="+prefix, "HEAD")
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
@@ -293,7 +292,7 @@ type EscrowPlan struct {
 
 // planEscrow assembles the component list for a mode without touching the
 // network. census drives reader selection; includeReaders gates part (c).
-func (a *App) planEscrow(mode string, includeReaders bool, census Census) EscrowPlan {
+func (a *App) planEscrow(mode string, includeReaders bool, census Census, cfg Config) EscrowPlan {
 	mode = normEscrowMode(mode)
 	version := appVersion
 	plan := EscrowPlan{Mode: mode, IncludeReaders: includeReaders, Version: version}
@@ -301,7 +300,7 @@ func (a *App) planEscrow(mode string, includeReaders bool, census Census) Escrow
 		plan.Skipped = true
 		return plan
 	}
-	cache := a.escrowCacheDir()
+	cache := a.escrowCacheDir(cfg)
 	m := loadEscrowManifest()
 
 	// Binaries + release checksums are in every non-off bundle: the practical escrow.
@@ -446,6 +445,10 @@ func (a *App) placeEscrowFile(c escrowComponent, dst string) (string, error) {
 // the registry pins one. It is the ONLY escrow path that touches the network, and
 // is invoked explicitly (never while writing a bundle). Returns per-file results.
 func (a *App) FetchEscrowCache(includeReaders bool, census Census, progress func(float64, string)) (map[string]any, error) {
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	if progress == nil {
 		progress = func(float64, string) {}
 	}
@@ -453,7 +456,7 @@ func (a *App) FetchEscrowCache(includeReaders bool, census Census, progress func
 	if !looksLikeReleaseTag(version) {
 		return nil, fmt.Errorf("this build reports version %q, not a release tag (vMAJOR.MINOR.PATCH) — release binaries can only be fetched for a tagged build; the bundle still ships whatever is already cached", version)
 	}
-	cache := a.escrowCacheDir()
+	cache := a.escrowCacheDir(cfg)
 	verDir := filepath.Join(cache, fsSafe(version))
 	if err := os.MkdirAll(verDir, 0o755); err != nil {
 		return nil, err

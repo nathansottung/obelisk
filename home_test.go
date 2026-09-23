@@ -18,7 +18,7 @@ func newHomeApp(t *testing.T) *App {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &App{DataDir: dir, Store: store}
+	return initializedTestApp(t, &App{DataDir: dir, Store: store})
 }
 
 // A NAS user: one sourced archive, no adopted drives. Home is archive-centric with
@@ -32,7 +32,7 @@ func TestHome_NASOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	d := app.HomeOverview(nil)
+	d := testValue(app.HomeOverview(nil))
 	if d.Empty {
 		t.Fatal("a user with an archive must not read as empty")
 	}
@@ -67,7 +67,7 @@ func TestHome_ShoeboxOnly(t *testing.T) {
 	makeSnapshotDrive(t, app, d2, "S2", "DRIVE-2")
 	makeSnapshotDrive(t, app, d3, "S3", "DRIVE-3")
 
-	d := app.HomeOverview(nil)
+	d := testValue(app.HomeOverview(nil))
 	if d.Empty {
 		t.Fatal("a user with adopted drives must not read as empty")
 	}
@@ -112,7 +112,7 @@ func TestHome_Mixed(t *testing.T) {
 	writeTree(t, u, map[string]string{"x.raw": "XXX", "y.raw": "YYY", "z.raw": "ZZZ"})
 	makeSnapshotDrive(t, app, u, "U1", "MYSTERY")
 
-	d := app.HomeOverview(nil)
+	d := testValue(app.HomeOverview(nil))
 	if d.Empty || d.Totals.Archives != 1 {
 		t.Fatalf("mixed: empty=%v archives=%d", d.Empty, d.Totals.Archives)
 	}

@@ -1,3 +1,5 @@
+//go:build !guionly
+
 package main
 
 // rename_compat_test.go — pins the permanent Mnemosyne -> Obelisk read-compatibility
@@ -20,7 +22,7 @@ func compatApp(t *testing.T) (*App, string) {
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	return &App{DataDir: dir, Store: store}, dir
+	return initializedTestApp(t, &App{DataDir: dir, Store: store}), dir
 }
 
 // (a) Data dir: prefer ~/.obelisk, fall back to ~/.mnemo silently.
@@ -56,7 +58,7 @@ func TestRenameCompat_MigrateCopiesVerifiesAndSwitches(t *testing.T) {
 	}
 	mustMkdir(t, filepath.Join(legacy, "keystores"))
 	mustWrite(t, filepath.Join(legacy, "keystores", "k.json"), `{"obelisk_keystore":1,"keys":[]}`)
-	app := &App{DataDir: legacy, Store: store}
+	app := initializedTestApp(t, &App{DataDir: legacy, Store: store})
 
 	if !app.LegacyDataDirMigrationAvailable() {
 		// LegacyDataDirMigrationAvailable checks the REAL ~/.mnemo home, so it may be
@@ -96,7 +98,7 @@ func TestRenameCompat_MigrateCopiesVerifiesAndSwitches(t *testing.T) {
 	}
 
 	// Refuses to clobber a target that already holds a catalog.
-	app2 := &App{DataDir: legacy, Store: store}
+	app2 := initializedTestApp(t, &App{DataDir: legacy, Store: store})
 	if _, err := app2.migrateDataDir(legacy, target); err == nil {
 		t.Error("migrate must refuse when the target already holds a catalog")
 	}

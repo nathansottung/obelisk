@@ -117,18 +117,18 @@ func (cfg Config) globalIntegrity() Integrity {
 
 // effectiveIntegrity returns the integrity a collection's packages are built with:
 // the archive's own override if set, else the global setting.
-func (a *App) effectiveIntegrity(collectionID int) Integrity {
+func (a *App) effectiveIntegrity(collectionID int, cfg Config) Integrity {
 	if collectionID > 0 {
 		if c := a.Store.Collection(collectionID); c != nil && c.Integrity != nil {
 			return c.Integrity.normalize()
 		}
 	}
-	return a.LoadConfig().globalIntegrity()
+	return cfg.globalIntegrity()
 }
 
 // integrityView is the API payload for the Integrity panel: the preset table,
 // the global setting, and the effective setting for a collection (0 = global).
-func (a *App) integrityView(collectionID int) map[string]any {
+func (a *App) integrityView(collectionID int) (map[string]any, error) {
 	presets := []map[string]any{}
 	for _, name := range integrityPresetOrder {
 		p := integrityPresets()[name]
@@ -136,14 +136,18 @@ func (a *App) integrityView(collectionID int) map[string]any {
 			"par2_redundancy": p.Par2Redundancy, "routine_verify_level": p.RoutineVerifyLevel,
 			"verify_due_months": p.VerifyDueMonths})
 	}
-	g := a.LoadConfig().globalIntegrity()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
+	g := cfg.globalIntegrity()
 	out := map[string]any{"presets": presets, "order": integrityPresetOrder, "global": g, "readback_always": true, "effective": g}
 	if collectionID > 0 {
 		c := a.Store.Collection(collectionID)
-		out["effective"] = a.effectiveIntegrity(collectionID)
+		out["effective"] = a.effectiveIntegrity(collectionID, cfg)
 		out["override"] = c != nil && c.Integrity != nil
 	}
-	return out
+	return out, nil
 }
 
 // mergeIntegrityBody applies a request body over a base integrity: a named preset
@@ -171,23 +175,34 @@ func mergeIntegrityBody(base Integrity, b map[string]any) Integrity {
 
 // applyGlobalIntegrity writes the global integrity knobs into config.json.
 func (a *App) applyGlobalIntegrity(b map[string]any) (Integrity, error) {
-	iv := mergeIntegrityBody(a.LoadConfig().globalIntegrity(), b).normalize()
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return Integrity{}, cfgErr
+	}
+	iv := mergeIntegrityBody(cfg.globalIntegrity(), b).normalize()
 	_, err := a.SaveConfig(map[string]any{
 		"build_verify": iv.BuildVerify, "par2_redundancy": iv.Par2Redundancy,
 		"routine_verify_level": iv.RoutineVerifyLevel, "verify_due_months": iv.VerifyDueMonths,
 	})
-	return iv, err
+	if err != nil {
+		return Integrity{}, err
+	}
+	return iv, nil
 }
 
 // applyArchiveIntegrity sets or clears an archive's integrity override.
 func (a *App) applyArchiveIntegrity(id int, b map[string]any) (Integrity, error) {
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return Integrity{}, cfgErr
+	}
 	if bl(b, "clear") {
 		if err := a.Store.SetCollectionIntegrity(id, nil); err != nil {
 			return Integrity{}, err
 		}
-		return a.LoadConfig().globalIntegrity(), nil
+		return cfg.globalIntegrity(), nil
 	}
-	iv := mergeIntegrityBody(a.effectiveIntegrity(id), b).normalize()
+	iv := mergeIntegrityBody(a.effectiveIntegrity(id, cfg), b).normalize()
 	cp := iv
 	return iv, a.Store.SetCollectionIntegrity(id, &cp)
 }

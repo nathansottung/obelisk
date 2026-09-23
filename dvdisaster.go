@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -135,7 +134,7 @@ func (a *App) generateDiscEcc(c *Chunk, cfg Config, progress func(float64, strin
 	// Reading a full BD and computing Reed–Solomon is slow; give it room but bound it.
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
-	out, runErr := exec.CommandContext(ctx, bin, args...).CombinedOutput()
+	out, runErr := helperCommandContext(ctx, bin, args...).CombinedOutput()
 	if runErr != nil {
 		_ = os.Remove(eccPath) // never leave a half-written .ecc behind
 		tail := strings.TrimSpace(string(out))

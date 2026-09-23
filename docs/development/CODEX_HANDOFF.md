@@ -1,0 +1,460 @@
+# Codex handoff - 2026-09-19
+
+OB-006 OWNER-ACCEPTED CHECKPOINT
+
+Implementation checkpoint: d147a823262757065d7817a233c0327523916e2a (owner accepted; separate evidence commit follows)
+Branch: fix/ob-006-keystore-validation
+Root: C:\Users\nsott\source\repos\obelisk
+
+PR-04 candidate not yet transferred. Figma design context pending. Repository-wide review not completed. Neither missing item blocks this baseline.
+
+Execution directory: C:\Users\nsott\AppData\Local\ObeliskDev\baseline-20260919-125535-898459a9
+Manifest: C:\Users\nsott\AppData\Local\ObeliskDev\baseline-20260919-125535-898459a9\execution-manifest.json
+
+Baseline checks and final summary complete. The bounded persistence source review is now complete; see the current review entry below.
+
+Report: [NEW_DESKTOP_BASELINE-2026-09-19.md](NEW_DESKTOP_BASELINE-2026-09-19.md).
+
+Read the manifest before resuming; check the process identity before duplicating any RUNNING command. Repository-wide review, REVIEW_COVERAGE.csv and FEATURE_MATRIX.csv remain next-stage work. No substantive reviewer reports are recoverable from the earlier aborted delegation. Preserve accepted fixes and residual scopes in OB_STATUS.md. Only authorized current documentation and local execution outputs may change; no source/UI/test/dependency changes, helpers, commits, pushes, merges or hardware operations.
+
+Results: build/vet/format exit 0; no formatting differences. Uncached tests exit 0: 209 top-level pass, 0 fail, 39 skip; separately 10 subtests pass. Three system-disk probes excluded. 36 skips require GPG/PAR2; Unicode compatibility remains unvalidated. Windows race, CI, Docker and hardware not tested. Full names/reasons are in the report; raw output and native results are in the execution directory above.
+
+## Current review - 2026-09-19
+
+BOUNDED PERSISTENCE PASS COMPLETE at 0dc7d5399c6889e015aebc9ba02e694a909d6e9c on setup/windows-nsott. Report: [PERSISTENCE_REVIEW-2026-09-19.md](PERSISTENCE_REVIEW-2026-09-19.md). Ledger: [REVIEW_COVERAGE.csv](REVIEW_COVERAGE.csv).
+
+208 tracked files inventoried, plus 3 local artifacts. Four entire files source-reviewed, 13 partial, 144 inventoried only, 47 excluded with reasons. Large store.go/pipeline.go/main.go remain PARTIAL. No repository-wide review or feature matrix completed.
+
+One bounded disposable probe run: 13 top-level pass / 0 fail / 0 skip, separately 5 passing subtests; native exit 0. These observations reproduce unresolved failure modes, not repaired behavior. Evidence: C:\Users\nsott\AppData\Local\ObeliskDev\persistence-20260919-131458-90213423 (source/probe source retained; probe-execution.json; logs/probes.jsonl). No full baseline rerun and no repository tests/source changed.
+
+OBX-004 config/jobs and OB-006 key reconciliation confirmed. OB-011 permission policy is source-observed; Windows ACL behavior not validated. PR-01/02/03 accepted scopes stand, with documented residuals. Catalog semantic-shape/counter observations await broader-register reconciliation; no speculative new OBX ID. PR-04 remains unavailable and Figma context pending.
+
+ONE next action: in a separately authorized task, prepare the bounded OB-006 validation-before-write repair with conflict/refused-participant regressions. Rejected participants are currently overwritten by sync, threatening otherwise recoverable encrypted media. Keep prior-generation/partial-publication residuals explicit. Do not restart baseline or claim the entire source was audited.
+
+## Current implementation - 2026-09-19
+
+READY_FOR_REVIEW: bounded OB-006 validation/conflict candidate on fix/ob-006-keystore-validation, parent 0dc7d5399c6889e015aebc9ba02e694a909d6e9c. See [implementation report](reviews/OB-006-KEYSTORE-VALIDATION-IMPLEMENTATION-2026-09-19.md) for exact candidate hashes, caller map, red/green copies and logs.
+
+Strict sync validates every existing participant before any keystore mutation. Status rejects missing/invalid/conflicting replicas; lookup permits offline recovery but rejects observed requested-key secret conflicts. First-use GenerateKey and encrypted-build precheck are preserved. Metadata field union is deterministic; differing same-field values refuse sync. No UI or endpoint change.
+
+Final build/vet/format pass. Targeted: 20 top-level and 30 subtest passes. Final uncached suite: 226 top-level pass / 0 fail / 39 skip, separately 40 subtest passes; three hardware probes excluded. Earlier suite had one unchanged reopen sharing failure, reproduced on parent and candidate (each 19/20 passes); evidence retained. No independent review is claimed. New code/test rows are CANDIDATE_PENDING_REVIEW, not silently covered by the persistence audit.
+
+Open: previous generations, transactional publication, GenerateKey partial writes/catalog metadata, ACL, config/jobs, cross-process/identity safety, unavailable PR-04 and Figma. ONE next action: independent review of this candidate. No stage/commit/push/merge, new fix or GUI work performed.
+
+
+## 2026-09-19 - Owner acceptance and OB-006 checkpoint
+
+Owner accepted the bounded candidate after [the detached-review execution](reviews/OB-006-KEYSTORE-VALIDATION-DETACHED-REVIEW-2026-09-19.md). Implementation commit: d147a823262757065d7817a233c0327523916e2a on fix/ob-006-keystore-validation, based on 0dc7d5399c6889e015aebc9ba02e694a909d6e9c. Reviewed source/test bytes are unchanged. Refs OB-006; the whole issue remains partially repaired.
+
+Accepted scope: synchronization validates every participant before keystore mutation; observed same-reference secret conflicts are rejected independently of order; status and lookup distinguish replica consistency from recovery availability; legitimate first-use initialization remains supported; partial-publication errors reach callers accurately.
+
+Residual scope: multi-store atomicity, concurrent writers, retained generations, GenerateKey/catalog coordination, and broader ACL/key-security validation. Configuration and job-state loading remain OBX-004 work; neither was implemented in this publication.
+
+Evidence remains distinct: the implementation report's final full run was 226 top-level passes / 0 failures / 39 skips, plus 40 passing subtests. The detached review separately ran 20 targeted tests and 39 prior-safety tests, plus 40 subtests; build/vet/format passed and seven expected parent-version regression failures reproduced. These overlapping selections are not a new full-suite result. Missing GPG/PAR2 limits integration coverage; Windows race, broader ACL, crash-durability and hardware evidence remain unestablished. Publication checks inspect Git scope, hashes and whitespace; no suite rerun or new review.
+
+Historical baseline, persistence, implementation and both review reports are preserved unchanged. The baseline and persistence review are included because these reports directly reference them and their contents were inspected for publication. Raw test logs, manifests, disposable red/green copies and scratch probes referenced under AppData remain LOCAL ONLY and are not included in this commit.
+
+The separate evidence commit containing this acceptance note is the intended base for the next configuration-repair branch. Use its full SHA after publication, not the old 0dc7d539 checkpoint. No configuration repair, merge or release is authorized during this publication.
+
+
+## 2026-09-19 - OBX-004 configuration candidate ready for separate review
+
+READY_FOR_REVIEW on fix/obx-004-config-read-safety, exact parent 26918c5b8ed01ea301fc9a4c7658e19054a73632 (published OB-006 evidence checkpoint; accepted implementation d147a823262757065d7817a233c0327523916e2a). No commits, index changes or publication in this slice. See [implementation report](reviews/OBX-004-CONFIG-READ-SAFETY-IMPLEMENTATION-2026-09-19.md) for exact file identities, caller map, commands and local raw evidence.
+
+Existing configuration reads/updates now fail closed for missing/unreadable/damaged input. Deliberate first use requires startup -init-config; existing valid optional fields retain defaults and unknown extension fields survive settings updates. Updates use checked staged publication; errors distinguish before-replacement failure from published-but-directory-durability-unconfirmed. Startup/auth, settings/setup, jobs/background, keystore and helper callers propagate errors or use a validated snapshot. This is a new implementation candidate, not a separately reviewed fix.
+
+Final current-source evidence: targeted 39 top-level passes and 62 passing subtests; uncached suite 240 top-level passes / 0 failures / 39 skips, plus 72 passing subtests. Go 1.26.8 Windows/amd64 build, vet and formatting passed. Earlier safety run hit the known Windows catalog-reopen sharing failure; exact accepted-parent reproduction 19/20 passes, current-candidate follow-up 20/20. Retained failures were not removed. Final suite passes do not establish the absence of that pre-existing timing issue. Missing GPG/PAR2 account for 36 skips; permission and opt-in scale/performance checks account for three more. Three system-disk probes excluded. Race/ACL/hardware/crash durability remain unestablished. Raw logs/candidate copies under AppData/Local/ObeliskDev/obx004-config-20260919 are LOCAL ONLY.
+
+Config-only OBX-004 scope is ready; loadJobs and its null-row panic are unchanged and remain the next separately authorized sub-scope. Multi-process exclusion, cross-file/setup/restore atomicity, retained generations, PR-04/source reconstruction and broader ACL work remain outside this patch. OB-006 storage-validation source is unchanged; its fixture explicitly initializes config and all 17 bounded keystore tests pass in the final suite. Existing Figma bytes and historical reports are preserved. Repository-wide review and the feature matrix are not thereby completed.
+
+ONE next action: separate review of this uncommitted configuration candidate and its retained evidence. Do not start job-loading work as part of that review.
+
+
+## 2026-09-19 - R1/R2 correction ready for focused recheck
+
+On fix/obx-004-config-read-safety, exact HEAD/base 26918c5b8ed01ea301fc9a4c7658e19054a73632. All 224 reviewed candidate hashes matched before edits; full pre-edit copies retained. [Follow-up report](reviews/OBX-004-CONFIG-READ-SAFETY-REVIEW-FOLLOWUP-2026-09-19.md) maps both controlling-review blockers to changes, pre/post identities and actual verification. The controlling review and original implementation report remain unchanged historical evidence.
+
+R1: explicit initialization now links the checked staging file into an absent destination; it cannot replace an arriving file, directory or link. Unsupported hard links refuse without fallback. Post-link cleanup/directory-sync failures preserve Published=true and the final entry. Ordinary updates retain replacement. Deterministic late-arrival tests fail on the pre-follow-up candidate and pass now, including real Windows symlink coverage. R2: README/handbook document explicit Docker and Compose bootstrap, loopback/no published ports, full arguments/token/same storage, stop-and-wait, then normal startup without the flag. Deployment file changes are comments only. Defaults alongside catalog/key state do not recover lost settings.
+
+Current executed evidence: target 52 top-level / 74 subtest passes; prior safety 43 / 10 passes; one uncached suite 244 top-level passes / 0 failures / 39 skips, with 84 passing subtests. Build/vet/format and Git Bash syntax checks pass. Actual-binary CLI lifecycle runs cover five natural refusals and four serving-then-forced-stop cases per execution, with exact exits retained. Docker runtime was unavailable and not executed. Missing GPG/PAR2, platform/opt-in skips, three excluded system-disk probes, Windows race/ACL/power-loss, other-platform runtime and CI limitations remain explicit. The previously recorded Windows sharing issue was not repaired; no such failure occurred in these runs.
+
+READY_FOR_FOCUSED_RECHECK is an implementation status, not independent approval. ONE next action: focused recheck of R1/R2 and their retained evidence. No staging, commits, pushes, merges, branch changes or job-loading repair. loadJobs/null-row work remains a separate later sub-scope; broader concurrency, storage identity, malicious same-principal interference, cross-file transactions, PR-04 and Figma access remain deferred. Figma bytes are preserved.
+
+
+## 2026-09-19 - OBX-004 configuration publication authorized
+
+The owner requested completion of configuration publication after the [OBX-004-CONFIG-READ-SAFETY-FOCUSED-RECHECK-2026-09-19.md](reviews/OBX-004-CONFIG-READ-SAFETY-FOCUSED-RECHECK-2026-09-19.md) closed R1 and R2 as READY_FOR_OWNER_REVIEW. Implementation commit: `3ea444ae528af7343818142c867a8f955f9252aa` on `fix/obx-004-config-read-safety`, parent `26918c5b8ed01ea301fc9a4c7658e19054a73632`. The reviewed source, tests, deployment files and first-use documentation were committed unchanged. Prior implementation/review reports are preserved as historical evidence. This is a bounded branch checkpoint, not a merge, release or repository-wide approval.
+
+Accepted scope: failed existing configuration reads never become defaults; ordinary updates preserve validated settings and unknown fields through checked replacement; explicit initialization publishes complete staged bytes with a no-replace hard link, refuses late entries, and reports post-publication errors truthfully. Startup/callers propagate failure. Docker/Compose first use explicitly initializes and serves on persistent state, then stops and waits before ordinary startup without the initialization flag. Hard-link support is required on the configuration/application-state filesystem; it is not imposed on backup media.
+
+Evidence remains distinct: the author reports 244 top-level passes / 39 skips and 84 passing subtests. The focused recheck executed 39 top-level passes and 48 subtest passes, plus a separate dangling-symlink probe with two passing subtests, and reproduced the old overwrite against preserved pre-follow-up source. Its build, vet, formatting and shell-syntax checks passed. These overlapping results are not a new full-suite count. Publication reverified candidate hashes, exact staged content and whitespace; no new tests or CI run are claimed. Raw AppData/Temp logs and disposable fixtures remain local only.
+
+Residuals: job loading/loadJobs null rows, broader storage identity, concurrent updates, cross-file transactions, retained generations and ACL work remain open. Docker runtime, Windows race, power loss, other-platform runtime and hardware are unverified; missing GPG/PAR2 still limits native integration. The known catalog-reopen sharing issue is not repaired by this checkpoint. Figma is preserved and excluded from publication.
+
+The separate evidence commit containing this note is the intended parent for later job-load work. Do not use the former base `26918c5b8ed01ea301fc9a4c7658e19054a73632` or the implementation commit as that parent. Publication is complete only when `publication-receipt.md` records a successful push and a live origin branch tip equal to the full evidence-commit SHA. The receipt is a local post-push artifact, kept outside the evidence commit to avoid a self-referential SHA. No job-load branch or implementation is created by this publication task.
+
+
+## 2026-09-19 - OBX-004 job-loading candidate awaiting review
+
+READY_FOR_JOB_LOADING_REVIEW on `fix/obx-004-job-load-safety`, exact published parent `da22f1d9895d5350142a6f9b05ac41f0a920e170`. Configuration publication is complete: implementation `3ea444ae528af7343818142c867a8f955f9252aa`, evidence `da22f1d9895d5350142a6f9b05ac41f0a920e170`; the existing verified receipt is `C:\Users\nsott\AppData\Local\ObeliskDev\obx004-config-publication-20260919\publication-receipt.md`. No publication steps were replayed for this local task. R1/R2 remain closed in their configuration scope.
+
+The uncommitted [job-loading implementation](reviews/OBX-004-JOB-LOAD-SAFETY-IMPLEMENTATION-2026-09-19.md) validates the complete sidecar before adopting/reconciling rows, propagates failed reads/decodes/identity checks through OpenStore, and latches refused reloads against stale publication. Valid missing-sidecar first use, historical empty forms, single case aliases, optional fields, counter recovery and interrupted-job semantics remain supported. Startup refuses before serving; restore/migration callers retain errors and cannot save their stale board over detected rejected job state. NewJob refuses exhausted counters rather than wrapping IDs. Catalog recovery still precedes the jobs gate; restore and migration remain nontransactional across files.
+
+Author execution in the current shared Codex session: preserved exact-parent source plus a portable regression produced 2 top-level failures / 20 failing subtests and a passing compatibility control. Initial focused candidate run: 85 top-level passes / 117 passing subtests. Final code: one native full-suite run, 254 top-level passes / 0 failures / 39 skips, separately 122 passing subtests; three system-disk probes excluded. Native build/vet and final formatting pass; Linux/amd64 and macOS/arm64 cross-build/vet pass without runtime qualification. Earlier configuration author/reviewer results are historical, separate evidence. No separate-context reviewer or automated review was run.
+
+Evidence: `C:\Users\nsott\AppData\Local\ObeliskDev\obx004-job-load-20260919-212813`, containing actual parent/candidate source, prompt, commands, raw JSON/logs, CLI stop/wait records and identities. Figma and unrelated/historical files are preserved. Missing GPG/PAR2, Windows permission fixtures, opt-in performance skips, race/ACL, Docker, CI, power loss, browser and hardware limitations remain explicit. The prior Windows sharing interleaving is not repaired or disproved by this passing run.
+
+Missing sidecar is still assumed optional on a fresh Store; storage identity and external-writer coordination remain open. Refusal latching is not continuous disk monitoring. Cross-file transactions, generation retention, schema migration/recovery tooling and broader repository review remain separate. Product direction is unchanged: generation-independent buffering/preservation; intended capability-based LTO-1 through LTO-10 and future extensions, with LTO-8 first for physical qualification rather than a generation limit or tested-support claim. Blu-ray and Figma work remain separate.
+
+ONE next action: one substantive review of this exact uncommitted candidate and retained evidence. No staging, commits, pushes, merges, GUI/media work or automatic reviewer execution.
+
+
+## 2026-09-19 - job restore-member correction awaiting focused recheck
+
+READY_FOR_JOB_LOADING_FOCUSED_RECHECK on `fix/obx-004-job-load-safety`, HEAD/base `da22f1d9895d5350142a6f9b05ac41f0a920e170`. The substantive [NEEDS_CHANGES review](reviews/OBX-004-JOB-LOAD-SAFETY-REVIEW-2026-09-19.md) remains unchanged. Its R1/P1 (restore validates a spelling but publishes a destination) is addressed by the author, not closed by a reviewer. This entry supersedes the earlier pending-substantive-review next action and the unqualified claim about all incoming job members.
+
+The [follow-up](reviews/OBX-004-JOB-LOAD-SAFETY-REVIEW-FOLLOWUP-2026-09-19.md) restricts regular app-backup members to exact state-file names and flat portable keystore filenames; rejects duplicate tar names before map insertion and duplicate manifest entries before publication; retains exact payload/hash binding and job validation. Aliases are rejected even with valid payloads. Canonical current/legacy formats and valid export/restore/migration pass. `keystores/jobs.json` remains distinct. No schema, transactional restore or general filesystem-alias guarantee is introduced.
+
+Current author evidence: exact reviewed uncommitted snapshot reproduces both reported clobbers; final native suite 257 top-level passes / 0 failures / 39 skips, separately 152 passing subtests. Earlier focused correction selection: 71 top-level / 112 subtest passes; retained probes rerun as author checks: 3 top-level / 3 subtest passes. Overlapping results are not summed. Prior author 254/39/122 and substantive reviewer 90/0/122 plus its separate probes remain historical. No new targeted reviewer execution or acceptance has occurred.
+
+Evidence: `C:\Users\nsott\AppData\Local\ObeliskDev\obx004-job-followup-20260919-222503`, including pre-correction bytes, captured red tar/before/after fixtures, commands/logs and final manifest. Missing helpers, optional performance and Windows permission skips remain; race/ACL, Docker/CI, other-platform runtime, power-loss and hardware qualification are not implied. Figma, historical reports, branch/HEAD and empty index remain preserved. Configuration publication stays complete and was not replayed.
+
+ONE next action: targeted recheck of R1 aliases, duplicate/collision ordering, validation before publication, original-store/latch preservation, valid restore/migration and affected safety controls on this exact candidate. No automatic review, staging, commits, push, GUI or media work. Generation-independent architecture and LTO-8 as the first physical qualification target remain unchanged.
+
+
+## 2026-09-19 - owner-accepted job-loading checkpoint
+
+Owner acceptance recorded 2026-09-19T23:09:31.174870-04:00 (America/New_York). The [substantive review](reviews/OBX-004-JOB-LOAD-SAFETY-REVIEW-2026-09-19.md) and [closing focused recheck](reviews/OBX-004-JOB-LOAD-SAFETY-FOCUSED-RECHECK-2026-09-19.md) establish the accepted bounded scope; restore-member R1 is CLOSED. Implementation commit: `58711f5d13132246fe048cd8f749cf16d67c1fc1`, direct parent `da22f1d9895d5350142a6f9b05ac41f0a920e170`, branch `fix/obx-004-job-load-safety`. This entry supersedes the pending-review next actions above. Historical reports retain their original verdicts, dates and bytes.
+
+Accepted: complete job-state validation before adoption/reconciliation, read/error propagation, serialized refused-load stale-write protection, and rejection of noncanonical restore member names and duplicates before publication. The policy is rejection, not alias normalization or recovery. Valid first-use/history/restore/migration and existing FAILED/current-recording/history semantics remain; completion is not verification. This does not close all OBX-004 or all persistence concerns.
+
+Evidence layers remain separate: initial job author 254 top-level passes / 39 skips, separately 122 passing subtests; substantive reviewer 90 top-level passes / no skips and 122 subtests, with separate probes (2 top passes / 1 failure; 1 subtest pass / 2 failures); correction author 257 top-level passes / 39 skips and 152 subtests; closing focused reviewer 33 top-level passes / no failures or skips and 81 subtests, plus separate probes 6 top-level / 12 subtest passes. The closing review executed build, vet, formatting and whitespace checks as well as 238-file preservation checks. Both job reviewers disclose same-session Codex provenance and a shared repository, with disposable probe copies; no independent agent/context isolation or human certification is claimed. Overlapping counts are not summed.
+
+This publication task performs identity, documentation, staging/tree, commit and remote checks only; no historical test campaign is rerun. No active required Git hook was found; any later hook execution must be separately recorded. Retained evidence preserves the correction's capture-filename collision and subsequent corrected capture, not an invented clean history. Missing GPG/PAR2 and permission/performance skips, integration limits, the pre-existing Windows sharing interleaving, race/ACL/power-loss, Docker/CI, other-platform runtime and hardware limitations remain. Cross-compilation is not target-platform execution. Storage identity, external/concurrent writers, cross-file transactions, retained generations and broader namespace/security remain deferred.
+
+Publication is PENDING until the external `C:\Users\nsott\AppData\Local\ObeliskDev\obx004-job-publication-20260919-230517\publication-receipt.md` records the actual evidence SHA and verified equality of local HEAD, origin tracking ref and live `refs/heads/fix/obx-004-job-load-safety` at `https://github.com/nathansottung/obelisk.git`. The evidence commit must not name its own SHA or claim an unperformed push. Only that successful receipt establishes NEXT_TASK_BASE_SHA for later authorized work. Configuration publication remains complete and unchanged.
+
+Immediate next action: complete the authorized evidence commit and scoped publication verification; no additional implementation or review. After publication, wait for a separate owner task. The isolated Figma preview remains proposed and unimplemented, not automatically authorized. Preserve generation-independent buffering/preservation; LTO-8 remains the first physical qualification target rather than a generation limit, other backends/generations need explicit qualification, and Blu-ray remains separate. Figma stays unchanged and excluded; no GUI/media work is performed.
+
+## 2026-09-19 - isolated GUI scaffold ready; design input required
+
+GUI_PREVIEW_SCAFFOLD_READY_DESIGN_INPUT_REQUIRED on `feat/gui-preview`, exact parent/unchanged HEAD `05cf50afc004803e1c0de20a6ce444f6a538c24d`. The owner submitted a separate bounded GUI-preview instruction. Local commit chain and origin tracking ref match; the existing job publication receipt was read and records ACCEPTED_AND_PUBLISHED. This supersedes the historical publication-pending/await-authorization next actions above; no publication or safety review was replayed.
+
+Runnable synthetic-only scaffold: Library/Find search, project/medium/availability filters, selection, occurrence details and fixture states; shell navigation and disclosure; static Activity/Devices; Back Up/Archive outlines and operational Settings deferred. No application store/API/device adapter. Separate loopback static entrypoint outside the embedded production UI: `node scripts/gui-preview/server.mjs 0` from the repository root; open its printed URL, Ctrl+C and wait to stop. No server left running.
+
+Selected Figma frames could not be inspected with available supported tools; only existing UI source styling and the submitted written architecture informed the provisional scaffold. Required input: readable shell/Library/Find frame exports with selected-detail/disclosure states and design specifications where absent from exports. No Figma fidelity or owner inspection claimed. Design file remains unchanged and untracked (SHA-256 `69c5dd577d262c782ae657ac9538cf4c38530c6ed9af7f79beaeed87f92fddda`).
+
+Author evidence: final Node 7 top-level passes / 0 failures / 0 skips, no subtests; separately 33 real Chrome browser assertions at 1365x1000 and 390x844. Screenshots, accessibility-tree evidence, harness corrections, bounded process stop/wait and exact candidate identities are in the [implementation record](reviews/GUI-PREVIEW-IMPLEMENTATION-2026-09-19.md) and external `C:\Users\nsott\AppData\Local\ObeliskDev\gui-preview-20260919-232330`. No Go/shared UI source changed; no historical safety run, independent review, full accessibility audit, backend integration, hardware/platform/CI qualification or new feature-matrix completion is inferred.
+
+ONE next action: owner inspection of the runnable scaffold and provision of the missing design exports; subsequent fidelity work and technical review/publication remain separately scoped. All earlier safety/platform/storage/PR-04/streaming/media/release residuals remain distinct and unworked. Index empty; candidate uncommitted; no stage/push/merge/release or automatic reviewer.
+
+## 2026-09-20 - readable-reference GUI alignment ready for review
+
+GUI_REFERENCE_ALIGNMENT_READY_FOR_REVIEW on existing `feat/gui-preview`, unchanged HEAD/backend parent `05cf50afc004803e1c0de20a6ce444f6a538c24d`. The owner supplied `docs/OBELISK_Readable_Design_References.zip`; its SHA-256 matches `72a1f3308e2c4421b62c8bf286f9fab7651393a1dbbbbe1520774feefb331aca`. All manifest-listed files verified. Pages 1 and 4 were visually inspected and applied to the existing shell/Library and Smith Wedding Evidence Inspector using a provisional teal/light baseline. Pages 2/3 are unused visual alternatives, not disclosure screens. The historical missing-frame/scaffold status is superseded for this bounded slice; historical reports remain unchanged.
+
+Library storage/project tables, attention panel, search and selection now follow the export. Smith Wedding navigation/return, HDD disclosure, exact comparison values/older evidence and inspector are implemented with demo-only responses. Offline 200 is kept visible instead of reproducing source clipping; the source action's six-unresolved versus matrix category ambiguity is preserved and explained. No production wiring, persistent registration, scan or device operation. Find functionality remains, with visual design unspecified; other screens/dialogs/responsive and extra disclosure layouts remain outside the supplied reference scope.
+
+Current execution: 7 Node top-level passes, no failures/skips/subtests; separately 48 browser assertions. Chrome screenshot comparison at 1440x1024 CSS pixels/scale 2, based on PDF dimensions, plus a narrow smoke check. Font/icon substitutions, small residual spacing differences, additional preview controls and initial harness failure are documented in [the alignment report](reviews/GUI-REFERENCE-ALIGNMENT-IMPLEMENTATION-2026-09-20.md). Evidence and exact final identities: `C:\Users\nsott\AppData\Local\ObeliskDev\gui-alignment-20260920-001358`. Prior 7/33 scaffold evidence remains historical, not summed. No Go/backend/platform/hardware qualification was run.
+
+Launch from repository root: `node scripts/gui-preview/server.mjs 0`; open the printed loopback URL. Ctrl+C and wait for the prompt to stop. All validation processes stopped/waited. Original Figma/ZIP/PDF, backend and historical evidence preserved; nothing staged, committed or pushed. ONE next action: owner visual review of the current uncommitted alignment. No automatic review/publication or other workstream.
+
+## 2026-09-20 - GUI skip-link R1 author correction
+
+READY_FOR_GUI_SKIP_LINK_FOCUSED_RECHECK (AUTHOR-ADDRESSED, not reviewer-closed or owner-accepted). Existing `feat/gui-preview`, unchanged HEAD/overall GUI base `05cf50afc004803e1c0de20a6ce444f6a538c24d`. This current entry supersedes the earlier GUI next action. The substantive review returned NEEDS_CHANGES for R1; its duplicate invocation verified identities only. Both historical records remain unchanged.
+
+A link-specific handler now focuses the existing main without changing the workspace fragment or rendering. Durable keyboard regressions preserve Library, queried/selected Find, and Smith Wedding file/disclosure state, repeat after rerender, and check Tab/Shift+Tab plus normal Back/Forward/breadcrumb navigation. This correction executed 7 Node top-level passes (0 fail/skip, no subtests) and separately 55 browser checks passing. Pre-fix probes reproduced both reported resets; the stricter Library control also failed route/history/node-preservation requirements despite retaining its title. Historical alignment 7/48 and substantive-review 7/48 plus 3-pass/2-fail probes and 2 isolation passes remain separate.
+
+See [the follow-up report](reviews/GUI-REFERENCE-ALIGNMENT-REVIEW-FOLLOWUP-2026-09-20.md) for exact delta, source/probe hashes, commands, screenshots and preservation. Evidence: `C:\Users\nsott\AppData\Local\ObeliskDev\gui-skip-fix-20260920-005527`. Only app.mjs, browser-check.mjs, these four living records and that new report change in this follow-up. Backend, fixtures, historical reports and design references preserved; index empty, nothing staged/committed/pushed/merged. Task processes stopped and waited.
+
+ONE next action: targeted keyboard-navigation recheck of R1 and directly affected controls. No automatic reviewer, publication (Prompt 10), catalog integration (Prompt 11), other workstream or owner-acceptance claim. Launch remains `node scripts/gui-preview/server.mjs 0`; open the printed loopback URL, Ctrl+C and wait to stop. Provisional teal/light design and all unshown-screen/font/icon limitations remain unchanged.
+
+## 2026-09-20 - accepted GUI preview milestone; publication checkpoint
+
+The owner accepted the bounded synthetic page-1 shell/Library and page-4 Smith Wedding/project-detail/Evidence Inspector milestone by submitting Prompt 10 on 2026-09-20. This records acceptance from the instruction, not an assertion of an independently observed manual visual test. R1 is CLOSED by [the focused recheck](reviews/GUI-REFERENCE-ALIGNMENT-FOCUSED-RECHECK-2026-09-20.md); the historical substantive NEEDS_CHANGES report stays intact. The GUI author/reviewer executions used the same Codex conversation with author context, not independent-agent/context or human certification.
+
+GUI_PATCH_BASE_SHA: `05cf50afc004803e1c0de20a6ce444f6a538c24d`. GUI_IMPLEMENTATION_SHA: `0a195a80582840c8a79a7dc92be9214f675baf00` (Add isolated Obelisk GUI preview and keyboard navigation). This evidence commit follows that implementation. Remote publication remains pending at this record's creation; its actual evidence tip, verified remote equality and NEXT_TASK_BASE_SHA will be recorded only in the external receipt, without a third bookkeeping commit.
+
+Publication authorization is solely `https://github.com/nathansottung/obelisk.git`, `refs/heads/feat/gui-preview`, normal non-force push. Provenance: owner-submitted `C:\Users\nsott\.codex\attachments\9e963c84-4e70-40c3-a8e0-05596db6100a\pasted-text.txt`; exact instruction and publication evidence retained at `C:\Users\nsott\AppData\Local\ObeliskDev\gui-publication-20260920-115158`. Consult its `publication-receipt.md` for the actual result before assuming publication or selecting the next base.
+
+Evidence layers remain separate: scaffold author 7 Node/33 browser; alignment author 7 Node/48 browser; substantive reviewer 7 Node/48 browser plus separate 3-pass/2-fail probes reproducing R1 and 2 isolation passes; correction author red reproduction then 7 Node/55 browser; closing post-reboot reviewer freshly executed 7 Node/55 browser, including state/focus, Tab/Shift+Tab and Back/Forward. Duplicate invocations only verified/reused identities where documented. Publication performs identity, staged-content/tree, line-ending, whitespace/documentation and destination/history checks; no runtime suites rerun. No active local commit/push hooks were found; none bypassed.
+
+Synthetic isolated preview only. Teal/light remains provisional; font/icon substitutions, source clipping correction and source-wording ambiguity remain disclosed. Find functionality stays intact, but Find reference alignment and unshown screens remain unspecified. R1 closure is bounded, not complete accessibility, repository-wide, backend, platform, hardware or media qualification. Design Figma/ZIP/PDF/PNG inputs and raw screenshots are excluded from publication and preserved locally.
+
+ONE proposed next task after verified publication: separately authorized read-only presentation of a disposable persisted catalog, based on the actual published evidence SHA in the receipt. Prompt 11 is not started or automatically authorized. No main merge, release or production integration. Existing safety/platform/tool/media residuals remain separate. Generation-independent preservation and buffering, LTO-8 as the first physical qualification target rather than a generation cap, explicit qualification of other backends/generations, and the separate Blu-ray workflow remain unchanged.
+
+## 2026-09-20 - disposable native catalog candidate ready for substantive review
+
+GUI_DISPOSABLE_CATALOG_READY_FOR_REVIEW, uncommitted on `feat/gui-catalog-readonly`, exact unchanged HEAD/parent `433cedac0a0f8a4e9dc67e3a1722b52c39c7cc6e`. The local published GUI chain and external receipt established ACCEPTED_AND_PUBLISHED; no network/publication replay. Owner's separately submitted instruction is retained at `C:\Users\nsott\AppData\Local\ObeliskDev\gui-catalog-20260920-120412\submitted-prompt.txt`. This current entry supersedes prior proposed-catalog/await-authorization language for this bounded implementation only.
+
+Native schema-8 synthetic JSON is decoded through the shared pure native decoder into private memory, queried with Store.Search and projected to Library/Find/inspector. OpenStore, production configuration/startup/routes/jobs and source-file access are bypassed. Two distinct persisted fixtures, valid empty and refused controls were prepared separately from readers. Unsupported advanced catalog sections, versions/spanning, capacity/live availability/parity and unshown workspace projections remain refused/unavailable; no sample comparison facts are overlaid. Static preview and R1 keyboard behavior remain intact.
+
+Current final Go: 17 top-level passes, 20 subtest passes, 1 explicit TestCatalogScale skip, no failures; build/vet/gofmt checks pass. Node: existing static 7 passes; final catalog 4 passes; separately final static CLI 1 pass. Browser: static 55 assertions; ALPHA/BETA/restarted ALPHA 22 each, valid empty 3, each of five refused inputs 2, final ALPHA 22. Overlapping runs are not summed. Initial missing-default-module-cache setup failure, foreign-Host test-boundary failure/recheck and later response-slot/size validation refinements are recorded separately. These are author tests, not a substantive review or reused historical 7/55 evidence.
+
+Implementation report: [GUI-DISPOSABLE-CATALOG-IMPLEMENTATION-2026-09-20.md](reviews/GUI-DISPOSABLE-CATALOG-IMPLEMENTATION-2026-09-20.md). Source/fixture manifests, exact commands, screenshots, process records and proof limits are under `C:\Users\nsott\AppData\Local\ObeliskDev\gui-catalog-20260920-120412`. Inputs are in inputs/, execution outputs in output/. Reader takes one explicit synthetic file and never initializes/migrates/saves; paths inside the catalog are text only. Source/read-boundary probes and before/after inventories support this bounded claim, not ACL/power-loss/concurrent-replacement or platform-wide qualification.
+
+See scripts/gui-preview/README.md for build/setup and `node scripts/gui-preview/server.mjs 0 --catalog <absolute-synthetic-input> --adapter <absolute-built-reader>`; plain static launch remains supported. Catalog notice states a synthetic snapshot is read, no source/media opened, and selected catalog unmodified. Stop via Ctrl+C or `stop` on stdin and wait for reader/server exit. Task-owned processes stopped/waited. Historical reports, Figma/ZIP/PDF/PNGs, accepted evidence and unrelated code preserved. Index empty; nothing staged, committed, pushed or merged.
+
+ONE next action: substantive review of this uncommitted candidate. No automatic review/publication or live catalog trial. PR-04, Unicode/tar, broader persistence/keystore/helpers, production/recovery/ACL/platform/Docker/hardware remain separate. Generation-independent preservation/buffering, LTO-8 first physical qualification target rather than generation cap, explicit other-generation/backend qualification and separate Blu-ray workflow unchanged.
+
+## 2026-09-20 - disposable catalog R1-R3 author correction
+
+READY_FOR_GUI_CATALOG_FOCUSED_RECHECK. R1, R2 and R3: AUTHOR_ADDRESSED; none is reviewer-closed. Branch remains `feat/gui-catalog-readonly`, unchanged HEAD/complete patch base `433cedac0a0f8a4e9dc67e3a1722b52c39c7cc6e`. The controlling NEEDS_CHANGES review and original implementation report remain unchanged. This entry supersedes the earlier full-review next action for this candidate.
+
+R1: validate complete protocol responses, invalidate detected terminal reader failure in dynamic server mode, and clear/latch the failed browser view so late responses and rerenders cannot restore old evidence. R2: exact native decimal-string IDs across projection/search/Node/browser plus exact int64 byte-size strings; no native schema change, renumbering or refusal of otherwise supported large IDs. R3: bounded LF/CRLF command parsing across chunks, explicit EOF behavior, idempotent stop with reader EOF/wait and bounded termination fallback. No health polling, picker or live operations.
+
+This correction reproduced all three against a hash-verified disposable copy of the reviewed uncommitted candidate (not the published parent alone), including fresh R1/R2 browser defect captures. Corrected Go: 18 top-level passes / 25 subtest passes / one TestCatalogScale skip; build/vet/formatting pass. Node: 5 parser, 7 static, 4 catalog, 6 correction tests; separately added focused EOF/signal and pending-shutdown tests each passed once. Browser: static 55; ALPHA recovery/BETA/ALPHA restart 22 each; empty 3; five refused cases 2 each; exact IDs, reversed order and failure/late-response checks separately recorded. Counts are not summed with historical or overlapping runs. Simulated reader faults and pipe/IPC signal dispatch are not native failures or interactive console tests.
+
+Report: [GUI-DISPOSABLE-CATALOG-REVIEW-FOLLOWUP-2026-09-20.md](reviews/GUI-DISPOSABLE-CATALOG-REVIEW-FOLLOWUP-2026-09-20.md). Exact submitted prompt, pre-fix/final source copies, commands, identities, fixture hashes, screenshots and process evidence: `C:\Users\nsott\AppData\Local\ObeliskDev\gui-catalog-fix-20260920-131810`. README has corrected fixture/build/launch/stop instructions; use the paired `output\corrected-reader.exe` and copied `inputs\alpha.json`, then type stop/Enter and wait. Original author/reviewer evidence, design inputs and unrelated code remain preserved. Index empty; no staging, commits, pushes, merges or branch changes.
+
+ONE next action: targeted reviewer recheck of R1-R3 and directly affected controls. This is author validation, not another substantive review, reviewer closure, owner acceptance or publication. Existing production/schema/scale/ACL/platform/Docker/recovery/hardware limitations and unrelated PR-04, tar/Unicode, keystore, tape/ring-buffer and Blu-ray work remain separate.
+
+## 2026-09-20 - disposable catalog owner acceptance and publication checkpoint
+
+OWNER_ACCEPTED_PUBLICATION_PENDING_LIVE_VERIFICATION. The owner submitted Prompt 13 as the current task on 2026-09-20, accepted the bounded synthetic-catalog preview on Windows and closure of R1-R3, and authorized exactly one implementation commit, one evidence commit and a normal push to https://github.com/nathansottung/obelisk.git, refs/heads/feat/gui-catalog-readonly. This submission is the acceptance event; it does not claim manual owner testing, screenshot inspection, interactive-console qualification or production approval.
+
+CATALOG_PATCH_BASE_SHA: 433cedac0a0f8a4e9dc67e3a1722b52c39c7cc6e. CATALOG_IMPLEMENTATION_SHA: d254d7bc2893482aad949416544762d2b2c7ff4b (Add read-only disposable catalog integration to GUI preview). Its parent and approved 20-path tree are verified. The separate evidence commit contains this closeout and four byte-preserved catalog reports. Its own future SHA is intentionally absent here. Final evidence/live/next-task SHAs and publication status belong in the external publication-receipt.md under C:\Users\nsott\AppData\Local\ObeliskDev\gui-catalog-publish-20260920-143507; publication is not claimed until live equality is recorded there.
+
+The [focused closing review](reviews/GUI-DISPOSABLE-CATALOG-FOCUSED-RECHECK-2026-09-20.md) returns GUI_DISPOSABLE_CATALOG_READY_FOR_OWNER_REVIEW: R1 CLOSED for truthful reader-failure propagation and affected browser state; R2 CLOSED for exact native-ID transport and correct record/evidence association; R3 CLOSED for bounded command-line parsing and verified pipe-driven shutdown. This is same-conversation Codex review, not independent-agent/context-isolated review or human certification. Its 271-file closing identity inventory matches before publication edits; the 270 earlier files and closing report were preserved. Inventory counts are not audited-file counts or staging allowlists. This entry supersedes prior pending-review next actions, including historical status wording retained in README and earlier reports.
+
+Evidence layers remain separate: original author integration and overlapping executions in [implementation](reviews/GUI-DISPOSABLE-CATALOG-IMPLEMENTATION-2026-09-20.md); original reviewer defect/protocol/native probes in [substantive review](reviews/GUI-DISPOSABLE-CATALOG-REVIEW-2026-09-20.md); author correction and exact pre-fix reproductions in [follow-up](reviews/GUI-DISPOSABLE-CATALOG-REVIEW-FOLLOWUP-2026-09-20.md); fresh closing reviewer Go 18 top-level passes / 25 passing subtests / one scale skip, Node 5 parser / 7 static / 4 catalog / 8 correction, and 16 browser sessions with individually recorded assertion counts. Closing build/vet/formatting and focused supplemental probes passed. Equal or overlapping counts are not summed. Publication performs identity/scope/documentation/staged-tree/commit/remote checks only; no runtime suites were rerun. Actual Git/hook outcomes and retained setup diagnostics are recorded externally.
+
+Accepted subset remains native schema 8 collections, folders, current files, nonspanned chunks/copies, volumes and locations: 4 MiB input, 1000 files, 100 ancillary rows per table, 1000 potential copy occurrences, bounded strings and native path/hash search. Advanced populated sections, retained versions and spanning remain refused. Recorded paths remain text; no source/media opening, scan, registration, inventory, migration, repair, save or real-catalog use is approved. Live availability, capacity, parity and current verification remain unavailable. Static preview and its distinct synthetic-demo notice remain intact. Production, scale, race, ACL, concurrent replacement/power-loss, interactive console, other-platform/Docker/helper/integration and hardware qualification remain unestablished.
+
+Original runtime evidence remains in gui-catalog-20260920-120412, gui-catalog-review-20260920-124607, gui-catalog-fix-20260920-131810 and gui-catalog-recheck-20260920-140643 under ObeliskDev. Design originals/ZIP/PDF/PNG exports, raw screenshots/catalogs/logs, executables/caches and source copies remain external or excluded. The actual submitted acceptance prompt, preserved scoped bytes, two allowlists, normalization checks and live publication receipt are in the publication evidence directory. Historical report bytes are unchanged; no invented prompt ID or reconstructed provenance was added.
+
+ONE next action after verified publication: choose and separately authorize the next bounded milestone from the existing roadmap. No next feature, discovery/registration/inventory, production or hardware task has started. Generation-independent preservation/buffering, LTO-8 as first physical qualification target rather than a generation cap, explicit qualification for other backends/generations, and a separate Blu-ray workflow remain planning constraints, not new support claims.
+
+## 2026-09-20 - disposable directory inventory implementation candidate
+
+GUI_DISPOSABLE_INVENTORY_READY_FOR_REVIEW. Branch feat/gui-disposable-inventory was created at exactly 5bc3a58d7ea9ad8f6a963859e0b3e52be06b122b, the accepted/published catalog evidence commit; HEAD and index remain unchanged. The local two-commit catalog ancestry and external publication receipt establish this checkpoint; no new remote lookup or publication replay was needed. This is a separately authorized local implementation, not owner acceptance or reviewer closure of inventory.
+
+The finite --gui-disposable-inventory producer reads only explicitly selected newly generated ordinary local test sources, reuses native schema-8 types and the extracted pure streaming hash core, validates with the accepted reader, then no-replace publishes a NEW catalog outside the source. It never calls application scanner/registration/OpenStore/persistence. File records retain distinct relative paths and exact IDs with observed size/mtime/FirstSeen and real SHA-256/catalog-only BLAKE3. No backup copies, storage registration, capacity, parity, current availability or verification are invented. The unchanged catalog-only viewer does not follow source paths.
+
+Boundaries: disjoint existing source/output-parent paths checked lexically and by actual ancestor identity; regular files/directories only, all ancestor/entry link checks, Windows fixed local drives and reparse/device/UNC/stream refusal. Limits 64 files, 128 entries, depth 8, 512-byte relative/4096-byte absolute paths, 8 MiB per file and 32 MiB total observed content (at most one growth-detection byte before refusal), 30-second cooperative deadline. Quiescent-tree assumption; observed changes/failures/cancellation prevent publication. Fully validated staged bytes are written/synced/closed, then os.Link creates the absent final name atomically without replacement. Post-publication cleanup/status failures explicitly retain published=true; only own staging is cleaned. Output hard-link support is local to this producer. PR-04 remains unrecovered and not integrated; malicious races, mount aliases on other platforms, ACL/kernel-blocking/power-loss guarantees remain outside this envelope.
+
+New author executions remain separate: initial affected Go 14 top-level/47 subtest passes; Windows-device-policy follow-up 8/28; final object-boundary and hash-error selection 10/28. No failures/skips; these overlap and are not summed. Node 5 parser/7 static/4 catalog/8 correction passes. Nine browser sessions: five generated-snapshot sessions at 11 assertions each (ALPHA, BETA, ALPHA source unavailable, changed-source alpha2, final pair), empty 3, static 55, query-failure 4, exact-large-ID 12. Fresh builds/vet/formatting passed. Historical catalog recheck 18/25/one scale skip and 16 sessions are not new inventory tests; no scale/race/platform/ACL campaign ran.
+
+Generated ALPHA/BETA/empty snapshots derive from real new files and independent setup oracles; nested spaces/Unicode, empty file, equal content at distinct paths and equal basenames with different bytes are covered. Existing and late-arriving outputs survive, injected permission/read/output failures and cancellation refuse, native symlink and three junction cases pass. ALPHA reopens with its source temporarily unavailable. One logged test-setup change produces separate later snapshots while the original remains unchanged. Generated-catalog split stop exits naturally with stdin open and reader exit 0; pipe/IPC evidence is not interactive-console testing. Final source/output manifests combine content/entry comparisons with source inspection, not OS-wide I/O tracing.
+
+Report: [GUI-DISPOSABLE-INVENTORY-IMPLEMENTATION-2026-09-20.md](reviews/GUI-DISPOSABLE-INVENTORY-IMPLEMENTATION-2026-09-20.md). Evidence/provenance/oracles/commands/raw logs/screenshots/source identities: C:\Users\nsott\AppData\Local\ObeliskDev\gui-inventory-20260920-145714. Use output\inventory-reader-bounded.exe with snapshots\alpha-final.json and the existing Node viewer; README provides exact launch/stop and new-output producer instructions. Submitted authorization is retained externally; no historical prompts were replayed or reconstructed. Design originals and all historical reports/catalog evidence remain preserved. No staging, commits, push, merge, installation, production-data or media access.
+
+ONE next action: one bounded substantive review of this uncommitted inventory producer, its source/output/no-replace boundaries and affected hashing/reader/browser controls. No automatic review or next implementation starts here. Generation-independent preservation/buffering, LTO-8 first physical qualification target (not a generation cap), explicit other-backend/generation qualification and separate Blu-ray workflow remain planning constraints, not support claims.
+
+## 2026-09-20 - inventory filename and exclusion correction candidate
+
+READY_FOR_GUI_INVENTORY_FOCUSED_RECHECK. Branch feat/gui-disposable-inventory; HEAD remains 5bc3a58d7ea9ad8f6a963859e0b3e52be06b122b, empty index. Prompt 15A separately authorizes this consolidated correction after the substantive review. F1 (P2) filename encoding: AUTHOR_ADDRESSED; F2 (P2) search fidelity: AUTHOR_ADDRESSED; S1 .DS_Store and durable scope: AUTHOR_IMPLEMENTED. These are author dispositions, not reviewer closure; missing S1 was not a reproduced producer safety failure. Original author/reviewer reports remain unchanged.
+
+Preview-only raw UTF-8/JSON-surrogate validation precedes decoding; native Windows names receive a bounded raw UTF-16 check before conversion, and raw Go paths/names are checked before encoding. Valid U+FFFD, supplementary characters and literal escape-looking text remain supported. Explicit opt-in exact-name JSON-string entry preserves LF/CR/CRLF, tabs, surrounding spaces, case and literal backslashes through bounded native queries and exact ID selection. Ordinary search stays literal. Control names display reversibly; invalid entry is an error, not a repaired query.
+
+Producer --ignore-ds-store[=true|false] precedes source/output, default OFF. Only classified regular exact-basename .DS_Store files are excluded; directories are traversed, links/specials refused, visited/excluded regular files remain bounded and rechecked, excluded contents are unopened. Scope persists in one native Audit action GUI_DISPOSABLE_INVENTORY_V1 with versioned bounded detail and observed counts. Corrected preview accepts only this exact audit facility; no schema migration or arbitrary advanced-section relaxation. Previous preview refuses the populated audit rather than silently losing scope. Older supported catalogs remain UNKNOWN-policy snapshots with their records visible.
+
+New correction execution: exact reviewed-copy red encoding/browser reproductions; corrected Windows Go 24 top-level/68 subtest passes; fresh Windows build/vet and Linux amd64/macOS arm64 cross-build/vet pass (no foreign runtime claim). Initial Node groups 5/7/4/8 and 3 new tests passed; after direct raw-response regression extraction, affected Node groups 4/8/4 passed separately. Browser evidence retains the initial empty-alert timing failure and the corrected failure/entry checks; exact current totals and stages are in the follow-up. Native clipboard/interactive-console/ACL/scale/race/power-loss/media qualification is not claimed.
+
+Actual OFF/ON fixtures record 37 entries and 28 regular files: OFF includes 28/excludes 0; ON includes 26/excludes 2. Empty, all-excluded, ON-zero and older UNKNOWN scopes survive fresh views. Foreign name/decoy fixtures are data only. Reopened scoped view works with the generated source unavailable; source restored, snapshots preserved. Natural split stop keeps stdin open through exit 0, waits native reader exit 0 and closes listener; harness forced termination remains labeled separately.
+
+Report: [GUI-DISPOSABLE-INVENTORY-REVIEW-FOLLOWUP-2026-09-20.md](reviews/GUI-DISPOSABLE-INVENTORY-REVIEW-FOLLOWUP-2026-09-20.md). Evidence: C:\Users\nsott\AppData\Local\ObeliskDev\gui-inventory-fix-20260920-163849. Fresh reader output/corrected-reader.exe; retained snapshots/on.json and off.json. README documents exact-name input and actual flag syntax plus NEW-output examples. Full before/final working-byte manifests include new tests and reports; approved corrections are distinguished from preserved historical bytes. No staging, commit, push, merge, branch change, installation, production catalog/source or media operation.
+
+ONE next action: one targeted reviewer recheck of F1/F2/S1, native Audit compatibility/strictness, raw encoding and explicit input/query boundaries, exclusion classification/counts/preservation, no-replace publication and directly affected failure/ID/skip/stop/isolation controls. No automatic review or publication. PR-04 remains unrecovered; external-tar Unicode containment remains outstanding. Generation-independent preservation/buffering, LTO-8 first physical qualification (not a generation cap), explicit other-backend qualification and separate Blu-ray workflow remain unchanged.
+
+## 2026-09-20 - bounded S1-R1 scope-key correction
+
+READY_FOR_GUI_INVENTORY_SCOPE_FOCUSED_RECHECK. Branch feat/gui-disposable-inventory; HEAD 5bc3a58d7ea9ad8f6a963859e0b3e52be06b122b; index unchanged and empty. Prompt 15C separately authorized this one correction. The controlling focused review closed F1/P2 and F2/P2; those remain PREVIOUSLY_CLOSED. S1-R1/P2 is AUTHOR_ADDRESSED only; S1 awaits reviewer closure. This entry supersedes earlier author-pending F1/F2 next actions without changing their historical records.
+
+The native preview now validates decoded canonical audit/event/detail keys before struct decoding can discard duplicates or fold aliases. Required members appear exactly once and are non-null; existing types/count equations still apply. Encoded canonical member names remain supported; case variants and duplicate canonical/encoded/alias wrappers refuse before successful adoption. Genuine absent/null/empty native audit history remains UNKNOWN; present malformed scope cannot downgrade to legacy. No filename/path/ID normalization, schema migration, general JSON replacement, traversal change, or unrelated advanced-section acceptance.
+
+Two exact retained malformed inputs reproduced the false complete-empty result in a fresh pre-edit build; one red browser diagnostic is retained. Corrected native selection: 26 top-level/242 subtest passes, zero failures/skips. Node groups 5/7/4/8/4 passed; the new two-test scope group initially overconstrained adapter error wording, then passed in two separately retained targeted runs after correcting the assertion to cover existing terminal failure messages. No adapter/UI change. Seventeen corrected browser sessions passed, including invalid/valid/reopen/encoding/ID/skip/static/failure controls. Natural split stop waited server and reader exit 0 with stdin open; browser termination remained forced/waited. Windows builds/vet and Linux amd64/Darwin arm64 cross-build/vet passed; foreign native runtimes not run.
+
+Evidence: C:\Users\nsott\AppData\Local\ObeliskDev\gui-inventory-scope-fix-20260920-194852. Newly built output/corrected-reader.exe SHA-256 d27c07e2a0b08605690bc0eca16d6ad24dd95ca20bfdc9281e662d91d7fc4763; snapshots/on.json and off.json are actual new outputs. Old identified pre-correction reader still refuses populated Audit safely; legacy records remain searchable with UNKNOWN scope. Scope/source/catalog bytes, preserved reports/design references and authorized deltas are identified in the follow-up; candidate counts are identity inventories, not audit totals.
+
+Report: [S1-R1 correction follow-up](reviews/GUI-DISPOSABLE-INVENTORY-SCOPE-S1-R1-FOLLOWUP-2026-09-20.md). ONE next action: a separately submitted targeted reviewer recheck of S1-R1/P2, compatibility and directly affected controls. No automatic review, staging, commit, push, merge, publication, production integration or next feature. PR-04, external-tar Unicode containment, native other-platform/ACL/race/power-loss/console/media qualification remain outstanding. Generation-independent preservation/buffering, LTO-8 as first physical qualification target rather than a cap, explicit other-backend qualification and separate Blu-ray planning remain unchanged.
+
+
+## 2026-09-20 - owner acceptance of reviewed disposable inventory
+
+OWNER_ACCEPTED bounded disposable-inventory milestone. Actual acceptance event: 2026-09-20 21:21:07 America/New_York (2026-09-21T01:21:07.268Z), through the submitted Prompt 16 instruction. Branch feat/gui-disposable-inventory. INVENTORY_PATCH_BASE_SHA: 5bc3a58d7ea9ad8f6a963859e0b3e52be06b122b. INVENTORY_IMPLEMENTATION_SHA: 8eb178bcb6f8f7367d2cb9aa75d2f4059d92a85c (Add bounded disposable inventory with filename fidelity and scope). Its parent and staged tree were verified. This entry supersedes previous pending-review/acceptance next actions; their historical evidence remains unchanged.
+
+Bounded base inventory and no-replace snapshot publication: ACCEPTED. F1/P2 filename encoding and F2/P2 search fidelity: PREVIOUSLY_CLOSED. S1-R1/P2 scope-key validation: CLOSED by the [closing targeted recheck](reviews/GUI-DISPOSABLE-INVENTORY-SCOPE-S1-R1-FOCUSED-RECHECK-2026-09-20.md). S1 optional exclusion and durable scope: IMPLEMENTED_AND_VERIFIED across the complete chain, without implying every earlier experiment ran in the final recheck. Reviews were Codex work in this same conversation; no independent context/agent or human source/screen certification is claimed. Owner acceptance is limited to small, quiescent, generated local Windows sources.
+
+The finite producer reads explicitly selected generated local sources and creates a new schema-8 catalog under the reviewed disjoint-source/output, absent-output, ordinary fixed-local-storage and hard-link prerequisites. It is not registration, arbitrary production scanning, incremental updating, file copying, restore or a browser-operated scanner. The viewer is read-only: recorded source paths are data, not authority to rescan/open originals. Supported Unicode names retain their supported exact representation; malformed encodings refuse. Optional --ignore-ds-store[=true|false] precedes both paths and is OFF by default; enabled filtering matches only the exact classified regular-file basename .DS_Store, leaves sources unchanged and traverses same-named directories. It neither removes sidecars nor hides older recorded occurrences. Durable scope distinguishes OFF, ON with observed counts, explicit valid zero, all-excluded, genuinely empty and supported historical UNKNOWN. Required missing/invalid fields, aliases and duplicates cannot manufacture complete-empty success. The reviewed README remains the exact command/limit contract.
+
+Historical execution evidence (not rerun for publication):
+
+- [GUI-DISPOSABLE-INVENTORY-IMPLEMENTATION-2026-09-20.md](reviews/GUI-DISPOSABLE-INVENTORY-IMPLEMENTATION-2026-09-20.md): Initial author executions: overlapping native selections 14 top/47 sub, 8/28 and 10/28; Node 5/7/4/8; nine browser sessions. These counts are separate, not summed.
+- [GUI-DISPOSABLE-INVENTORY-REVIEW-2026-09-20.md](reviews/GUI-DISPOSABLE-INVENTORY-REVIEW-2026-09-20.md): Substantive review accepted the bounded base, reproduced F1/F2 and identified missing S1 requested scope. Native 17/47 plus supplemental 3/13; Node 5/7/4/8; 14 browser attempts, 12 completed and two retained failures.
+- [GUI-DISPOSABLE-INVENTORY-REVIEW-FOLLOWUP-2026-09-20.md](reviews/GUI-DISPOSABLE-INVENTORY-REVIEW-FOLLOWUP-2026-09-20.md): Filename/search and S1 author correction: native 24/68; initial Node 5/7/4/8/3, later affected 4/8/4. Seventeen corrected browser attempts, sixteen completed and one retained initial alert-role failure; original red and observer-setup diagnostics are separately retained. Windows build/vet and Linux amd64/Darwin arm64 cross-build/vet are build evidence, not foreign runtime qualification.
+- [GUI-DISPOSABLE-INVENTORY-FOCUSED-RECHECK-2026-09-20.md](reviews/GUI-DISPOSABLE-INVENTORY-FOCUSED-RECHECK-2026-09-20.md): First focused review closed F1/F2 but left S1-R1/P2 open: native 24/68; Node 5/7/4/8/4 after retained relative-fixture failure. Twenty-five browser attempts: seven fixture-dependent failures, seventeen completed compliance sessions including four repeats, and one diagnostic reproduction. Later 286-file/700-artifact identity verification reused this review without rerunning tests.
+- [GUI-DISPOSABLE-INVENTORY-SCOPE-S1-R1-FOLLOWUP-2026-09-20.md](reviews/GUI-DISPOSABLE-INVENTORY-SCOPE-S1-R1-FOLLOWUP-2026-09-20.md): S1-R1 author correction: native 26 top/242 sub, zero failures/skips; Node 5/7/4/8/4, new two-test group initially failed an overconstrained error-wording assertion then passed in two separately retained targeted runs. Seventeen corrected browser sessions plus one separate red diagnostic. Fresh Windows and foreign cross-build/vet evidence remains historical.
+- [GUI-DISPOSABLE-INVENTORY-SCOPE-S1-R1-FOCUSED-RECHECK-2026-09-20.md](reviews/GUI-DISPOSABLE-INVENTORY-SCOPE-S1-R1-FOCUSED-RECHECK-2026-09-20.md): Closing reviewer: 14 native top-level passes/219 subtest passes, zero failures/skips. Node stop-command 5, preview 7, catalog 4, catalog-correction 8, inventory-correction 4, inventory-scope-keys 2, all passed without failures/skips; seventeen completed browser sessions, not seventeen assertions. Windows producer/reader and double builds, vet, formatting/whitespace, 23 raw scope fixtures (19 refusals/four positives), six supplemental raw controls and explicit-OFF output were recorded. No reviewer setup/test failure or retry; no foreign cross-build/runtime rerun in this closing review. Exact selectors, argv, screenshots and stop/reopen evidence are in the report and its external scripts.
+
+The controlling closing report is 19243 raw bytes, SHA-256 dcd2953afc02d5d6f9fd881d0d9423bec411cb04b56b6223572bf1ae6e56ded0. Its 290-path final-current-identities.json excludes that newly added report, which was checked separately before closeout edits. These are preservation counts, not staging/audited-file totals. Reviewer evidence: C:\Users\nsott\AppData\Local\ObeliskDev\gui-inventory-scope-review-20260920-210104. Reviewed fresh reader output/corrected-reader.exe SHA-256 f5d934b3649a1d5e3db1894dec3504acf44f955f9827fd05c63dc45f3357415d; it was built from the verified pre-commit candidate copy, not rebuilt during publication. The earlier author corrected reader SHA-256 d27c07e2a0b08605690bc0eca16d6ad24dd95ca20bfdc9281e662d91d7fc4763 remains separate historical execution evidence.
+
+Newly scoped catalogs require the corrected compatible inventory/preview reader from implementation 8eb178bcb6f8f7367d2cb9aa75d2f4059d92a85c. The previously identified pre-correction uncommitted reader (SHA-256 bc7e1fc73ec1121fa8c4523b8ae3b6917db91abf1760138089cd82433b374a69) refuses populated Audit scope; this documented refusal is not corruption or universal backward compatibility. Supported older unscoped catalogs remain readable with scope UNKNOWN, never inferred OFF/zero. Pair outputs and readers by their documented source/build identities; an earlier prepared executable is not automatically suitable. Do not remove or rewrite scope metadata to make an older reader accept a catalog. No automatic catalog migration is performed.
+
+Residuals remain: small/quiescent/generated Windows sources only; production/scale, unsupported filenames/filesystems/storage, ACLs, hostile-filesystem races, power loss, interactive consoles, native other-platform runtimes, Docker/CI, external helpers and hardware are not newly qualified. PR-04 remains unrecovered; external-tar Unicode containment remains outstanding. Broader persistence/concurrency, other-platform qualification, tape/ring buffer, Blu-ray and packaging/release are separate workstreams. LTO-8 remains the first physical qualification target, not the generation limit.
+
+This is documentation closeout for exactly two authorized commits and a normal push to https://github.com/nathansottung/obelisk.git refs/heads/feat/gui-disposable-inventory. The separate evidence commit follows the actual implementation above. Its own full SHA, live remote result and NEXT_TASK_BASE_SHA belong in the external publication receipt after creation and verification; this pre-push record does not claim remote success. Publication evidence: C:\Users\nsott\AppData\Local\ObeliskDev\gui-inventory-publish-20260920-212106. The exact submitted instruction is retained there as submitted-prompt.txt, not reconstructed as a historical repository prompt. Original .fig/PDF/ZIP, historical reports and raw external evidence remain unchanged and excluded as applicable. No runtime catalogs, screenshots, executables, credentials or private records are included.
+
+Publication checks executed so far: complete reviewed working-byte comparison (290 pre-existing paths plus separately hashed closing report), cumulative source/test/doc inspection and distribution allowlists, explicit path staging, staged whitespace checks, expected Git line-ending/blob comparisons, pre/post-commit implementation identity checks, commit parent/tree verification and sanitized effective destination/hook inspection. No active hooks were found. No new Go/Node/browser tests, builds, inventory scan or platform qualification ran. Subsequent documentation/CSV/link, commit and live remote identity checks are recorded with their actual outcomes in the external receipt.
+
+ONE next action after the publication receipt verifies the evidence tip: choose and separately authorize the next bounded milestone. No next implementation, review, scan, merge, tag/release or deployment has begun.
+
+
+## 2026-09-20 - local Windows inventory developer-alpha packaging candidate
+
+WINDOWS_INVENTORY_ALPHA_PACKAGE_READY_FOR_REVIEW. New branch feat/windows-inventory-alpha-package; full HEAD bfbce891df78d529c6be2d2912dc8443597c007e. Packaging/tutorial/tests/documentation are uncommitted and unstaged. Runtime implementation 8eb178bcb6f8f7367d2cb9aa75d2f4059d92a85c and the accepted producer/reader/protocol/UI remain unchanged. No publication, installation, production input or media operation.
+
+Local unsigned Windows amd64 package: Node 24 x64 and an existing browser remain external prerequisites; packaged PowerShell/Node launcher exposes separate explicit generate, inventory, view and static actions with help by default. Generated workspace must be new, separate from package assets, beneath the existing accepted LOCALAPPDATA/ObeliskDev boundary. No Go/Git/compiler/source checkout is needed for use. Six new snapshots from two generated ten-file trees cover OFF/ON and new-output reuse; two output collisions refuse replacement. This is not a backup/archive product release candidate or a sandbox around the full executable.
+
+Fresh validation: corrected package group 7 pass/0 fail/0 skip; missing-catalog supplement 1 pass/0 fail/0 skip separately. Four catalog browser sessions (8/8/8/2 checks) and corrected static session (3 checks) passed. First compiler missing-embed failure, first harness PATHEXT omission (six failed tests plus an incomplete dependent setup/forced stop), and one early static readiness failure/forced browser cleanup are preserved separately; no historical inventory test totals are reused. Ten split-stop CLI sessions, a deliberate captured-reader failure, actual nonredirected ConsoleHost Ctrl+C and typed-stop paths were exercised. Ctrl+C reader/server exits were 0, interrupted outer PowerShell was 1; typed-stop exits were all 0. Final task-owned process count is zero; 18 recorded URLs no longer respond.
+
+ZIP SHA-256 f25125c46acca5635b2297305d849888fbded129281708875a64289c4b22c5de; binary bd03641cc098ae79a5c1cf5e6a86464f8e478ef4188f51870501234406435292; manifest 6fc6aca29d187b2487eef86a55859dbff6c1273975d81e113a1b99f7af02c98a. Package has 20 exact entries, no bundled Node/browser/helpers/designs/raw evidence/runtime catalogs. Source and uncommitted script identities are distinct. Evidence: C:\Users\nsott\AppData\Local\ObeliskDev\windows-inventory-alpha-20260920-232225.
+
+New scoped snapshots require the corrected paired reader; historically identified older reader refusal remains a compatibility boundary. Supported unscoped inputs retain UNKNOWN, never fabricated OFF/zero; no scope stripping or migration. The accepted generated/quiescent/fixed-local/no-replace/name/scope limits stand. Same-workstation relocation is not clean-VM/second-machine qualification. Broader console/platform/production/scale/ACL/hostile-race/power-loss/media qualification and public signing/distribution remain pending. Owner-reported negative scan does not classify the earlier alert: Defender status queries were access-denied and not elevated; no malware-free or false-positive claim. No protections were changed. PR-04, external-tar Unicode containment, persistence/concurrency, tape/ring buffer, Blu-ray and other-platform queues remain separate; LTO-8 is the first physical target, not the generation cap.
+
+Report: [WINDOWS-INVENTORY-ALPHA-PACKAGE-IMPLEMENTATION-2026-09-20.md](reviews/WINDOWS-INVENTORY-ALPHA-PACKAGE-IMPLEMENTATION-2026-09-20.md). ONE next action: substantive package review of the exact uncommitted candidate and local artifact. No automatic publication or next feature.
+
+
+## 2026-09-21 - owner acceptance of local Windows package
+
+OWNER_ACCEPTED local unsigned Windows inventory developer-alpha package, recorded 2026-09-21T13:36:52.189Z through submitted Prompt 19. PACKAGE_PATCH_BASE_SHA: bfbce891df78d529c6be2d2912dc8443597c007e. PACKAGE_IMPLEMENTATION_SHA: 082ae8375130bdb9943d31d7432c87a3c53fbbb8. Source-only destination: https://github.com/nathansottung/obelisk.git refs/heads/feat/windows-inventory-alpha-package. This supersedes the prior pending-review next action; historical evidence remains intact.
+
+The [acceptance and frozen-artifact record](reviews/WINDOWS-INVENTORY-ALPHA-PACKAGE-ACCEPTANCE-2026-09-21.md) identifies the original ZIP (SHA-256 f25125c46acca5635b2297305d849888fbded129281708875a64289c4b22c5de), reviewed source manifest (60ea696a91f4c467b543b381a93e6294813ed5030e557386722e55b1de6713a0), actual implementation, separate author/reviewer evidence and unchanged compatibility. New scoped outputs need the corrected reader; the identified earlier reader refuses them; legacy unscoped input remains UNKNOWN. Node 24 x64, reviewed Windows PowerShell 5.1 and browser prerequisites remain. Generated-only/new-output/read-only/stop/reopen limits stand.
+
+This checkpoint runs identity/documentation/commit/network checks only, without rebuilding or retesting. The ZIP remains local, unsigned and unchanged; it predates and is associated with the new source commit. Clean/second-machine, downloaded-file policy, public signing/distribution, broader runtimes/consoles/platforms, original-alert classification and production/scale/ACL/race/power-loss/recovery/media remain gated. Owner acceptance is not security or human execution certification.
+
+The evidence commit and verified live result belong in C:\Users\nsott\AppData\Local\ObeliskDev\windows-package-publish-20260921-093258\publication-receipt.md after publication; no advance success is asserted here. ONE next action after that verification: separately authorize a clean/second-Windows-machine rehearsal of the exact frozen ZIP with the new source checkpoint and original ZIP hash. No new milestone is started.
+
+## 2026-09-21 - two generated snapshots, author implementation ready for review
+
+GUI_MULTI_SNAPSHOT_READY_FOR_REVIEW. Owner submitted Prompt22 selecting only the transient two-snapshot Library/Find milestone from the external scope reconciliation. Branch feat/gui-multi-snapshot-readonly; unchanged parent/HEAD a099ddc7530d81a9f3206e426b81def5172b16ec. Index empty; candidate uncommitted. Source publication of the earlier package is complete per its retained receipt/resume evidence; no publication replay. Prompt20 remains DEFERRED_BY_OWNER and second/clean-machine qualification PENDING, not a prerequisite here.
+
+Development server accepts a second explicit --catalog before --adapter. Both readers validate before successful adoption; identical digests refuse, aggregate caps remain 1000 records/1000 copy occurrences. Random session handles plus exact native ID strings bind queries/results/inspectors. All requires both valid results; failure clears/latches without demo fallback. Per-source OFF/ON/UNKNOWN/counts and validated recorded event timestamps stay separate from load time and returned-result counts. Source paths remain text. No registry, merge, comparison, source rescan or durable schema change. Static and single-input controls remain.
+
+Author execution: final focused native selection 26 top-level/242 subtest passes, zero failures/skips; initial Node selection31 passes, affected final multi selection7 passes (overlapping, not additive). All21 browser sessions completed, including earlier presentation runs and final native pair, large IDs, scope/name controls, reversal/reopen, failure, single and static. Two new fixture-setup failures and corrected retries are retained. Windows build/vet/format/whitespace checks passed; no foreign runtime/hardware/production qualification.
+
+Report: [GUI-MULTI-SNAPSHOT-READONLY-IMPLEMENTATION-2026-09-21.md](reviews/GUI-MULTI-SNAPSHOT-READONLY-IMPLEMENTATION-2026-09-21.md). Evidence: C:\Users\nsott\AppData\Local\ObeliskDev\gui-multi-snapshot-20260921-130125. Exact source/fixture/binary manifests and command/stop/browser logs are retained there. The frozen ZIP still hashes to f25125c46acca5635b2297305d849888fbded129281708875a64289c4b22c5de and was not rebuilt/repackaged. Owner workspaces/processes, prior evidence and design inputs remain untouched. Public binary distribution remains NOT_AUTHORIZED / NOT_PERFORMED.
+
+ONE next action: one substantive review of this exact uncommitted candidate. This is author-ready, not reviewer-accepted or published. Earlier closed config/job/GUI/catalog/filename/scope-key findings remain closed within their scopes. PR-04, external-tar Unicode, broader persistence/identity/ACL/race/power-loss, scale/media and second-machine qualification remain separate. Generation-independent buffering/preservation, LTO-8 first physical target rather than cap, other-backend qualification and separate Blu-ray work remain unchanged. Other scope-map proposals are not selected or implemented. No automatic next milestone, commit/push or target request.
+
+## 2026-09-21 - same-basename source labels corrected; focused recheck pending
+
+READY_FOR_GUI_MULTI_SNAPSHOT_LABEL_FOCUSED_RECHECK. SOURCE_LABEL_FINDING: AUTHOR_ADDRESSED (R1/P2 in GUI-MULTI-SNAPSHOT-READONLY-REVIEW-2026-09-21.md). Prompt23A authorized this bounded correction; this is author completion, not reviewer closure or owner acceptance. Branch feat/gui-multi-snapshot-readonly; parent/HEAD a099ddc7530d81a9f3206e426b81def5172b16ec; uncommitted, index empty.
+
+Snapshot A/B display prefixes now remain bound to startup handles across Library, selectors, scope/time summaries, results, totals and inspector attribution. Native identity, protocol, reader/backend, failure semantics and frozen package remain unchanged. Same-basename inputs remain valid. Focused browser regression rejects the preserved pre-fix Library ambiguity; all 12 corrected browser sessions pass, including same/long Unicode basenames in both orders and directly affected controls. The 31 selected Node tests pass with zero skips. No native suite/build/vet was rerun: the verified unchanged reader was copied into this task's output. Earlier substantive-review native26/242, Node31 and 13 completed browser sessions remain historical; its harness diagnostic is not a candidate defect.
+
+Report: [GUI-MULTI-SNAPSHOT-READONLY-REVIEW-FOLLOWUP-2026-09-21.md](reviews/GUI-MULTI-SNAPSHOT-READONLY-REVIEW-FOLLOWUP-2026-09-21.md). Evidence: C:\Users\nsott\AppData\Local\ObeliskDev\gui-source-label-correction-20260921-143056. Manifests, pre-fix source, fixture expectations, screenshots, exact commands and process exits are retained. Owned servers/readers stopped and waited; explicit stop with stdin open succeeded. Browser harness force-stop/wait remains separately disclosed. Historical reports/designs/owner work are preserved. Frozen ZIP unchanged; public binary distribution NOT_AUTHORIZED / NOT_PERFORMED. Prompt20 remains DEFERRED_BY_OWNER; second-machine, platform/media and other qualifications remain separate.
+
+ONE next action: separately submit the focused source-label recheck and directly affected binding controls. No automatic reviewer closure, publication, package refresh, registry/comparison feature or second-machine request.
+
+## 2026-09-21 - owner accepted complete multi-snapshot source milestone
+
+Owner authorization recorded 2026-09-21T15:13:11.3614995-04:00. Implementation: 265f93f334af8c529616caba00ec2bde1af89418, parent a099ddc7530d81a9f3206e426b81def5172b16ec, branch feat/gui-multi-snapshot-readonly. R1/P2 CLOSED by the focused recheck; owner accepts the generated-data, two-fixed-snapshot Library/Find scope. This is source-only acceptance/publication closeout, not new execution qualification. The evidence commit's actual SHA and live push result belong in the external receipt after publication, not as advance claims here.
+
+[Acceptance and compatibility record](reviews/GUI-MULTI-SNAPSHOT-SOURCE-ACCEPTANCE-2026-09-21.md) preserves the full contract, four historical reports and separate evidence layers. Closing reviewer freshly ran Node31 and browser12; earlier native26/242 totals remain historical. Same-session AI-assisted provenance is not human/isolated-agent/screen-reader certification. This publication runs identity/documentation/staging/tree/remote checks only; no runtime tests or builds. A/B labels remain session presentation; exact snapshot/native identity, per-source scope/time, historical UNKNOWN, duplicate refusal, failure/late-response behavior, static/single compatibility and read-only boundaries remain.
+
+Source destination solely https://github.com/nathansottung/obelisk.git refs/heads/feat/gui-multi-snapshot-readonly. Receipt: C:\Users\nsott\AppData\Local\ObeliskDev\gui-multi-snapshot-publish-20260921-151311\publication-receipt.md. Frozen ZIP SHA-256 f25125c46acca5635b2297305d849888fbded129281708875a64289c4b22c5de remains unchanged and does not contain the new multi-snapshot feature. PUBLIC_BINARY_DISTRIBUTION: NOT_AUTHORIZED / NOT_PERFORMED. Prompt19, TOOLS-A and scope reconciliation are complete/reused; Prompt20 remains DEFERRED_BY_OWNER. Owner dogfood is not inferred complete. Production/platform/scale/ACL/power-loss/security/media qualification and existing architecture/LTO-8-first/separate-Blu-ray directions remain unchanged.
+
+ONE next action after verified source publication: owner selects and separately authorizes the next bounded milestone using the actual evidence SHA from the receipt. No automatic package refresh, registry/comparison feature, audit, second-machine request or implementation.
+
+## Recorded snapshot comparison author candidate — 2026-09-21
+
+**GUI_RECORDED_SNAPSHOT_COMPARISON_READY_FOR_REVIEW**, uncommitted on
+`feat/gui-recorded-snapshot-comparison`, parent/HEAD
+`4abbfa566470b9f25e59c3eb190c801b622b613c`.
+See [the implementation report](reviews/GUI-RECORDED-SNAPSHOT-COMPARISON-IMPLEMENTATION-2026-09-21.md).
+Evidence: `C:\Users\nsott\AppData\Local\ObeliskDev\gui-recorded-comparison-20260921-153523`.
+
+Two fixed generated snapshots now support explicitly selected reference and
+accepted relative-root alignment, exact-key five-way recorded comparison,
+filterable rows and two-sided exact evidence. Both native readers must enumerate
+complete adopted sets; no current source paths are opened. Unsupported/ambiguous
+frames refuse comparison while browsing remains available. Scope/time remain
+per input; recorded agreement/absence is not backup health or independent copies.
+
+Fresh author validation: native 28 top-level plus 242 subtests, no failures/skips;
+38 Node tests; 13 initial browser sessions plus one final 22-check browser session
+after control-spacing changes. Build/vet/format and exclusive-lock/read-only plus
+stdin-open split-stop controls passed. Full candidate hashes and starting/final
+source copies are external; historical review results remain separate.
+
+Next: one substantive review of this uncommitted candidate. No automatic review,
+publication or package refresh. Prompt20 remains **DEFERRED_BY_OWNER**. Frozen ZIP
+SHA-256 remains `f25125c46acca5635b2297305d849888fbded129281708875a64289c4b22c5de`.
+No staging/commits/pushes, production scanning, live verification, native migration,
+registry/history, media or second-machine work. Generation-independent buffering,
+LTO-8 as first target (not generation limit), other-backend qualification and separate
+Blu-ray workflow remain planning directions. The existing external scope matrix
+is retained; no duplicate matrix is created for the absent historical repository
+matrix. This entry is the current bounded feature/status update.
+
+## Owner accepted recorded comparison source — 2026-09-21
+
+The owner authorized scoped source publication following the clean substantive
+review. Implementation: `87b4fcf3443bf18bd64671896f911c73dcbdc22a`, parent
+`4abbfa566470b9f25e59c3eb190c801b622b613c`, branch
+`feat/gui-recorded-snapshot-comparison`. This supersedes the prior pending-review
+next action; historical reports remain intact.
+
+[Acceptance and compatibility record](reviews/GUI-RECORDED-SNAPSHOT-COMPARISON-SOURCE-ACCEPTANCE-2026-09-21.md).
+Destination solely `https://github.com/nathansottung/obelisk.git`,
+`refs/heads/feat/gui-recorded-snapshot-comparison`. Actual evidence-commit SHA
+and verified live result belong in
+`C:\Users\nsott\AppData\Local\ObeliskDev\gui-recorded-comparison-publish-20260921-172333\publication-receipt.md`.
+
+Accepted scope: two fixed generated snapshots, explicit reference/root alignment,
+exact-path recorded classification, complete stored sets, exact two-sided identity,
+separate scope/time and strict failure/stale-response/read-only behavior. Closing
+reviewer native28/242, Node38, browser15 and independent probes are historical
+here; this publication runs identity/documentation/Git checks only. Same-session
+AI-assisted provenance and evidence-helper retry remain disclosed.
+
+Frozen ZIP unchanged at SHA-256
+`f25125c46acca5635b2297305d849888fbded129281708875a64289c4b22c5de`; it gains neither
+multi-snapshot nor comparison functionality. No public binary distribution.
+Prompt20 remains **DEFERRED_BY_OWNER**. Production/live-source, durable identity,
+registry/history, migration, recovery, platform/scale/ACL/power-loss/media limits
+and generation-independent/LTO-8-first/separate-Blu-ray directions are unchanged.
+
+ONE next action after verified publication: owner selects and separately authorizes
+the next bounded milestone using the final receipt SHA. No automatic follow-on.
+
+
+## Windows comparison package candidate — 2026-09-21
+
+**WINDOWS_COMPARISON_ALPHA_PACKAGE_READY_FOR_REVIEW** on
+`feat/windows-comparison-alpha-package`, unchanged parent
+`e3d9bef998a20dff78dc67463dfb8f848aad76ce`; packaging changes remain uncommitted/unstaged.
+The new unsigned local comparison ZIP is distinct from the accepted inventory ZIP.
+New ZIP SHA-256: `33d1d9e5087c35aca23606957777f3d13ff8267de798c9848c79ada4697f00d2`.
+Accepted runtime source and the original ZIP remain unchanged.
+Current execution: extracted-package tests 10/10, missing-input boundary 1/1,
+9 normally stopped browser sessions, actual console typed stop, and the final
+22-source-file lock / induced second-reader failure / reopen probe passed. Two
+supplemental probe harness failures and corrections are retained separately.
+Historical native/browser/reviewer results are not new package coverage.
+See [implementation and artifact identities](reviews/WINDOWS-COMPARISON-ALPHA-PACKAGE-IMPLEMENTATION-2026-09-21.md).
+Prompt20 remains **DEFERRED_BY_OWNER**; unresolved prior alert classification,
+second-machine/downloaded-file policy and broader qualification gates remain separate.
+**One next action:** substantive package-delta review of the exact new ZIP and
+uncommitted candidate. No acceptance/publication/package replacement is implied.
+
+
+## Owner-accepted comparison package source checkpoint — 2026-09-21
+
+The owner accepted the reviewed local unsigned generated-data comparison package
+through separately submitted Prompt30. Implementation: `be6f60f178c793835cdbad82c9f774f61fd4071d`
+(parent `e3d9bef998a20dff78dc67463dfb8f848aad76ce`). Both archives remain unchanged; new ZIP
+SHA-256 `33d1d9e5087c35aca23606957777f3d13ff8267de798c9848c79ada4697f00d2`,
+older inventory ZIP `f25125c46acca5635b2297305d849888fbded129281708875a64289c4b22c5de`.
+Historical author/reviewer tests remain separately attributed; no runtime tests,
+package sessions or builds were rerun for this checkpoint. The empty-EOF reviewer
+harness diagnostic is retained; supported stop-token behavior is unchanged.
+See [acceptance and source/artifact mapping](reviews/WINDOWS-COMPARISON-ALPHA-PACKAGE-ACCEPTANCE-2026-09-21.md).
+The final evidence SHA and live publication verification are in the external
+receipt at `C:\Users\nsott\AppData\Local\ObeliskDev\windows-comparison-publish-20260921-200052\publication-receipt.md`.
+Prompt20 remains **DEFERRED_BY_OWNER**; second-machine qualification is pending.
+Reader compatibility, generated-data/recorded-evidence limits, unresolved alert
+classification and public distribution/signing gates remain separate. No binary
+upload or package replacement. ONE suggested next activity after verified source
+publication: owner dogfood with fresh generated workspaces, if not already done.
+No owner session or automatic next task is implied.

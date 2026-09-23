@@ -1,0 +1,80 @@
+// Developer-only build. Never packaged or run by testers. No downloads.
+// Builds the package from the committed HEAD only: every source, runtime and
+// launcher file is read with `git show HEAD:<path>`, and tracked files must match
+// HEAD. Untracked files cannot enter the package.
+// Prerequisite: GOPROXY=off, so ABS_EXISTING_MODULE_CACHE must already hold every
+// module in go.sum (for example from an earlier online `go mod download`).
+// The Go executable must be exactly the `toolchain` named in go.mod at HEAD; the
+// module cache is checked with `go mod verify` and the launcher-only source is
+// vetted before it is built.
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import assert from 'node:assert/strict';
+import { runtimeFiles, launcherFiles, dependencies } from './package-files.mjs';
+import { makeZip } from './zip.mjs';
+
+const scripts = path.dirname(fileURLToPath(import.meta.url)), repo = path.resolve(scripts, '../..');
+const [output, go, moduleCache] = process.argv.slice(2);
+if (process.argv.length !== 5 || [output, go, moduleCache].some(p => !p || !path.isAbsolute(p))) throw Error('Usage: node build.mjs ABS_NEW_TASK_BUILD ABS_INSTALLED_GO_EXE ABS_EXISTING_MODULE_CACHE');
+assert.equal(process.platform, 'win32'); assert.equal(process.arch, 'x64');
+const taskBase = fs.realpathSync(path.join(process.env.LOCALAPPDATA, 'ObeliskDev'));
+const relative = path.relative(taskBase, path.resolve(output)); assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+assert.ok(!fs.existsSync(output), 'Build directory already exists; no replacement or automatic retry');
+fs.mkdirSync(output);
+const source = path.join(output, 'source'), stage = path.join(output, 'stage'); fs.mkdirSync(source); fs.mkdirSync(stage);
+const events = [], sha = b => createHash('sha256').update(b).digest('hex');
+function command(exe, args, cwd, env = process.env) {
+  const started = new Date().toISOString(), t = Date.now();
+  const result = spawnSync(exe, args, { cwd, env, windowsHide: true, maxBuffer: 32 * 1024 * 1024, timeout: 120000 });
+  events.push({ exe, args, cwd, started, durationMs: Date.now() - t, exit: result.status, error: result.error?.code });
+  fs.writeFileSync(path.join(output, 'commands.json'), JSON.stringify(events, null, 2));
+  fs.writeFileSync(path.join(output, `command-${events.length}.stdout`), result.stdout || '');
+  fs.writeFileSync(path.join(output, `command-${events.length}.stderr`), result.stderr || '');
+  if (result.status !== 0) throw Error(`Command ${events.length} failed (${result.status}, ${result.error?.code ?? 'see stderr'}). Stop; do not recreate a security-blocked output.`);
+  return result.stdout;
+}
+const git = (...args) => command('git', args, repo);
+const base = git('rev-parse', 'HEAD').toString().trim();
+assert.match(base, /^[0-9a-f]{40}$/);
+assert.equal(git('status', '--porcelain', '--untracked-files=no').toString().trim(), '', 'Tracked files differ from HEAD. Commit or discard them; the package is built only from committed bytes.');
+const tracked = git('ls-tree', '-r', '--name-only', base).toString().trim().split('\n');
+const sourceFiles = tracked.filter(n => (/^[^/]+\.go$/.test(n) && !n.endsWith('_test.go')) || ['go.mod', 'go.sum', 'formats.json', 'docs/COMPARISON.md', 'docs/RESTORE_RUNBOOK.md', 'escrow_manifest.json', 'escrow/obelisk-src.tar.gz'].includes(n) || n.startsWith('ui/'));
+const sourceManifest = [];
+function write(dir, name, bytes) { fs.mkdirSync(path.dirname(path.join(dir, name)), { recursive: true }); fs.writeFileSync(path.join(dir, name), bytes, { flag: 'wx' }); }
+for (const name of sourceFiles) { const bytes = git('show', base + ':' + name); write(source, name, bytes); sourceManifest.push({ path: name, bytes: bytes.length, sha256: sha(bytes) }); }
+fs.writeFileSync(path.join(output, 'build-source.json'), JSON.stringify(sourceManifest, null, 2));
+const env = { ...process.env, GOTOOLCHAIN: 'local', GOPROXY: 'off', GOSUMDB: 'off', GOFLAGS: '-mod=readonly', CGO_ENABLED: '0', GOOS: 'windows', GOARCH: 'amd64', GOMODCACHE: moduleCache, GOCACHE: path.join(output, 'go-cache'), TEMP: path.join(output, 'go-temp'), TMP: path.join(output, 'go-temp') }; delete env.GOTMPDIR;
+fs.mkdirSync(env.TEMP);
+const goVersion = command(go, ['version'], source, env).toString().trim();
+const toolchain = git('show', base + ':go.mod').toString().match(/^toolchain (go\d+\.\d+\.\d+)\r?$/m)?.[1];
+assert.ok(toolchain, 'go.mod at HEAD must name an exact toolchain line');
+assert.equal(goVersion, `go version ${toolchain} windows/amd64`, `Build requires exactly ${toolchain}; got: ${goVersion}`);
+command(go, ['mod', 'verify'], source, env);
+command(go, ['vet', '-tags', 'guionly', '.'], source, env);
+const label = '0.9.2-dev-comparison.' + base.slice(0, 12);
+fs.mkdirSync(path.join(stage, 'bin'));
+const buildFlags = ['-trimpath', '-buildvcs=false', '-tags', 'guionly', '-ldflags', '-X main.appVersion=' + label];
+command(go, ['build', ...buildFlags, '-o', path.join(stage, 'bin/obelisk.exe'), '.'], source, env);
+const buildInfo = command(go, ['version', '-m', path.join(stage, 'bin/obelisk.exe')], source, env).toString();
+fs.writeFileSync(path.join(output, 'binary-build-info.txt'), buildInfo);
+const entries = ['bin/obelisk.exe'];
+for (const name of runtimeFiles) { write(stage, 'preview/' + name, git('show', base + ':scripts/gui-preview/' + name)); entries.push('preview/' + name); }
+for (const name of launcherFiles) { write(stage, name, git('show', base + ':scripts/windows-alpha/' + name)); entries.push(name); }
+write(stage, 'LICENSE', git('show', base + ':LICENSE')); entries.push('LICENSE');
+let notices = 'Third-party modules recorded in this launcher-only Obelisk binary. No Node/browser/helper executables are bundled.\n\n';
+for (const [module, license] of dependencies) notices += module + '\n' + fs.readFileSync(path.join(moduleCache, module, license), 'utf8') + '\n\n';
+notices += 'Go standard library/toolchain runtime\n' + fs.readFileSync(path.resolve(go, '../../LICENSE'), 'utf8');
+write(stage, 'THIRD-PARTY-NOTICES.txt', Buffer.from(notices)); entries.push('THIRD-PARTY-NOTICES.txt');
+const scriptNames = [...launcherFiles, 'build.mjs', 'zip.mjs', 'package-files.mjs'];
+const scriptIdentities = scriptNames.map(name => ({ path: 'scripts/windows-alpha/' + name, sha256: sha(git('show', base + ':scripts/windows-alpha/' + name)), revision: base }));
+const manifest = { packageID: label + '-windows-amd64-local', version: label, unsigned: true, status: 'DEVELOPER_ALPHA_PACKAGING_CANDIDATE', sourceCommit: base, binary: 'launcher-only (-tags guionly): --gui-disposable-inventory and --gui-catalog-readonly; no HTTP server, UI or backend routes; reports ' + label + ' in inventory results, the reader handshake and its refusal message', scriptIdentities, target: 'windows/amd64', build: { goVersion, toolchain, node: process.version, host: os.release(), flags: buildFlags, CGO_ENABLED: '0', GOPROXY: 'off' }, prerequisites: { node: '24.x x64, externally installed', browser: 'externally installed modern browser; Chrome exercised', shell: 'Launch.cmd through the built-in Windows Command Prompt; no PowerShell or execution-policy change' }, files: entries.map(name => { const bytes = fs.readFileSync(path.join(stage, name)); return { path: name, bytes: bytes.length, sha256: sha(bytes) }; }) };
+write(stage, 'package-manifest.json', Buffer.from(JSON.stringify(manifest, null, 2))); entries.push('package-manifest.json');
+const zip = makeZip(entries.map(name => ({ name, data: fs.readFileSync(path.join(stage, name)) })));
+const zipPath = path.join(output, manifest.packageID + '.zip'); fs.writeFileSync(zipPath, zip, { flag: 'wx' });
+fs.writeFileSync(path.join(output, 'artifact.json'), JSON.stringify({ zipPath, bytes: zip.length, sha256: sha(zip), manifestSHA256: sha(fs.readFileSync(path.join(stage, 'package-manifest.json'))), entries, buildEnvironment: envSubset(env) }, null, 2));
+console.log(JSON.stringify({ zipPath, sha256: sha(zip), entries: entries.length, goVersion }));
+function envSubset(e) { return Object.fromEntries(['GOTOOLCHAIN','GOPROXY','GOSUMDB','GOFLAGS','CGO_ENABLED','GOOS','GOARCH','GOMODCACHE','GOCACHE','TEMP','TMP'].map(k => [k,e[k]])); }
