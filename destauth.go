@@ -549,21 +549,42 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 		root.Close()
 		return nil, fmt.Errorf("cannot generate a staging token: %w", err)
 	}
+	// Only findings on the destination itself, or what folders created inside it
+	// inherit, may cover folders inside it. A grant accepted on a folder above the
+	// destination says nothing about a shared folder later moved into it.
 	accepted := map[string]bool{}
-	for _, f := range append(in.findings, destfs.findings...) {
-		accepted[findingKey(f)] = true
+	for _, f := range in.findings {
+		if atOrBelow(f.Folder, in.anchorCanon) {
+			accepted[findingKey(f)] = true
+		}
+	}
+	for _, f := range destfs.findings {
+		if atOrBelow(f.Folder, canon) {
+			accepted[findingKey(f)] = true
+		}
 	}
 	return &DestRoot{root: root, canonical: canon, display: display, snap: snap, fs: destfs, accepted: accepted,
 		token: hex.EncodeToString(tok), release: release, volume: id.vol}, nil
 }
 
-// findingKey groups findings the same decision covers: a grant to the same group,
-// wherever below the destination it appears, or the destination's filesystem.
+// findingKey groups findings the same decision covers: a grant of the same
+// strength to the same group, wherever below the destination it appears, or the
+// destination's filesystem. A grant that can also change permissions is a
+// different, stronger finding than one that can only change files.
 func findingKey(f destFinding) string {
 	if f.Kind == destFindingUnchecked {
 		return f.Kind
 	}
+	if f.Permissions {
+		return "sid:" + f.SID + ":permissions"
+	}
 	return "sid:" + f.SID
+}
+
+// atOrBelow reports whether folder is root or inside it.
+func atOrBelow(folder, root string) bool {
+	f, r := normPath(folder), normPath(root)
+	return f == r || canonicalWithin(r, f)
 }
 
 // destInspection is everything decided about a destination before anything is
@@ -880,6 +901,10 @@ func (d *DestRoot) checkParent(parent *os.Root) error {
 	// destination itself was not accepted with — for example a shared folder moved
 	// into a private destination, or one left shared by Make private.
 	for _, f := range ns.findings {
+		// Folders above the destination were judged when it was authorized.
+		if !atOrBelow(f.Folder, d.canonical) {
+			continue
+		}
 		if !d.accepted[findingKey(f)] {
 			who := f.Group
 			if f.Kind == destFindingUnchecked {

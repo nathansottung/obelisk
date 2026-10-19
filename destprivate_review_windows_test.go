@@ -366,3 +366,74 @@ func TestDestRel_RejectsDeviceNames(t *testing.T) {
 		}
 	}
 }
+
+// movedSharedFolder makes a folder that inherits the given rights for
+// Authenticated Users and moves it to dst (same volume: it keeps the grant).
+func movedSharedFolder(t *testing.T, dst, rights string) {
+	t.Helper()
+	user, _ := destUserSID()
+	p := t.TempDir()
+	setDestFixtureDACL(t, p, "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;SY)(A;OICIIO;"+rights+";;;AU)")
+	src := filepath.Join(p, "Moved")
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(src, dst); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A grant the user accepted on a folder ABOVE a private destination does not
+// cover a shared folder later moved inside the destination.
+func TestDestGuard_AncestorAcceptanceDoesNotCoverSubfolders(t *testing.T) {
+	app := dockApp(t)
+	user, _ := destUserSID()
+	shared, _ := sharedFolder(t)
+	dest := filepath.Join(shared, "Private")
+	if err := os.Mkdir(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setDestFixtureDACL(t, dest, "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;SY)")
+	c := app.Store.CheckDestination(dest)
+	if c.Status != destStatusChoose {
+		t.Fatalf("precondition: the shared folder above needs a choice, got %q", c.Status)
+	}
+	if _, err := app.Store.ChooseUseAnyway(dest, c.Fingerprint, destUseAnywayWord); err != nil {
+		t.Fatal(err)
+	}
+	movedSharedFolder(t, filepath.Join(dest, "Sub"), "0x1301bf")
+	d, err := app.Store.AuthorizeDestination(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if err := d.WriteFileAtomic("Sub/x.txt", []byte("x"), 0o644); err == nil {
+		t.Fatal("a shared folder inside a private destination was written into because of a grant above it")
+	}
+	if err := d.WriteFileAtomic("Fine/x.txt", []byte("x"), 0o644); err != nil {
+		t.Fatalf("a new private folder inside: %v", err)
+	}
+}
+
+// Accepting a group that can modify files does not cover a folder inside where the
+// same group can also change permissions (Full control).
+func TestDestGuard_ModifyAcceptanceDoesNotCoverFullControl(t *testing.T) {
+	app := dockApp(t)
+	dest, _ := sharedFolder(t) // Authenticated Users: Modify, inherited
+	c := app.Store.CheckDestination(dest)
+	if _, err := app.Store.ChooseUseAnyway(dest, c.Fingerprint, destUseAnywayWord); err != nil {
+		t.Fatal(err)
+	}
+	movedSharedFolder(t, filepath.Join(dest, "Full"), "FA")
+	d, err := app.Store.AuthorizeDestination(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if err := d.WriteFileAtomic("Full/x.txt", []byte("x"), 0o644); err == nil {
+		t.Fatal("a folder where the group has Full control was covered by accepting Modify")
+	}
+	if err := d.WriteFileAtomic("New/x.txt", []byte("x"), 0o644); err != nil {
+		t.Fatalf("a folder Obelisk creates inside: %v", err)
+	}
+}
