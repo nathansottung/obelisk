@@ -512,3 +512,29 @@ func TestDestAuth_UNCSourceNotMappedToLetter(t *testing.T) {
 		t.Fatalf("UNC source mapped onto C: %v", err)
 	}
 }
+
+// A no-propagate grant on the existing folder reaches only the first new folder,
+// not a destination several new folders deep: it is not shown as a finding about
+// the destination, and cannot cover a shared folder moved into it.
+func TestDestPredict_NoPropagateStopsAtFirstNewFolder(t *testing.T) {
+	app := dockApp(t)
+	user, _ := destUserSID()
+	p := t.TempDir()
+	setDestFixtureDACL(t, p, "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;SY)(A;OICIIONP;FA;;;AU)")
+	dest := filepath.Join(p, "A", "B")
+	if c := app.Store.CheckDestination(dest); c.Status != destStatusPass {
+		t.Fatalf("destination two new folders deep: %q with findings %+v, want pass", c.Status, c.Findings)
+	}
+	if c := app.Store.CheckDestination(filepath.Join(p, "A")); c.Status != destStatusChoose {
+		t.Fatalf("the first new folder does get the grant: %q, want a choice", c.Status)
+	}
+	d, err := app.Store.AuthorizeDestination(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	movedSharedFolder(t, filepath.Join(dest, "Sub"), "FA")
+	if err := d.WriteFileAtomic("Sub/x.txt", []byte("x"), 0o644); err == nil {
+		t.Fatal("a Full-control shared folder inside the destination was written into")
+	}
+}

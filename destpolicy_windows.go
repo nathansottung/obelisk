@@ -98,6 +98,7 @@ const (
 // ACE header flags.
 const (
 	destAceContainerInherit = 0x2
+	destAceNoPropagate      = 0x4
 	destAceInheritOnly      = 0x8
 	destAceInherited        = 0x10
 )
@@ -224,10 +225,11 @@ func checkDestDACL(sd *windows.SECURITY_DESCRIPTOR, user, folder string, publica
 	return findings, nil
 }
 
-// predictDestChild returns what a folder Obelisk creates inside the directory r
-// holds would inherit, so the choice can be made before anything is created. Every
-// container-inheritable grant on r becomes an inherited grant on the new folder.
-func predictDestChild(r *os.Root, child string) ([]destFinding, error) {
+// predictDestChild returns what a folder Obelisk creates depth levels below the
+// directory r holds would inherit, so the choice can be made before anything is
+// created. Every container-inheritable grant on r reaches the first new folder; a
+// no-propagate grant stops there and does not reach deeper new folders.
+func predictDestChild(r *os.Root, child string, depth int) ([]destFinding, error) {
 	f, err := r.Open(".")
 	if err != nil {
 		return nil, err
@@ -258,6 +260,9 @@ func predictDestChild(r *os.Root, child string) ([]destFinding, error) {
 			return nil, err
 		}
 		if ace.Header.AceFlags&destAceContainerInherit == 0 {
+			continue
+		}
+		if depth > 1 && ace.Header.AceFlags&destAceNoPropagate != 0 {
 			continue
 		}
 		switch ace.Header.AceType {

@@ -670,7 +670,7 @@ func (s *Store) inspectDestination(path string) (*destInspection, error) {
 		// Folders Obelisk creates inside an existing destination inherit from it;
 		// a grant they would inherit (even one that is inherit-only on the folder
 		// itself) is a finding about this folder.
-		pred, err := predictDestChild(anc, ancCanon)
+		pred, err := predictDestChild(anc, ancCanon, 1)
 		if err != nil {
 			return fail(err)
 		}
@@ -686,7 +686,7 @@ func (s *Store) inspectDestination(path string) (*destInspection, error) {
 				findings[i].Folder = intended
 			}
 		}
-		pred, err := predictDestChild(anc, filepath.Join(ancCanon, missing[0]))
+		pred, err := predictDestChild(anc, filepath.Join(ancCanon, missing[0]), len(missing))
 		if err != nil {
 			return fail(err)
 		}

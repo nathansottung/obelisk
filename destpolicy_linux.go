@@ -127,7 +127,7 @@ func checkDestNamespace(r *os.Root) (destFS, error) {
 
 // predictDestChild has nothing to predict on Linux: a folder Obelisk creates is
 // owned by this user with mode 0755 less the umask, and inherits no grants.
-func predictDestChild(*os.Root, string) ([]destFinding, error) { return nil, nil }
+func predictDestChild(*os.Root, string, int) ([]destFinding, error) { return nil, nil }
 
 // destStagePermsEnforced reports whether the filesystem behind f keeps real owner
 // and mode bits, so the private staging directory's 0700 can be relied on.

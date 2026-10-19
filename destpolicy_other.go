@@ -29,4 +29,6 @@ func acquireDestLease(*os.Root) (func() error, error) { return nil, destUnsuppor
 
 func destStagePermsEnforced(*os.File) bool { return true }
 
-func predictDestChild(*os.Root, string) ([]destFinding, error) { return nil, destUnsupportedPlatform() }
+func predictDestChild(*os.Root, string, int) ([]destFinding, error) {
+	return nil, destUnsupportedPlatform()
+}
