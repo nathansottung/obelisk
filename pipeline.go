@@ -352,7 +352,12 @@ func writeStoreObserved(path string, ks *keystoreFile, observe func(string)) err
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := renameReplacing(tmp, path); err != nil {
+		// The staged copy holds key material; do not leave it beside the keystore.
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func (a *App) KeystoreStatus() map[string]any {

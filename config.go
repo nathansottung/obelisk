@@ -38,7 +38,7 @@ type configHooks struct {
 	readFile   func(string) ([]byte, error)
 	observe    func(string)
 	createTemp func(string, string) (configTempFile, error)
-	rename     func(string, string) error
+	rename     func(string, string) error // nil uses renameReplacing
 	link       func(string, string) error // initialization only; nil uses os.Link
 	removeTemp func(string) error         // checked post-link cleanup; nil uses os.Remove
 	syncDir    func(string) error
@@ -322,7 +322,7 @@ func (a *App) publishConfig(b []byte, initialize bool) (published bool, err erro
 	} else {
 		rename := a.configIO.rename
 		if rename == nil {
-			rename = os.Rename
+			rename = renameReplacing
 		}
 		if e := rename(f.Name(), a.configPath()); e != nil {
 			return fail(e)
