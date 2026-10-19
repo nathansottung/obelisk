@@ -104,3 +104,30 @@ func TestDestChoiceAPI_MakePrivate(t *testing.T) {
 		t.Fatalf("apply: %d %v", code, out)
 	}
 }
+
+// Package-mode "back up changes" writes nothing into dest_dir, so a folder there
+// that would need a choice for a mirror does not block it.
+func TestDestChoiceAPI_PackageModeNotGated(t *testing.T) {
+	app, collID, _, _ := mirrorSetup(t, "Tape", map[string]string{"a.txt": "alpha"})
+	tape := app.Store.AddVolume(Volume{Label: "T1", Kind: "TAPE"})
+	folder, _ := sharedFolder(t)
+	mux := http.NewServeMux()
+	api(mux, app)
+	code, out := postJSON(t, mux, fmt.Sprintf("/api/collections/%d/backup-changes", collID),
+		map[string]any{"volume_id": tape.ID, "dest_dir": folder, "base": "volume"})
+	if code == 409 {
+		t.Fatalf("package-mode backup was blocked by a destination check: %v", out)
+	}
+	if id, ok := out["job_id"].(float64); ok {
+		deadline := time.Now().Add(30 * time.Second)
+		for j := app.Store.Job(int(id)); j == nil || j.Status == "RUNNING"; j = app.Store.Job(int(id)) {
+			if time.Now().After(deadline) {
+				t.Fatal("job did not finish")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	if got := entriesOf(t, folder); len(got) != 0 {
+		t.Fatalf("package mode wrote into dest_dir: %q", got)
+	}
+}

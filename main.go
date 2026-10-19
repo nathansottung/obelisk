@@ -1283,7 +1283,8 @@ func api(mux *http.ServeMux, app *App) {
 		folderIDs := intList(b, "folder_ids")
 		base, mode, dest, throttle := s(b, "base"), s(b, "mode"), s(b, "dest_dir"), f(b, "throttle_mbps")
 		scope := s(b, "scope_prefix")
-		if strings.TrimSpace(dest) != "" && !destinationGate(w, app, dest) {
+		// Only mirror mode writes into dest_dir; package mode plans packages.
+		if strings.TrimSpace(dest) != "" && normMode(mode, app.Store.Volume(vol)) == ModeMirror && !destinationGate(w, app, dest) {
 			return
 		}
 		volLabel := nonEmpty(app.Store.Volume(vol).Label, "volume")
