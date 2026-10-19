@@ -99,7 +99,7 @@ func TestDestAuth_OfflineSourceSkippedByOnlineDecision(t *testing.T) {
 
 // End to end: a registered source whose recorded volume is not where it was
 // registered does not stop a mirror destination from being authorized.
-func TestDestAuth_AuthorizeWithOfflineRecordedSource(t *testing.T) {
+func TestDestVolume_AuthorizeWithOfflineRecordedSource(t *testing.T) {
 	app := dockApp(t)
 	here := pathVolumeID(t.TempDir())
 	if here == "" {
@@ -128,7 +128,7 @@ func TestDestAuth_AuthorizeWithOfflineRecordedSource(t *testing.T) {
 	d.Close()
 }
 
-func TestDestAuth_RecordsSourceVolume(t *testing.T) {
+func TestDestVolume_RecordsSourceVolume(t *testing.T) {
 	app := dockApp(t)
 	src := t.TempDir()
 	want := pathVolumeID(src)
