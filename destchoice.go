@@ -272,7 +272,7 @@ func (s *Store) ChooseUseAnyway(path, fingerprint, typed string) (*DestinationCh
 		}
 	}
 	s.c.DestinationChoices = append(kept, rec)
-	err = s.save()
+	err = s.writeCatalog() // not save(): a batching job must not hold back the user's choice
 	s.mu.Unlock()
 	if err != nil {
 		return nil, err

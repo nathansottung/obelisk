@@ -330,3 +330,24 @@ func TestDestNotice_SaysWhenGroupCanChangePermissions(t *testing.T) {
 		t.Fatal("a Modify grant was described as able to change permissions")
 	}
 }
+
+// "Use it anyway" is on disk when the call returns, even while a job is batching
+// catalog writes.
+func TestDestChoice_SavedImmediatelyDuringBatch(t *testing.T) {
+	app := dockApp(t)
+	folder, _ := sharedFolder(t)
+	app.Store.BeginBatch()
+	defer app.Store.EndBatch()
+	app.Store.AddCollection("forces a recent write")
+	c := app.Store.CheckDestination(folder)
+	if _, err := app.Store.ChooseUseAnyway(folder, c.Fingerprint, destUseAnywayWord); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(app.DataDir, "catalog.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"destination_choices"`) {
+		t.Fatal("the choice was not written to disk")
+	}
+}
