@@ -351,3 +351,18 @@ func TestDestChoice_SavedImmediatelyDuringBatch(t *testing.T) {
 		t.Fatal("the choice was not written to disk")
 	}
 }
+
+// Names Windows treats as devices, with or without an extension or trailing
+// spaces, are not written as destination files.
+func TestDestRel_RejectsDeviceNames(t *testing.T) {
+	for _, bad := range []string{"NUL.tar.gz", "nul.txt", "LPT1.x", "COM0", "NUL .txt", "con", "sub/AUX.json", "CONIN$", "conout$.log", "COM¹.txt"} {
+		if _, err := destRel(bad); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	for _, good := range []string{"nullify.txt", "CONSOLE.txt", "com10.txt", "lpt.txt", "Aux Files/a.txt"} {
+		if _, err := destRel(good); err != nil {
+			t.Errorf("%q refused: %v", good, err)
+		}
+	}
+}

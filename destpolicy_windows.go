@@ -22,7 +22,9 @@ const (
 )
 
 // platformDestName refuses names Windows would silently alter or read as a stream
-// or device: trailing spaces or dots, a colon, a NUL.
+// or device: trailing spaces or dots, a colon, a NUL, or a device name such as NUL,
+// CON or COM1 — which Windows reads as the device even with an extension
+// ("NUL.txt") or spaces before the dot ("NUL .txt").
 func platformDestName(rel string) error {
 	if !filepath.IsLocal(filepath.FromSlash(rel)) {
 		return fmt.Errorf("unsupported Windows name")
@@ -31,8 +33,28 @@ func platformDestName(rel string) error {
 		if strings.HasSuffix(el, " ") || strings.HasSuffix(el, ".") || strings.ContainsAny(el, ":\x00") {
 			return fmt.Errorf("unsupported or ambiguous Windows component %q", el)
 		}
+		if windowsDeviceName(el) {
+			return fmt.Errorf("%q is a Windows device name", el)
+		}
 	}
 	return nil
+}
+
+// windowsDeviceName reports whether a path component names a DOS device.
+func windowsDeviceName(el string) bool {
+	base := el
+	if i := strings.IndexByte(base, '.'); i >= 0 {
+		base = base[:i]
+	}
+	base = strings.ToUpper(strings.TrimRight(base, " "))
+	switch base {
+	case "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$":
+		return true
+	}
+	if r := []rune(base); len(r) == 4 && (string(r[:3]) == "COM" || string(r[:3]) == "LPT") {
+		return strings.ContainsRune("0123456789¹²³", r[3])
+	}
+	return false
 }
 
 func destUserSID() (string, error) {
