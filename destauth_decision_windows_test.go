@@ -618,3 +618,33 @@ func TestDestChoice_MakePrivateAcceptsShortName(t *testing.T) {
 		t.Fatal("a change shown for one folder was applied to another")
 	}
 }
+
+// A source registered before volume identities were recorded, whose drive is now
+// attached under another letter: its old letter is empty, and the same folder
+// exists at the same place on the destination's drive. That folder may be the
+// source itself, so a destination inside it, around it or equal to it is refused.
+func TestDestAuth_UnrecordedSourceUnderNewLetter(t *testing.T) {
+	app := dockApp(t)
+	real := t.TempDir() // the source, as it appears under its new letter
+	mustWrite(t, filepath.Join(real, "photo.jpg"), "ORIGINAL")
+	old := unusedDriveLetter(t)[:2] + real[len(filepath.VolumeName(real)):]
+	coll := app.Store.AddCollection("Legacy")
+	f := app.Store.AddFolder(coll.ID, old)
+	f.VolumeID = "" // registered before identities were recorded
+
+	for _, dest := range []string{real, filepath.Join(real, "mirror"), filepath.Dir(real)} {
+		if d, err := app.Store.AuthorizeDestination(dest); err == nil {
+			d.Close()
+			t.Fatalf("destination %s may be inside the source under its new letter: want a refusal", dest)
+		} else if !strings.Contains(err.Error(), "new letter") {
+			t.Fatalf("refusal for %s should explain the drive may have a new letter: %v", dest, err)
+		}
+	}
+	// Elsewhere on the same drive is fine.
+	d, err := app.Store.AuthorizeDestination(t.TempDir())
+	if err != nil {
+		t.Fatalf("unrelated destination refused: %v", err)
+	}
+	d.Close()
+	mustBytes(t, filepath.Join(real, "photo.jpg"), "ORIGINAL", "refused destinations")
+}

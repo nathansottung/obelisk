@@ -272,6 +272,32 @@ func (snap *sourceSnapshot) decideOffline(destVolumeID, requested, canonical, di
 				return err
 			}
 		}
+		if s.volumeID == "" {
+			if err := sameFolderOtherLetter(s, canonical, display); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// sameFolderOtherLetter covers a source registered before volume identities were
+// recorded whose drive came back under a different letter. If the destination's
+// drive holds a folder at the source's place (its path without the drive letter),
+// that folder may be the source itself, and the destination must not be it,
+// inside it, or around it.
+func sameFolderOtherLetter(s sourceRef, canonical, display string) error {
+	srcVol := filepath.VolumeName(s.abs)
+	destVol := filepath.VolumeName(canonical)
+	if srcVol == "" || destVol == "" || strings.EqualFold(srcVol, destVol) {
+		return nil
+	}
+	candidate := destVol + s.abs[len(srcVol):]
+	if st, err := os.Stat(candidate); err != nil || !st.IsDir() {
+		return nil
+	}
+	if err := overlapError(normPath(canonical), normPath(candidate), display, canonical, candidate); err != nil {
+		return fmt.Errorf("refusing: registered source %s is not attached under its letter, and %s is at the same place on drive %s, so it may be the same drive under a new letter. %w", s.registered, candidate, destVol, err)
 	}
 	return nil
 }
