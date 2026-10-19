@@ -43,6 +43,8 @@ type DestinationChoice struct {
 	Choice      string    `json:"choice"`
 	ChosenAt    time.Time `json:"chosen_at"`
 	Findings    []string  `json:"findings,omitempty"` // what the user was told, for the record
+	Keys        []string  `json:"keys,omitempty"`     // the kinds of finding the user accepted (findingKey)
+	Intended    string    `json:"intended,omitempty"` // the folder the user chose to write into
 	Created     []uint64  `json:"created,omitempty"`  // folders Obelisk then created inside it
 }
 
@@ -155,15 +157,31 @@ func destCanMakePrivate(in *destInspection) bool {
 // made for a folder Obelisk then created this folder inside, whose own folder is
 // unchanged. A choice for this folder whose fingerprint no longer matches is
 // returned as stale, so the notice can say why Obelisk is asking again.
+//
+// A choice made for a folder that did not exist yet is held by its existing parent;
+// it covers that folder and what is inside it, not other new folders there. A
+// created folder is covered only while its findings are among those the user saw.
 func (s *Store) coveringChoice(in *destInspection) (valid, stale *DestinationChoice) {
 	s.mu.Lock()
-	choices := append([]*DestinationChoice(nil), s.c.DestinationChoices...)
+	choices := make([]*DestinationChoice, 0, len(s.c.DestinationChoices))
+	for _, c := range s.c.DestinationChoices {
+		cp := *c // copied under the lock: jobs append to Created concurrently
+		cp.Created = append([]uint64(nil), c.Created...)
+		cp.Keys = append([]string(nil), c.Keys...)
+		choices = append(choices, &cp)
+	}
 	s.mu.Unlock()
 	for _, c := range choices {
 		if c.Volume != in.anchorID.vol {
 			continue
 		}
 		if c.Folder == in.anchorID.idx {
+			// The choice covers the folder it was made for and folders inside it,
+			// not other folders under the same existing parent.
+			if c.Intended != "" && normPath(c.Intended) != normPath(in.intended) &&
+				!canonicalWithin(normPath(c.Intended), normPath(in.intended)) {
+				continue
+			}
 			if c.Fingerprint == in.fingerprint {
 				return c, nil
 			}
@@ -171,12 +189,22 @@ func (s *Store) coveringChoice(in *destInspection) (valid, stale *DestinationCho
 			continue
 		}
 		for _, id := range c.Created {
-			if id == in.anchorID.idx && choiceFolderUnchanged(c) {
+			if id == in.anchorID.idx && findingsWithin(in.findings, c.Keys) && choiceFolderUnchanged(c) {
 				return c, nil
 			}
 		}
 	}
 	return nil, stale
+}
+
+// findingsWithin reports whether every finding is of a kind the user accepted.
+func findingsWithin(findings []destFinding, keys []string) bool {
+	for _, f := range findings {
+		if !destContains(keys, findingKey(f)) {
+			return false
+		}
+	}
+	return true
 }
 
 // choiceFolderUnchanged reopens the folder a choice was made for and confirms it
@@ -229,8 +257,12 @@ func (s *Store) ChooseUseAnyway(path, fingerprint, typed string) (*DestinationCh
 	}
 	rec := &DestinationChoice{Volume: in.anchorID.vol, Folder: in.anchorID.idx, Path: in.anchorCanon,
 		Fingerprint: in.fingerprint, Choice: destChoiceUseAnyway, ChosenAt: time.Now().UTC()}
+	rec.Intended = in.intended
 	for _, f := range in.findings {
 		rec.Findings = append(rec.Findings, destFindingSummary(f))
+		if k := findingKey(f); !destContains(rec.Keys, k) {
+			rec.Keys = append(rec.Keys, k)
+		}
 	}
 	s.mu.Lock()
 	kept := s.c.DestinationChoices[:0]

@@ -216,3 +216,55 @@ func TestDestGuard_InheritOnlyGrantNeedsChoice(t *testing.T) {
 		t.Fatalf("write into a folder created inside a chosen destination: %v", err)
 	}
 }
+
+// A choice made for a folder that did not exist yet covers that folder only, not
+// every other new folder under the same existing parent.
+func TestDestChoice_MissingFolderChoiceIsNarrow(t *testing.T) {
+	app := dockApp(t)
+	_, parent := sharedFolder(t)
+	a := filepath.Join(parent, "NewA")
+	c := app.Store.CheckDestination(a)
+	if c.Status != destStatusChoose {
+		t.Fatalf("precondition: status %q", c.Status)
+	}
+	if _, err := app.Store.ChooseUseAnyway(a, c.Fingerprint, destUseAnywayWord); err != nil {
+		t.Fatal(err)
+	}
+	if got := app.Store.CheckDestination(a).Status; got != destStatusChosen {
+		t.Fatalf("the chosen folder: %q", got)
+	}
+	if got := app.Store.CheckDestination(filepath.Join(parent, "NewB")).Status; got != destStatusChoose {
+		t.Fatalf("another new folder under the same parent: %q, want a choice", got)
+	}
+}
+
+// A folder Obelisk created under a choice, then moved somewhere that adds a group
+// the user never saw, is no longer covered by that choice.
+func TestDestChoice_MovedCreatedFolderAskedAgain(t *testing.T) {
+	app := dockApp(t)
+	user, _ := destUserSID()
+	folder, _ := sharedFolder(t)
+	c := app.Store.CheckDestination(folder)
+	if _, err := app.Store.ChooseUseAnyway(folder, c.Fingerprint, destUseAnywayWord); err != nil {
+		t.Fatal(err)
+	}
+	d, err := app.Store.AuthorizeDestination(filepath.Join(folder, "New"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Close()
+	// Q is a folder where Users can change things through an inherited grant.
+	qParent := t.TempDir()
+	setDestFixtureDACL(t, qParent, "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;SY)(A;OICIIO;0x1301bf;;;BU)")
+	q := filepath.Join(qParent, "Q")
+	if err := os.Mkdir(q, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(q, "New")
+	if err := os.Rename(filepath.Join(folder, "New"), moved); err != nil {
+		t.Fatal(err)
+	}
+	if got := app.Store.CheckDestination(moved); got.Status != destStatusChoose {
+		t.Fatalf("moved created folder: %q with findings %+v, want a choice", got.Status, got.Findings)
+	}
+}
