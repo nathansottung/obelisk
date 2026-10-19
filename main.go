@@ -345,6 +345,27 @@ func configResponse(cfg Config, keystoreStatus map[string]any) map[string]any {
 	}
 }
 
+// destinationGate answers a write request whose destination is refused (400) or
+// still needs the user's choice (409, with the check and its notice), and reports
+// whether the request may go on. The job itself enforces the same rule.
+func destinationGate(w http.ResponseWriter, app *App, dest string) bool {
+	c := app.Store.CheckDestination(dest)
+	switch c.Status {
+	case destStatusRefuse:
+		jsonErr(w, 400, fmt.Errorf("%s", c.Reason))
+		return false
+	case destStatusChoose:
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(409)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error":             fmt.Sprintf("choose what to do about %s first: %s", c.Folder, c.Notice.Title),
+			"destination_check": c,
+		})
+		return false
+	}
+	return true
+}
+
 func body(r *http.Request) map[string]any {
 	var m map[string]any
 	_ = json.NewDecoder(r.Body).Decode(&m)
@@ -1135,6 +1156,14 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("at least one target {dest_dir, volume_id} required"))
 			return
 		}
+		// Every destination must be acceptable, or chosen by the user, before any job
+		// starts: one refused or undecided target stops the whole request.
+		for _, t := range targets {
+			tm, _ := t.(map[string]any)
+			if dest := s(tm, "dest_dir"); strings.TrimSpace(dest) != "" && !destinationGate(w, app, dest) {
+				return
+			}
+		}
 		jobs := []map[string]any{}
 		for _, t := range targets {
 			tm, _ := t.(map[string]any)
@@ -1179,6 +1208,41 @@ func api(mux *http.ServeMux, app *App) {
 		jsonOut(w, map[string]any{"jobs": jobs})
 	})
 
+	// ---- destination checks and choices (see destchoice.go) ----
+	// Read-only: may Obelisk write to this folder, and what must the user decide?
+	mux.HandleFunc("POST /api/destinations/check", func(w http.ResponseWriter, r *http.Request) {
+		jsonOut(w, app.Store.CheckDestination(s(body(r), "path")))
+	})
+	// "Use it anyway": the user typed the confirmation word for the fingerprint shown.
+	mux.HandleFunc("POST /api/destinations/use-anyway", func(w http.ResponseWriter, r *http.Request) {
+		b := body(r)
+		c, err := app.Store.ChooseUseAnyway(s(b, "path"), s(b, "fingerprint"), s(b, "typed"))
+		if err != nil {
+			jsonErr(w, 400, err)
+			return
+		}
+		jsonOut(w, c)
+	})
+	// "Make this folder private": first the exact change, then (confirmed) apply it.
+	mux.HandleFunc("POST /api/destinations/make-private/preview", func(w http.ResponseWriter, r *http.Request) {
+		plan, err := app.Store.PreviewMakePrivate(s(body(r), "path"))
+		if err != nil {
+			jsonErr(w, 400, err)
+			return
+		}
+		jsonOut(w, plan)
+	})
+	mux.HandleFunc("POST /api/destinations/make-private/apply", func(w http.ResponseWriter, r *http.Request) {
+		b := body(r)
+		confirmed, _ := b["confirm"].(bool)
+		c, err := app.Store.ApplyMakePrivate(s(b, "path"), s(b, "token"), confirmed)
+		if err != nil {
+			jsonErr(w, 400, err)
+			return
+		}
+		jsonOut(w, c)
+	})
+
 	// ---- incremental "back up changes" (see incremental.go) ----
 	// Preview the delta: file count, bytes, per-role breakdown, and a fit check.
 	register(mux, "POST /api/collections/{id}/backup-delta", func(w http.ResponseWriter, r *http.Request) {
@@ -1219,6 +1283,10 @@ func api(mux *http.ServeMux, app *App) {
 		folderIDs := intList(b, "folder_ids")
 		base, mode, dest, throttle := s(b, "base"), s(b, "mode"), s(b, "dest_dir"), f(b, "throttle_mbps")
 		scope := s(b, "scope_prefix")
+		// Only mirror mode writes into dest_dir; package mode plans packages.
+		if strings.TrimSpace(dest) != "" && normMode(mode, app.Store.Volume(vol)) == ModeMirror && !destinationGate(w, app, dest) {
+			return
+		}
 		volLabel := nonEmpty(app.Store.Volume(vol).Label, "volume")
 		label := fmt.Sprintf("Back up changes: %s → %s", coll.Name, volLabel)
 		if disp := app.Store.scopeDisplay(id, scope); disp != "" {

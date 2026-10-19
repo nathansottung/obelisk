@@ -82,6 +82,14 @@ func sampleHashHex(path string) (string, error) {
 		return "", err
 	}
 	defer f.Close()
+	return sampleHashOpen(f)
+}
+
+// sampleHashOpen is sampleHashHex over an already-open file — the one
+// implementation, so the level-C fingerprint taken through an authorized
+// destination handle (DestRoot.SampleHashRel) is the same fingerprint a later
+// verify computes by pathname.
+func sampleHashOpen(f *os.File) (string, error) {
 	st, err := f.Stat()
 	if err != nil {
 		return "", err

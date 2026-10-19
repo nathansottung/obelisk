@@ -55,6 +55,11 @@ jobs:
       - name: go test
         run: go test ./... -v
 
+      # The destination-boundary tests must run, not skip, on Linux: they are the
+      # evidence that a mirror never writes into a registered source here.
+      - name: destination-boundary tests (no skips)
+        run: bash scripts/ci/dest-boundary-linux.sh
+
       # Navigation performance budget for the Archives folder tree: expanding the
       # widest folder of a ~200k-file catalog must stay under 100ms server compute and
       # 50KB payload (TestTreeExpansionBudget). The OBELISK_PERF gate only exempts a

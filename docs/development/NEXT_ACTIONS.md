@@ -1091,3 +1091,36 @@ classification and public distribution/signing gates remain separate. No binary
 upload or package replacement. ONE suggested next activity after verified source
 publication: owner dogfood with fresh generated workspaces, if not already done.
 No owner session or automatic next task is implied.
+
+
+## Destination guard ported onto main (mirror and drive backup) — 2026-10-19
+
+The destination guard drafted on 2026-09-07/08 (review records under
+`reviews/PR04-OB-004-*`, written against base `0dc7d53`) is ported onto main on
+branch `fix/m2-slice-a`. It covers `MirrorToVolume` and mirror-mode
+`BackupChanges` only. Changes from the reviewed draft, by owner decision:
+
+- **exFAT / FAT:** accepted instead of refused. The job result and activity log
+  list what cannot be checked there (permissions, hard links, stable file IDs).
+  FAT32 and FAT refuse a job with a file over 4 GB before copying.
+- **NTFS drive root:** the default Windows root ACL (Authenticated Users may
+  create folders) is accepted with a warning; any other grant to other users still
+  refuses.
+- **Docker overlay:** refused with a message pointing at a host bind mount.
+- **macOS / BSD:** guarded writes refused with a "not yet supported" message.
+- **Offline sources:** source folders record their volume identity (Windows
+  volume serial, Linux filesystem UUID). A source whose volume is absent blocks
+  only a destination on that volume; with no recorded identity, only a
+  destination whose path could be the source's path. The draft blocked every
+  mirror while any source drive was unplugged.
+- **Handle renames:** the Windows handle rename now uses the same bounded retry
+  on transient locks as pathname renames.
+- **Go:** language floor 1.25 (for `os.Root`); builds keep the go.mod toolchain.
+  The draft's 1.26.8 pins in CI, release and Docker were not ported.
+
+Not covered yet: every other writer (plans, writer/span, packages, app backup,
+escrow, recovery kit, finalize, quarantine, burner and the app's own data files);
+plan mapping validation against `..`; media identity; macOS support; confinement of
+external helpers. Creating a real exFAT/FAT32 volume needs administrator rights,
+so those cases are tested through a filesystem-query seam, not a mounted volume.
+The Linux boundary tests run in CI and must not skip.

@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/nathansottung/obelisk/actions/workflows/ci.yml/badge.svg)](https://github.com/nathansottung/obelisk/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/nathansottung/obelisk?logo=github&color=2e5e4e)](https://github.com/nathansottung/obelisk/releases/latest)
-[![Go](https://img.shields.io/badge/Go-1.22-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Single binary](https://img.shields.io/badge/deploy-single%20binary-2e5e4e)](#quickstart)
 [![Restore: par2 · gpg · tar](https://img.shields.io/badge/restore-par2%20%C2%B7%20gpg%20%C2%B7%20tar-informational)](docs/RESTORE_RUNBOOK.md)
@@ -95,6 +95,22 @@ replace.
   The check applies to the **staging folder**, **write / span / burn
   destinations**, **restore output**, the **recovery-kit output**, and
   **keystore paths**. The check is not yet complete; known gaps are being fixed.
+- **Mirrors and "back up changes" to a drive use a stricter guard.** They open
+  the destination folder and judge the folder actually opened, so a shortcut,
+  junction, 8.3 short name or `\\?\` spelling of a source is refused like the
+  source itself, and so is a destination that *contains* a source. Every file is
+  written through that open folder, staged and verified before it gets its real
+  name. NTFS, exFAT and FAT32 drives are accepted on Windows. Some folders need
+  your choice first: a folder other accounts on this PC can change through
+  Windows' default groups (Authenticated Users or Users, inherited), a drive's
+  top folder, or an exFAT or FAT32 drive, where permissions, hard links and file
+  IDs cannot be checked. Obelisk explains what it found and writes nothing there
+  until you pick **Make this folder private**, **Use it anyway** (type
+  `Continue`; asked again if the permissions change) or **Pick another folder**.
+  Grants to Everyone, Guests, Anonymous Logon or any other account are refused.
+  FAT32 refuses files over 4 GB before copying. On Linux,
+  ext4, XFS, Btrfs, exFAT and FAT are accepted and a Docker overlay folder is
+  refused. On macOS these jobs are not yet supported and are refused.
 - **Drift reports changes to your originals.** Delete or move a source file
   yourself and drift will report it.
 
@@ -1254,8 +1270,8 @@ lived option — which is the point.
 go build -o obelisk .
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o obelisk.exe .
 ```
-One dependency (QR-code generation); everything else is the Go standard
-library. Requires **Go 1.22+**. See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)
+A few small pure-Go dependencies (see docs/ARCHITECTURE.md); everything else is
+the Go standard library. Requires **Go 1.25+**. See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)
 and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Optical burn queue

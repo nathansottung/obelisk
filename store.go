@@ -137,6 +137,10 @@ type Folder struct {
 	ID           int    `json:"id"`
 	CollectionID int    `json:"collection_id"`
 	Path         string `json:"path"`
+	// VolumeID names the volume the folder was on when it was last seen (see
+	// volumeIDOf). It lets a destination check tell a source whose drive is not
+	// attached from one that was deleted. Empty when it could not be read.
+	VolumeID string `json:"volume_id,omitempty"`
 }
 
 type File struct {
@@ -1069,6 +1073,11 @@ type catalog struct {
 	// exist to show a Backup History and to feed Home's periodic-backup recognition
 	// natively. Additive; tolerated absent on older catalogs. See incremental.go.
 	BackupSessions []*BackupSession `json:"backup_sessions,omitempty"`
+	// DestinationChoices: the user's recorded "Use it anyway" decisions for mirror
+	// and backup destinations that other accounts can change or whose filesystem
+	// cannot record permissions. Each is tied to a folder's identity and a
+	// fingerprint of its permissions; see destchoice.go. Additive.
+	DestinationChoices []*DestinationChoice `json:"destination_choices,omitempty"`
 }
 
 // compactThreshold is the file count above which the catalog is saved as compact
@@ -1845,6 +1854,7 @@ func pruneID(ids []int, drop int) []int {
 }
 
 func (s *Store) AddFolder(collectionID int, path string) *Folder {
+	vid := pathVolumeID(path) // disk access before taking the lock
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, f := range s.c.Folders { // idempotent per (collection, path)
@@ -1852,7 +1862,7 @@ func (s *Store) AddFolder(collectionID int, path string) *Folder {
 			return f
 		}
 	}
-	f := &Folder{ID: s.next("folder"), CollectionID: collectionID, Path: path}
+	f := &Folder{ID: s.next("folder"), CollectionID: collectionID, Path: path, VolumeID: vid}
 	s.c.Folders = append(s.c.Folders, f)
 	_ = s.save()
 	return f
@@ -1870,6 +1880,36 @@ func (s *Store) FoldersOf(collectionID int) []*Folder {
 	return out
 }
 
+// sourceFolders returns a copy of every registered source folder with a path.
+func (s *Store) sourceFolders() []Folder {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Folder, 0, len(s.c.Folders))
+	for _, f := range s.c.Folders {
+		if strings.TrimSpace(f.Path) != "" {
+			out = append(out, *f)
+		}
+	}
+	return out
+}
+
+// recordFolderVolume stores the volume a source folder was seen on, when none was
+// recorded yet. A recorded identity is never overwritten here.
+func (s *Store) recordFolderVolume(folderID int, volumeID string) {
+	if volumeID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, f := range s.c.Folders {
+		if f.ID == folderID && f.VolumeID == "" {
+			f.VolumeID = volumeID
+			_ = s.save()
+			return
+		}
+	}
+}
+
 // SourceRoots returns every registered Archive source folder (across all
 // collections) — the directories Obelisk only ever OPENS FOR READING.
 func (s *Store) SourceRoots() []string {
@@ -1884,12 +1924,28 @@ func (s *Store) SourceRoots() []string {
 	return out
 }
 
-// AssertOutsideSources enforces Obelisk's core invariant — it NEVER writes into
-// source data. Any WRITABLE destination (staging, write/span target, restore or
-// recovery-kit output, keystore path, …) is refused when it resolves to a path
-// at or beneath a registered source root. Empty paths pass (callers do their own
-// required-ness check); resolution is best-effort so a not-yet-created
-// destination is still checked by its intended absolute path.
+// AssertOutsideSources is a PREFLIGHT PATHNAME CHECK, not the write-authority
+// boundary. It refuses a destination whose ABSOLUTE PATHNAME STRING is at or
+// beneath a registered source root. Empty paths pass (callers do their own
+// required-ness check); resolution is best-effort so a not-yet-created destination
+// is still checked by its intended absolute path.
+//
+// WHAT IT CANNOT DECIDE:
+//
+//   - a destination that CONTAINS a registered source — it tests one direction only,
+//     so mirroring two registered folders to their common parent is permitted and
+//     republishes the originals over themselves;
+//   - an ALIAS of a source (junction, 8.3 short name, extended-length `\\?\`
+//     spelling) — it compares spellings, and filepath.Abs preserves them;
+//   - a NESTED link below a correct destination root — the entry check is right and
+//     the escape happens one level below it;
+//   - a root SUBSTITUTED after the check — the answer was true when it was given.
+//
+// The boundary that does decide those is Store.AuthorizeDestination in destauth.go:
+// it opens the destination, decides on the identity of the opened object, and
+// returns the handle every subsequent write goes through. Mirror runs and
+// mirror-mode BackupChanges use it; every other writer still relies on this check.
+// Do not read a pass from it as authorization to write.
 func (s *Store) AssertOutsideSources(path string) error {
 	if strings.TrimSpace(path) == "" {
 		return nil
