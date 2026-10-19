@@ -137,6 +137,10 @@ type Folder struct {
 	ID           int    `json:"id"`
 	CollectionID int    `json:"collection_id"`
 	Path         string `json:"path"`
+	// VolumeID names the volume the folder was on when it was last seen (see
+	// volumeIDOf). It lets a destination check tell a source whose drive is not
+	// attached from one that was deleted. Empty when it could not be read.
+	VolumeID string `json:"volume_id,omitempty"`
 }
 
 type File struct {
@@ -1845,6 +1849,7 @@ func pruneID(ids []int, drop int) []int {
 }
 
 func (s *Store) AddFolder(collectionID int, path string) *Folder {
+	vid := pathVolumeID(path) // disk access before taking the lock
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, f := range s.c.Folders { // idempotent per (collection, path)
@@ -1852,7 +1857,7 @@ func (s *Store) AddFolder(collectionID int, path string) *Folder {
 			return f
 		}
 	}
-	f := &Folder{ID: s.next("folder"), CollectionID: collectionID, Path: path}
+	f := &Folder{ID: s.next("folder"), CollectionID: collectionID, Path: path, VolumeID: vid}
 	s.c.Folders = append(s.c.Folders, f)
 	_ = s.save()
 	return f
@@ -1868,6 +1873,36 @@ func (s *Store) FoldersOf(collectionID int) []*Folder {
 		}
 	}
 	return out
+}
+
+// sourceFolders returns a copy of every registered source folder with a path.
+func (s *Store) sourceFolders() []Folder {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Folder, 0, len(s.c.Folders))
+	for _, f := range s.c.Folders {
+		if strings.TrimSpace(f.Path) != "" {
+			out = append(out, *f)
+		}
+	}
+	return out
+}
+
+// recordFolderVolume stores the volume a source folder was seen on, when none was
+// recorded yet. A recorded identity is never overwritten here.
+func (s *Store) recordFolderVolume(folderID int, volumeID string) {
+	if volumeID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, f := range s.c.Folders {
+		if f.ID == folderID && f.VolumeID == "" {
+			f.VolumeID = volumeID
+			_ = s.save()
+			return
+		}
+	}
 }
 
 // SourceRoots returns every registered Archive source folder (across all

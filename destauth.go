@@ -1,0 +1,704 @@
+package main
+
+// destauth.go — destination authority.
+//
+// The invariant this file exists to keep: Obelisk NEVER writes into registered
+// source data. Until now that was one boolean — AssertOutsideSources — asked once
+// at function entry about a PATHNAME STRING, after which every leaf write rebuilt
+// an absolute path and reopened it by name. Three different questions were riding
+// on that single answer:
+//
+//  1. Is the destination object registered source data, inside it, or around it?
+//  2. Does every leaf operation land beneath the destination we decided about?
+//  3. Is this really the medium the operator selected?
+//
+// This file separates (1) and (2) and deliberately does NOT answer (3).
+//
+//   - AUTHORIZATION — Store.AuthorizeDestination opens the destination, derives
+//     its canonical name FROM THE OPEN HANDLE, decides against a snapshot of the
+//     registered sources, and returns the handle it decided about. The pathname
+//     is never re-resolved afterwards. Deciding on the handle is what makes an
+//     alias (junction, 8.3 short name, extended-length spelling) get the same
+//     verdict as the real path: they all canonicalise to the same object.
+//
+//   - CONFINEMENT — every subsequent operation is relative to that retained
+//     handle, via os.Root or the platform descriptor-relative publication API.
+//     No absolute pathname is reopened after the decision, including staging
+//     paths, read-backs, sidecars and failure cleanup. A stored canonical
+//     pathname is NOT a capability; the open handle is.
+//
+// MEDIA IDENTITY IS NOT ESTABLISHED HERE. A retained handle proves the writes go
+// to ONE SPECIFIC DIRECTORY OBJECT. It does not prove that object is the volume,
+// session or removable medium the operator chose.
+//
+// SCOPE. Only MirrorToVolume and mirror-mode BackupChanges (with their shared leaf
+// copy and inventory sidecar) use this boundary so far. Every other writer still
+// uses AssertOutsideSources.
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+// errRelEscape marks a destination-relative path that is not a plain, confined
+// relative path. It is returned BEFORE the path reaches the os.Root, so a bad
+// catalog RelPath, folder label or staged entry name is rejected at one place
+// rather than being handed to the filesystem to adjudicate.
+var errRelEscape = errors.New("destination-relative path is not confined")
+
+// destRel validates a destination-relative path. It must be a non-empty, slash-
+// separated, relative path with no empty, "." or ".." element, no leading slash
+// and no drive letter or UNC volume. Catalog RelPath values, mirrorFolderLabels
+// output and sidecar component names all pass through here. os.Root would refuse
+// an escaping path anyway; validating first gives one clear application error.
+func destRel(rel string) (string, error) {
+	r := rel
+	if r == "" || strings.TrimSpace(r) == "" {
+		return "", fmt.Errorf("%w: empty path", errRelEscape)
+	}
+	r = filepath.ToSlash(r)
+	// Catalog names are not user-entered root configuration. Never trim them.
+	// Drive qualification is rejected on every host, including Unix.
+	if len(r) >= 2 && ((r[0] >= 'A' && r[0] <= 'Z') || (r[0] >= 'a' && r[0] <= 'z')) && r[1] == ':' {
+		return "", fmt.Errorf("%w: %q is drive-qualified", errRelEscape, rel)
+	}
+	if err := platformDestName(r); err != nil {
+		return "", fmt.Errorf("%w: %q: %w", errRelEscape, rel, err)
+	}
+	if v := filepath.VolumeName(filepath.FromSlash(r)); v != "" {
+		return "", fmt.Errorf("%w: %q names volume %q", errRelEscape, rel, v)
+	}
+	if strings.HasPrefix(r, "/") {
+		return "", fmt.Errorf("%w: %q is rooted", errRelEscape, rel)
+	}
+	for _, el := range strings.Split(r, "/") {
+		switch el {
+		case "":
+			return "", fmt.Errorf("%w: %q has an empty path element", errRelEscape, rel)
+		case ".", "..":
+			return "", fmt.Errorf("%w: %q contains a %q element", errRelEscape, rel, el)
+		}
+	}
+	return r, nil
+}
+
+// ---- volume identity ----------------------------------------------------------
+
+// pathVolumeID is the recorded identity of the volume holding path, or "" when it
+// cannot be read (the path is absent, unreadable, or the platform records none).
+func pathVolumeID(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	id, err := volumeIDOf(f)
+	if err != nil {
+		return ""
+	}
+	return id
+}
+
+// ---- the registered-source snapshot -----------------------------------------
+
+// sourceRef is one registered source root as it was resolved at authorization
+// time. canonical is handle-derived whenever the root exists on disk, so an alias
+// of a source compares equal to the source itself.
+//
+// A source whose drive is not attached has no canonical name. It is kept as
+// offline, with the volume identity it was recorded on (if any) and the absolute
+// path it was registered at, and decided by decideOffline instead.
+type sourceRef struct {
+	registered string // exactly as registered in the catalog
+	canonical  string // opened root, or opened ancestor plus the absent descendant
+	fromHandle bool
+	offline    bool   // the source's volume is not where the source was registered
+	volumeID   string // recorded volume identity, for offline sources
+	abs        string // absolute registered path, for offline sources
+}
+
+// sourceSnapshot is the set of registered sources an authorization decided
+// against, captured ONCE.
+//
+// SYNCHRONISATION: Store.sourceFolders takes the general Store mutex and releases
+// it before returning. The mutex is NOT held for the duration of the job — a
+// mirror can run for hours and needs the same mutex to record its results.
+//
+// RESIDUAL: a source registered AFTER authorization, or protected data moved INTO
+// the authorized tree afterwards, is not covered by this snapshot. The retained
+// handle still confines every write to the directory that was authorized; it does
+// not re-decide whether that directory has since become protected.
+type sourceSnapshot struct {
+	at   time.Time
+	srcs []sourceRef
+}
+
+// sourceSnapshot resolves every registered source root to a canonical name,
+// preferring the identity of the OPEN OBJECT over the spelling of its name.
+//
+// A root that cannot be opened for a reason other than "does not exist" is a
+// refusal: authorizing a destination while a source location is unresolved would
+// be authorizing on a guess. A root that does not exist is one of three things:
+//
+//   - its folder was removed but its volume is still there: resolve the existing
+//     ancestor and protect the path the source would occupy;
+//   - its volume is not attached (no ancestor exists, or a different volume now
+//     answers at that path): it cannot hold the destination, so it is offline and
+//     only blocks a destination on the volume it was recorded on;
+//   - its volume identity was never recorded and nothing answers at its path: it
+//     is offline and blocks only a destination whose path could be its path.
+func (s *Store) sourceSnapshot() (*sourceSnapshot, error) {
+	folders := s.sourceFolders() // takes and RELEASES the Store mutex
+	snap := &sourceSnapshot{at: time.Now().UTC()}
+	for _, folder := range folders {
+		r := folder.Path
+		abs, err := filepath.Abs(r)
+		if err != nil {
+			return nil, fmt.Errorf("cannot resolve registered source %s: %w", r, err)
+		}
+		f, oerr := os.Open(abs)
+		if oerr == nil {
+			c, cerr := handleCanonicalPath(f)
+			if cerr == nil && folder.VolumeID == "" {
+				if vid, verr := volumeIDOf(f); verr == nil && vid != "" {
+					s.recordFolderVolume(folder.ID, vid)
+				}
+			}
+			f.Close()
+			if cerr != nil {
+				return nil, fmt.Errorf("cannot establish the real location of registered source root %s: %w — refusing to authorize a destination while a protected source is unresolved", r, cerr)
+			}
+			snap.srcs = append(snap.srcs, sourceRef{registered: r, canonical: c, fromHandle: true})
+			continue
+		}
+		if !errors.Is(oerr, fs.ErrNotExist) {
+			return nil, fmt.Errorf("cannot open registered source root %s to establish its real location: %w — refusing to authorize a destination on a guess", r, oerr)
+		}
+		offline := sourceRef{registered: r, offline: true, volumeID: folder.VolumeID, abs: abs}
+		ancestor, missing, err := deepestExistingDir(abs)
+		if errors.Is(err, errNoExistingParent) {
+			snap.srcs = append(snap.srcs, offline)
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("registered source %s is unresolved: %w; restore access to its parent or repair the alias before retrying", r, err)
+		}
+		if folder.VolumeID != "" {
+			if vid := pathVolumeID(ancestor); vid != "" && vid != folder.VolumeID {
+				snap.srcs = append(snap.srcs, offline)
+				continue
+			}
+		}
+		parent, err := os.OpenRoot(ancestor)
+		if err != nil {
+			return nil, fmt.Errorf("cannot open ancestor of registered source %s: %w", r, err)
+		}
+		canon, err := rootCanonicalPath(parent)
+		parent.Close()
+		if err != nil {
+			return nil, fmt.Errorf("cannot locate ancestor of registered source %s: %w", r, err)
+		}
+		canon = filepath.Join(append([]string{canon}, missing...)...)
+		snap.srcs = append(snap.srcs, sourceRef{registered: r, canonical: canon})
+	}
+	return snap, nil
+}
+
+// decide answers the source-overlap question in BOTH directions plus equality,
+// over canonical names, at path-segment boundaries.
+//
+//	equal    — the destination IS a registered source
+//	inside   — the destination is beneath a registered source
+//	ancestor — the destination CONTAINS a registered source
+//
+// The ancestor direction is the one AssertOutsideSources omits, and it needs no
+// links at all to republish protected data over itself: mirror two registered
+// folders to their common parent and the per-folder subtree labels reconstruct the
+// source paths exactly. Offline sources are skipped here; see decideOffline.
+func (snap *sourceSnapshot) decide(destCanonical, display string) error {
+	d := normPath(destCanonical)
+	if d == "" {
+		return fmt.Errorf("refusing: could not establish the real location of destination %s", display)
+	}
+	for _, s := range snap.srcs {
+		if s.offline {
+			continue
+		}
+		if err := overlapError(d, normPath(s.canonical), display, destCanonical, s.registered); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// decideOffline applies the offline sources to a destination on the volume named
+// destVolumeID (empty when that is unknown), whose path as requested is requested
+// and as resolved is canonical.
+//
+// A source recorded on a volume blocks only a destination on that same volume: the
+// volume is attached somewhere other than where the source was registered, and
+// the destination may be inside it. When either identity is unknown the decision
+// falls back to paths: refuse when the destination's path could be the source's.
+func (snap *sourceSnapshot) decideOffline(destVolumeID, requested, canonical, display string) error {
+	for _, s := range snap.srcs {
+		if !s.offline {
+			continue
+		}
+		if s.volumeID != "" && destVolumeID != "" {
+			if s.volumeID == destVolumeID {
+				return fmt.Errorf("refusing: the drive that holds registered source %s is attached at a different location, and %s is on that drive. Reattach it where the source was registered, or choose a destination on another drive", s.registered, display)
+			}
+			continue
+		}
+		src := normPath(s.abs)
+		for _, p := range []string{requested, canonical} {
+			if err := overlapError(normPath(p), src, display, p, s.registered+" (its drive is not attached)"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// overlapError reports whether destination d and source r (both normPath keys)
+// are the same folder or one contains the other.
+func overlapError(d, r, display, destName, registered string) error {
+	if r == "" {
+		return fmt.Errorf("refusing: registered source %s has an unresolved location", registered)
+	}
+	switch {
+	case d == r:
+		return fmt.Errorf("refusing: %s is registered source root %s (both name the same folder: %s); Obelisk never writes into source data", display, registered, destName)
+	case canonicalWithin(r, d):
+		return fmt.Errorf("refusing: %s is inside source root %s (it resolves to %s); Obelisk never writes into source data", display, registered, destName)
+	case canonicalWithin(d, r):
+		return fmt.Errorf("refusing: %s (it resolves to %s) CONTAINS registered source root %s. Writing here would copy protected originals back over themselves. Pick an output folder that holds no registered source — a dedicated subfolder, or a different drive", display, destName, registered)
+	}
+	return nil
+}
+
+// filepath.Rel understands filesystem roots and volumes; a separator appended
+// to a root spelling does not. Inputs are comparison keys, never stored names.
+func canonicalWithin(parent, child string) bool {
+	rel, err := filepath.Rel(filepath.FromSlash(parent), filepath.FromSlash(child))
+	return err == nil && rel != ".." && !filepath.IsAbs(rel) &&
+		!strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// ---- the destination filesystem ------------------------------------------------
+
+// destFS is what the platform policy learned about the destination's filesystem:
+// its name, the largest file it can hold (0 when there is no practical limit),
+// the checks that could not run there, and anything accepted with a warning.
+type destFS struct {
+	name       string
+	maxFile    int64
+	notChecked []string
+	warnings   []string
+}
+
+// ---- the authorized destination ---------------------------------------------
+
+// DestRoot is a destination directory that has been authorized, together with the
+// open handle the decision was made about. Every write goes through this handle.
+//
+// WHAT IT GUARANTEES: every operation lands beneath the directory object that was
+// authorized — not beneath whatever its pathname resolves to later. A junction,
+// symlink or reparse point BELOW the root cannot redirect a leaf operation out.
+//
+// WHAT IT DOES NOT GUARANTEE: that the object is the intended medium (see the
+// file header); confinement of EXTERNAL HELPER PROCESSES, which receive pathname
+// operands and are not constrained by a handle this process holds; or anything
+// under privileged topology changes (bind mounts, device or drive-letter
+// substitution), which are outside the threat model.
+type DestRoot struct {
+	root      *os.Root
+	canonical string // handle-derived at authorization; never re-resolved
+	display   string // the operator's spelling, for messages and catalog records
+	snap      *sourceSnapshot
+	fs        destFS
+	token     string       // collision avoidance; object ownership is retained separately
+	release   func() error // cooperative lease retained through the caller's catalog credit
+	volume    uint64
+}
+
+// AuthorizeDestination resolves path to a real directory, opens it, decides
+// against the registered sources using the identity of THE OPENED OBJECT, and
+// returns the handle that was decided about. The caller must Close it.
+//
+// Order is the whole point. Open first, then name: the canonical name comes from
+// the open handle, so the verdict is about the object being held rather than about
+// a string that may name something else by the time it is used.
+//
+// BOOTSTRAP creates one absent component at a time. A single-component Mkdir
+// does not traverse a terminal link and an existing entry is a refusal. Before
+// any next creation the newly opened parent's actual location is authorized.
+func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
+	display := strings.TrimSpace(path)
+	if display == "" {
+		return nil, fmt.Errorf("a destination folder is required")
+	}
+	abs, err := filepath.Abs(display)
+	if err != nil {
+		return nil, fmt.Errorf("cannot resolve destination %s: %w", display, err)
+	}
+	abs = filepath.Clean(abs)
+
+	snap, err := s.sourceSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	existing, missing, err := deepestExistingDir(abs)
+	if err != nil {
+		return nil, err
+	}
+
+	anc, err := os.OpenRoot(existing)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open destination folder %s: %w", existing, err)
+	}
+	ancCanon, err := rootCanonicalPath(anc)
+	if err != nil {
+		anc.Close()
+		return nil, fmt.Errorf("cannot establish the real location of %s: %w — refusing rather than writing on a guess", existing, err)
+	}
+	// Preflight the intended path; this is not permission to traverse links in
+	// the missing suffix. The component creation loop below enforces that rule.
+	intended := ancCanon
+	if len(missing) > 0 {
+		intended = filepath.Join(append([]string{ancCanon}, missing...)...)
+	}
+	if err := snap.decide(intended, display); err != nil {
+		anc.Close()
+		return nil, err
+	}
+	if err := snap.decideOffline(rootVolumeID(anc), abs, intended, display); err != nil {
+		anc.Close()
+		return nil, err
+	}
+
+	root := anc
+	for _, component := range missing {
+		if _, err := destRel(component); err != nil {
+			root.Close()
+			return nil, err
+		}
+		// Only the first parent may contain sources: creation of this single
+		// absent, disjoint child is authorized, not its sibling subtrees.
+		if err := snap.decide(filepath.Join(ancCanon, component), display); err != nil {
+			root.Close()
+			return nil, err
+		}
+		if _, err := checkDestNamespace(root); err != nil {
+			root.Close()
+			return nil, err
+		}
+		if err := bootstrapMkdir(root, component); err != nil {
+			root.Close()
+			return nil, fmt.Errorf("cannot safely create destination component %q: %w; inspect the destination and retry", component, err)
+		}
+		sub, serr := root.OpenRoot(component)
+		root.Close()
+		if serr != nil {
+			return nil, fmt.Errorf("cannot open destination component %q: %w", component, serr)
+		}
+		root = sub
+		ancCanon, err = rootCanonicalPath(root)
+		if err == nil {
+			err = snap.decide(ancCanon, display)
+		}
+		if err != nil {
+			root.Close()
+			return nil, err
+		}
+	}
+
+	// Re-derive the canonical name from the handle actually retained, and take the
+	// verdict again on it. This closes the gap between "the name we intended" and
+	// "the object we are holding".
+	canon, err := rootCanonicalPath(root)
+	if err != nil {
+		root.Close()
+		return nil, fmt.Errorf("cannot establish the real location of %s: %w — refusing rather than writing on a guess", display, err)
+	}
+	if err := snap.decide(canon, display); err != nil {
+		root.Close()
+		return nil, err
+	}
+	if err := snap.decideOffline(rootVolumeID(root), abs, canon, display); err != nil {
+		root.Close()
+		return nil, err
+	}
+
+	destfs, err := checkDestNamespace(root)
+	if err != nil {
+		root.Close()
+		return nil, err
+	}
+	release, err := acquireDestLease(root)
+	if err != nil {
+		root.Close()
+		return nil, err
+	}
+	f, err := root.Open(".")
+	if err != nil {
+		release()
+		root.Close()
+		return nil, err
+	}
+	id, err := handleIdentity(f)
+	f.Close()
+	if err != nil {
+		release()
+		root.Close()
+		return nil, err
+	}
+	tok := make([]byte, 16)
+	if _, err := rand.Read(tok); err != nil {
+		release()
+		root.Close()
+		return nil, fmt.Errorf("cannot generate a staging token: %w", err)
+	}
+	return &DestRoot{root: root, canonical: canon, display: display, snap: snap, fs: destfs, token: hex.EncodeToString(tok), release: release, volume: id.vol}, nil
+}
+
+// rootVolumeID is the volume identity of the directory r holds, or "".
+func rootVolumeID(r *os.Root) string {
+	f, err := r.Open(".")
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	id, err := volumeIDOf(f)
+	if err != nil {
+		return ""
+	}
+	return id
+}
+
+// Test seam immediately before the actual single-component creation.
+var bootstrapMkdir = func(r *os.Root, component string) error { return r.Mkdir(component, 0o755) }
+
+// errNoExistingParent means nothing exists anywhere along a path, not even its
+// volume root — for a drive letter, the drive is not attached.
+var errNoExistingParent = errors.New("no existing parent folder")
+
+// deepestExistingDir splits abs into the deepest existing directory and the
+// components below it that do not exist yet.
+//
+// This walk uses pathname lookups, and that is fine: it only chooses WHERE TO
+// START. Nothing is authorized by it — the ancestor it picks is then opened and
+// judged on its handle-derived identity, and the leaf is judged again on its own.
+func deepestExistingDir(abs string) (string, []string, error) {
+	var missing []string
+	p := abs
+	for {
+		st, err := os.Lstat(p)
+		if err == nil {
+			// Lstat distinguishes an existing dangling entry from absence. Stat
+			// then follows both Unix symlinks and Windows junction/reparse forms
+			// (which need not report ModeSymlink).
+			st, err = os.Stat(p)
+			if err != nil {
+				return "", nil, fmt.Errorf("cannot resolve existing entry %s: %w", p, err)
+			}
+		}
+		if err == nil {
+			if !st.IsDir() {
+				return "", nil, fmt.Errorf("destination %s exists and is not a folder", p)
+			}
+			return p, missing, nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", nil, fmt.Errorf("cannot inspect %s: %w", p, err)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return "", nil, fmt.Errorf("%w for %s", errNoExistingParent, abs)
+		}
+		base := filepath.Base(p)
+		if base == "" || base == "." || base == ".." {
+			return "", nil, fmt.Errorf("cannot create destination %s: unusable path component %q", abs, base)
+		}
+		missing = append([]string{base}, missing...)
+		p = parent
+	}
+}
+
+// rootCanonicalPath derives an os.Root's canonical location from the handle it
+// holds, by opening "." within it and asking the platform where that object
+// actually lives. Root.Name() is the string the root was opened WITH, which is
+// exactly what must not be trusted here.
+func rootCanonicalPath(r *os.Root) (string, error) {
+	f, err := r.Open(".")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	return handleCanonicalPath(f)
+}
+
+// Name is the operator's spelling of the destination — for messages, log lines,
+// the Performance strip and catalog records. It is NOT a capability and is never
+// reopened for a mutation.
+func (d *DestRoot) Name() string { return d.display }
+
+// Canonical is the handle-derived location the authorization decided about.
+// Also not a capability: read-only queries (free space) may use it; writes go
+// through the handle.
+func (d *DestRoot) Canonical() string { return d.canonical }
+
+// Filesystem is the destination filesystem's name as the platform reports it.
+func (d *DestRoot) Filesystem() string { return d.fs.name }
+
+// MaxFileSize is the largest file the destination filesystem can hold, or 0 when
+// it has no practical limit.
+func (d *DestRoot) MaxFileSize() int64 { return d.fs.maxFile }
+
+// Notes lists, for the job result, every warning the destination was accepted
+// with and every check that could not run on its filesystem.
+func (d *DestRoot) Notes() []string {
+	var out []string
+	out = append(out, d.fs.warnings...)
+	for _, c := range d.fs.notChecked {
+		out = append(out, "not checked on this drive: "+c)
+	}
+	return out
+}
+
+// CheckFileSizes refuses, before anything is written, a job whose largest file
+// will not fit on the destination filesystem.
+func (d *DestRoot) CheckFileSizes(sizes []int64) error {
+	if d.fs.maxFile <= 0 {
+		return nil
+	}
+	n, largest := 0, int64(0)
+	for _, s := range sizes {
+		if s > d.fs.maxFile {
+			n++
+			largest = max(largest, s)
+		}
+	}
+	if n == 0 {
+		return nil
+	}
+	return fmt.Errorf("%d file(s) are larger than %s can hold (largest %.2f GB; the limit is 4 GB per file). Use an exFAT or NTFS drive for this destination", n, d.fs.name, float64(largest)/1e9)
+}
+
+// Close follows completion of the owning job (including its workers and catalog
+// updates). Independent jobs obtain independent DestRoots and are coordinated by
+// the platform lease.
+func (d *DestRoot) Close() error {
+	if d == nil || d.root == nil {
+		return nil
+	}
+	return errors.Join(d.root.Close(), d.release())
+}
+
+// MkdirAll creates rel (and its parents) beneath the authorized root. An empty
+// rel or "." is the root itself, which already exists.
+func (d *DestRoot) MkdirAll(rel string) error {
+	r := filepath.ToSlash(rel)
+	if r == "" || r == "." {
+		return nil
+	}
+	v, err := destRel(r)
+	if err != nil {
+		return err
+	}
+	parent := d.root
+	defer func() {
+		if parent != d.root {
+			parent.Close()
+		}
+	}()
+	for _, component := range strings.Split(v, "/") {
+		if err := d.checkParent(parent); err != nil {
+			return err
+		}
+		if err := parent.Mkdir(component, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		sub, err := parent.OpenRoot(component)
+		if err != nil {
+			return err
+		}
+		if parent != d.root {
+			parent.Close()
+		}
+		parent = sub
+	}
+	return d.checkParent(parent)
+}
+
+// checkParent re-checks a directory below the root at the moment it is used: its
+// namespace must still pass the platform policy and it must be on the same volume
+// as the authorized root, so a mount point below the root cannot redirect writes.
+func (d *DestRoot) checkParent(parent *os.Root) error {
+	if _, err := checkDestNamespace(parent); err != nil {
+		return err
+	}
+	f, err := parent.Open(".")
+	if err != nil {
+		return err
+	}
+	id, err := handleIdentity(f)
+	f.Close()
+	if err != nil {
+		return err
+	}
+	if id.vol != d.volume {
+		return fmt.Errorf("unsupported publication namespace: nested filesystem differs from the leased destination volume")
+	}
+	return nil
+}
+
+// Open opens rel for reading, relative to the authorized root.
+func (d *DestRoot) Open(rel string) (*os.File, error) {
+	v, err := destRel(rel)
+	if err != nil {
+		return nil, err
+	}
+	return d.root.Open(v)
+}
+
+// Stat stats rel relative to the authorized root.
+func (d *DestRoot) Stat(rel string) (fs.FileInfo, error) {
+	v, err := destRel(rel)
+	if err != nil {
+		return nil, err
+	}
+	return d.root.Stat(v)
+}
+
+// HashRel is the copy-then-verify read-back: SHA-256 of rel, read back through the
+// authorized handle rather than reopened by absolute name.
+func (d *DestRoot) HashRel(rel string) (string, error) {
+	f, err := d.Open(rel)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	return hashReader(f)
+}
+
+// SampleHashRel is the level-C fingerprint of rel, read through the authorized
+// handle. Same fingerprint as sampleHashHex — same function, different opener.
+func (d *DestRoot) SampleHashRel(rel string) (string, error) {
+	f, err := d.Open(rel)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	return sampleHashOpen(f)
+}
+
+// Test observation after the OS has reported a conflicting cooperative lease.
+var destLeaseContended = func() {}
