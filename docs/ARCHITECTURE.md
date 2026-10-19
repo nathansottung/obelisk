@@ -710,9 +710,16 @@ Mirrors and mirror-mode "back up changes" write through `Store.AuthorizeDestinat
    never deletes the existing file. Each parent folder is re-checked when used.
 3. **Platform policy.** The folder and its ancestors must be on an accepted
    filesystem and, where it keeps permissions, changeable only by this user and
-   the system. exFAT and FAT are accepted with the unchecked items listed in the
-   job result; a drive root with the default Windows ACL is accepted with a
-   warning; a Docker overlay is refused; macOS and BSD are refused for now.
+   the system. Three cases need the user's choice before anything is written
+   (`destchoice.go`): a folder Authenticated Users or Users can change through an
+   inherited grant, a drive root with Windows' default "create folders" grant, and
+   an exFAT or FAT drive. The choices are Make this folder private (removes those
+   groups from that one folder's permissions, by handle, after showing the exact
+   change), Use it anyway (typed `Continue`, recorded against the folder's volume
+   and file ID with a fingerprint of the permissions up to the drive root, and
+   asked again when that changes), or Pick another folder. Grants to Everyone,
+   Guests, Anonymous Logon or any other account, or set explicitly on the folder,
+   refuse. A Docker overlay is refused; macOS and BSD are refused for now.
 4. **Offline sources.** Source folders record the volume they were seen on. A
    source whose drive is not attached blocks only a destination on that volume, or,
    with no recorded volume, only a destination whose path could be its path.

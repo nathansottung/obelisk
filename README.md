@@ -100,9 +100,15 @@ replace.
   junction, 8.3 short name or `\\?\` spelling of a source is refused like the
   source itself, and so is a destination that *contains* a source. Every file is
   written through that open folder, staged and verified before it gets its real
-  name. NTFS, exFAT and FAT32 drives are accepted on Windows; on exFAT and FAT32
-  the result lists the checks that cannot run there (permissions, hard links,
-  stable file IDs), and FAT32 refuses files over 4 GB before copying. On Linux,
+  name. NTFS, exFAT and FAT32 drives are accepted on Windows. Some folders need
+  your choice first: a folder other accounts on this PC can change through
+  Windows' default groups (Authenticated Users or Users, inherited), a drive's
+  top folder, or an exFAT or FAT32 drive, where permissions, hard links and file
+  IDs cannot be checked. Obelisk explains what it found and writes nothing there
+  until you pick **Make this folder private**, **Use it anyway** (type
+  `Continue`; asked again if the permissions change) or **Pick another folder**.
+  Grants to Everyone, Guests, Anonymous Logon or any other account are refused.
+  FAT32 refuses files over 4 GB before copying. On Linux,
   ext4, XFS, Btrfs, exFAT and FAT are accepted and a Docker overlay folder is
   refused. On macOS these jobs are not yet supported and are refused.
 - **Drift reports changes to your originals.** Delete or move a source file
