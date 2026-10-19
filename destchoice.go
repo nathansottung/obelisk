@@ -26,7 +26,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -350,8 +349,15 @@ func (s *Store) ApplyMakePrivate(path, token string, confirmed bool) (*Destinati
 	if p == nil || time.Now().After(p.expires) {
 		return nil, fmt.Errorf("that permission change has expired or was already used; preview it again")
 	}
-	abs, err := filepath.Abs(strings.TrimSpace(path))
-	if err != nil || normPath(abs) != normPath(p.path) {
+	// Compare the folder, not its spelling: a short (8.3) name, a junction or a
+	// different case can name the same folder the change was shown for.
+	r, err := os.OpenRoot(strings.TrimSpace(path))
+	if err != nil {
+		return nil, fmt.Errorf("cannot open %s: %w", path, err)
+	}
+	id, err := rootIdentity(r)
+	r.Close()
+	if err != nil || id != p.change.id {
 		return nil, fmt.Errorf("that permission change was shown for %s, not %s", p.path, path)
 	}
 	if err := applyPrivateFolder(p.path, p.change); err != nil {

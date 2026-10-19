@@ -497,10 +497,12 @@ func TestDestChoice_FATNeedsChoice(t *testing.T) {
 func TestDestChoice_NoticeWording(t *testing.T) {
 	app := dockApp(t)
 	folder, _ := sharedFolder(t)
-	n := app.Store.CheckDestination(folder).Notice
+	c := app.Store.CheckDestination(folder)
+	n := c.Notice
+	// The notice names the folder as resolved from its handle (long name, real case).
 	if !strings.Contains(n.Text, "Another account on this PC could change or delete your backup copies") ||
 		!strings.Contains(n.Text, "If you're the only person who signs in to this PC, this is usually fine") ||
-		!strings.Contains(n.Text, folder) || !strings.Contains(n.Text, "Authenticated Users") {
+		!strings.Contains(n.Text, c.Folder) || !strings.Contains(n.Text, "Authenticated Users") {
 		t.Fatalf("notice is missing a required part:\n%s", n.Text)
 	}
 	for _, l := range n.Lines {
@@ -583,5 +585,36 @@ func TestDestAuth_OfflineSourceVolumeAttachedElsewhere(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "attached at a different location") {
 		t.Fatalf("refusal should explain the drive moved: %v", err)
+	}
+}
+
+// Make private matches the folder, not its spelling: a change previewed under the
+// long name applies under the 8.3 short name of the same folder.
+func TestDestChoice_MakePrivateAcceptsShortName(t *testing.T) {
+	app := dockApp(t)
+	folder, _ := sharedFolder(t)
+	short := shortPathName(t, folder)
+	if strings.EqualFold(short, folder) {
+		t.Skip("8.3 short names are not generated on this volume")
+	}
+	plan, err := app.Store.PreviewMakePrivate(folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := app.Store.ApplyMakePrivate(short, plan.Token, true)
+	if err != nil {
+		t.Fatalf("apply under the short name: %v", err)
+	}
+	if got.Status != destStatusPass {
+		t.Fatalf("status %q", got.Status)
+	}
+	// A different folder is still refused.
+	other, _ := sharedFolder(t)
+	plan, err = app.Store.PreviewMakePrivate(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.Store.ApplyMakePrivate(folder, plan.Token, true); err == nil {
+		t.Fatal("a change shown for one folder was applied to another")
 	}
 }
