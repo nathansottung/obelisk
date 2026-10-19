@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -175,4 +176,34 @@ func TestDestAuth_UnixSpaceEndingDirectory(t *testing.T) {
 	}
 	assertFileBytes(t, filepath.Join(dest, "dir ", " a.txt"), "EXACT")
 	assertFileBytes(t, filepath.Join(dest, "dir", "a.txt"), "OTHER")
+}
+
+// Publishing (or discarding) a staged file leaves no empty private staging folder
+// behind: a large mirror would otherwise leave one per file.
+func TestDestAuth_NoStagingFoldersLeftBehind(t *testing.T) {
+	app, cid, _, vol := mirrorSetup(t, "Tidy", map[string]string{"a.txt": "A", "sub/b.txt": "B", "sub/deep/c.txt": "C"})
+	dest := t.TempDir()
+	if _, err := app.MirrorToVolume(cid, nil, dest, vol.ID, 0, "", noProgMirror); err != nil {
+		t.Fatal(err)
+	}
+	d, err := app.Store.AuthorizeDestination(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.WriteFileAtomic("sidecar.txt", []byte("S"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rel, _, err := d.stagingFor("discarded.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Discard(rel); err != nil {
+		t.Fatal(err)
+	}
+	d.Close()
+	for _, p := range treeOf(t, dest) {
+		if strings.HasSuffix(p, ".obelisk-stage") || strings.Contains(p, ".obelisk-stage/") {
+			t.Errorf("staging folder left behind: %s", p)
+		}
+	}
 }

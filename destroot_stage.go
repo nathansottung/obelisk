@@ -22,6 +22,7 @@ type destStage struct {
 	file      *os.File
 	parent    *os.Root
 	private   *os.Root // Unix: mode-0700 namespace, retained independently of its name
+	container string   // Unix: that namespace's name in parent
 	perms     bool     // Unix: the filesystem enforces the private namespace's owner and mode
 	rel       string
 	leaf      string

@@ -11,6 +11,9 @@ package main
 // not isolate mutually hostile processes with the same UID. Identity checks here
 // detect ordered violations; they are NOT a race-proof substitute for isolation.
 //
+// After publication or cleanup the empty private folder is removed, but only while
+// its name still refers to the folder this operation created.
+//
 // On FAT and exFAT the owner and mode bits come from mount options, so the 0700
 // and owner checks below are skipped there; the result already lists folder
 // permissions as not checked on such a drive.
@@ -54,7 +57,7 @@ func createDestStage(parent *os.Root, name string) (*destStage, error) {
 		private.Close()
 		return nil, err
 	}
-	return &destStage{file: f, private: private, leaf: path.Join(container, "payload"+mirrorTmpSuffix), perms: perms}, nil
+	return &destStage{file: f, private: private, container: container, leaf: path.Join(container, "payload"+mirrorTmpSuffix), perms: perms}, nil
 }
 
 // The identity is taken from an opened file. On disagreement leave the unknown
@@ -118,8 +121,42 @@ func discardDestStage(s *destStage) error {
 			err = s.private.Remove("payload" + mirrorTmpSuffix)
 		}
 	}
-	// Never remove the public container name: another writer can replace it.
-	// Empty .obelisk-stage directories intentionally remain; crash remnants and
-	// substituted private entries are retained for inspection, not recursive cleanup.
+	if err == nil {
+		removeOwnContainer(s)
+	}
 	return errors.Join(err, s.file.Close(), s.private.Close())
+}
+
+// removeOwnContainer removes the now-empty private staging folder, but only while
+// its name in the parent still refers to the folder this stage holds open (same
+// device and inode), and only with rmdir, which never removes a folder that is not
+// empty. A name replaced by something else, or a folder something was put into, is
+// left alone for inspection. Best effort: a failure leaves an empty folder behind.
+func removeOwnContainer(s *destStage) {
+	if s.container == "" || s.parent == nil {
+		return
+	}
+	p, err := s.parent.Open(".")
+	if err != nil {
+		return
+	}
+	defer p.Close()
+	q, err := s.private.Open(".")
+	if err != nil {
+		return
+	}
+	var held, named unix.Stat_t
+	err = unix.Fstat(int(q.Fd()), &held)
+	q.Close()
+	if err != nil {
+		return
+	}
+	if unix.Fstatat(int(p.Fd()), s.container, &named, unix.AT_SYMLINK_NOFOLLOW) != nil {
+		return
+	}
+	if named.Dev != held.Dev || named.Ino != held.Ino || named.Mode&unix.S_IFMT != unix.S_IFDIR {
+		return
+	}
+	_ = unix.Unlinkat(int(p.Fd()), s.container, unix.AT_REMOVEDIR)
+	runtime.KeepAlive(p)
 }
