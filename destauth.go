@@ -169,16 +169,22 @@ func (s *Store) sourceSnapshot() (*sourceSnapshot, error) {
 		f, oerr := os.Open(abs)
 		if oerr == nil {
 			c, cerr := handleCanonicalPath(f)
-			if cerr == nil && folder.VolumeID == "" {
-				if vid, verr := volumeIDOf(f); verr == nil && vid != "" {
-					s.recordFolderVolume(folder.ID, vid)
-				}
-			}
+			vid, verr := volumeIDOf(f)
 			f.Close()
 			if cerr != nil {
 				return nil, fmt.Errorf("cannot establish the real location of registered source root %s: %w — refusing to authorize a destination while a protected source is unresolved", r, cerr)
 			}
 			snap.srcs = append(snap.srcs, sourceRef{registered: r, canonical: c, fromHandle: true})
+			switch {
+			case verr != nil || vid == "":
+			case folder.VolumeID == "":
+				s.recordFolderVolume(folder.ID, vid)
+			case vid != folder.VolumeID:
+				// The path now answers on a different drive than the one the source
+				// was recorded on. That drive may be attached elsewhere, still holding
+				// the source: protect it too.
+				snap.srcs = append(snap.srcs, sourceRef{registered: r, offline: true, volumeID: folder.VolumeID, abs: abs})
+			}
 			continue
 		}
 		if !errors.Is(oerr, fs.ErrNotExist) {
