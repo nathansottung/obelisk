@@ -376,8 +376,11 @@ type destFinding struct {
 	Group     string `json:"group,omitempty"`
 	SID       string `json:"sid,omitempty"`
 	Inherited bool   `json:"inherited,omitempty"`
-	FS        string `json:"filesystem,omitempty"`
-	MaxFile   int64  `json:"max_file,omitempty"`
+	// Permissions: the group can also change who may use the folder (change its
+	// permissions or take ownership), not only its contents.
+	Permissions bool   `json:"can_change_permissions,omitempty"`
+	FS          string `json:"filesystem,omitempty"`
+	MaxFile     int64  `json:"max_file,omitempty"`
 }
 
 // appendFinding adds f unless an equal finding is already listed.

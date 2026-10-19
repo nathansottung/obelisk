@@ -427,6 +427,7 @@ func destNotice(folder string, findings []destFinding, stale *DestinationChoice,
 	var groups []string
 	var root, unchecked *destFinding
 	groupFolder := folder
+	perms := false
 	for i := range findings {
 		f := &findings[i]
 		switch f.Kind {
@@ -435,6 +436,7 @@ func destNotice(folder string, findings []destFinding, stale *DestinationChoice,
 				groups = append(groups, f.Group)
 			}
 			groupFolder = f.Folder
+			perms = perms || f.Permissions
 		case destFindingDriveRoot:
 			root = f
 		case destFindingUnchecked:
@@ -447,9 +449,15 @@ func destNotice(folder string, findings []destFinding, stale *DestinationChoice,
 	switch {
 	case len(groups) > 0:
 		n.Title = "Other accounts on this PC can change this folder"
+		can := "add, change and delete files in it"
+		why := "✗ Why it matters: Another account on this PC could change or delete your backup copies, and you might not find out until you need them."
+		if perms {
+			can = "add, change and delete files in it, and change who can use it"
+			why = "✗ Why it matters: Another account on this PC could change or delete your backup copies, and could also change the folder's permissions, for example to undo Make private or to lock you out."
+		}
 		n.Lines = append(n.Lines,
-			fmt.Sprintf("✗ What we found: %s lets %s add, change and delete files in it. %s Windows sets this up for folders made directly on a drive.", groupFolder, joinAnd(groups), groupMeaning(groups)),
-			"✗ Why it matters: Another account on this PC could change or delete your backup copies, and you might not find out until you need them.")
+			fmt.Sprintf("✗ What we found: %s lets %s %s. %s Windows sets this up for folders made directly on a drive.", groupFolder, joinAnd(groups), can, groupMeaning(groups)),
+			why)
 		if groupFolder != folder {
 			n.Lines = append(n.Lines, fmt.Sprintf("✗ Obelisk will write into %s, inside that folder, so the same applies there.", folder))
 		}

@@ -304,3 +304,29 @@ func TestDestPredict_UnknownInheritableEntryRefusedBeforeCreating(t *testing.T) 
 		t.Fatal("the folder was created before the refusal")
 	}
 }
+
+// When the shared group can also change the folder's permissions or take
+// ownership (Full control), the notice says so: it is still a choice, but the
+// user should know those accounts could undo Make private or lock them out.
+func TestDestNotice_SaysWhenGroupCanChangePermissions(t *testing.T) {
+	app := dockApp(t)
+	user, _ := destUserSID()
+	parent := t.TempDir()
+	setDestFixtureDACL(t, parent, "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;SY)(A;OICIIO;FA;;;AU)")
+	folder := filepath.Join(parent, "Full")
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := app.Store.CheckDestination(folder)
+	if c.Status != destStatusChoose {
+		t.Fatalf("status %q %s", c.Status, c.Reason)
+	}
+	if !strings.Contains(c.Notice.Text, "change who can use it") {
+		t.Fatalf("notice should say the group can change permissions:\n%s", c.Notice.Text)
+	}
+	// A plain Modify grant does not get that line.
+	plain, _ := sharedFolder(t)
+	if strings.Contains(app.Store.CheckDestination(plain).Notice.Text, "change who can use it") {
+		t.Fatal("a Modify grant was described as able to change permissions")
+	}
+}

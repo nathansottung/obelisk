@@ -133,7 +133,8 @@ func classifyDestGrant(sid, folder string, granted uint32, inherited, publicatio
 		return &destFinding{Kind: destFindingDriveRoot, Folder: folder, Group: destGroupName(sid), SID: sid}, nil
 	}
 	if (sid == sidAuthenticatedUsers || sid == sidUsers) && inherited && !volumeRoot {
-		return &destFinding{Kind: destFindingSharedGroup, Folder: folder, Group: destGroupName(sid), SID: sid, Inherited: true}, nil
+		return &destFinding{Kind: destFindingSharedGroup, Folder: folder, Group: destGroupName(sid), SID: sid, Inherited: true,
+			Permissions: granted&(windows.WRITE_DAC|windows.WRITE_OWNER|windows.GENERIC_ALL) != 0}, nil
 	}
 	how := "set on this folder"
 	if inherited {
