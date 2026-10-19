@@ -1,7 +1,7 @@
 # Architecture
 
 Obelisk is deliberately small and boring: one Go binary, the standard
-library plus a single dependency (QR generation), and a **flat-file catalog**
+library plus a few focused pure-Go dependencies, and a **flat-file catalog**
 you can read with a text editor in 30 years. There is no database service, no
 CGO, no background daemon. The whole thing is ~4k lines of Go plus one HTML
 file.
@@ -674,7 +674,7 @@ back, and an import reconstructs the graph rather than the bytes.
 
 ## Dependencies
 
-Two tiny, pure-Go, CGO-free libraries — each earns its place against the
+Small, pure-Go, CGO-free libraries — each earns its place against the
 "one static binary, hand-restorable, no service" bargain:
 
 - **`github.com/skip2/go-qrcode`** — QR images for key recovery cards and
@@ -684,10 +684,42 @@ Two tiny, pure-Go, CGO-free libraries — each earns its place against the
   ourselves. A printed label that scans back into the catalog is worth one small
   dependency; rolling our own Code128 encoder would be more code and more risk
   than importing a focused, widely-used one.
+- **`github.com/zeebo/blake3`** — the catalog-internal content hash (see Hashing).
+- **`golang.org/x/sys`** — the native calls behind the destination guard
+  (`destauth.go`): on Windows, creating, renaming and discarding a staged file by
+  its handle, reading folder ACLs and volume information; on Linux, `renameat`,
+  `fstatfs` and `flock`. The standard library has no handle-relative rename or ACL
+  reader, and doing these by pathname is exactly what the guard exists to avoid.
 
 Everything else — tar, gpg, par2 — is an **external tool** shelled out to, on
 purpose (see the custody chain and Recovery Kit): the restore story must not
 depend on Obelisk's Go code existing.
+
+## Destination guard
+
+Mirrors and mirror-mode "back up changes" write through `Store.AuthorizeDestination`
+(`destauth.go`) rather than the older pathname check, `AssertOutsideSources`:
+
+1. **Decide on the folder actually opened.** The destination is opened (missing
+   folders are created one component at a time), its real location is read back
+   from the open handle, and it is refused when it is, is inside, or contains a
+   registered source. Aliases resolve to the same answer as the real path.
+2. **Write only through that handle.** Every file is created as an exclusively
+   owned staging object in its final folder, verified through the same handle,
+   then renamed into place relative to the authorized folder. A failed rename
+   never deletes the existing file. Each parent folder is re-checked when used.
+3. **Platform policy.** The folder and its ancestors must be on an accepted
+   filesystem and, where it keeps permissions, changeable only by this user and
+   the system. exFAT and FAT are accepted with the unchecked items listed in the
+   job result; a drive root with the default Windows ACL is accepted with a
+   warning; a Docker overlay is refused; macOS and BSD are refused for now.
+4. **Offline sources.** Source folders record the volume they were seen on. A
+   source whose drive is not attached blocks only a destination on that volume, or,
+   with no recorded volume, only a destination whose path could be its path.
+
+The guard does not establish *which medium* a folder is on, does not confine the
+external helpers (tar, gpg, par2), and covers only these two jobs so far; every
+other writer still uses `AssertOutsideSources`.
 
 ## Request/job lifecycle
 

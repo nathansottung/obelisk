@@ -95,6 +95,16 @@ replace.
   The check applies to the **staging folder**, **write / span / burn
   destinations**, **restore output**, the **recovery-kit output**, and
   **keystore paths**. The check is not yet complete; known gaps are being fixed.
+- **Mirrors and "back up changes" to a drive use a stricter guard.** They open
+  the destination folder and judge the folder actually opened, so a shortcut,
+  junction, 8.3 short name or `\\?\` spelling of a source is refused like the
+  source itself, and so is a destination that *contains* a source. Every file is
+  written through that open folder, staged and verified before it gets its real
+  name. NTFS, exFAT and FAT32 drives are accepted on Windows; on exFAT and FAT32
+  the result lists the checks that cannot run there (permissions, hard links,
+  stable file IDs), and FAT32 refuses files over 4 GB before copying. On Linux,
+  ext4, XFS, Btrfs, exFAT and FAT are accepted and a Docker overlay folder is
+  refused. On macOS these jobs are not yet supported and are refused.
 - **Drift reports changes to your originals.** Delete or move a source file
   yourself and drift will report it.
 
@@ -1254,8 +1264,8 @@ lived option — which is the point.
 go build -o obelisk .
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o obelisk.exe .
 ```
-One dependency (QR-code generation); everything else is the Go standard
-library. Requires **Go 1.25+**. See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)
+A few small pure-Go dependencies (see docs/ARCHITECTURE.md); everything else is
+the Go standard library. Requires **Go 1.25+**. See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)
 and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Optical burn queue

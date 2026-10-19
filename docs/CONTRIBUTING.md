@@ -7,6 +7,13 @@ The bar here is *longevity and clarity*, not cleverness.
 
 Requires **Go 1.25+**. No other toolchain, no code generation, no `make`.
 
+The language floor is 1.25 because the destination guard (`destauth.go`) uses
+`os.Root.Rename`, `os.Root.Symlink` and friends. Builds use the toolchain named on
+the `toolchain` line of `go.mod`, which CI, the release workflow and the
+`Dockerfile` all read. Do not build the guard with a Go release older than
+1.25.12 or 1.26.5: those carry the fix for a `Root` symlink-handling flaw on Unix
+(GO-2026-4970).
+
 ```bash
 go build ./...        # compiles the binary (UI is embedded via //go:embed)
 go vet ./...          # catches the usual mistakes
