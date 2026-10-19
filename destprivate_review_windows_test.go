@@ -437,3 +437,78 @@ func TestDestGuard_ModifyAcceptanceDoesNotCoverFullControl(t *testing.T) {
 		t.Fatalf("a folder Obelisk creates inside: %v", err)
 	}
 }
+
+// When the destination does not exist yet, a grant on the existing folder above
+// it (where it will be created) does not cover a shared folder later moved inside
+// the new, private destination.
+func TestDestGuard_AnchorGrantDoesNotCoverNewDestination(t *testing.T) {
+	app := dockApp(t)
+	user, _ := destUserSID()
+	p := t.TempDir()
+	// Anchor gets Authenticated Users Full control but does not pass it on (NP).
+	setDestFixtureDACL(t, p, "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;SY)(A;OICIIONP;FA;;;AU)")
+	anchor := filepath.Join(p, "Anchor")
+	if err := os.Mkdir(anchor, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(anchor, "Dest")
+	c := app.Store.CheckDestination(dest)
+	if c.Status != destStatusChoose {
+		t.Fatalf("precondition: %q", c.Status)
+	}
+	if _, err := app.Store.ChooseUseAnyway(dest, c.Fingerprint, destUseAnywayWord); err != nil {
+		t.Fatal(err)
+	}
+	// The run that creates Dest (its anchor is the folder above) is the one at risk.
+	d, err := app.Store.AuthorizeDestination(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	movedSharedFolder(t, filepath.Join(dest, "Sub"), "FA")
+	if err := d.WriteFileAtomic("Sub/x.txt", []byte("x"), 0o644); err == nil {
+		t.Fatal("a shared folder inside a new private destination was covered by the grant on the folder above it")
+	}
+}
+
+// Two levels of missing folders under an inherit-only shared grant: once chosen,
+// every folder Obelisk creates down to the destination, and inside it, is covered.
+func TestDestGuard_NestedNewDestinationUnderSharedParent(t *testing.T) {
+	app := dockApp(t)
+	user, _ := destUserSID()
+	p := t.TempDir()
+	setDestFixtureDACL(t, p, "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;SY)(A;OICIIO;0x1301bf;;;AU)")
+	dest := filepath.Join(p, "A", "B")
+	c := app.Store.CheckDestination(dest)
+	if _, err := app.Store.ChooseUseAnyway(dest, c.Fingerprint, destUseAnywayWord); err != nil {
+		t.Fatal(err)
+	}
+	d, err := app.Store.AuthorizeDestination(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if err := d.WriteFileAtomic("C/x.txt", []byte("x"), 0o644); err != nil {
+		t.Fatalf("a folder created inside a chosen new destination: %v", err)
+	}
+}
+
+// The drive-root finding (others may only create folders) is weaker than a Modify
+// grant and must not cover one.
+func TestDestGuard_DriveRootKeyIsNotModify(t *testing.T) {
+	root := destFinding{Kind: destFindingDriveRoot, SID: sidAuthenticatedUsers}
+	modify := destFinding{Kind: destFindingSharedGroup, SID: sidAuthenticatedUsers, Inherited: true}
+	if findingKey(root) == findingKey(modify) {
+		t.Fatal("accepting the drive-root default would cover a Modify grant")
+	}
+}
+
+// An offline UNC source is not mapped onto a drive letter.
+func TestDestAuth_UNCSourceNotMappedToLetter(t *testing.T) {
+	real := t.TempDir() // a folder that exists at the same place on C:
+	abs := `\\host\share` + real[len(filepath.VolumeName(real)):]
+	src := sourceRef{registered: abs, offline: true, abs: abs}
+	if err := sameFolderOtherLetter(src, real, real); err != nil {
+		t.Fatalf("UNC source mapped onto C: %v", err)
+	}
+}

@@ -295,8 +295,8 @@ func (snap *sourceSnapshot) decideOffline(destVolumeID, requested, canonical, di
 func sameFolderOtherLetter(s sourceRef, canonical, display string) error {
 	srcVol := filepath.VolumeName(s.abs)
 	destVol := filepath.VolumeName(canonical)
-	if srcVol == "" || destVol == "" || strings.EqualFold(srcVol, destVol) {
-		return nil
+	if !isDriveLetter(srcVol) || !isDriveLetter(destVol) || strings.EqualFold(srcVol, destVol) {
+		return nil // only a drive letter can change; a UNC share is not mapped onto one
 	}
 	rel := s.abs[len(srcVol):]
 	if strings.Trim(rel, `\/`) == "" {
@@ -554,7 +554,7 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 	// destination says nothing about a shared folder later moved into it.
 	accepted := map[string]bool{}
 	for _, f := range in.findings {
-		if atOrBelow(f.Folder, in.anchorCanon) {
+		if atOrBelow(f.Folder, in.intended) {
 			accepted[findingKey(f)] = true
 		}
 	}
@@ -575,11 +575,17 @@ func findingKey(f destFinding) string {
 	if f.Kind == destFindingUnchecked {
 		return f.Kind
 	}
+	if f.Kind == destFindingDriveRoot { // others may only create folders: weaker than Modify
+		return "root:" + f.SID
+	}
 	if f.Permissions {
 		return "sid:" + f.SID + ":permissions"
 	}
 	return "sid:" + f.SID
 }
+
+// isDriveLetter reports whether vol is a drive-letter volume name such as "E:".
+func isDriveLetter(vol string) bool { return len(vol) == 2 && vol[1] == ':' }
 
 // atOrBelow reports whether folder is root or inside it.
 func atOrBelow(folder, root string) bool {
@@ -685,6 +691,9 @@ func (s *Store) inspectDestination(path string) (*destInspection, error) {
 			return fail(err)
 		}
 		for _, f := range pred {
+			// Every folder created down to the destination inherits the same grant;
+			// name it for the destination the user chose.
+			f.Folder = intended
 			findings = appendFinding(findings, f)
 		}
 	}
