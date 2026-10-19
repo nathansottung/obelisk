@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-func TestDestAuth_F5ExpectedDigestMismatch(t *testing.T) {
+func TestDestAuth_ExpectedDigestMismatch(t *testing.T) {
 	app := dockApp(t)
 	dir := t.TempDir()
 	writeTree(t, dir, map[string]string{"good": "PRIOR GOOD"})
@@ -73,7 +73,7 @@ func TestDestAuth_F5ExpectedDigestMismatch(t *testing.T) {
 	}
 }
 
-func TestDestAuth_F5IndependentStages(t *testing.T) {
+func TestDestAuth_IndependentStages(t *testing.T) {
 	app := dockApp(t)
 	d, err := app.Store.AuthorizeDestination(t.TempDir())
 	if err != nil {
@@ -105,7 +105,7 @@ func TestDestAuth_F5IndependentStages(t *testing.T) {
 	}
 }
 
-func TestDestAuth_F5CooperatingJobs(t *testing.T) {
+func TestDestAuth_CooperatingJobs(t *testing.T) {
 	app := dockApp(t)
 	dir := t.TempDir()
 	first, err := app.Store.AuthorizeDestination(dir)
@@ -158,7 +158,7 @@ func TestDestAuth_F5CooperatingJobs(t *testing.T) {
 	}
 }
 
-func TestDestAuth_F5CooperatingProcesses(t *testing.T) {
+func TestDestAuth_CooperatingProcesses(t *testing.T) {
 	app := dockApp(t)
 	dir := t.TempDir()
 	d, err := app.Store.AuthorizeDestination(dir)
@@ -168,7 +168,7 @@ func TestDestAuth_F5CooperatingProcesses(t *testing.T) {
 	defer d.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDestAuth_F5LeaseProcessHelper$")
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDestAuth_LeaseProcessHelper$")
 	cmd.Env = append(os.Environ(), "OBELISK_LEASE_TEST_DIR="+dir)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -198,7 +198,7 @@ func TestDestAuth_F5CooperatingProcesses(t *testing.T) {
 	}
 }
 
-func TestDestAuth_F5LeaseProcessHelper(t *testing.T) {
+func TestDestAuth_LeaseProcessHelper(t *testing.T) {
 	dir := os.Getenv("OBELISK_LEASE_TEST_DIR")
 	if dir == "" {
 		return

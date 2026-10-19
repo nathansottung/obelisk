@@ -12,7 +12,7 @@ import (
 )
 
 // Real permission configurations, not a simulated second user's execution.
-func TestDestAuth_F5UntrustedLinuxNamespace(t *testing.T) {
+func TestDestAuth_UntrustedLinuxNamespace(t *testing.T) {
 	for _, which := range []string{"publication", "ancestor"} {
 		t.Run(which, func(t *testing.T) {
 			app := dockApp(t)
@@ -56,7 +56,7 @@ func TestDestAuth_F5UntrustedLinuxNamespace(t *testing.T) {
 	}
 }
 
-func TestDestAuth_F5LinuxPrivateStage(t *testing.T) {
+func TestDestAuth_LinuxPrivateStage(t *testing.T) {
 	app := dockApp(t)
 	d, err := app.Store.AuthorizeDestination(t.TempDir())
 	if err != nil {
@@ -96,7 +96,7 @@ func TestDestAuth_F5LinuxPrivateStage(t *testing.T) {
 	}
 }
 
-func TestDestAuth_F5UnsupportedLinuxFilesystem(t *testing.T) {
+func TestDestAuth_UnsupportedLinuxFilesystem(t *testing.T) {
 	// procfs is already mounted for handle canonicalization; no mount or privilege
 	// changes. Check the actual kernel filesystem, never create files in it.
 	f, err := os.Open("/proc/self")
@@ -111,7 +111,7 @@ func TestDestAuth_F5UnsupportedLinuxFilesystem(t *testing.T) {
 
 // Excluded actor, kept visible as evidence. A passing assertion here means the
 // deliberate attack was CHARACTERIZED, not that the implementation defended it.
-func TestDestAuth_F5SamePrincipalLateSubstitutionCharacterization(t *testing.T) {
+func TestDestAuth_SamePrincipalLateSubstitutionCharacterization(t *testing.T) {
 	app := dockApp(t)
 	d, err := app.Store.AuthorizeDestination(t.TempDir())
 	if err != nil {

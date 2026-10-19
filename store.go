@@ -1919,12 +1919,28 @@ func (s *Store) SourceRoots() []string {
 	return out
 }
 
-// AssertOutsideSources enforces Obelisk's core invariant — it NEVER writes into
-// source data. Any WRITABLE destination (staging, write/span target, restore or
-// recovery-kit output, keystore path, …) is refused when it resolves to a path
-// at or beneath a registered source root. Empty paths pass (callers do their own
-// required-ness check); resolution is best-effort so a not-yet-created
-// destination is still checked by its intended absolute path.
+// AssertOutsideSources is a PREFLIGHT PATHNAME CHECK, not the write-authority
+// boundary. It refuses a destination whose ABSOLUTE PATHNAME STRING is at or
+// beneath a registered source root. Empty paths pass (callers do their own
+// required-ness check); resolution is best-effort so a not-yet-created destination
+// is still checked by its intended absolute path.
+//
+// WHAT IT CANNOT DECIDE:
+//
+//   - a destination that CONTAINS a registered source — it tests one direction only,
+//     so mirroring two registered folders to their common parent is permitted and
+//     republishes the originals over themselves;
+//   - an ALIAS of a source (junction, 8.3 short name, extended-length `\\?\`
+//     spelling) — it compares spellings, and filepath.Abs preserves them;
+//   - a NESTED link below a correct destination root — the entry check is right and
+//     the escape happens one level below it;
+//   - a root SUBSTITUTED after the check — the answer was true when it was given.
+//
+// The boundary that does decide those is Store.AuthorizeDestination in destauth.go:
+// it opens the destination, decides on the identity of the opened object, and
+// returns the handle every subsequent write goes through. Mirror runs and
+// mirror-mode BackupChanges use it; every other writer still relies on this check.
+// Do not read a pass from it as authorization to write.
 func (s *Store) AssertOutsideSources(path string) error {
 	if strings.TrimSpace(path) == "" {
 		return nil

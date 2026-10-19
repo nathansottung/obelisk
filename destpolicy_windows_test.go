@@ -12,7 +12,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func TestDestAuth_F5UntrustedWindowsNamespace(t *testing.T) {
+func TestDestAuth_UntrustedWindowsNamespace(t *testing.T) {
 	user, err := destUserSID()
 	if err != nil {
 		t.Fatal(err)
@@ -60,7 +60,7 @@ func TestDestAuth_F5UntrustedWindowsNamespace(t *testing.T) {
 	}
 }
 
-func TestDestAuth_F5WindowsPrivateStage(t *testing.T) {
+func TestDestAuth_WindowsPrivateStage(t *testing.T) {
 	app := dockApp(t)
 	d, err := app.Store.AuthorizeDestination(t.TempDir())
 	if err != nil {
@@ -102,7 +102,7 @@ func TestDestAuth_F5WindowsPrivateStage(t *testing.T) {
 	}
 }
 
-func TestDestAuth_F5UnsupportedWindowsACL(t *testing.T) {
+func TestDestAuth_UnsupportedWindowsACL(t *testing.T) {
 	user, err := destUserSID()
 	if err != nil {
 		t.Fatal(err)

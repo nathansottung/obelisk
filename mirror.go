@@ -6,8 +6,8 @@ package main
 // optical; mirrors are live, directly-browsable copies for spinning drives.
 //
 // Each file is copied with v1's copy-then-verify discipline: staged to
-// <name>.mnemo_tmp, its bytes hashed as they are written, read back off the
-// destination and compared to the source, then ATOMICALLY renamed into place —
+// a uniquely created object, its bytes hashed as they are written, read back
+// through the retained file and compared to the source, then renamed into place —
 // so a partially-written or corrupted file never appears under its real name. The
 // result is recorded exactly like an adopted mirror (Prompt 23): a verified
 // file-level Copy on the volume, via the same Chunk.Mirror record, so drift and
@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -125,6 +126,9 @@ type MirrorResult struct {
 	Skipped  int      `json:"skipped"` // source unreadable/missing
 	Sidecar  string   `json:"sidecar,omitempty"`
 	Coverage Coverage `json:"coverage"`
+	// DestinationNotes lists warnings the destination was accepted with and checks
+	// that could not run on its filesystem (for example on exFAT or FAT32).
+	DestinationNotes []string `json:"destination_notes,omitempty"`
 }
 
 // MirrorToVolume copies the selected folders of an archive to destDir as plain
@@ -143,11 +147,24 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 	if strings.TrimSpace(destDir) == "" {
 		return nil, fmt.Errorf("dest_dir (the mirror target on the volume) required")
 	}
-	// SOURCE-SAFETY: a mirror WRITES files + a sidecar into destDir — it must
-	// never resolve inside a registered source root.
-	if err := a.Store.AssertOutsideSources(destDir); err != nil {
+	// SOURCE-SAFETY. A mirror WRITES files and a sidecar
+	// into destDir. The destination is authorized ONCE, on the identity of the
+	// object actually opened, and every write below goes through the returned
+	// handle — payload, read-back, sidecar and failure cleanup alike. Nothing here
+	// reopens an absolute pathname after this point.
+	//
+	// This replaces the entry-time AssertOutsideSources string test, which could
+	// not see an alias of a source, a destination that CONTAINS a source, a nested
+	// link below a correct root, or a root substituted after the check.
+	//
+	// The authorization also creates the destination when it does not exist yet,
+	// root-relative through an authorized ancestor — so no unrestricted MkdirAll
+	// runs before the decision.
+	dest, err := a.Store.AuthorizeDestination(destDir)
+	if err != nil {
 		return nil, err
 	}
+	defer dest.Close()
 	vol := a.Store.Volume(volumeID)
 	if vol == nil {
 		return nil, fmt.Errorf("volume %d not found", volumeID)
@@ -193,6 +210,9 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 	if len(files) == 0 {
 		return nil, fmt.Errorf("no cataloged files to mirror (scan a folder into the archive first, or widen the folder selection)")
 	}
+	if err := dest.CheckFileSizes(fileSizes(files)); err != nil {
+		return nil, err
+	}
 
 	// Preserve the source tree. With a single source folder, files land at their
 	// bare rel path; with several, each folder gets a unique subtree so trees from
@@ -200,15 +220,14 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 	label := mirrorFolderLabels(usedFolders, folderPath)
 	multi := len(usedFolders) > 1
 
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
-		return nil, err
-	}
-	// Space pre-flight against the destination (best-effort).
-	if free, err := diskFree(destDir); err == nil && free < totalBytes {
+	// Space pre-flight against the destination (best-effort). A read-only query, so
+	// it may use the authorized canonical name; nothing is mutated through it.
+	if free, err := diskFree(dest.Canonical()); err == nil && free < totalBytes {
 		return nil, fmt.Errorf("destination too small: need %.1f GB, free %.1f GB", float64(totalBytes)/1e9, float64(free)/1e9)
 	}
 
-	res := &MirrorResult{VolumeID: vol.ID, Volume: vol.Label, Dest: destDir}
+	res := &MirrorResult{VolumeID: vol.ID, Volume: vol.Label, Dest: destDir, DestinationNotes: dest.Notes()}
+	logDestinationNotes(a.Store, "mirror", dest)
 	th := &throttler{bps: throttleMbps * 1e6, start: time.Now()}
 	throttleBps := throttleMbps * 1e6 // fed to the Performance strip's destination row
 	var doneBytes, doneFiles int64
@@ -231,16 +250,12 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 		if multi {
 			mrel = label[f.FolderID] + "/" + f.RelPath
 		}
-		destPath := filepath.Join(destDir, filepath.FromSlash(mrel))
-		if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
-			res.Failed++
-			continue
-		}
-		tmp := destPath + mirrorTmpSuffix
 		if i%25 == 0 || len(files) < 50 {
 			report(fmt.Sprintf("mirroring %d/%d — %s", i+1, len(files), f.RelPath))
 		}
-		streamHash, n, err := mirrorCopyFile(srcPath, tmp, th, func(d int64) {
+		// One confined landing: parent creation, staging, read-back, publication and
+		// failure cleanup all happen through the authorized handle, relative to mrel.
+		streamHash, n, cerr := copyVerifyToRoot(dest, srcPath, mrel, th, func(d int64) {
 			doneBytes += d
 			now := time.Now()
 			// Feed the Performance strip: a copy reads and writes the same bytes, so the
@@ -252,22 +267,15 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 				report(fmt.Sprintf("mirroring %d/%d — %s", i+1, len(files), f.RelPath))
 			}
 		})
-		if err != nil {
-			_ = os.Remove(tmp)
-			res.Skipped++ // source unreadable / mid-copy IO error
-			continue
-		}
-		// Copy-then-verify: read the bytes back off the destination and confirm
-		// they are byte-identical to the source before the file gets its real name.
-		rb, rerr := hashFileHex(tmp)
-		if rerr != nil || rb != streamHash {
-			_ = os.Remove(tmp)
-			res.Failed++
-			continue
-		}
-		if err := atomicRename(tmp, destPath); err != nil {
-			_ = os.Remove(tmp)
-			res.Failed++
+		if cerr != nil {
+			// Same split as before the conversion: an unreadable or mid-copy-failing
+			// SOURCE is skipped; a destination that would not take, verify or publish
+			// the bytes is a failure.
+			if errors.Is(cerr, errCopySource) {
+				res.Skipped++
+			} else {
+				res.Failed++
+			}
 			continue
 		}
 		if streamHash != f.Hash {
@@ -275,7 +283,7 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 		}
 		// Record the level-C sample baseline (size + first/last 4 MiB) so a cheap
 		// sample re-verify has something to compare against later.
-		sample, _ := sampleHashHex(destPath)
+		sample, _ := dest.SampleHashRel(mrel)
 		refs = append(refs, ChunkFileRef{FileID: f.ID, RelPath: f.RelPath, SizeBytes: n, Hash: streamHash, SampleHash: sample})
 		res.Mirrored++
 		res.Bytes += n
@@ -289,7 +297,7 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 	}
 
 	progress(0.96, "refreshing volume inventory sidecar")
-	if sc, err := a.writeVolumeInventory(destDir, vol); err == nil {
+	if sc, err := a.writeVolumeInventoryTo(dest, vol); err == nil {
 		res.Sidecar = sc
 	}
 	res.Coverage = a.archiveCoverage([]int{collectionID})
@@ -299,30 +307,59 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 	return res, nil
 }
 
-// copyVerifyToDest copies srcPath to destPath with the full copy-then-verify
-// discipline — stream to a .mnemo_tmp (hashing on the way), read the bytes back off
-// the destination and confirm they match, then atomically rename into place — so a
-// partial or corrupted file never appears under its real name. Returns the streamed
-// SHA-256 and byte count. The single verified landing path shared by full mirrors and
-// incremental "back up changes" runs.
-func copyVerifyToDest(srcPath, destPath string, th *throttler, onBytes func(int64)) (string, int64, error) {
-	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+// copyVerifyToRoot copies srcPath to rel BENEATH AN AUTHORIZED DESTINATION with the
+// full copy-then-verify discipline — stage into a uniquely owned .mnemo_tmp created
+// with O_EXCL (hashing on the way), read the bytes back off the destination through
+// the same handle and confirm they match, then publish by rename — so a partial or
+// corrupted file never appears under its real name. Returns the streamed SHA-256 and
+// byte count. The single verified landing path shared by full mirrors and incremental
+// "back up changes" runs.
+//
+// Every step is relative to the authorized root: the parent directory creation, the
+// staging file, the read-back, the publication and the cleanup. rel is validated as a
+// confined relative path before it reaches the filesystem, so a catalog RelPath or a
+// folder label cannot address anything outside the destination.
+//
+// Failure discipline: publication never removes the previous
+// destination file, so a failed publish leaves the existing copy byte-identical; and
+// cleanup follows the platform ownership contract in deststage_*.go. Unix
+// private staging requires trusted same-UID processes and retains empty containers.
+//
+// A source-side failure is wrapped with errCopySource so callers can keep counting
+// "skipped" (unreadable source) apart from "failed" (destination would not take it).
+func copyVerifyToRoot(dest *DestRoot, srcPath, rel string, th *throttler, onBytes func(int64)) (string, int64, error) {
+	v, err := destRel(rel)
+	if err != nil {
 		return "", 0, err
 	}
-	tmp := destPath + mirrorTmpSuffix
-	streamHash, n, err := mirrorCopyFile(srcPath, tmp, th, onBytes)
+	if dir := path.Dir(v); dir != "." {
+		if err := dest.MkdirAll(dir); err != nil {
+			return "", 0, err
+		}
+	}
+	tmpRel, out, err := dest.stagingFor(v)
 	if err != nil {
-		_ = os.Remove(tmp)
+		return "", 0, err
+	}
+	in, err := os.Open(srcPath)
+	if err != nil {
+		_ = dest.Discard(tmpRel)
+		return "", 0, fmt.Errorf("%w: %w", errCopySource, err)
+	}
+	defer in.Close()
+	streamHash, n, err := mirrorCopyStream(in, out, th, onBytes)
+	if err != nil {
+		_ = dest.Discard(tmpRel)
 		return "", n, err
 	}
 	// Read the bytes back off the destination and confirm byte-identity before the
 	// file gets its real name.
-	if rb, rerr := hashFileHex(tmp); rerr != nil || rb != streamHash {
-		_ = os.Remove(tmp)
-		return "", n, fmt.Errorf("read-back check failed for %s: the copy on the drive does not match the source. The drive may be failing, or the file changed while copying. Copy it again; if it keeps failing, check the drive's health", filepath.Base(destPath))
+	if rerr := dest.VerifyStage(tmpRel, streamHash); rerr != nil {
+		_ = dest.Discard(tmpRel)
+		return "", n, fmt.Errorf("read-back check failed for %s: the copy on the drive does not match the source. The drive may be failing, or the file changed while copying. Copy it again; if it keeps failing, check the drive's health", path.Base(v))
 	}
-	if err := atomicRename(tmp, destPath); err != nil {
-		_ = os.Remove(tmp)
+	if err := dest.Publish(tmpRel, v); err != nil {
+		_ = dest.Discard(tmpRel)
 		return "", n, err
 	}
 	return streamHash, n, nil
@@ -373,6 +410,23 @@ func atomicRename(tmp, final string) error {
 	return nil
 }
 
+// fileSizes lists the cataloged sizes of files, for a destination size check.
+func fileSizes(files []*File) []int64 {
+	out := make([]int64, len(files))
+	for i, f := range files {
+		out[i] = f.SizeBytes
+	}
+	return out
+}
+
+// logDestinationNotes records in the activity log what a job's destination was
+// accepted with, so it is visible after the job result is gone.
+func logDestinationNotes(s *Store, action string, dest *DestRoot) {
+	for _, n := range dest.Notes() {
+		s.Log(action, dest.Name()+": "+n)
+	}
+}
+
 // mirrorFolderLabels assigns each source folder a unique, filesystem-safe subtree
 // name (its base name, disambiguated by folder id on collision) for multi-folder
 // mirrors.
@@ -398,17 +452,21 @@ func mirrorFolderLabels(used map[int]bool, folderPath map[int]string) map[int]st
 	return out
 }
 
-// writeVolumeInventory refreshes the OBELISK_DOCK sidecar at destDir describing
-// everything the catalog says this volume holds — a self-documenting inventory
-// that survives the catalog. Guarded against writing into a source.
-func (a *App) writeVolumeInventory(destDir string, vol *Volume) (string, error) {
-	if err := a.Store.AssertOutsideSources(destDir); err != nil {
+// writeVolumeInventoryTo refreshes the OBELISK_DOCK sidecar on an ALREADY
+// AUTHORIZED destination, describing everything the catalog says this volume
+// holds — a self-documenting inventory that survives the catalog.
+//
+// The sidecar obeys exactly the authority the payload writes obey. It used to
+// re-run the AssertOutsideSources string test and then os.MkdirAll / os.WriteFile a
+// rebuilt absolute path, which followed whatever that name resolved to — in the
+// recorded reproduction it wrote the inventory INSIDE a registered source through a
+// destination alias. Now it writes root-relative, staged and published like a
+// payload file, and re-checking the pathname is neither needed nor trusted.
+func (a *App) writeVolumeInventoryTo(dest *DestRoot, vol *Volume) (string, error) {
+	if err := dest.MkdirAll(dockSidecarDir); err != nil {
 		return "", err
 	}
-	dir := filepath.Join(destDir, dockSidecarDir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
+	dir := filepath.Join(dest.Name(), dockSidecarDir) // display only; never reopened
 	now := time.Now().UTC()
 
 	type invFile struct {
@@ -461,7 +519,7 @@ func (a *App) writeVolumeInventory(destDir string, vol *Volume) (string, error) 
 		"formats": census,
 	}
 	sb, _ := json.MarshalIndent(snap, "", "  ")
-	if err := os.WriteFile(filepath.Join(dir, "catalog_snapshot.json"), sb, 0o644); err != nil {
+	if err := dest.WriteFileAtomic(dockSidecarDir+"/catalog_snapshot.json", sb, 0o644); err != nil {
 		return "", err
 	}
 
@@ -491,7 +549,7 @@ func (a *App) writeVolumeInventory(destDir string, vol *Volume) (string, error) 
 	b.WriteString("\n---\n\n")
 	b.WriteString(fmt.Sprintf("**Formats:** %.0f%% of these bytes are in OPEN or DOCUMENTED formats.\n\n", census.SafePct))
 	b.WriteString("```\n" + readersReference(census) + "```\n")
-	if err := os.WriteFile(filepath.Join(dir, "INVENTORY.md"), []byte(b.String()), 0o644); err != nil {
+	if err := dest.WriteFileAtomic(dockSidecarDir+"/INVENTORY.md", []byte(b.String()), 0o644); err != nil {
 		return dir, err
 	}
 	return dir, nil
