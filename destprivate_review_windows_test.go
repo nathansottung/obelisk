@@ -151,3 +151,68 @@ func TestMakePrivate_PreviewNamesStillSharedFolders(t *testing.T) {
 		t.Fatalf("the preview should say other accounts can still change those folders: %q", note)
 	}
 }
+
+// A folder inside a private destination that other accounts can still change (here
+// one moved in from a shared folder, keeping its inherited grant) is not written
+// into: the user never chose to allow that.
+func TestDestGuard_SharedSubfolderRefused(t *testing.T) {
+	app := dockApp(t)
+	user, err := destUserSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	setDestFixtureDACL(t, dest, "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;SY)")
+	shared, _ := sharedFolder(t)
+	sub := filepath.Join(dest, "Sub")
+	if err := os.Rename(shared, sub); err != nil { // same volume: keeps its inherited grant
+		t.Fatal(err)
+	}
+	if c := app.Store.CheckDestination(dest); c.Status != destStatusPass {
+		t.Fatalf("precondition: the destination itself is private, got %q", c.Status)
+	}
+	d, err := app.Store.AuthorizeDestination(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if err := d.WriteFileAtomic("Sub/new.txt", []byte("x"), 0o644); err == nil || !strings.Contains(err.Error(), "Authenticated Users") {
+		t.Fatalf("write into a shared folder inside a private destination: got %v, want a refusal naming the group", err)
+	}
+	if err := d.MkdirAll("Sub/Deeper"); err == nil {
+		t.Fatal("folder created inside a shared folder of a private destination")
+	}
+	if got := entriesOf(t, sub); len(got) != 0 {
+		t.Fatalf("written into the shared folder: %q", got)
+	}
+	// Writing elsewhere in the private destination still works.
+	if err := d.WriteFileAtomic("Other/ok.txt", []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A destination whose only grant to other accounts is one new folders inside would
+// inherit (inherit-only) needs the same choice as one they can change directly:
+// otherwise it would pass the check and then refuse every folder it creates.
+func TestDestGuard_InheritOnlyGrantNeedsChoice(t *testing.T) {
+	app := dockApp(t)
+	user, _ := destUserSID()
+	dest := t.TempDir()
+	setDestFixtureDACL(t, dest, "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;SY)(A;OICIIO;0x1301bf;;;AU)")
+	c := app.Store.CheckDestination(dest)
+	if c.Status != destStatusChoose {
+		t.Fatalf("status %q, want a choice", c.Status)
+	}
+	if _, err := app.Store.ChooseUseAnyway(dest, c.Fingerprint, destUseAnywayWord); err != nil {
+		t.Fatal(err)
+	}
+	d, err := app.Store.AuthorizeDestination(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	// Once chosen, folders Obelisk creates inside (which inherit the grant) are fine.
+	if err := d.WriteFileAtomic("New/file.txt", []byte("x"), 0o644); err != nil {
+		t.Fatalf("write into a folder created inside a chosen destination: %v", err)
+	}
+}

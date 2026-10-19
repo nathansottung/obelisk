@@ -378,8 +378,9 @@ type DestRoot struct {
 	display   string // the operator's spelling, for messages and catalog records
 	snap      *sourceSnapshot
 	fs        destFS
-	token     string       // collision avoidance; object ownership is retained separately
-	release   func() error // cooperative lease retained through the caller's catalog credit
+	accepted  map[string]bool // findings the destination was accepted with (see findingKey)
+	token     string          // collision avoidance; object ownership is retained separately
+	release   func() error    // cooperative lease retained through the caller's catalog credit
 	volume    uint64
 	seq       atomic.Uint64
 	mu        sync.Mutex
@@ -497,7 +498,21 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 		root.Close()
 		return nil, fmt.Errorf("cannot generate a staging token: %w", err)
 	}
-	return &DestRoot{root: root, canonical: canon, display: display, snap: snap, fs: destfs, token: hex.EncodeToString(tok), release: release, volume: id.vol}, nil
+	accepted := map[string]bool{}
+	for _, f := range append(in.findings, destfs.findings...) {
+		accepted[findingKey(f)] = true
+	}
+	return &DestRoot{root: root, canonical: canon, display: display, snap: snap, fs: destfs, accepted: accepted,
+		token: hex.EncodeToString(tok), release: release, volume: id.vol}, nil
+}
+
+// findingKey groups findings the same decision covers: a grant to the same group,
+// wherever below the destination it appears, or the destination's filesystem.
+func findingKey(f destFinding) string {
+	if f.Kind == destFindingUnchecked {
+		return f.Kind
+	}
+	return "sid:" + f.SID
 }
 
 // destInspection is everything decided about a destination before anything is
@@ -573,7 +588,18 @@ func (s *Store) inspectDestination(path string) (*destInspection, error) {
 		return fail(err)
 	}
 	findings := nsfs.findings
-	if len(missing) > 0 {
+	if len(missing) == 0 {
+		// Folders Obelisk creates inside an existing destination inherit from it;
+		// a grant they would inherit (even one that is inherit-only on the folder
+		// itself) is a finding about this folder.
+		pred, err := predictDestChild(anc, ancCanon)
+		if err != nil {
+			return fail(err)
+		}
+		for _, f := range pred {
+			findings = appendFinding(findings, f)
+		}
+	} else {
 		// The folder written into does not exist yet: its filesystem findings are
 		// the anchor's, named for the folder that will be created, plus whatever it
 		// would inherit.
@@ -795,8 +821,21 @@ func (d *DestRoot) MkdirAll(rel string) error {
 // namespace must still pass the platform policy and it must be on the same volume
 // as the authorized root, so a mount point below the root cannot redirect writes.
 func (d *DestRoot) checkParent(parent *os.Root) error {
-	if _, err := checkDestNamespace(parent); err != nil {
+	ns, err := checkDestNamespace(parent)
+	if err != nil {
 		return err
+	}
+	// A folder inside the destination may not let anyone change it that the
+	// destination itself was not accepted with — for example a shared folder moved
+	// into a private destination, or one left shared by Make private.
+	for _, f := range ns.findings {
+		if !d.accepted[findingKey(f)] {
+			who := f.Group
+			if f.Kind == destFindingUnchecked {
+				who = "any account (" + f.FS + " has no permissions)"
+			}
+			return fmt.Errorf("refusing: %s inside the destination lets %s change it, and %s was not accepted for that. Obelisk won't write there; check that folder, make it private, or choose another destination", f.Folder, who, d.display)
+		}
 	}
 	f, err := parent.Open(".")
 	if err != nil {
