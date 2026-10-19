@@ -648,3 +648,18 @@ func TestDestAuth_UnrecordedSourceUnderNewLetter(t *testing.T) {
 	d.Close()
 	mustBytes(t, filepath.Join(real, "photo.jpg"), "ORIGINAL", "refused destinations")
 }
+
+// A legacy source registered as a whole drive (Q:\) whose drive is not attached
+// cannot be located on another drive by its path; it must not make every
+// destination on every other drive look like its root.
+func TestDestAuth_UnrecordedRootSourceDoesNotBlockEverything(t *testing.T) {
+	app := dockApp(t)
+	coll := app.Store.AddCollection("Whole drive")
+	f := app.Store.AddFolder(coll.ID, unusedDriveLetter(t))
+	f.VolumeID = ""
+	d, err := app.Store.AuthorizeDestination(filepath.Join(t.TempDir(), "mirror"))
+	if err != nil {
+		t.Fatalf("an unplugged whole-drive source refused an unrelated destination: %v", err)
+	}
+	d.Close()
+}

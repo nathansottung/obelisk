@@ -286,14 +286,30 @@ func (snap *sourceSnapshot) decideOffline(destVolumeID, requested, canonical, di
 // drive holds a folder at the source's place (its path without the drive letter),
 // that folder may be the source itself, and the destination must not be it,
 // inside it, or around it.
+//
+// A source registered as a whole drive (E:\) has no place to look for: every
+// drive has a root. It is left to the path rule rather than refusing every
+// destination on every drive. The candidate folder is compared by the location
+// read from its handle, so a short (8.3) or differently cased spelling of the
+// source's path still matches.
 func sameFolderOtherLetter(s sourceRef, canonical, display string) error {
 	srcVol := filepath.VolumeName(s.abs)
 	destVol := filepath.VolumeName(canonical)
 	if srcVol == "" || destVol == "" || strings.EqualFold(srcVol, destVol) {
 		return nil
 	}
-	candidate := destVol + s.abs[len(srcVol):]
-	if st, err := os.Stat(candidate); err != nil || !st.IsDir() {
+	rel := s.abs[len(srcVol):]
+	if strings.Trim(rel, `\/`) == "" {
+		return nil
+	}
+	f, err := os.Open(destVol + rel)
+	if err != nil {
+		return nil
+	}
+	candidate, cerr := handleCanonicalPath(f)
+	st, serr := f.Stat()
+	f.Close()
+	if cerr != nil || serr != nil || !st.IsDir() {
 		return nil
 	}
 	if err := overlapError(normPath(canonical), normPath(candidate), display, canonical, candidate); err != nil {
