@@ -81,10 +81,11 @@ const (
 )
 
 const (
-	sidUsers     = "S-1-5-32-545"
-	sidGuests    = "S-1-5-32-546"
-	sidEveryone  = "S-1-1-0"
-	sidAnonymous = "S-1-5-7"
+	sidUsers        = "S-1-5-32-545"
+	sidGuests       = "S-1-5-32-546"
+	sidEveryone     = "S-1-1-0"
+	sidAnonymous    = "S-1-5-7"
+	sidCreatorOwner = "S-1-3-0"
 )
 
 // destGroupName is the plain name of a principal for notices and refusals.
@@ -233,15 +234,24 @@ func predictDestChild(r *os.Root, child string) ([]destFinding, error) {
 		if err := windows.GetAce(acl, i, &ace); err != nil {
 			return nil, err
 		}
-		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceFlags&destAceContainerInherit == 0 {
+		if ace.Header.AceFlags&destAceContainerInherit == 0 {
 			continue
+		}
+		switch ace.Header.AceType {
+		case windows.ACCESS_ALLOWED_ACE_TYPE:
+		case windows.ACCESS_DENIED_ACE_TYPE:
+			continue // Conservative: never subtract a deny from a later grant.
+		default:
+			// Refuse now rather than create the folder and refuse it afterwards.
+			return nil, fmt.Errorf("unsupported destination namespace: %s would inherit a permission entry of type %d that Obelisk cannot evaluate", child, ace.Header.AceType)
 		}
 		granted := uint32(ace.Mask) & mask
 		if granted == 0 {
 			continue
 		}
 		s := (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()
-		if trustedDestSID(s, user) {
+		// On a new folder, CREATOR OWNER becomes an entry for its creator: this user.
+		if s == sidCreatorOwner || trustedDestSID(s, user) {
 			continue
 		}
 		fd, err := classifyDestGrant(s, child, granted, true, true, false)

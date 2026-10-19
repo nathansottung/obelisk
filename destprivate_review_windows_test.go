@@ -55,11 +55,18 @@ func TestMakePrivate_UnshownEntryRefused(t *testing.T) {
 	if err == nil {
 		t.Fatalf("preview of a folder with an entry it cannot rewrite succeeded:\nbefore %q\nremoved %q\nafter %s", plan.Before, plan.Removed, plan.AfterSDDL)
 	}
-	if !strings.Contains(err.Error(), "can't safely") {
+	// The destination check may refuse first (the entry would be inherited by new
+	// folders); either way the folder is left as it was.
+	if !strings.Contains(err.Error(), "can't safely") && !strings.Contains(err.Error(), "cannot evaluate") {
 		t.Fatalf("refusal should explain why: %v", err)
 	}
 	if folderSDDLOf(t, folder) != before {
 		t.Fatal("the folder's permissions changed")
+	}
+	// And the Make private builder itself refuses such an entry.
+	user, _ := destUserSID()
+	if _, _, _, _, err := privateDACL(before, user); err == nil || !strings.Contains(err.Error(), "can't safely") {
+		t.Fatalf("Make private builder with an entry it cannot rewrite: %v", err)
 	}
 }
 
@@ -266,5 +273,34 @@ func TestDestChoice_MovedCreatedFolderAskedAgain(t *testing.T) {
 	}
 	if got := app.Store.CheckDestination(moved); got.Status != destStatusChoose {
 		t.Fatalf("moved created folder: %q with findings %+v, want a choice", got.Status, got.Findings)
+	}
+}
+
+// A CREATOR OWNER grant on the parent becomes an entry for the folder's creator —
+// this user — on a new folder, so it is not a reason to refuse.
+func TestDestPredict_CreatorOwnerIsTheUser(t *testing.T) {
+	app := dockApp(t)
+	user, _ := destUserSID()
+	parent := t.TempDir()
+	setDestFixtureDACL(t, parent, "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;SY)(A;OICIIO;GA;;;CO)")
+	if c := app.Store.CheckDestination(filepath.Join(parent, "New")); c.Status != destStatusPass {
+		t.Fatalf("new folder under a CREATOR OWNER grant: %q %s", c.Status, c.Reason)
+	}
+}
+
+// An inheritable entry Obelisk cannot evaluate (here a conditional one) refuses
+// before the new folder is created, not after, leaving nothing behind.
+func TestDestPredict_UnknownInheritableEntryRefusedBeforeCreating(t *testing.T) {
+	app := dockApp(t)
+	user, _ := destUserSID()
+	parent := t.TempDir()
+	setDestFixtureDACL(t, parent, "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;SY)"+`(XA;OICIIO;FA;;;WD;(@User.title == "x"))`)
+	newDir := filepath.Join(parent, "New")
+	if d, err := app.Store.AuthorizeDestination(newDir); err == nil {
+		d.Close()
+		t.Fatal("a folder that would inherit an entry Obelisk cannot evaluate was authorized")
+	}
+	if _, err := os.Stat(newDir); err == nil {
+		t.Fatal("the folder was created before the refusal")
 	}
 }
