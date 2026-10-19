@@ -73,36 +73,103 @@ const (
 	destDACLPublication = windows.FILE_WRITE_DATA | windows.FILE_APPEND_DATA // ADD_FILE, ADD_SUBDIRECTORY
 )
 
-// checkDestDACL refuses a directory whose owner is untrusted or whose DACL lets an
-// untrusted principal mutate it. One grant is tolerated with a warning: Windows
-// gives Authenticated Users "create folders" (and nothing else) on a volume root
-// by default, so a destination that IS a drive root would otherwise always fail.
-// Any other grant to other users, on a root or anywhere else, still refuses.
-func checkDestDACL(sd *windows.SECURITY_DESCRIPTOR, user string, publication, volumeRoot bool) (warning string, err error) {
+// ACE header flags.
+const (
+	destAceContainerInherit = 0x2
+	destAceInheritOnly      = 0x8
+	destAceInherited        = 0x10
+)
+
+const (
+	sidUsers     = "S-1-5-32-545"
+	sidGuests    = "S-1-5-32-546"
+	sidEveryone  = "S-1-1-0"
+	sidAnonymous = "S-1-5-7"
+)
+
+// destGroupName is the plain name of a principal for notices and refusals.
+func destGroupName(sid string) string {
+	switch sid {
+	case sidAuthenticatedUsers:
+		return "Authenticated Users"
+	case sidUsers:
+		return "Users"
+	case sidEveryone:
+		return "Everyone"
+	case sidGuests:
+		return "Guests"
+	case sidAnonymous:
+		return "Anonymous Logon"
+	case sidLocalSystem:
+		return "SYSTEM"
+	case sidAdministrators:
+		return "Administrators"
+	case sidTrustedInstaller:
+		return "TrustedInstaller"
+	}
+	if s, err := windows.StringToSid(sid); err == nil {
+		if name, domain, _, err := s.LookupAccount(""); err == nil && name != "" {
+			if domain != "" {
+				return domain + `\` + name
+			}
+			return name
+		}
+	}
+	return sid
+}
+
+// classifyDestGrant decides what one grant of change rights to another principal
+// means for a destination folder:
+//
+//   - the Windows default on a drive root, where Authenticated Users may create
+//     folders and nothing else, is a finding the user decides about;
+//   - an INHERITED grant to Authenticated Users or Users, which is how Windows lays
+//     out folders made directly on a drive, is a finding the user decides about;
+//   - anything else — Everyone, Guests, Anonymous Logon, any other account or
+//     group, or a grant set explicitly on this folder — refuses.
+func classifyDestGrant(sid, folder string, granted uint32, inherited, publication, volumeRoot bool) (*destFinding, error) {
+	if volumeRoot && publication && sid == sidAuthenticatedUsers && granted == windows.FILE_APPEND_DATA {
+		return &destFinding{Kind: destFindingDriveRoot, Folder: folder, Group: destGroupName(sid), SID: sid}, nil
+	}
+	if (sid == sidAuthenticatedUsers || sid == sidUsers) && inherited && !volumeRoot {
+		return &destFinding{Kind: destFindingSharedGroup, Folder: folder, Group: destGroupName(sid), SID: sid, Inherited: true}, nil
+	}
+	how := "set on this folder"
+	if inherited {
+		how = "inherited"
+	}
+	return nil, fmt.Errorf("unsafe destination namespace: %s lets %s change it (%s; mutation mask %#x to untrusted principal %s)", folder, destGroupName(sid), how, granted, sid)
+}
+
+// checkDestDACL refuses a directory whose owner is untrusted or whose DACL lets
+// another principal change it in a way classifyDestGrant refuses, and returns the
+// grants the user must decide about.
+func checkDestDACL(sd *windows.SECURITY_DESCRIPTOR, user, folder string, publication, volumeRoot bool) ([]destFinding, error) {
 	owner, _, err := sd.Owner()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if owner == nil || !trustedDestSID(owner.String(), user) {
-		return "", fmt.Errorf("unsafe destination namespace: untrusted directory owner")
+		return nil, fmt.Errorf("unsafe destination namespace: %s is owned by another account (untrusted directory owner)", folder)
 	}
 	acl, _, err := sd.DACL()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if acl == nil {
-		return "", fmt.Errorf("unsafe destination namespace: unrestricted NULL DACL")
+		return nil, fmt.Errorf("unsafe destination namespace: %s has no permissions set, so anyone can change it (unrestricted NULL DACL)", folder)
 	}
 	mask := uint32(destDACLMutation)
 	if publication {
 		mask |= destDACLPublication
 	}
+	var findings []destFinding
 	for i := uint32(0); i < uint32(acl.AceCount); i++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(acl, i, &ace); err != nil {
-			return "", err
+			return nil, err
 		}
-		if ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 {
+		if ace.Header.AceFlags&destAceInheritOnly != 0 {
 			continue
 		}
 		switch ace.Header.AceType {
@@ -115,22 +182,75 @@ func checkDestDACL(sd *windows.SECURITY_DESCRIPTOR, user string, publication, vo
 			}
 			sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
 			if !sid.IsValid() {
-				return "", fmt.Errorf("unsafe destination namespace: DACL entry with an invalid principal")
+				return nil, fmt.Errorf("unsafe destination namespace: %s has a permission entry with an invalid principal", folder)
 			}
 			s := sid.String()
 			if trustedDestSID(s, user) {
 				continue
 			}
-			if volumeRoot && publication && s == sidAuthenticatedUsers && granted == windows.FILE_APPEND_DATA {
-				warning = "the drive root lets any signed-in user create folders (the Windows default); a folder another user creates here is refused when Obelisk reaches it"
-				continue
+			f, err := classifyDestGrant(s, folder, granted, ace.Header.AceFlags&destAceInherited != 0, publication, volumeRoot)
+			if err != nil {
+				return nil, err
 			}
-			return "", fmt.Errorf("unsafe destination namespace: DACL grants mutation mask %#x to untrusted principal %s", granted, s)
+			findings = appendFinding(findings, *f)
 		default:
-			return "", fmt.Errorf("unsupported destination namespace: ACE type %d requires native policy evaluation", ace.Header.AceType)
+			return nil, fmt.Errorf("unsupported destination namespace: ACE type %d requires native policy evaluation", ace.Header.AceType)
 		}
 	}
-	return warning, nil
+	return findings, nil
+}
+
+// predictDestChild returns what a folder Obelisk creates inside the directory r
+// holds would inherit, so the choice can be made before anything is created. Every
+// container-inheritable grant on r becomes an inherited grant on the new folder.
+func predictDestChild(r *os.Root, child string) ([]destFinding, error) {
+	f, err := r.Open(".")
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	_, acls, err := destFilesystem(f)
+	if err != nil || !acls {
+		return nil, err
+	}
+	user, err := destUserSID()
+	if err != nil {
+		return nil, err
+	}
+	sd, err := windows.GetSecurityInfo(windows.Handle(f.Fd()), windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	runtime.KeepAlive(f)
+	if err != nil {
+		return nil, fmt.Errorf("cannot inspect destination namespace DACL: %w", err)
+	}
+	acl, _, err := sd.DACL()
+	if err != nil || acl == nil {
+		return nil, err
+	}
+	mask := uint32(destDACLMutation | destDACLPublication)
+	var findings []destFinding
+	for i := uint32(0); i < uint32(acl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(acl, i, &ace); err != nil {
+			return nil, err
+		}
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceFlags&destAceContainerInherit == 0 {
+			continue
+		}
+		granted := uint32(ace.Mask) & mask
+		if granted == 0 {
+			continue
+		}
+		s := (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()
+		if trustedDestSID(s, user) {
+			continue
+		}
+		fd, err := classifyDestGrant(s, child, granted, true, true, false)
+		if err != nil {
+			return nil, err
+		}
+		findings = appendFinding(findings, *fd)
+	}
+	return findings, nil
 }
 
 // destVolumeInformation reports the filesystem name and flags of the volume behind
@@ -178,11 +298,7 @@ func destFilesystem(f *os.File) (destFS, bool, error) {
 		}
 		return destFS{name: fsName}, true, nil
 	case "exFAT", "FAT32", "FAT":
-		fs := destFS{name: fsName, notChecked: []string{
-			"folder permissions (" + fsName + " has no access control)",
-			"hard links (" + fsName + " has none)",
-			"stable file IDs (" + fsName + " file IDs can change when a file is renamed)",
-		}}
+		fs := destFS{name: fsName, notChecked: []string{destCheckPermissions, destCheckHardLinks, destCheckFileIDs}}
 		if fsName != "exFAT" {
 			fs.maxFile = fatMaxFile
 		}
@@ -193,8 +309,10 @@ func destFilesystem(f *os.File) (destFS, bool, error) {
 
 // checkDestNamespace checks the directory held by r and every ancestor up to the
 // volume root: each must be on an accepted filesystem and, where the filesystem
-// keeps permissions, owned and writable only by this user and the system. It
-// returns what it learned about the destination's own filesystem.
+// keeps permissions, owned by this user or the system and changeable by others
+// only in the ways classifyDestGrant accepts. It returns what it learned about the
+// destination's filesystem, the grants the user must decide about, and each
+// level's permissions for the choice fingerprint.
 func checkDestNamespace(r *os.Root) (destFS, error) {
 	user, err := destUserSID()
 	if err != nil {
@@ -206,36 +324,47 @@ func checkDestNamespace(r *os.Root) (destFS, error) {
 	}
 	defer func() { f.Close() }()
 	var dest destFS
+	var findings []destFinding
+	var chain []destLevel
 	publication := true
 	for {
 		fs, acls, err := destFilesystem(f)
 		if err != nil {
 			return destFS{}, err
 		}
-		if publication {
-			dest = fs
-		}
 		canon, err := handleCanonicalPath(f)
 		if err != nil {
 			return destFS{}, err
 		}
+		if publication {
+			dest = fs
+			if len(fs.notChecked) > 0 {
+				findings = append(findings, destFinding{Kind: destFindingUnchecked, Folder: canon, FS: fs.name, MaxFile: fs.maxFile})
+			}
+		}
 		parent := filepath.Dir(canon)
 		volumeRoot := parent == canon
+		level := destLevel{path: canon, fs: fs.name}
 		if acls {
 			sd, err := windows.GetSecurityInfo(windows.Handle(f.Fd()), windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 			runtime.KeepAlive(f)
 			if err != nil {
 				return destFS{}, fmt.Errorf("cannot inspect destination namespace DACL: %w", err)
 			}
-			warning, err := checkDestDACL(sd, user, publication, volumeRoot)
+			found, err := checkDestDACL(sd, user, canon, publication, volumeRoot)
 			if err != nil {
-				return destFS{}, fmt.Errorf("%s: %w", canon, err)
+				return destFS{}, err
 			}
-			if warning != "" {
-				dest.warnings = append(dest.warnings, warning)
+			for _, fd := range found {
+				findings = appendFinding(findings, fd)
 			}
+			level.perms = sd.String()
+		} else if id, err := handleIdentity(f); err == nil {
+			level.perms = fmt.Sprintf("vsn:%08X", id.vol)
 		}
+		chain = append(chain, level)
 		if volumeRoot {
+			dest.findings, dest.chain = findings, chain
 			return dest, nil
 		}
 		p, err := os.Open(parent) // read-only authority inspection, never a mutation

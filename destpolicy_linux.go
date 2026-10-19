@@ -38,9 +38,9 @@ func destFilesystem(f *os.File) (destFS, bool, error) {
 	case unix.TMPFS_MAGIC:
 		return destFS{name: "tmpfs"}, true, nil
 	case destMagicMSDOS:
-		return destFS{name: "FAT", maxFile: 1<<32 - 1, notChecked: fatNotChecked("FAT")}, false, nil
+		return destFS{name: "FAT", maxFile: 1<<32 - 1, notChecked: fatNotChecked()}, false, nil
 	case destMagicExFAT:
-		return destFS{name: "exFAT", notChecked: fatNotChecked("exFAT")}, false, nil
+		return destFS{name: "exFAT", notChecked: fatNotChecked()}, false, nil
 	case unix.OVERLAYFS_SUPER_MAGIC:
 		return destFS{}, false, fmt.Errorf("unsupported destination: this folder is on a container overlay filesystem (for example inside Docker). Obelisk will not write there; mount a host folder into the container (for example -v /mnt/backup:/backup) and choose that as the destination")
 	}
@@ -63,12 +63,8 @@ func platformDestName(rel string) error {
 	return nil
 }
 
-func fatNotChecked(name string) []string {
-	return []string{
-		"folder permissions (" + name + " owner and mode come from mount options, not the disk)",
-		"hard links (" + name + " has none)",
-		"stable file IDs (" + name + " inode numbers are not stable across mounts)",
-	}
+func fatNotChecked() []string {
+	return []string{destCheckPermissions, destCheckHardLinks, destCheckFileIDs}
 }
 
 func trustedDestOwner(uid uint32) bool { return uid == 0 || uid == uint32(os.Geteuid()) }
@@ -77,7 +73,8 @@ func trustedDestOwner(uid uint32) bool { return uid == 0 || uid == uint32(os.Get
 // outside the root. POSIX access ACL write grants are bounded by the group-class
 // mode mask on the admitted filesystems. A sticky ancestor such as /tmp is safe
 // only because the child and ancestor owners are trusted. Publication parents must
-// not be shared. Owner and mode are not checked where the filesystem emulates them.
+// not be shared. Owner and mode are not checked where the filesystem emulates them;
+// that is returned as a finding the user decides about.
 func checkDestNamespace(r *os.Root) (destFS, error) {
 	f, err := r.Open(".")
 	if err != nil {
@@ -85,22 +82,28 @@ func checkDestNamespace(r *os.Root) (destFS, error) {
 	}
 	defer func() { f.Close() }()
 	var dest destFS
+	var chain []destLevel
 	leaf := true
 	for {
 		fs, perms, err := destFilesystem(f)
 		if err != nil {
 			return destFS{}, err
 		}
-		if leaf {
-			dest = fs
-		}
 		var st unix.Stat_t
 		if err := unix.Fstat(int(f.Fd()), &st); err != nil {
 			return destFS{}, err
 		}
+		canon, _ := handleCanonicalPath(f)
+		if leaf {
+			dest = fs
+			if len(fs.notChecked) > 0 {
+				dest.findings = append(dest.findings, destFinding{Kind: destFindingUnchecked, Folder: canon, FS: fs.name, MaxFile: fs.maxFile})
+			}
+		}
 		if perms && (!trustedDestOwner(st.Uid) || st.Mode&0o022 != 0 && (leaf || st.Mode&unix.S_ISVTX == 0)) {
 			return destFS{}, fmt.Errorf("unsafe destination namespace: directory owner %d or mode %#o permits untrusted entry replacement", st.Uid, st.Mode&0o7777)
 		}
+		chain = append(chain, destLevel{path: canon, fs: fs.name, perms: fmt.Sprintf("dev=%d ino=%d uid=%d mode=%o", st.Dev, st.Ino, st.Uid, st.Mode&0o7777)})
 		fd, err := unix.Openat(int(f.Fd()), "..", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 		runtime.KeepAlive(f)
 		if err != nil {
@@ -114,12 +117,17 @@ func checkDestNamespace(r *os.Root) (destFS, error) {
 		}
 		if ps.Dev == st.Dev && ps.Ino == st.Ino {
 			parent.Close()
+			dest.chain = chain
 			return dest, nil
 		}
 		f.Close()
 		f, leaf = parent, false
 	}
 }
+
+// predictDestChild has nothing to predict on Linux: a folder Obelisk creates is
+// owned by this user with mode 0755 less the umask, and inherits no grants.
+func predictDestChild(*os.Root, string) ([]destFinding, error) { return nil, nil }
 
 // destStagePermsEnforced reports whether the filesystem behind f keeps real owner
 // and mode bits, so the private staging directory's 0700 can be relied on.

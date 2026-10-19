@@ -28,3 +28,5 @@ func checkDestNamespace(*os.Root) (destFS, error) { return destFS{}, destUnsuppo
 func acquireDestLease(*os.Root) (func() error, error) { return nil, destUnsupportedPlatform() }
 
 func destStagePermsEnforced(*os.File) bool { return true }
+
+func predictDestChild(*os.Root, string) ([]destFinding, error) { return nil, destUnsupportedPlatform() }

@@ -94,7 +94,7 @@ func TestDestAuth_WindowsPrivateStage(t *testing.T) {
 	if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String() != user {
 		t.Fatal("stage grants another principal access")
 	}
-	if _, err := checkDestDACL(sd, user, true, false); err != nil {
+	if _, err := checkDestDACL(sd, user, "fixture", true, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.Discard(rel); err != nil {
@@ -112,7 +112,7 @@ func TestDestAuth_UnsupportedWindowsACL(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := checkDestDACL(sd, user, true, false); err == nil {
+		if _, err := checkDestDACL(sd, user, "fixture", true, false); err == nil {
 			t.Fatalf("unsupported security descriptor admitted: %s", sddl)
 		}
 	}

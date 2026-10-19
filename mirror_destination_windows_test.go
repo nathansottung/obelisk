@@ -20,6 +20,7 @@ func TestMirror_FAT32RefusesOversizeFileUpFront(t *testing.T) {
 	}
 	withDestVolume(t, "FAT32", 0)
 	dest := filepath.Join(t.TempDir(), "mirror")
+	chooseAnyway(t, app, dest)
 	_, err := app.MirrorToVolume(collID, nil, dest, vol.ID, 0, "", noProgMirror)
 	if err == nil || !strings.Contains(err.Error(), "FAT32") || !strings.Contains(err.Error(), "4 GB") {
 		t.Fatalf("got %v, want a FAT32 4 GB refusal", err)
@@ -27,7 +28,9 @@ func TestMirror_FAT32RefusesOversizeFileUpFront(t *testing.T) {
 	if ents, _ := os.ReadDir(dest); len(ents) != 0 {
 		t.Fatalf("a refused mirror wrote %d entries", len(ents))
 	}
-	_, err = app.BackupChanges(collID, nil, vol.ID, BaseVolume, ModeMirror, filepath.Join(t.TempDir(), "backup"), 0, "", noProgMirror)
+	backup := filepath.Join(t.TempDir(), "backup")
+	chooseAnyway(t, app, backup)
+	_, err = app.BackupChanges(collID, nil, vol.ID, BaseVolume, ModeMirror, backup, 0, "", noProgMirror)
 	if err == nil || !strings.Contains(err.Error(), "4 GB") {
 		t.Fatalf("back up changes: got %v, want a FAT32 4 GB refusal", err)
 	}
@@ -37,7 +40,9 @@ func TestMirror_FAT32RefusesOversizeFileUpFront(t *testing.T) {
 func TestMirror_ExFATResultListsUncheckedItems(t *testing.T) {
 	app, collID, _, vol := mirrorSetup(t, "Card", map[string]string{"a.txt": "alpha"})
 	withDestVolume(t, "exFAT", 0)
-	res, err := app.MirrorToVolume(collID, nil, filepath.Join(t.TempDir(), "mirror"), vol.ID, 0, "", noProgMirror)
+	dest := filepath.Join(t.TempDir(), "mirror")
+	chooseAnyway(t, app, dest)
+	res, err := app.MirrorToVolume(collID, nil, dest, vol.ID, 0, "", noProgMirror)
 	if err != nil {
 		t.Fatal(err)
 	}

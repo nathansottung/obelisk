@@ -1073,6 +1073,11 @@ type catalog struct {
 	// exist to show a Backup History and to feed Home's periodic-backup recognition
 	// natively. Additive; tolerated absent on older catalogs. See incremental.go.
 	BackupSessions []*BackupSession `json:"backup_sessions,omitempty"`
+	// DestinationChoices: the user's recorded "Use it anyway" decisions for mirror
+	// and backup destinations that other accounts can change or whose filesystem
+	// cannot record permissions. Each is tied to a folder's identity and a
+	// fingerprint of its permissions; see destchoice.go. Additive.
+	DestinationChoices []*DestinationChoice `json:"destination_choices,omitempty"`
 }
 
 // compactThreshold is the file count above which the catalog is saved as compact

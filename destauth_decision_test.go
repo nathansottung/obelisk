@@ -29,6 +29,18 @@ func identOf(t *testing.T, p string) fileIdent {
 	return id
 }
 
+// chooseAnyway records "Use it anyway" for a destination that needs a choice.
+func chooseAnyway(t *testing.T, app *App, dest string) {
+	t.Helper()
+	c := app.Store.CheckDestination(dest)
+	if c.Status != destStatusChoose {
+		t.Fatalf("%s: status %q (%s), want a choice", dest, c.Status, c.Reason)
+	}
+	if _, err := app.Store.ChooseUseAnyway(dest, c.Fingerprint, destUseAnywayWord); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func offlineSnap(refs ...sourceRef) *sourceSnapshot {
 	for i := range refs {
 		refs[i].offline = true
@@ -170,10 +182,11 @@ func TestDestAuth_FileSizeLimit(t *testing.T) {
 	}
 }
 
-func TestDestAuth_NotesListWarningsAndUncheckedItems(t *testing.T) {
-	d := &DestRoot{fs: destFS{name: "exFAT", warnings: []string{"w1"}, notChecked: []string{"folder permissions"}}}
+func TestDestAuth_NotesListFindingsAndUncheckedItems(t *testing.T) {
+	d := &DestRoot{fs: destFS{name: "exFAT", notChecked: []string{"folder permissions"},
+		findings: []destFinding{{Kind: destFindingSharedGroup, Folder: "X", Group: "Authenticated Users"}}}}
 	notes := d.Notes()
-	if len(notes) != 2 || notes[0] != "w1" || notes[1] != "not checked on this drive: folder permissions" {
+	if len(notes) != 2 || !strings.Contains(notes[0], "Authenticated Users can change X") || notes[1] != "not checked on this drive: folder permissions" {
 		t.Fatalf("notes = %q", notes)
 	}
 	if n := (&DestRoot{fs: destFS{name: "NTFS"}}).Notes(); len(n) != 0 {

@@ -299,12 +299,63 @@ func canonicalWithin(parent, child string) bool {
 
 // destFS is what the platform policy learned about the destination's filesystem:
 // its name, the largest file it can hold (0 when there is no practical limit),
-// the checks that could not run there, and anything accepted with a warning.
+// the checks that could not run there, the findings the user must decide about,
+// and each folder level's permissions from the destination up to the volume root
+// (for the choice fingerprint).
 type destFS struct {
 	name       string
 	maxFile    int64
 	notChecked []string
-	warnings   []string
+	findings   []destFinding
+	chain      []destLevel
+}
+
+// destLevel is one folder on the way from a destination up to its volume root, as
+// the fingerprint of a recorded choice sees it.
+type destLevel struct {
+	path  string
+	fs    string
+	perms string // owner and permissions as the platform reports them
+}
+
+// Checks that cannot run on FAT and exFAT, as listed in notices and results.
+const (
+	destCheckPermissions = "folder permissions"
+	destCheckHardLinks   = "hard links"
+	destCheckFileIDs     = "stable file IDs"
+)
+
+// Kinds of destination finding.
+const (
+	// Other accounts on this PC can change the folder, through a group Windows
+	// grants by default (Authenticated Users or Users, inherited).
+	destFindingSharedGroup = "shared-group"
+	// The folder is a drive root with Windows' default "create folders" grant.
+	destFindingDriveRoot = "drive-root"
+	// The filesystem cannot record permissions, hard links or stable file IDs.
+	destFindingUnchecked = "unchecked"
+)
+
+// destFinding is one thing about a destination that is acceptable only once the
+// user has chosen what to do about it.
+type destFinding struct {
+	Kind      string `json:"kind"`
+	Folder    string `json:"folder"`
+	Group     string `json:"group,omitempty"`
+	SID       string `json:"sid,omitempty"`
+	Inherited bool   `json:"inherited,omitempty"`
+	FS        string `json:"filesystem,omitempty"`
+	MaxFile   int64  `json:"max_file,omitempty"`
+}
+
+// appendFinding adds f unless an equal finding is already listed.
+func appendFinding(list []destFinding, f destFinding) []destFinding {
+	for _, g := range list {
+		if g == f {
+			return list
+		}
+	}
+	return append(list, f)
 }
 
 // ---- the authorized destination ---------------------------------------------
@@ -345,55 +396,28 @@ type DestRoot struct {
 // the open handle, so the verdict is about the object being held rather than about
 // a string that may name something else by the time it is used.
 //
+// A destination with findings (other accounts can change it, or its filesystem
+// cannot record permissions) is refused with a *DestinationChoiceError until the
+// user has made a choice that still matches the folder (see destchoice.go). That
+// decision is taken before anything is created, so nothing is written first.
+//
 // BOOTSTRAP creates one absent component at a time. A single-component Mkdir
 // does not traverse a terminal link and an existing entry is a refusal. Before
 // any next creation the newly opened parent's actual location is authorized.
 func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
-	display := strings.TrimSpace(path)
-	if display == "" {
-		return nil, fmt.Errorf("a destination folder is required")
-	}
-	abs, err := filepath.Abs(display)
+	in, err := s.inspectDestination(path)
 	if err != nil {
-		return nil, fmt.Errorf("cannot resolve destination %s: %w", display, err)
+		return nil, err
 	}
-	abs = filepath.Clean(abs)
+	if len(in.findings) > 0 && in.choice == nil {
+		in.anchor.Close()
+		return nil, &DestinationChoiceError{Check: s.checkFromInspection(in)}
+	}
+	display, snap, ancCanon := in.display, in.snap, in.anchorCanon
 
-	snap, err := s.sourceSnapshot()
-	if err != nil {
-		return nil, err
-	}
-	existing, missing, err := deepestExistingDir(abs)
-	if err != nil {
-		return nil, err
-	}
-
-	anc, err := os.OpenRoot(existing)
-	if err != nil {
-		return nil, fmt.Errorf("cannot open destination folder %s: %w", existing, err)
-	}
-	ancCanon, err := rootCanonicalPath(anc)
-	if err != nil {
-		anc.Close()
-		return nil, fmt.Errorf("cannot establish the real location of %s: %w — refusing rather than writing on a guess", existing, err)
-	}
-	// Preflight the intended path; this is not permission to traverse links in
-	// the missing suffix. The component creation loop below enforces that rule.
-	intended := ancCanon
-	if len(missing) > 0 {
-		intended = filepath.Join(append([]string{ancCanon}, missing...)...)
-	}
-	if err := snap.decide(intended, display); err != nil {
-		anc.Close()
-		return nil, err
-	}
-	if err := snap.decideOffline(rootVolumeID(anc), abs, intended, display); err != nil {
-		anc.Close()
-		return nil, err
-	}
-
-	root := anc
-	for _, component := range missing {
+	root := in.anchor
+	var created []uint64
+	for _, component := range in.missing {
 		if _, err := destRel(component); err != nil {
 			root.Close()
 			return nil, err
@@ -418,6 +442,9 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 			return nil, fmt.Errorf("cannot open destination component %q: %w", component, serr)
 		}
 		root = sub
+		if id, err := rootIdentity(root); err == nil {
+			created = append(created, id.idx)
+		}
 		ancCanon, err = rootCanonicalPath(root)
 		if err == nil {
 			err = snap.decide(ancCanon, display)
@@ -426,6 +453,9 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 			root.Close()
 			return nil, err
 		}
+	}
+	if in.choice != nil && len(created) > 0 {
+		s.recordCreatedUnderChoice(in.choice, created)
 	}
 
 	// Re-derive the canonical name from the handle actually retained, and take the
@@ -440,7 +470,7 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 		root.Close()
 		return nil, err
 	}
-	if err := snap.decideOffline(rootVolumeID(root), abs, canon, display); err != nil {
+	if err := snap.decideOffline(rootVolumeID(root), in.abs, canon, display); err != nil {
 		root.Close()
 		return nil, err
 	}
@@ -455,14 +485,7 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 		root.Close()
 		return nil, err
 	}
-	f, err := root.Open(".")
-	if err != nil {
-		release()
-		root.Close()
-		return nil, err
-	}
-	id, err := handleIdentity(f)
-	f.Close()
+	id, err := rootIdentity(root)
 	if err != nil {
 		release()
 		root.Close()
@@ -475,6 +498,118 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 		return nil, fmt.Errorf("cannot generate a staging token: %w", err)
 	}
 	return &DestRoot{root: root, canonical: canon, display: display, snap: snap, fs: destfs, token: hex.EncodeToString(tok), release: release, volume: id.vol}, nil
+}
+
+// destInspection is everything decided about a destination before anything is
+// created: the deepest existing folder (held open), the components still to
+// create, the findings for the folder that will be written into, and the recorded
+// choice that covers them, if any.
+type destInspection struct {
+	display     string
+	abs         string
+	snap        *sourceSnapshot
+	anchor      *os.Root // deepest existing folder; caller closes
+	anchorCanon string
+	anchorID    fileIdent
+	missing     []string
+	intended    string
+	fs          destFS
+	findings    []destFinding
+	fingerprint string
+	choice      *DestinationChoice // a valid choice covering the findings, or nil
+	stale       *DestinationChoice // a choice for this folder that no longer matches
+}
+
+// inspectDestination runs every check AuthorizeDestination makes before creating
+// anything, and writes nothing: the source overlap decision, the platform policy
+// on the deepest existing folder and its ancestors, and what a folder created
+// there would inherit. A refusal is returned as an error.
+func (s *Store) inspectDestination(path string) (*destInspection, error) {
+	display := strings.TrimSpace(path)
+	if display == "" {
+		return nil, fmt.Errorf("a destination folder is required")
+	}
+	abs, err := filepath.Abs(display)
+	if err != nil {
+		return nil, fmt.Errorf("cannot resolve destination %s: %w", display, err)
+	}
+	abs = filepath.Clean(abs)
+
+	snap, err := s.sourceSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	existing, missing, err := deepestExistingDir(abs)
+	if err != nil {
+		return nil, err
+	}
+	anc, err := os.OpenRoot(existing)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open destination folder %s: %w", existing, err)
+	}
+	ancCanon, err := rootCanonicalPath(anc)
+	if err != nil {
+		anc.Close()
+		return nil, fmt.Errorf("cannot establish the real location of %s: %w — refusing rather than writing on a guess", existing, err)
+	}
+	// Preflight the intended path; this is not permission to traverse links in
+	// the missing suffix. The component creation loop enforces that rule.
+	intended := ancCanon
+	if len(missing) > 0 {
+		intended = filepath.Join(append([]string{ancCanon}, missing...)...)
+	}
+	fail := func(err error) (*destInspection, error) {
+		anc.Close()
+		return nil, err
+	}
+	if err := snap.decide(intended, display); err != nil {
+		return fail(err)
+	}
+	if err := snap.decideOffline(rootVolumeID(anc), abs, intended, display); err != nil {
+		return fail(err)
+	}
+	nsfs, err := checkDestNamespace(anc)
+	if err != nil {
+		return fail(err)
+	}
+	findings := nsfs.findings
+	if len(missing) > 0 {
+		// The folder written into does not exist yet: its filesystem findings are
+		// the anchor's, named for the folder that will be created, plus whatever it
+		// would inherit.
+		for i := range findings {
+			if findings[i].Kind == destFindingUnchecked {
+				findings[i].Folder = intended
+			}
+		}
+		pred, err := predictDestChild(anc, filepath.Join(ancCanon, missing[0]))
+		if err != nil {
+			return fail(err)
+		}
+		for _, f := range pred {
+			findings = appendFinding(findings, f)
+		}
+	}
+	id, err := rootIdentity(anc)
+	if err != nil {
+		return fail(err)
+	}
+	in := &destInspection{display: display, abs: abs, snap: snap, anchor: anc, anchorCanon: ancCanon, anchorID: id,
+		missing: missing, intended: intended, fs: nsfs, findings: findings, fingerprint: destFingerprint(nsfs.chain)}
+	if len(findings) > 0 {
+		in.choice, in.stale = s.coveringChoice(in)
+	}
+	return in, nil
+}
+
+// rootIdentity is the identity of the directory r holds, read from a handle.
+func rootIdentity(r *os.Root) (fileIdent, error) {
+	f, err := r.Open(".")
+	if err != nil {
+		return fileIdent{}, err
+	}
+	defer f.Close()
+	return handleIdentity(f)
 }
 
 // rootVolumeID is the volume identity of the directory r holds, or "".
@@ -574,7 +709,14 @@ func (d *DestRoot) MaxFileSize() int64 { return d.fs.maxFile }
 // with and every check that could not run on its filesystem.
 func (d *DestRoot) Notes() []string {
 	var out []string
-	out = append(out, d.fs.warnings...)
+	for _, f := range d.fs.findings {
+		switch f.Kind {
+		case destFindingSharedGroup:
+			out = append(out, fmt.Sprintf("%s can change %s (accepted by your choice)", f.Group, f.Folder))
+		case destFindingDriveRoot:
+			out = append(out, fmt.Sprintf("%s can create folders in the drive root %s (accepted by your choice)", f.Group, f.Folder))
+		}
+	}
 	for _, c := range d.fs.notChecked {
 		out = append(out, "not checked on this drive: "+c)
 	}

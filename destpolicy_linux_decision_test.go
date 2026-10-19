@@ -48,6 +48,10 @@ func TestDestPolicy_LinuxFATDestinationAcceptedWithNotes(t *testing.T) {
 				t.Fatal("precondition: a world-writable ext4/tmpfs folder must be refused")
 			}
 			withDestStatfs(t, magic)
+			if _, err := app.Store.AuthorizeDestination(dest); err == nil || !strings.Contains(err.Error(), "choose what to do") {
+				t.Fatalf("%s before a choice: got %v, want a choice to be required", name, err)
+			}
+			chooseAnyway(t, app, dest)
 			d, err := app.Store.AuthorizeDestination(dest)
 			if err != nil {
 				t.Fatalf("%s destination refused: %v", name, err)
