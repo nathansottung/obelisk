@@ -3,6 +3,10 @@
 package main
 
 import (
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -113,5 +117,37 @@ func TestMakePrivate_AddedEntryAfterDenies(t *testing.T) {
 	}
 	if !strings.Contains(dacl, ";"+user+")") {
 		t.Fatalf("the user's full control was not added: %s", dacl)
+	}
+}
+
+// Make private changes only the folder itself, so folders already inside keep the
+// grant they inherited. The preview must say so and name them, rather than let the
+// user think everything inside became private.
+func TestMakePrivate_PreviewNamesStillSharedFolders(t *testing.T) {
+	app := dockApp(t)
+	folder, _ := sharedFolder(t)
+	for _, d := range []string{"Old", `Old\Deeper`} {
+		if err := os.Mkdir(filepath.Join(folder, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A junction inside, sorted first, must neither be followed nor end the walk.
+	mustJunction(t, filepath.Join(folder, "Aaa-link"), t.TempDir())
+	mux := http.NewServeMux()
+	api(mux, app)
+	code, plan := postJSON(t, mux, "/api/destinations/make-private/preview", map[string]any{"path": folder})
+	if code != 200 {
+		t.Fatalf("preview: %d %v", code, plan)
+	}
+	shared, _ := plan["still_shared"].([]any)
+	var names []string
+	for _, s := range shared {
+		names = append(names, fmt.Sprint(s))
+	}
+	if strings.Join(names, ",") != `Old,Old\Deeper` {
+		t.Fatalf("still_shared = %q, want the two folders inside that keep the grant", names)
+	}
+	if note := fmt.Sprint(plan["note"]); !strings.Contains(note, "can still change") {
+		t.Fatalf("the preview should say other accounts can still change those folders: %q", note)
 	}
 }

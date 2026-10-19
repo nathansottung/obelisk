@@ -272,6 +272,11 @@ type DestinationPrivatePlan struct {
 	After   []string `json:"after"`
 	Removed []string `json:"removed"`
 	Token   string   `json:"token"`
+	// StillShared lists folders inside (relative paths) that keep a grant for the
+	// groups being removed: Make private changes only the folder itself.
+	StillShared     []string `json:"still_shared"`
+	StillSharedMore int      `json:"still_shared_more,omitempty"` // further folders not listed
+	Note            string   `json:"note"`
 	// The exact security descriptors, for anyone who wants to compare them.
 	BeforeSDDL string `json:"before_sddl"`
 	AfterSDDL  string `json:"after_sddl"`
@@ -283,6 +288,8 @@ type destPrivateChange struct {
 	before, after           string
 	beforeLines, afterLines []string
 	removedLines            []string
+	stillShared             []string
+	stillSharedMore         int
 }
 
 type pendingPrivate struct {
@@ -310,7 +317,11 @@ func (s *Store) PreviewMakePrivate(path string) (*DestinationPrivatePlan, error)
 	if !destCanMakePrivate(in) {
 		return nil, fmt.Errorf("Obelisk can only make an existing NTFS folder private when the other groups are granted on that folder itself; choose Use it anyway or pick another folder")
 	}
-	ch, err := planPrivateFolder(in.anchorCanon)
+	var groups []string
+	for _, f := range in.findings {
+		groups = append(groups, f.SID)
+	}
+	ch, err := planPrivateFolder(in.anchorCanon, groups)
 	if err != nil {
 		return nil, err
 	}
@@ -330,8 +341,17 @@ func (s *Store) PreviewMakePrivate(path string) (*DestinationPrivatePlan, error)
 	}
 	privatePending[token] = &pendingPrivate{path: in.anchorCanon, change: ch, expires: time.Now().Add(destPrivateTTL)}
 	privateMu.Unlock()
+	note := fmt.Sprintf("Only the permissions of %s itself change, and it stops taking permissions from the folder above it. Files and folders already inside keep the permissions they have.", in.anchorCanon)
+	if n := len(ch.stillShared) + ch.stillSharedMore; n > 0 {
+		note += fmt.Sprintf(" Other accounts can still change %d folder(s) inside, listed here; Obelisk won't write into those.", n)
+	}
+	shared := ch.stillShared
+	if shared == nil {
+		shared = []string{}
+	}
 	return &DestinationPrivatePlan{Folder: in.anchorCanon, Before: ch.beforeLines, After: ch.afterLines,
-		Removed: ch.removedLines, Token: token, BeforeSDDL: ch.before, AfterSDDL: ch.after}, nil
+		Removed: ch.removedLines, Token: token, BeforeSDDL: ch.before, AfterSDDL: ch.after,
+		StillShared: shared, StillSharedMore: ch.stillSharedMore, Note: note}, nil
 }
 
 // ApplyMakePrivate applies the change a preview showed. confirmed is the user's
@@ -426,7 +446,7 @@ func destNotice(folder string, findings []destFinding, stale *DestinationChoice,
 
 	if canMakePrivate {
 		n.Choices = append(n.Choices, DestinationOption{ID: destChoiceMakePrivate, Label: "Make this folder private",
-			Detail: fmt.Sprintf("Obelisk removes %s from the permissions of %s, so only you, Administrators and Windows itself can change it. You'll see the exact change and confirm it first. Files already in the folder keep the permissions they have.", joinAnd(groups), groupFolder)})
+			Detail: fmt.Sprintf("Obelisk removes %s from the permissions of %s, so only you, Administrators and Windows itself can change it. You'll see the exact change and confirm it first. Files and folders already inside keep the permissions they have, so other accounts may still be able to change them; Obelisk won't write into any of those.", joinAnd(groups), groupFolder)})
 	}
 	n.Choices = append(n.Choices,
 		DestinationOption{ID: destChoiceUseAnyway, Label: "Use it anyway",

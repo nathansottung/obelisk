@@ -14,6 +14,8 @@ package main
 
 import (
 	"fmt"
+	"io/fs"
+	"path/filepath"
 	"strings"
 	"unsafe"
 
@@ -58,8 +60,9 @@ func folderSDDL(h windows.Handle) (string, error) {
 	return sd.String(), nil
 }
 
-// planPrivateFolder works out the private permissions for the folder at path.
-func planPrivateFolder(path string) (*destPrivateChange, error) {
+// planPrivateFolder works out the private permissions for the folder at path, and
+// lists the folders inside that would still give groups (SIDs) change rights.
+func planPrivateFolder(path string, groups []string) (*destPrivateChange, error) {
 	h, id, err := openFolderForSecurity(path, false)
 	if err != nil {
 		return nil, err
@@ -77,7 +80,75 @@ func planPrivateFolder(path string) (*destPrivateChange, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &destPrivateChange{id: id, before: before, after: after, beforeLines: beforeLines, afterLines: afterLines, removedLines: removed}, nil
+	shared, more := stillSharedFolders(path, groups)
+	return &destPrivateChange{id: id, before: before, after: after, beforeLines: beforeLines, afterLines: afterLines,
+		removedLines: removed, stillShared: shared, stillSharedMore: more}, nil
+}
+
+// Limits on the walk of folders inside a folder being made private.
+const (
+	privateWalkMax = 5000 // folders examined
+	privateListMax = 50   // folders named
+)
+
+// stillSharedFolders walks the folders inside path (not following links or
+// junctions) and returns, relative to path, those whose own permissions still let
+// one of groups change them, plus how many more were found than are named.
+func stillSharedFolders(path string, groups []string) ([]string, int) {
+	var named []string
+	more, seen := 0, 0
+	_ = filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || p == path {
+			return nil
+		}
+		// WalkDir does not follow symlinks or junctions (they are not reported as
+		// folders), so only real folders inside are examined.
+		if !d.IsDir() {
+			return nil
+		}
+		if seen++; seen > privateWalkMax {
+			return fs.SkipAll
+		}
+		if folderGrantsChange(p, groups) {
+			rel, _ := filepath.Rel(path, p)
+			if len(named) < privateListMax {
+				named = append(named, rel)
+			} else {
+				more++
+			}
+		}
+		return nil
+	})
+	return named, more
+}
+
+// folderGrantsChange reports whether the folder at p lets one of groups change it.
+func folderGrantsChange(p string, groups []string) bool {
+	sd, err := windows.GetNamedSecurityInfo(p, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return true // cannot tell: list it rather than call it private
+	}
+	acl, _, err := sd.DACL()
+	if err != nil || acl == nil {
+		return true
+	}
+	for i := uint32(0); i < uint32(acl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if windows.GetAce(acl, i, &ace) != nil {
+			return true
+		}
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceFlags&destAceInheritOnly != 0 ||
+			uint32(ace.Mask)&(destDACLMutation|destDACLPublication) == 0 {
+			continue
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()
+		for _, g := range groups {
+			if sid == g {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // applyPrivateFolder applies a planned change, only if the folder is still the same

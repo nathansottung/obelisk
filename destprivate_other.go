@@ -8,7 +8,7 @@ import "fmt"
 // notice does not offer it.
 const destMakePrivateSupported = false
 
-func planPrivateFolder(string) (*destPrivateChange, error) {
+func planPrivateFolder(string, []string) (*destPrivateChange, error) {
 	return nil, fmt.Errorf("making a folder private is only available on Windows")
 }
 
