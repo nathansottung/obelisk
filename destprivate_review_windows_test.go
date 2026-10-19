@@ -522,11 +522,17 @@ func TestDestPredict_NoPropagateStopsAtFirstNewFolder(t *testing.T) {
 	p := t.TempDir()
 	setDestFixtureDACL(t, p, "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;SY)(A;OICIIONP;FA;;;AU)")
 	dest := filepath.Join(p, "A", "B")
-	if c := app.Store.CheckDestination(dest); c.Status != destStatusPass {
-		t.Fatalf("destination two new folders deep: %q with findings %+v, want pass", c.Status, c.Findings)
+	// The grant is shown for the first new folder (A), never for the destination.
+	c := app.Store.CheckDestination(dest)
+	for _, f := range c.Findings {
+		if !strings.EqualFold(filepath.Base(f.Folder), "A") {
+			t.Fatalf("finding named for %s; the grant does not reach the destination", f.Folder)
+		}
 	}
-	if c := app.Store.CheckDestination(filepath.Join(p, "A")); c.Status != destStatusChoose {
-		t.Fatalf("the first new folder does get the grant: %q, want a choice", c.Status)
+	if c.Status == destStatusChoose {
+		if _, err := app.Store.ChooseUseAnyway(dest, c.Fingerprint, destUseAnywayWord); err != nil {
+			t.Fatal(err)
+		}
 	}
 	d, err := app.Store.AuthorizeDestination(dest)
 	if err != nil {
@@ -536,5 +542,42 @@ func TestDestPredict_NoPropagateStopsAtFirstNewFolder(t *testing.T) {
 	movedSharedFolder(t, filepath.Join(dest, "Sub"), "FA")
 	if err := d.WriteFileAtomic("Sub/x.txt", []byte("x"), 0o644); err == nil {
 		t.Fatal("a Full-control shared folder inside the destination was written into")
+	}
+}
+
+// A no-propagate grant the first new folder will get is still shown — named for
+// that folder, not the destination — so the run that creates it asks, as later
+// runs do; and it still does not cover the destination's own subfolders.
+func TestDestPredict_NoPropagateGrantOnFirstNewFolderIsShown(t *testing.T) {
+	app := dockApp(t)
+	user, _ := destUserSID()
+	p := t.TempDir()
+	setDestFixtureDACL(t, p, "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;SY)(A;OICIIONP;FA;;;AU)")
+	first := filepath.Join(p, "A")
+	dest := filepath.Join(first, "B")
+	c := app.Store.CheckDestination(dest)
+	if c.Status != destStatusChoose {
+		t.Fatalf("status %q, want a choice: the first new folder gets the grant", c.Status)
+	}
+	for _, f := range c.Findings {
+		// Compared by name: the finding uses the real long path, the test may not.
+		if !strings.EqualFold(filepath.Base(f.Folder), "A") {
+			t.Fatalf("finding named for %s, want the first new folder %s", f.Folder, first)
+		}
+	}
+	if _, err := app.Store.ChooseUseAnyway(dest, c.Fingerprint, destUseAnywayWord); err != nil {
+		t.Fatal(err)
+	}
+	d, err := app.Store.AuthorizeDestination(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	movedSharedFolder(t, filepath.Join(dest, "Sub"), "FA")
+	if err := d.WriteFileAtomic("Sub/x.txt", []byte("x"), 0o644); err == nil {
+		t.Fatal("the first new folder's grant covered a shared folder inside the destination")
+	}
+	d.Close()
+	if got := app.Store.CheckDestination(dest).Status; got != destStatusChosen {
+		t.Fatalf("a later run: %q, want the recorded choice to cover it", got)
 	}
 }

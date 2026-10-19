@@ -686,7 +686,8 @@ func (s *Store) inspectDestination(path string) (*destInspection, error) {
 				findings[i].Folder = intended
 			}
 		}
-		pred, err := predictDestChild(anc, filepath.Join(ancCanon, missing[0]), len(missing))
+		first := filepath.Join(ancCanon, missing[0])
+		pred, err := predictDestChild(anc, first, len(missing))
 		if err != nil {
 			return fail(err)
 		}
@@ -695,6 +696,18 @@ func (s *Store) inspectDestination(path string) (*destInspection, error) {
 			// name it for the destination the user chose.
 			f.Folder = intended
 			findings = appendFinding(findings, f)
+		}
+		if len(missing) > 1 {
+			// A no-propagate grant reaches only the first new folder. It is still
+			// something other accounts can change, so it is shown, named for that
+			// folder; being above the destination, it covers nothing inside it.
+			firstOnly, err := predictDestChild(anc, first, 1)
+			if err != nil {
+				return fail(err)
+			}
+			for _, f := range firstOnly {
+				findings = appendFinding(findings, f)
+			}
 		}
 	}
 	id, err := rootIdentity(anc)
