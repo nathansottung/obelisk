@@ -1,6 +1,6 @@
 module github.com/nathansottung/obelisk
 
-go 1.22.2
+go 1.25.0
 
 // The Go toolchain for CI, release binaries, the container image and the Windows
 // package. The CI and release workflows read this line, CI checks that the

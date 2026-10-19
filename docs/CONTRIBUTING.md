@@ -5,7 +5,7 @@ The bar here is *longevity and clarity*, not cleverness.
 
 ## Build & check
 
-Requires **Go 1.22+**. No other toolchain, no code generation, no `make`.
+Requires **Go 1.25+**. No other toolchain, no code generation, no `make`.
 
 ```bash
 go build ./...        # compiles the binary (UI is embedded via //go:embed)

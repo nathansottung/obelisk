@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/nathansottung/obelisk/actions/workflows/ci.yml/badge.svg)](https://github.com/nathansottung/obelisk/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/nathansottung/obelisk?logo=github&color=2e5e4e)](https://github.com/nathansottung/obelisk/releases/latest)
-[![Go](https://img.shields.io/badge/Go-1.22-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Single binary](https://img.shields.io/badge/deploy-single%20binary-2e5e4e)](#quickstart)
 [![Restore: par2 · gpg · tar](https://img.shields.io/badge/restore-par2%20%C2%B7%20gpg%20%C2%B7%20tar-informational)](docs/RESTORE_RUNBOOK.md)
@@ -1255,7 +1255,7 @@ go build -o obelisk .
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o obelisk.exe .
 ```
 One dependency (QR-code generation); everything else is the Go standard
-library. Requires **Go 1.22+**. See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)
+library. Requires **Go 1.25+**. See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)
 and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Optical burn queue
