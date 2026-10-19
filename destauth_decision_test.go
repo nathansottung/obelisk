@@ -6,10 +6,28 @@ package main
 // sources, recorded volume identity, file-size limits and the result notes.
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// identOf reads an object's identity from an OPEN HANDLE, forcing it now. On
+// Windows a FileInfo's identity is filled in lazily by reopening the name, so
+// os.SameFile on a FileInfo taken before a mutation can vouch for a replacement.
+func identOf(t *testing.T, p string) fileIdent {
+	t.Helper()
+	f, err := os.Open(p)
+	if err != nil {
+		t.Fatalf("open %s for identity: %v", p, err)
+	}
+	defer f.Close()
+	id, err := handleIdentity(f)
+	if err != nil {
+		t.Fatalf("identity of %s: %v", p, err)
+	}
+	return id
+}
 
 func offlineSnap(refs ...sourceRef) *sourceSnapshot {
 	for i := range refs {

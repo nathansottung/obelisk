@@ -40,10 +40,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -327,6 +330,11 @@ type DestRoot struct {
 	token     string       // collision avoidance; object ownership is retained separately
 	release   func() error // cooperative lease retained through the caller's catalog credit
 	volume    uint64
+	seq       atomic.Uint64
+	mu        sync.Mutex
+	stages    map[string]*destStage
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // AuthorizeDestination resolves path to a real directory, opens it, decides
@@ -593,13 +601,16 @@ func (d *DestRoot) CheckFileSizes(sizes []int64) error {
 }
 
 // Close follows completion of the owning job (including its workers and catalog
-// updates). Independent jobs obtain independent DestRoots and are coordinated by
-// the platform lease.
+// updates). Borrowed staging files must not outlive it. Independent jobs obtain
+// independent DestRoots and are coordinated by the platform lease.
 func (d *DestRoot) Close() error {
 	if d == nil || d.root == nil {
 		return nil
 	}
-	return errors.Join(d.root.Close(), d.release())
+	d.closeOnce.Do(func() {
+		d.closeErr = errors.Join(d.discardAll(), d.root.Close(), d.release())
+	})
+	return d.closeErr
 }
 
 // MkdirAll creates rel (and its parents) beneath the authorized root. An empty
@@ -681,6 +692,12 @@ func (d *DestRoot) Stat(rel string) (fs.FileInfo, error) {
 // HashRel is the copy-then-verify read-back: SHA-256 of rel, read back through the
 // authorized handle rather than reopened by absolute name.
 func (d *DestRoot) HashRel(rel string) (string, error) {
+	if stage := d.stage(rel); stage != nil {
+		if _, err := stage.file.Seek(0, io.SeekStart); err != nil {
+			return "", err
+		}
+		return hashReader(stage.file)
+	}
 	f, err := d.Open(rel)
 	if err != nil {
 		return "", err
