@@ -22,6 +22,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -53,19 +54,36 @@ func (t *throttler) pace(n int) {
 	}
 }
 
+// errCopySource marks a failure reading the SOURCE, as opposed to the destination.
+// Mirror runs count the two differently: an unreadable source is "skipped", a
+// destination that would not take the bytes is "failed".
+var errCopySource = errors.New("source read failed")
+
 // mirrorCopyFile streams src -> dst, hashing the bytes on the way through
 // (so the returned hash proves what left the source), pacing the writer, and
 // fsyncing before return so a subsequent read-back sees the medium, not cache.
+//
+// The source is opened before dst is created: os.Create truncates an existing dst,
+// including through a hard link, so a source that cannot be read must not cost the
+// destination anything.
 func mirrorCopyFile(src, dst string, th *throttler, onBytes func(int64)) (string, int64, error) {
 	in, err := os.Open(src)
 	if err != nil {
-		return "", 0, err
+		return "", 0, fmt.Errorf("%w: %w", errCopySource, err)
 	}
 	defer in.Close()
 	out, err := os.Create(dst)
 	if err != nil {
 		return "", 0, err
 	}
+	hash, n, err := mirrorCopyStream(in, out, th, onBytes)
+	return hash, n, errors.Join(err, out.Close())
+}
+
+// mirrorCopyStream streams an open source into an open destination, hashing the
+// bytes on the way through, pacing the writer, and syncing before it returns. The
+// caller owns and closes both files, on failure too.
+func mirrorCopyStream(in, out *os.File, th *throttler, onBytes func(int64)) (string, int64, error) {
 	h := sha256.New()
 	buf := make([]byte, 1<<20)
 	var written int64
@@ -73,7 +91,6 @@ func mirrorCopyFile(src, dst string, th *throttler, onBytes func(int64)) (string
 		n, rerr := in.Read(buf)
 		if n > 0 {
 			if _, werr := out.Write(buf[:n]); werr != nil {
-				out.Close()
 				return "", written, werr
 			}
 			h.Write(buf[:n])
@@ -87,15 +104,10 @@ func mirrorCopyFile(src, dst string, th *throttler, onBytes func(int64)) (string
 			break
 		}
 		if rerr != nil {
-			out.Close()
-			return "", written, rerr
+			return "", written, fmt.Errorf("%w: %w", errCopySource, rerr)
 		}
 	}
 	if err := out.Sync(); err != nil {
-		out.Close()
-		return "", written, err
-	}
-	if err := out.Close(); err != nil {
 		return "", written, err
 	}
 	return hex.EncodeToString(h.Sum(nil)), written, nil
