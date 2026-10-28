@@ -5,11 +5,34 @@ package main
 // destructive_ops.go — the actions behind the delete gate (see destructive.go).
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 )
 
 func init() {
+	destructiveOps["rewrite-copy"] = &destructiveOp{
+		word: wordOverwrite,
+		title: func(a *App, p map[string]any) string {
+			name := fmt.Sprintf("package %d", paramInt(p, "id"))
+			if c := a.Store.Chunk(paramInt(p, "id")); c != nil {
+				name = c.Name
+			}
+			return fmt.Sprintf("Re-write the copy of %s on volume %d from staging", name, paramInt(p, "volume_id"))
+		},
+		targets: rewriteCopyTargets,
+		run: func(a *App, p map[string]any) (any, error) {
+			id, vol := paramInt(p, "id"), paramInt(p, "volume_id")
+			if err := sealGuard(a, vol); err != nil {
+				return nil, refuseDestructive(409, "%s", err.Error())
+			}
+			c := a.Store.Chunk(id)
+			return runJob(a, "write", "Re-write "+c.Name+" copy", func(pr func(float64, string)) (map[string]any, error) {
+				return a.RewriteCopy(id, vol, paramFloat(p, "buffer_gb"), paramInt(p, "block_mb"), paramFloat(p, "throttle_mbps"), pr)
+			})
+		},
+	}
 	destructiveOps["record-delete"] = &destructiveOp{
 		word: wordDelete,
 		title: func(a *App, p map[string]any) string {
@@ -199,4 +222,48 @@ func runRecordDelete(a *App, p map[string]any) (any, error) {
 	}
 	a.Store.Log("delete", fmt.Sprintf("deleted %s %s", kind, recordIDParam(p)))
 	return map[string]any{"ok": true, "deleted": true}, nil
+}
+
+// rewriteCopyTargets is the copy's record and every file in the copy's folder,
+// which the re-write replaces. The package, the copy and the volume's seal are
+// checked here too, so a confirmation is only issued for a re-write that can run.
+func rewriteCopyTargets(a *App, p map[string]any) ([]destructiveTarget, error) {
+	id, vol := paramInt(p, "id"), paramInt(p, "volume_id")
+	c := a.Store.Chunk(id)
+	if c == nil {
+		return nil, refuseDestructive(404, "package %d not found", id)
+	}
+	if vol <= 0 {
+		return nil, refuseDestructive(400, "volume_id required (the volume whose copy to re-write)")
+	}
+	if c.Spanned {
+		return nil, refuseDestructive(400, "package %s is spanned; re-write its segments via span-write", c.Name)
+	}
+	if err := sealGuard(a, vol); err != nil {
+		return nil, refuseDestructive(409, "%s", err.Error())
+	}
+	var cp *Copy
+	for i := range c.Copies {
+		if c.Copies[i].VolumeID == vol && !c.Copies[i].Superseded {
+			cp = &c.Copies[i]
+			break
+		}
+	}
+	if cp == nil {
+		return nil, refuseDestructive(404, "no current copy of %s on volume %d to re-write", c.Name, vol)
+	}
+	out := []destructiveTarget{recordTarget(fmt.Sprintf("copy of %s on volume %d", c.Name, vol), cp, "marked superseded, and a new copy is written")}
+	files, err := treeTargets(cp.Path, "replaced by the re-written copy")
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	if len(files) == 0 {
+		files = []destructiveTarget{fileTarget(cp.Path, "the copy's folder (not there now); written by the re-write")}
+	}
+	return append(out, files...), nil
+}
+
+func paramFloat(p map[string]any, k string) float64 {
+	v, _ := p[k].(float64)
+	return v
 }

@@ -2035,26 +2035,10 @@ func api(mux *http.ServeMux, app *App) {
 			return app.WriteChunk(id, dest, f(b, "buffer_gb"), int(f(b, "block_mb")), f(b, "throttle_mbps"), vol, p)
 		}))
 	})
+	// Gated: prepare op "rewrite-copy" {id, volume_id, ...}, then execute with
+	// "Overwrite".
 	register(mux, "POST /api/chunks/{id}/rewrite-copy", func(w http.ResponseWriter, r *http.Request) {
-		id := pathID(r)
-		b := body(r)
-		c := app.Store.Chunk(id)
-		if c == nil {
-			jsonErr(w, 404, fmt.Errorf("package not found"))
-			return
-		}
-		vol := int(f(b, "volume_id"))
-		if vol <= 0 {
-			jsonErr(w, 400, fmt.Errorf("volume_id required (the volume whose copy to re-write)"))
-			return
-		}
-		if err := sealGuard(app, vol); err != nil {
-			jsonErr(w, 409, err)
-			return
-		}
-		startedOn(w).write(runJob(app, "write", "Re-write "+c.Name+" copy", func(p func(float64, string)) (map[string]any, error) {
-			return app.RewriteCopy(id, vol, f(b, "buffer_gb"), int(f(b, "block_mb")), f(b, "throttle_mbps"), p)
-		}))
+		needsConfirmation(w, "rewrite-copy")
 	})
 	register(mux, "POST /api/chunks/{id}/span-write", func(w http.ResponseWriter, r *http.Request) {
 		id := pathID(r)

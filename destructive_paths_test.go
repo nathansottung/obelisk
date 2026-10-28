@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -198,5 +199,57 @@ func TestDestructive_RecordDeletes(t *testing.T) {
 				t.Fatal("the record was not deleted")
 			}
 		})
+	}
+}
+
+func TestDestructive_RewriteCopy(t *testing.T) {
+	s := newIT(t)
+	s.setConfig(nil)
+	src := s.makeSource(map[string][]byte{"a.txt": []byte("one\n")})
+	c := s.scanPlanBuild(src, 1, false, 10)
+	pid, name := int(c["id"].(float64)), c["name"].(string)
+	medium := t.TempDir()
+	vid := s.addVolume("REWRITE-1", "lab")
+	s.job(s.obj("POST", fmt.Sprintf("/api/chunks/%d/write", pid), map[string]any{"dest_dir": medium, "volume_id": vid}))
+	params := map[string]any{"id": float64(pid), "volume_id": float64(vid)}
+
+	if m := s.obj("POST", fmt.Sprintf("/api/chunks/%d/rewrite-copy", pid), map[string]any{"volume_id": vid}); s.status(m) != 428 {
+		t.Fatalf("old route answered %v, want 428", m)
+	}
+
+	// A file in the copy's folder changes after prepare: refused, nothing re-written.
+	p := prepareForTest(t, s.app, "rewrite-copy", params)
+	if p.Word != wordOverwrite || len(p.Targets) < 3 {
+		t.Fatalf("prepare: word %q, %d target(s)", p.Word, len(p.Targets))
+	}
+	readme := filepath.Join(medium, name, "RESTORE.txt")
+	mustWrite(t, readme, "edited on the medium\n")
+	_, err := s.app.ExecuteDestructive(testSession, p.Token, "Overwrite")
+	refusedWith(t, err, 409, "changed copy")
+	assertFileBytes(t, readme, "edited on the medium\n")
+	for _, cp := range s.app.Store.Chunk(pid).Copies {
+		if cp.Superseded {
+			t.Fatal("the copy was marked superseded although the re-write was refused")
+		}
+	}
+
+	// As prepared: the re-write runs.
+	p = prepareForTest(t, s.app, "rewrite-copy", params)
+	res, err := s.app.ExecuteDestructive(testSession, p.Token, "Overwrite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asJSON map[string]any // as the UI receives it
+	b, _ := json.Marshal(res)
+	_ = json.Unmarshal(b, &asJSON)
+	s.job(asJSON)
+	superseded := 0
+	for _, cp := range s.app.Store.Chunk(pid).Copies {
+		if cp.Superseded {
+			superseded++
+		}
+	}
+	if superseded != 1 {
+		t.Errorf("%d superseded copies after the re-write, want 1", superseded)
 	}
 }
