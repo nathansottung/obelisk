@@ -13,8 +13,11 @@ import (
 // BSDs. Their ACLs are not bounded by the POSIX mode mask, so 0700 is not evidence
 // that no one else can change a folder, and the native checks are not written yet.
 func destUnsupportedPlatform() error {
-	return fmt.Errorf("writing mirrors and backups is not yet supported on %s: Obelisk cannot yet confirm that no one else can change the destination folder there, so it refuses rather than guess. Run mirror and backup jobs from Windows or Linux for now", runtime.GOOS)
+	return fmt.Errorf("mirror, backup and plan jobs are not yet supported on %s: Obelisk cannot yet confirm that no one else can change the destination folder there, so it refuses rather than guess. Run them from Windows or Linux for now (a restore can go into a new folder)", runtime.GOOS)
 }
+
+// destGuardPlatform: the destination guard cannot authorize a folder here.
+const destGuardPlatform = false
 
 func platformDestName(rel string) error {
 	if strings.HasPrefix(rel, `\\`) || strings.ContainsRune(rel, 0) {

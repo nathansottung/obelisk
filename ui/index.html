@@ -1718,6 +1718,14 @@ function addMirrorTarget(){
    The server decides and enforces this (POST /api/destinations/*); the page shows
    its notice, offers the three choices with none preselected, and records the one
    picked. Resolves true when the folder may be used now. ---- */
+// restoreGate asks about a restore's output folder. Where the destination guard
+// is not available (macOS, the BSDs) a restore goes only into a new folder that
+// Obelisk creates, and the server checks that; there is nothing to ask here.
+async function restoreGate(path){
+  const c=await api('POST','/api/destinations/check',{path});
+  if(c.new_folder_only)return true;
+  return destGate(path);
+}
 async function destGate(path){
   let c=await api('POST','/api/destinations/check',{path});
   if(c.status==='create'){
@@ -2062,7 +2070,7 @@ async function restoreFileVersion(fileId,index,label){
   const out=prompt('Restore '+label+' to which folder? (must be OUTSIDE any source root)');
   if(!out)return;
   const src=prompt('Package medium mounted at? (blank = use the recorded written destination)','')||'';
-  try{if(!(await destGate(out)))return;
+  try{if(!(await restoreGate(out)))return;
     await api('POST','/api/files/'+fileId+'/restore',{output_dir:out,source_dir:src,version:index});
     toast('Restoring '+label+' — see Jobs',1);loc('jobs');}
   catch(e){toast(e.message,1)}}
@@ -2233,7 +2241,7 @@ function restoreDlg(id,name){dlg(`<h1>Restore ${esc(name)}</h1>
   <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">par2 → decrypt → extract</button></div>`,
   async()=>{const out=$('#d2').value.trim();if(!out)return;
     const mem=$('#d3').value.split('\\n').map(s=>s.trim()).filter(Boolean);
-    if(!(await destGate(out)))throw new Error('Nothing restored: choose what to do about '+out+' first');
+    if(!(await restoreGate(out)))throw new Error('Nothing restored: choose what to do about '+out+' first');
     await api('POST',`/api/chunks/${id}/restore`,{source_dir:$('#d1').value.trim(),output_dir:out,members:mem.length?mem:undefined});
     toast('Restore started — see Jobs');loc('jobs')});}
 

@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -156,4 +157,125 @@ func publishRestored(dest *DestRoot, w restoreWork) (int, []string, error) {
 		n++
 	}
 	return n, warnings, nil
+}
+
+// destGuardAvailable reports whether the destination guard can authorize a
+// folder on this platform. A variable so tests can exercise the new-folder
+// restore that platforms without the guard use.
+var destGuardAvailable = destGuardPlatform
+
+// restoreTarget is where a restore writes: an output folder authorized by the
+// destination guard, or, where the guard is not available, a new folder this
+// restore created (newRestoreFolder).
+type restoreTarget struct {
+	dest    *DestRoot // nil for a new folder
+	out     string    // the new folder (dest == nil)
+	work    restoreWork
+	into    string // where the package is unpacked
+	notes   []string
+	created bool // out was created by this restore
+}
+
+// openRestoreTarget prepares where a restore into outputDir writes.
+func (a *App) openRestoreTarget(outputDir string) (*restoreTarget, error) {
+	if !destGuardAvailable {
+		return a.newRestoreFolder(outputDir)
+	}
+	dest, err := a.Store.AuthorizeDestination(outputDir)
+	if err != nil {
+		return nil, err
+	}
+	work, err := newRestoreWork(dest)
+	if err != nil {
+		dest.Close()
+		return nil, err
+	}
+	return &restoreTarget{dest: dest, work: work, into: work.extracted(), notes: dest.Notes()}, nil
+}
+
+// newRestoreFolder is a restore's output where the destination guard is not
+// available. The folder must not exist yet and its parent must; it is checked
+// against every registered source by real location (it must not be, be inside
+// or hold one), created by this restore with mode 0700 (creation fails if
+// anything appeared at that name), and checked again once it exists. Because it
+// is new and empty, unpacking straight into it can replace nothing.
+func (a *App) newRestoreFolder(outputDir string) (*restoreTarget, error) {
+	abs, err := filepath.Abs(outputDir)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.Store.checkNewRestoreFolder(abs, outputDir); err != nil {
+		return nil, err
+	}
+	if err := os.Mkdir(abs, 0o700); err != nil {
+		return nil, fmt.Errorf("cannot create the restore folder %s: %w", outputDir, err)
+	}
+	tgt := &restoreTarget{out: abs, into: abs, created: true}
+	fail := func(err error) (*restoreTarget, error) {
+		_ = os.Remove(abs) // removes the folder only while it is still empty
+		return nil, err
+	}
+	if err := a.Store.CheckOutsideSources(abs); err != nil {
+		return fail(err)
+	}
+	if entries, err := os.ReadDir(abs); err != nil || len(entries) != 0 {
+		return fail(fmt.Errorf("the restore folder %s is not empty: something else wrote into it", outputDir))
+	}
+	work, err := os.MkdirTemp(abs, ".obelisk-restore-*")
+	if err != nil {
+		return fail(err)
+	}
+	tgt.work = restoreWork{rel: filepath.Base(work), abs: work}
+	tgt.notes = []string{fmt.Sprintf("On %s a restore goes only into a new folder; Obelisk created %s for it.", runtime.GOOS, outputDir)}
+	return tgt, nil
+}
+
+// checkNewRestoreFolder is the check before a new restore folder is created.
+func (s *Store) checkNewRestoreFolder(abs, display string) error {
+	if _, err := os.Lstat(abs); err == nil {
+		return fmt.Errorf("on %s a restore goes only into a new folder, and %s already exists. Choose a folder that does not exist yet; Obelisk creates it", runtime.GOOS, display)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("cannot check %s: %w", display, err)
+	}
+	if fi, err := os.Stat(filepath.Dir(abs)); err != nil || !fi.IsDir() {
+		return fmt.Errorf("the folder that would hold %s does not exist; create it first", display)
+	}
+	return s.CheckOutsideSources(abs)
+}
+
+// publish gives the unpacked files their real names (see publishRestored). In
+// a new folder they are already in place.
+func (t *restoreTarget) publish() (int, []string, error) {
+	if t.dest != nil {
+		return publishRestored(t.dest, t.work)
+	}
+	if err := os.RemoveAll(t.work.abs); err != nil {
+		return 0, nil, err
+	}
+	n := 0
+	err := filepath.WalkDir(t.out, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			n++
+		}
+		return err
+	})
+	return n, nil, err
+}
+
+// closeRestoreTarget removes the work folder, and a new restore folder that a
+// failed restore leaves behind (everything in it came from this restore).
+func (a *App) closeRestoreTarget(t *restoreTarget, succeeded bool) {
+	if t.dest != nil {
+		if err := t.dest.removeWork(t.work.rel); err != nil {
+			a.Store.Log("restore", fmt.Sprintf("could not remove the work folder %s in %s: %v", t.work.rel, t.dest.Name(), err))
+		}
+		t.dest.Close()
+		return
+	}
+	_ = os.RemoveAll(t.work.abs)
+	if !succeeded && t.created {
+		if err := os.RemoveAll(t.out); err != nil {
+			a.Store.Log("restore", fmt.Sprintf("could not remove the restore folder %s after the restore failed: %v", t.out, err))
+		}
+	}
 }

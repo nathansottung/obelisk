@@ -366,6 +366,24 @@ func destinationGate(w http.ResponseWriter, app *App, dest string) bool {
 	return true
 }
 
+// restoreGate is destinationGate for a restore's output folder. Where the
+// destination guard is not available, a restore may only go into a new folder,
+// so that is checked instead (the job checks it again and creates the folder).
+func restoreGate(w http.ResponseWriter, app *App, out string) bool {
+	if destGuardAvailable {
+		return destinationGate(w, app, out)
+	}
+	abs, err := filepath.Abs(out)
+	if err == nil {
+		err = app.Store.checkNewRestoreFolder(abs, out)
+	}
+	if err != nil {
+		jsonErr(w, 400, err)
+		return false
+	}
+	return true
+}
+
 func body(r *http.Request) map[string]any {
 	var m map[string]any
 	_ = json.NewDecoder(r.Body).Decode(&m)
@@ -2155,7 +2173,7 @@ func api(mux *http.ServeMux, app *App) {
 				}
 			}
 		}
-		if !destinationGate(w, app, out) {
+		if !restoreGate(w, app, out) {
 			return
 		}
 		startedOn(w).write(runJob(app, "restore", "Restore "+c.Name, func(p func(float64, string)) (map[string]any, error) {
@@ -2206,7 +2224,7 @@ func api(mux *http.ServeMux, app *App) {
 			}
 			sel.AsOf = &t
 		}
-		if !destinationGate(w, app, out) {
+		if !restoreGate(w, app, out) {
 			return
 		}
 		startedOn(w).write(runJob(app, "restore", fmt.Sprintf("Restore file %d", id), func(p func(float64, string)) (map[string]any, error) {

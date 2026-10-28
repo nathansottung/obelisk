@@ -634,21 +634,16 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	// guard: never a source, inside one or holding one, by real location. The
 	// package is unpacked into a private work folder there, and each file then
 	// gets its real name without ever replacing one (see restore_guard.go).
-	dest, err := a.Store.AuthorizeDestination(outputDir)
+	// Where the guard is not available (macOS, the BSDs) a restore goes only into
+	// a new folder that this restore creates (see newRestoreFolder).
+	tgt, err := a.openRestoreTarget(outputDir)
 	if err != nil {
 		return nil, err
 	}
-	defer dest.Close()
-	work, err := newRestoreWork(dest)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if rerr := dest.removeWork(work.rel); rerr != nil {
-			a.Store.Log("restore", fmt.Sprintf("could not remove the work folder %s in %s: %v", work.rel, outputDir, rerr))
-		}
-	}()
-	restoreWarnings = append(restoreWarnings, dest.Notes()...)
+	succeeded := false
+	defer func() { a.closeRestoreTarget(tgt, succeeded) }()
+	work := tgt.work
+	restoreWarnings = append(restoreWarnings, tgt.notes...)
 	enc := findPayload(sourceDir, c)
 	if enc == "" {
 		// Spanned restore drill: if the joined payload isn't present but the
@@ -713,12 +708,14 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 		// "--" ends option parsing: members are archive member names chosen by the
 		// caller, and a member beginning with "-" would otherwise be read as a tar
 		// option rather than as the file to restore.
-		targs := []string{"-xf", enc, "-C", work.extracted(), "--"}
+		targs := []string{"-xf", enc, "-C", tgt.into, "--"}
 		targs = append(targs, members...)
 		if err := run(tarBin, "", targs...); err != nil {
 			return nil, fmt.Errorf("tar extract failed: %v", err)
 		}
-		return a.finishRestore(c, dest, work, outputDir, repaired, restoreWarnings, progress)
+		res, err := a.finishRestore(c, tgt, outputDir, repaired, restoreWarnings, progress)
+		succeeded = err == nil
+		return res, err
 	}
 
 	progress(0.25, "decrypt + extract")
@@ -733,7 +730,7 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	if err != nil {
 		return nil, err
 	}
-	targs := []string{"-xf", "-", "-C", work.extracted(), "--"} // "--": member names are never options
+	targs := []string{"-xf", "-", "-C", tgt.into, "--"} // "--": member names are never options
 	targs = append(targs, members...)
 	tarc := helperCommand(tarBin, targs...)
 	tarc.Stdin = pipe
@@ -756,14 +753,16 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	if terr != nil {
 		return nil, fmt.Errorf("tar extract failed: %s", tail(tarErr.String(), 400))
 	}
-	return a.finishRestore(c, dest, work, outputDir, repaired, restoreWarnings, progress)
+	res, err := a.finishRestore(c, tgt, outputDir, repaired, restoreWarnings, progress)
+	succeeded = err == nil
+	return res, err
 }
 
 // finishRestore publishes what was extracted into the work folder to its real
 // names in the output folder (refusing any name already taken) and reports.
-func (a *App) finishRestore(c *Chunk, dest *DestRoot, work restoreWork, outputDir string, repaired bool, warnings []string, progress func(float64, string)) (map[string]any, error) {
+func (a *App) finishRestore(c *Chunk, tgt *restoreTarget, outputDir string, repaired bool, warnings []string, progress func(float64, string)) (map[string]any, error) {
 	progress(0.9, "placing restored files")
-	n, warns, err := publishRestored(dest, work)
+	n, warns, err := tgt.publish()
 	if err != nil {
 		if stop := a.stopOnDestinationChange("restore", err, n); stop != nil {
 			return nil, stop

@@ -163,3 +163,6 @@ func acquireDestLease(r *os.Root) (func() error, error) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// destGuardPlatform: the destination guard can authorize folders here.
+const destGuardPlatform = true

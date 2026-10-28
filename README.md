@@ -116,7 +116,9 @@ replace.
   Grants to Everyone, Guests, Anonymous Logon or any other account are refused.
   FAT32 refuses files over 4 GB before copying. On Linux,
   ext4, XFS, Btrfs, exFAT and FAT are accepted and a Docker overlay folder is
-  refused. On macOS these jobs are not yet supported and are refused.
+  refused. On macOS (and the BSDs) these jobs, and plan execution, are not yet
+  supported and are refused; a restore there goes only into a new folder, outside
+  every source, that Obelisk creates for it.
 - **Drift reports changes to your originals.** Delete or move a source file
   yourself and drift will report it.
 

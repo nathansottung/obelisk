@@ -467,3 +467,6 @@ func acquireDestLease(r *os.Root) (func() error, error) {
 	var closeErr error
 	return func() error { once.Do(func() { close(release); closeErr = <-done }); return closeErr }, nil
 }
+
+// destGuardPlatform: the destination guard can authorize folders here.
+const destGuardPlatform = true
