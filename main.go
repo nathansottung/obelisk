@@ -755,6 +755,19 @@ func api(mux *http.ServeMux, app *App) {
 		}
 		jsonOut(w, configResponse(cfg, app.KeystoreStatus()))
 	})
+	// Remove the stored access token (takes effect at the next start).
+	mux.HandleFunc("POST /api/config/remove-token", func(w http.ResponseWriter, r *http.Request) {
+		env, err := app.RemoveAuthToken()
+		if err != nil {
+			jsonErr(w, 400, err)
+			return
+		}
+		note := "The stored token was removed. Obelisk keeps using its current token until it is next started; after that, a server on this computer only needs no token, and one reachable from other machines refuses to start until a token is set."
+		if env {
+			note += " A token is also set in the OBELISK_AUTH_TOKEN or MNEMO_AUTH_TOKEN environment variable; that one still applies."
+		}
+		jsonOut(w, map[string]any{"removed": true, "env_token": env, "note": note})
+	})
 	// Program settings held from an app-backup restore (see heldsettings.go):
 	// shown, applied with the typed word "Confirm", or discarded.
 	mux.HandleFunc("GET /api/config/held-settings", func(w http.ResponseWriter, r *http.Request) {

@@ -3654,6 +3654,7 @@ async function vSettings(){
     ${advOpen('Advanced settings — network, privacy, sealing, escrow, discs')}
     <label>Access token (for reaching the app from another machine)</label>
     <input id="atok" class="full" style="font:12px var(--mono)" value="" autocomplete="off" placeholder="${tokSet?'a token is set — leave blank to keep it, or type a new one':'a long random secret'}">
+    ${tokSet?'<button type="button" class="btn ghost" style="margin-top:4px" onclick="removeAuthToken()">Remove token</button>':''}
     <div class="help">Only needed when the app is reached from off-box. It binds to localhost by default; the listen address is set with the <span class="mono">-listen</span> flag at startup, and a non-localhost bind refuses to run without a token.</div>
     <label class="row" style="gap:8px;align-items:center;margin-top:14px"><input id="upd" type="checkbox" ${cfg.update_check?'checked':''}> Remind me to check for updates</label>
     <div class="help">Shows a small "a newer release may be available" reminder with a link to the releases page. <b>The app never downloads anything or contacts the network on its own.</b></div>
@@ -4038,6 +4039,9 @@ async function appRestoreInspect(){
     if(el)el.innerHTML=`<span style="color:var(--ok)">✓ Valid backup</span> — schema v${m.schema_version}, made ${esc((m.created||'').slice(0,10))} by ${esc(m.app_version||'?')}, ${(m.members||[]).length} item(s)${m.includes_keys?' · <b>includes keystores</b>':''}.`;
   }catch(e){if(el)el.innerHTML=`<span class="err">${esc(e.message)}</span>`;}
 }
+async function removeAuthToken(){
+  if(!confirm('Remove the stored access token?\n\nObelisk keeps using the current token until it is next started. After that it needs no token on this computer, and refuses to start if it is reachable from other machines until a token is set.'))return;
+  try{const r=await api('POST','/api/config/remove-token',{});toast(r.note||'Token removed',1);vSettings()}catch(e){toast(e.message,1)}}
 async function applyHeldSettings(){
   const w=prompt('These settings choose which programs run on this computer.\nType Confirm to apply the settings from the backup:','');
   if(w!=='Confirm'){toast('Not applied: type Confirm to apply them',1);return}

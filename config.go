@@ -398,3 +398,31 @@ func loadStartupConfig(dataDir string, initialize bool) (Config, error) {
 	}
 	return a.LoadConfig()
 }
+
+// RemoveAuthToken removes the stored access token from the settings, keeping
+// every other setting. The running server keeps the token it started with; the
+// removal takes effect the next time Obelisk starts. A token given in the
+// OBELISK_AUTH_TOKEN or MNEMO_AUTH_TOKEN environment variable is not stored
+// here and is not affected; envToken reports whether one is set.
+func (a *App) RemoveAuthToken() (envToken bool, err error) {
+	a.configMu.Lock()
+	defer a.configMu.Unlock()
+	cfg, fields, err := a.readConfig()
+	if err != nil {
+		return false, err
+	}
+	cfg.AuthToken = ""
+	delete(fields, "auth_token")
+	out, err := encodeConfig(cfg, fields)
+	if err != nil {
+		return false, err
+	}
+	if _, err := a.publishConfig(out, false); err != nil {
+		return false, err
+	}
+	if a.Store != nil {
+		a.Store.Log("config", "the stored access token was removed")
+	}
+	env := strings.TrimSpace(os.Getenv("OBELISK_AUTH_TOKEN")) != "" || strings.TrimSpace(os.Getenv("MNEMO_AUTH_TOKEN")) != ""
+	return env, nil
+}
