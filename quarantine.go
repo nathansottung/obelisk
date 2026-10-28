@@ -30,6 +30,7 @@ package main
 // the entry HUMAN-REMOVED, and keeps the history — it never silently forgets.
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -142,17 +143,23 @@ type quarantineTarget struct {
 	destVol  int
 }
 
-// resolveQuarantine decides a path by where it really is, not by how it is
-// spelled. Its parent folder is opened and the platform asked where that folder
-// is, so a folder link (junction, symbolic link), a short 8.3 name or another
-// spelling of the same place gives the same answer. The path itself must be a
-// file or folder, not a link.
+// resolveQuarantine decides a path by the identity of the object it names, not
+// by how it is spelled. The path's parent folder is opened, the path is opened
+// inside it (it must be a file or folder, not a link), and from that handle the
+// platform reports the object's identity (volume and file ID) and its real
+// location. So a folder link, a short 8.3 name, a different letter case or any
+// other spelling of the same object gives the same answer.
 //
-// It is refused if its real location is a registered source, is inside one, or
-// CONTAINS one (moving a folder moves everything in it, so a source's parent is
-// never moved either), with the same identity-based check the destination guard
-// uses. It must then be inside a managed root (compared by real location too),
-// not the root itself and not the _deleted staging area.
+// The object is then matched against every registered source by identity: it
+// is refused if it IS a source, is inside one (a source is one of the folders
+// above it), or CONTAINS one (it is one of the folders above a source; moving a
+// folder moves everything in it, so a source's parent is never moved). The
+// destination guard's path check on the real locations is applied as well, and
+// covers a source whose folder is gone or whose drive is not attached.
+//
+// It must then be inside a managed root, matched by identity too, and not be the
+// root itself or inside the _deleted staging area. Its path relative to the root
+// is taken from its real location, so it is recorded in its real spelling.
 func (s *Store) resolveQuarantine(absPath string) (quarantineTarget, error) {
 	var t quarantineTarget
 	if strings.TrimSpace(absPath) == "" {
@@ -166,55 +173,78 @@ func (s *Store) resolveQuarantine(absPath string) (quarantineTarget, error) {
 	if parent == abs || name == "" || name == "." || name == string(filepath.Separator) {
 		return t, fmt.Errorf("cannot quarantine %s", absPath)
 	}
-	fi, err := os.Lstat(abs)
-	if err != nil {
-		return t, fmt.Errorf("cannot read %s: %w", absPath, err)
-	}
-	if fi.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
-		return t, fmt.Errorf("%s is a link; quarantine moves files and folders, never links", absPath)
-	}
 	pr, err := os.OpenRoot(parent)
 	if err != nil {
 		return t, fmt.Errorf("cannot open the folder holding %s: %w", absPath, err)
 	}
-	pc, err := rootCanonicalPath(pr)
-	volID := rootVolumeID(pr)
-	pr.Close()
-	if err != nil {
-		return t, fmt.Errorf("cannot establish the real location of %s: %w", absPath, err)
+	defer pr.Close()
+	if err := notALink(pr, name, absPath); err != nil {
+		return t, err
 	}
-	t.real = filepath.Join(pc, name)
+	f, err := pr.Open(name)
+	if err != nil {
+		return t, fmt.Errorf("cannot read %s: %w", absPath, err)
+	}
+	id, idErr := handleIdentity(f)
+	real, realErr := handleCanonicalPath(f)
+	f.Close()
+	if idErr != nil || realErr != nil {
+		return t, fmt.Errorf("cannot establish what %s is: %w", absPath, errors.Join(idErr, realErr))
+	}
+	// Still not a link once opened (a name swapped for one in between is refused).
+	if err := notALink(pr, name, absPath); err != nil {
+		return t, err
+	}
+	t.real = real
+	chain := identityChain(real, id)
 
 	snap, err := s.sourceSnapshot()
 	if err != nil {
 		return t, err
 	}
+	for _, src := range snap.srcs {
+		if src.offline || !src.fromHandle {
+			continue // no object to match; the path checks below cover it
+		}
+		sid, err := pathIdentity(src.canonical)
+		if err != nil {
+			continue
+		}
+		switch {
+		case sid == id:
+			return t, fmt.Errorf("quarantine never moves source data: %s is registered source %s", absPath, src.registered)
+		case chainHas(chain[1:], sid):
+			return t, fmt.Errorf("quarantine never moves source data: %s is inside registered source %s", absPath, src.registered)
+		case chainHas(identityChain(src.canonical, sid)[1:], id):
+			return t, fmt.Errorf("quarantine never moves source data: %s holds registered source %s, which would move with it", absPath, src.registered)
+		}
+	}
 	if err := snap.decide(t.real, absPath); err != nil {
 		return t, fmt.Errorf("quarantine never moves source data: %w", err)
 	}
-	if err := snap.decideOffline(volID, abs, t.real, absPath); err != nil {
+	if err := snap.decideOffline(rootVolumeID(pr), abs, t.real, absPath); err != nil {
 		return t, fmt.Errorf("quarantine never moves source data: %w", err)
 	}
 
-	np := normPath(t.real)
 	for _, mr := range s.ManagedRoots() {
 		r, err := os.OpenRoot(filepath.FromSlash(mr.Root))
 		if err != nil {
 			continue // not attached: nothing in it can be the path in hand
 		}
-		rc, err := rootCanonicalPath(r)
+		rid, idErr := rootIdentity(r)
+		rc, rcErr := rootCanonicalPath(r)
 		r.Close()
-		if err != nil {
+		if idErr != nil || rcErr != nil {
 			continue
 		}
-		rp := normPath(rc)
-		if np == rp {
+		k := chainIndex(chain, rid)
+		if k < 0 {
+			continue
+		}
+		if k == 0 {
 			return t, fmt.Errorf("cannot quarantine a managed root itself: %s", absPath)
 		}
-		if !canonicalWithin(rp, np) {
-			continue
-		}
-		rel, err := filepath.Rel(rc, t.real)
+		rel, err := filepath.Rel(chain[k].path, t.real)
 		if err != nil {
 			return t, err
 		}
@@ -227,6 +257,63 @@ func (s *Store) resolveQuarantine(absPath string) (quarantineTarget, error) {
 	}
 	return t, fmt.Errorf("not managed territory: quarantine applies only to destinations Obelisk populated (adopted media and sources are never moved)")
 }
+
+// notALink refuses name in r when it is a link (or another special entry).
+func notALink(r *os.Root, name, display string) error {
+	fi, err := r.Lstat(name)
+	if err != nil {
+		return fmt.Errorf("cannot read %s: %w", display, err)
+	}
+	if fi.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+		return fmt.Errorf("%s is a link; quarantine moves files and folders, never links", display)
+	}
+	return nil
+}
+
+// idEntry is one folder (or the object itself) on the way up from an object.
+type idEntry struct {
+	path string
+	id   fileIdent
+}
+
+// identityChain is the object at real (with identity id) followed by each
+// folder above it, up to its volume's root, each with the identity read from a
+// handle on it. A folder that cannot be opened ends the chain there.
+func identityChain(real string, id fileIdent) []idEntry {
+	chain := []idEntry{{real, id}}
+	for p := filepath.Dir(real); ; p = filepath.Dir(p) {
+		pid, err := pathIdentity(p)
+		if err != nil {
+			break
+		}
+		chain = append(chain, idEntry{p, pid})
+		if filepath.Dir(p) == p {
+			break
+		}
+	}
+	return chain
+}
+
+// pathIdentity is the identity of the object at p, read from a handle on it.
+func pathIdentity(p string) (fileIdent, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return fileIdent{}, err
+	}
+	defer f.Close()
+	return handleIdentity(f)
+}
+
+func chainIndex(chain []idEntry, id fileIdent) int {
+	for i, e := range chain {
+		if e.id == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func chainHas(chain []idEntry, id fileIdent) bool { return chainIndex(chain, id) >= 0 }
 
 // QuarantineTerritory resolves the managed root a path belongs to, refusing anything
 // outside managed territory, any source, inside a source or holding one, and the

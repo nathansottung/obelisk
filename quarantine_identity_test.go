@@ -33,12 +33,13 @@ func TestQuarantine_NeverMovesASourceParent(t *testing.T) {
 	}
 }
 
-// A path that reaches a source through a folder link inside managed territory
-// is decided by where it really is: inside the source, so it is refused, and a
-// link itself is never quarantined.
+// A path that reaches a source through a folder link is decided by what it
+// really is. The source and the link are both inside managed territory, so the
+// refusal can only come from matching the source, and a link itself is never
+// quarantined.
 func TestQuarantine_DecidesByRealLocation(t *testing.T) {
 	app, destRoot, _ := quarantineScenario(t)
-	src := t.TempDir()
+	src := filepath.Join(destRoot, "raw", "live")
 	writeTree(t, src, map[string]string{"orig.nef": "ORIG", "sub/deep.nef": "DEEP"})
 	app.Store.AddFolder(app.Store.AddCollection("Live").ID, src)
 	link := filepath.Join(destRoot, "raw", "shortcut")
@@ -48,8 +49,9 @@ func TestQuarantine_DecidesByRealLocation(t *testing.T) {
 		if app.Store.QuarantineEligible(p) {
 			t.Errorf("%s is offered for quarantine although it is inside a source", p)
 		}
-		if _, err := app.Quarantine(p, "", ""); err == nil || !strings.Contains(err.Error(), "source") {
-			t.Errorf("quarantine %s: got %v, want a refusal naming the source", p, err)
+		_, err := app.Quarantine(p, "", "")
+		if err == nil || !strings.Contains(err.Error(), "source") || strings.Contains(err.Error(), "not managed territory") {
+			t.Errorf("quarantine %s: got %v, want a refusal because of the source", p, err)
 		}
 	}
 	if _, err := app.Quarantine(link, "", ""); err == nil {
