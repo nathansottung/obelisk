@@ -707,17 +707,24 @@ Mirrors and mirror-mode "back up changes" write through `Store.AuthorizeDestinat
 2. **Write only through that handle.** Every file is created as an exclusively
    owned staging object in its final folder, verified through the same handle,
    then renamed into place relative to the authorized folder. A failed rename
-   never deletes the existing file. Each parent folder is re-checked when used.
+   never deletes the existing file. Before every write the destination is
+   re-read: if it is no longer the same folder (volume and file ID at its path)
+   or its real permissions, or those of a folder above it, changed, the write
+   stops and the next check asks again. Each parent folder is re-checked too.
 3. **Platform policy.** The folder and its ancestors must be on an accepted
    filesystem and, where it keeps permissions, changeable only by this user and
-   the system. Three cases need the user's choice before anything is written
-   (`destchoice.go`): a folder Authenticated Users or Users can change through an
-   inherited grant, a drive root with Windows' default "create folders" grant, and
-   an exFAT or FAT drive. The choices are Make this folder private (removes those
-   groups from that one folder's permissions, by handle, after showing the exact
-   change), Use it anyway (typed `Continue`, recorded against the folder's volume
-   and file ID with a fingerprint of the permissions up to the drive root, and
-   asked again when that changes), or Pick another folder. Grants to Everyone,
+   the system. A missing destination is created first, empty, so the check reads
+   the permissions Windows actually set rather than predicting them. Three cases
+   need the user's choice before anything else is written (`destchoice.go`): a
+   folder Authenticated Users or Users can change through an inherited grant, a
+   drive root with Windows' default "create folders" grant, and an exFAT or FAT
+   drive. The choices are Make this folder private (removes those groups from
+   that one folder's permissions, by handle, after showing the exact change),
+   Use it anyway (typed `Continue`, recorded against the destination folder's
+   own volume and file ID with a digest of its real owner and permissions and
+   those of every folder up to the drive root, and asked again when the folder
+   is replaced or any of that changes; a choice covers no other folder,
+   including new folders made inside it), or Pick another folder. Grants to Everyone,
    Guests, Anonymous Logon or any other account, or set explicitly on the folder,
    refuse. A Docker overlay is refused; macOS and BSD are refused for now.
 4. **Offline sources.** Source folders record the volume they were seen on. A

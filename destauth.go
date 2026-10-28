@@ -433,11 +433,15 @@ type DestRoot struct {
 	token     string          // collision avoidance; object ownership is retained separately
 	release   func() error    // cooperative lease retained through the caller's catalog credit
 	volume    uint64
-	seq       atomic.Uint64
-	mu        sync.Mutex
-	stages    map[string]*destStage
-	closeOnce sync.Once
-	closeErr  error
+	id        fileIdent // the authorized folder's identity
+	// fingerprint is the authorized folder's real permissions and those of every
+	// folder above it (destFingerprint); every write checks they are unchanged.
+	fingerprint string
+	seq         atomic.Uint64
+	mu          sync.Mutex
+	stages      map[string]*destStage
+	closeOnce   sync.Once
+	closeErr    error
 }
 
 // AuthorizeDestination resolves path to a real directory, opens it, decides
@@ -450,12 +454,13 @@ type DestRoot struct {
 //
 // A destination with findings (other accounts can change it, or its filesystem
 // cannot record permissions) is refused with a *DestinationChoiceError until the
-// user has made a choice that still matches the folder (see destchoice.go). That
-// decision is taken before anything is created, so nothing is written first.
+// user has made a choice that still matches the folder (see destchoice.go). The
+// choice is about the folder's real permissions: a missing destination is created
+// first (empty), and what Windows actually set on it is what the user decides
+// about. Nothing else is written until then.
 //
-// BOOTSTRAP creates one absent component at a time. A single-component Mkdir
-// does not traverse a terminal link and an existing entry is a refusal. Before
-// any next creation the newly opened parent's actual location is authorized.
+// Every write through the returned DestRoot re-reads the destination's identity
+// and real permissions first (see checkRoot), and stops if either changed.
 func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 	in, err := s.inspectDestination(path)
 	if err != nil {
@@ -465,50 +470,8 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 		in.anchor.Close()
 		return nil, &DestinationChoiceError{Check: s.checkFromInspection(in)}
 	}
-	display, snap, ancCanon := in.display, in.snap, in.anchorCanon
-
+	display, snap := in.display, in.snap
 	root := in.anchor
-	var created []uint64
-	for _, component := range in.missing {
-		if _, err := destRel(component); err != nil {
-			root.Close()
-			return nil, err
-		}
-		// Only the first parent may contain sources: creation of this single
-		// absent, disjoint child is authorized, not its sibling subtrees.
-		if err := snap.decide(filepath.Join(ancCanon, component), display); err != nil {
-			root.Close()
-			return nil, err
-		}
-		if _, err := checkDestNamespace(root); err != nil {
-			root.Close()
-			return nil, err
-		}
-		if err := bootstrapMkdir(root, component); err != nil {
-			root.Close()
-			return nil, fmt.Errorf("cannot safely create destination component %q: %w; inspect the destination and retry", component, err)
-		}
-		sub, serr := root.OpenRoot(component)
-		root.Close()
-		if serr != nil {
-			return nil, fmt.Errorf("cannot open destination component %q: %w", component, serr)
-		}
-		root = sub
-		if id, err := rootIdentity(root); err == nil {
-			created = append(created, id.idx)
-		}
-		ancCanon, err = rootCanonicalPath(root)
-		if err == nil {
-			err = snap.decide(ancCanon, display)
-		}
-		if err != nil {
-			root.Close()
-			return nil, err
-		}
-	}
-	if in.choice != nil && len(created) > 0 {
-		s.recordCreatedUnderChoice(in.choice, created)
-	}
 
 	// Re-derive the canonical name from the handle actually retained, and take the
 	// verdict again on it. This closes the gap between "the name we intended" and
@@ -532,14 +495,20 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 		root.Close()
 		return nil, err
 	}
-	release, err := acquireDestLease(root)
+	id, err := rootIdentity(root)
 	if err != nil {
 		root.Close()
 		return nil, err
 	}
-	id, err := rootIdentity(root)
+	// The decision (and any recorded choice) was about the folder and permissions
+	// read a moment ago; the handle kept must still be exactly that.
+	fingerprint := destFingerprint(destfs.chain)
+	if id != in.anchorID || fingerprint != in.fingerprint {
+		root.Close()
+		return nil, &DestinationChangedError{Folder: display}
+	}
+	release, err := acquireDestLease(root)
 	if err != nil {
-		release()
 		root.Close()
 		return nil, err
 	}
@@ -564,7 +533,43 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 		}
 	}
 	return &DestRoot{root: root, canonical: canon, display: display, snap: snap, fs: destfs, accepted: accepted,
-		token: hex.EncodeToString(tok), release: release, volume: id.vol}, nil
+		token: hex.EncodeToString(tok), release: release, volume: id.vol, id: id, fingerprint: fingerprint}, nil
+}
+
+// DestinationChangedError stops a write because the destination is no longer the
+// folder, or no longer has the permissions, that were checked (and, where needed,
+// chosen). Checking the destination again shows what changed and asks again.
+type DestinationChangedError struct {
+	Folder string
+}
+
+func (e *DestinationChangedError) Error() string {
+	return fmt.Sprintf("refusing: %s is no longer the folder Obelisk checked, or its permissions (or those of a folder above it) changed. Nothing more is written there; check the destination again", e.Folder)
+}
+
+// checkRoot re-reads the destination's identity and real permissions, and those of
+// every folder above it, and refuses if any differ from what was authorized.
+// checkParent runs it before every write.
+func (d *DestRoot) checkRoot() error {
+	ns, err := checkDestNamespace(d.root)
+	if err != nil {
+		return err
+	}
+	if destFingerprint(ns.chain) != d.fingerprint {
+		return &DestinationChangedError{Folder: d.display}
+	}
+	// The handle cannot change object; the name it was authorized under must still
+	// lead to it, so a folder deleted (or moved) and replaced is noticed.
+	r, err := os.OpenRoot(d.canonical)
+	if err != nil {
+		return &DestinationChangedError{Folder: d.display}
+	}
+	id, err := rootIdentity(r)
+	r.Close()
+	if err != nil || id != d.id {
+		return &DestinationChangedError{Folder: d.display}
+	}
+	return nil
 }
 
 // findingKey groups findings the same decision covers: a grant of the same
@@ -594,29 +599,29 @@ func atOrBelow(folder, root string) bool {
 }
 
 // destInspection is everything decided about a destination before anything is
-// created: the deepest existing folder (held open), the components still to
-// create, the findings for the folder that will be written into, and the recorded
-// choice that covers them, if any.
+// written into it: the destination folder itself (held open; created empty first
+// if it was missing), its findings, and the recorded choice that covers them, if any.
 type destInspection struct {
 	display     string
 	abs         string
 	snap        *sourceSnapshot
-	anchor      *os.Root // deepest existing folder; caller closes
+	anchor      *os.Root // the destination folder; caller closes
 	anchorCanon string
 	anchorID    fileIdent
-	missing     []string
-	intended    string
+	intended    string // the destination's real location (anchorCanon)
+	created     []string
 	fs          destFS
 	findings    []destFinding
 	fingerprint string
 	choice      *DestinationChoice // a valid choice covering the findings, or nil
-	stale       *DestinationChoice // a choice for this folder that no longer matches
+	stale       *DestinationChoice // a choice for this folder or path that no longer matches
 }
 
-// inspectDestination runs every check AuthorizeDestination makes before creating
-// anything, and writes nothing: the source overlap decision, the platform policy
-// on the deepest existing folder and its ancestors, and what a folder created
-// there would inherit. A refusal is returned as an error.
+// inspectDestination runs every check AuthorizeDestination makes before writing:
+// the source overlap decision and the platform policy on the destination and its
+// ancestors. A missing destination is created first, one empty folder at a time,
+// so the findings are the permissions Windows actually set rather than a
+// prediction of them. A refusal is returned as an error.
 func (s *Store) inspectDestination(path string) (*destInspection, error) {
 	display := strings.TrimSpace(path)
 	if display == "" {
@@ -645,81 +650,120 @@ func (s *Store) inspectDestination(path string) (*destInspection, error) {
 		anc.Close()
 		return nil, fmt.Errorf("cannot establish the real location of %s: %w — refusing rather than writing on a guess", existing, err)
 	}
-	// Preflight the intended path; this is not permission to traverse links in
-	// the missing suffix. The component creation loop enforces that rule.
-	intended := ancCanon
-	if len(missing) > 0 {
-		intended = filepath.Join(append([]string{ancCanon}, missing...)...)
-	}
 	fail := func(err error) (*destInspection, error) {
 		anc.Close()
 		return nil, err
 	}
+	// Preflight the intended path before creating anything; this is not permission
+	// to traverse links in the missing suffix. The creation loop enforces that.
+	intended := filepath.Join(append([]string{ancCanon}, missing...)...)
 	if err := snap.decide(intended, display); err != nil {
 		return fail(err)
 	}
 	if err := snap.decideOffline(rootVolumeID(anc), abs, intended, display); err != nil {
 		return fail(err)
 	}
+	var created []string
+	if len(missing) > 0 {
+		anc, ancCanon, created, err = createDestComponents(anc, ancCanon, missing, snap, display)
+		if err != nil {
+			return nil, withCreatedNote(err, created)
+		}
+		if err := snap.decideOffline(rootVolumeID(anc), abs, ancCanon, display); err != nil {
+			return fail(withCreatedNote(err, created))
+		}
+	}
 	nsfs, err := checkDestNamespace(anc)
 	if err != nil {
-		return fail(err)
+		return fail(withCreatedNote(err, created))
 	}
 	findings := nsfs.findings
-	if len(missing) == 0 {
-		// Folders Obelisk creates inside an existing destination inherit from it;
-		// a grant they would inherit (even one that is inherit-only on the folder
-		// itself) is a finding about this folder.
-		pred, err := predictDestChild(anc, ancCanon, 1)
-		if err != nil {
-			return fail(err)
-		}
-		for _, f := range pred {
-			findings = appendFinding(findings, f)
-		}
-	} else {
-		// The folder written into does not exist yet: its filesystem findings are
-		// the anchor's, named for the folder that will be created, plus whatever it
-		// would inherit.
-		for i := range findings {
-			if findings[i].Kind == destFindingUnchecked {
-				findings[i].Folder = intended
-			}
-		}
-		first := filepath.Join(ancCanon, missing[0])
-		pred, err := predictDestChild(anc, first, len(missing))
-		if err != nil {
-			return fail(err)
-		}
-		for _, f := range pred {
-			// Every folder created down to the destination inherits the same grant;
-			// name it for the destination the user chose.
-			f.Folder = intended
-			findings = appendFinding(findings, f)
-		}
-		if len(missing) > 1 {
-			// A no-propagate grant reaches only the first new folder. It is still
-			// something other accounts can change, so it is shown, named for that
-			// folder; being above the destination, it covers nothing inside it.
-			firstOnly, err := predictDestChild(anc, first, 1)
-			if err != nil {
-				return fail(err)
-			}
-			for _, f := range firstOnly {
-				findings = appendFinding(findings, f)
-			}
-		}
+	// Folders Obelisk creates inside the destination take the inheritable entries
+	// of its real permissions; a grant they would get (even one that is
+	// inherit-only on the folder itself) is a finding about this folder. Every
+	// such folder is still read before anything is written into it (checkParent).
+	pred, err := predictDestChild(anc, ancCanon, 1)
+	if err != nil {
+		return fail(withCreatedNote(err, created))
+	}
+	for _, f := range pred {
+		findings = appendFinding(findings, f)
 	}
 	id, err := rootIdentity(anc)
 	if err != nil {
 		return fail(err)
 	}
 	in := &destInspection{display: display, abs: abs, snap: snap, anchor: anc, anchorCanon: ancCanon, anchorID: id,
-		missing: missing, intended: intended, fs: nsfs, findings: findings, fingerprint: destFingerprint(nsfs.chain)}
+		intended: ancCanon, created: created, fs: nsfs, findings: findings, fingerprint: destFingerprint(nsfs.chain)}
 	if len(findings) > 0 {
 		in.choice, in.stale = s.coveringChoice(in)
 	}
 	return in, nil
+}
+
+// createDestComponents creates the missing destination folders below root, one
+// empty folder at a time, and returns the last one opened, its real location, and
+// the folders it created. It takes ownership of root, closing it on return or
+// returning the new folder in its place.
+//
+// A single-component Mkdir does not traverse a terminal link and an existing entry
+// is a refusal. Before each creation the parent's actual location is decided
+// against the sources and checked by the platform policy, so nothing is created
+// below a folder that already refuses.
+func createDestComponents(root *os.Root, canon string, missing []string, snap *sourceSnapshot, display string) (*os.Root, string, []string, error) {
+	var created []string
+	for _, component := range missing {
+		if _, err := destRel(component); err != nil {
+			root.Close()
+			return nil, "", created, err
+		}
+		// Only the first parent may contain sources: creation of this single
+		// absent, disjoint child is authorized, not its sibling subtrees.
+		if err := snap.decide(filepath.Join(canon, component), display); err != nil {
+			root.Close()
+			return nil, "", created, err
+		}
+		if _, err := checkDestNamespace(root); err != nil {
+			root.Close()
+			return nil, "", created, err
+		}
+		// An inheritable entry that would make the new folder refused anyway stops
+		// here, before it is made. Only the refusal is used: what the user is asked
+		// about is read from the folder once it exists.
+		if _, err := predictDestChild(root, filepath.Join(canon, component), 1); err != nil {
+			root.Close()
+			return nil, "", created, err
+		}
+		if err := bootstrapMkdir(root, component); err != nil {
+			root.Close()
+			return nil, "", created, fmt.Errorf("cannot safely create destination component %q: %w; inspect the destination and retry", component, err)
+		}
+		created = append(created, filepath.Join(canon, component))
+		sub, err := root.OpenRoot(component)
+		root.Close()
+		if err != nil {
+			return nil, "", created, fmt.Errorf("cannot open destination component %q: %w", component, err)
+		}
+		root = sub
+		canon, err = rootCanonicalPath(root)
+		if err == nil {
+			err = snap.decide(canon, display)
+		}
+		if err != nil {
+			root.Close()
+			return nil, "", created, err
+		}
+	}
+	return root, canon, created, nil
+}
+
+// withCreatedNote tells the user about the empty folders Obelisk created to read
+// their permissions, when the destination is then refused.
+func withCreatedNote(err error, created []string) error {
+	if len(created) == 0 {
+		return err
+	}
+	return fmt.Errorf("%w (Obelisk created the empty folder %s to read the permissions it was given; you can delete it)", err, strings.Join(created, ", "))
 }
 
 // rootIdentity is the identity of the directory r holds, read from a handle.
@@ -915,6 +959,9 @@ func (d *DestRoot) MkdirAll(rel string) error {
 // namespace must still pass the platform policy and it must be on the same volume
 // as the authorized root, so a mount point below the root cannot redirect writes.
 func (d *DestRoot) checkParent(parent *os.Root) error {
+	if err := d.checkRoot(); err != nil {
+		return err
+	}
 	ns, err := checkDestNamespace(parent)
 	if err != nil {
 		return err

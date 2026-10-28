@@ -37,15 +37,14 @@ const destUseAnywayWord = "Continue"
 // DestinationChoice is a recorded "Use it anyway" decision.
 type DestinationChoice struct {
 	Volume      uint64    `json:"volume"`      // volume serial (Windows) or device (Linux)
-	Folder      uint64    `json:"folder"`      // the folder's file ID on that volume
+	Folder      uint64    `json:"folder"`      // the destination folder's own file ID on that volume
 	Path        string    `json:"path"`        // where the folder was when the choice was made
-	Fingerprint string    `json:"fingerprint"` // permissions and filesystem, folder up to drive root
+	Fingerprint string    `json:"fingerprint"` // real owner, permissions and filesystem, folder up to drive root
 	Choice      string    `json:"choice"`
 	ChosenAt    time.Time `json:"chosen_at"`
 	Findings    []string  `json:"findings,omitempty"` // what the user was told, for the record
 	Keys        []string  `json:"keys,omitempty"`     // the kinds of finding the user accepted (findingKey)
 	Intended    string    `json:"intended,omitempty"` // the folder the user chose to write into
-	Created     []uint64  `json:"created,omitempty"`  // folders Obelisk then created inside it
 }
 
 // DestinationCheck is the answer to "can Obelisk write here?" for the UI and API.
@@ -110,7 +109,7 @@ func destFingerprint(chain []destLevel) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// CheckDestination reports, without writing anything, whether Obelisk may write
+// CheckDestination reports, without writing into it, whether Obelisk may write
 // to path and what the user must decide first.
 func (s *Store) CheckDestination(path string) *DestinationCheck {
 	in, err := s.inspectDestination(path)
@@ -132,7 +131,7 @@ func (s *Store) checkFromInspection(in *destInspection) *DestinationCheck {
 		c.ChosenAt = &t
 	default:
 		c.Status = destStatusChoose
-		c.Notice = destNotice(in.intended, in.findings, in.stale, destCanMakePrivate(in))
+		c.Notice = destNotice(in.intended, in.findings, in.stale, in.created, destCanMakePrivate(in))
 	}
 	return c
 }
@@ -141,7 +140,7 @@ func (s *Store) checkFromInspection(in *destInspection) *DestinationCheck {
 // finding: the folder exists, keeps permissions, is not a drive root, and the only
 // findings are groups Windows grants on that folder itself.
 func destCanMakePrivate(in *destInspection) bool {
-	if !destMakePrivateSupported || len(in.missing) > 0 || len(in.findings) == 0 {
+	if !destMakePrivateSupported || len(in.findings) == 0 {
 		return false
 	}
 	for _, f := range in.findings {
@@ -153,88 +152,38 @@ func destCanMakePrivate(in *destInspection) bool {
 }
 
 // coveringChoice finds a recorded choice that still covers the inspected
-// destination: one made for this very folder with the same fingerprint, or one
-// made for a folder Obelisk then created this folder inside, whose own folder is
-// unchanged. A choice for this folder whose fingerprint no longer matches is
-// returned as stale, so the notice can say why Obelisk is asking again.
-//
-// A choice made for a folder that did not exist yet is held by its existing parent;
-// it covers that folder and what is inside it, not other new folders there. A
-// created folder is covered only while its findings are among those the user saw.
+// destination: one made for this very folder (same volume and file ID) whose
+// fingerprint, the real permissions of the folder and every folder above it, is
+// unchanged. A choice for this folder whose fingerprint no longer matches, or one
+// made at this path for a folder that has since been replaced, is returned as
+// stale, so the notice can say why Obelisk is asking again.
 func (s *Store) coveringChoice(in *destInspection) (valid, stale *DestinationChoice) {
 	s.mu.Lock()
 	choices := make([]*DestinationChoice, 0, len(s.c.DestinationChoices))
 	for _, c := range s.c.DestinationChoices {
-		cp := *c // copied under the lock: jobs append to Created concurrently
-		cp.Created = append([]uint64(nil), c.Created...)
+		cp := *c
 		cp.Keys = append([]string(nil), c.Keys...)
 		choices = append(choices, &cp)
 	}
 	s.mu.Unlock()
 	for _, c := range choices {
-		if c.Volume != in.anchorID.vol {
+		// A choice recorded before destinations were created ahead of the question
+		// was held by an existing parent for a folder below it; it covers nothing.
+		if c.Intended != "" && normPath(c.Intended) != normPath(c.Path) {
 			continue
 		}
-		if c.Folder == in.anchorID.idx {
-			// The choice covers the folder it was made for and folders inside it,
-			// not other folders under the same existing parent.
-			if c.Intended != "" && normPath(c.Intended) != normPath(in.intended) &&
-				!canonicalWithin(normPath(c.Intended), normPath(in.intended)) {
-				continue
-			}
+		if c.Volume == in.anchorID.vol && c.Folder == in.anchorID.idx {
 			if c.Fingerprint == in.fingerprint {
 				return c, nil
 			}
 			stale = c
 			continue
 		}
-		for _, id := range c.Created {
-			if id == in.anchorID.idx && findingsWithin(in.findings, c.Keys) && choiceFolderUnchanged(c) {
-				return c, nil
-			}
+		if stale == nil && normPath(c.Path) == normPath(in.anchorCanon) {
+			stale = c // the folder at this path was deleted (or moved) and replaced
 		}
 	}
 	return nil, stale
-}
-
-// findingsWithin reports whether every finding is of a kind the user accepted.
-func findingsWithin(findings []destFinding, keys []string) bool {
-	for _, f := range findings {
-		if !destContains(keys, findingKey(f)) {
-			return false
-		}
-	}
-	return true
-}
-
-// choiceFolderUnchanged reopens the folder a choice was made for and confirms it
-// is the same folder with the same permissions and filesystem.
-func choiceFolderUnchanged(c *DestinationChoice) bool {
-	r, err := os.OpenRoot(c.Path)
-	if err != nil {
-		return false
-	}
-	defer r.Close()
-	id, err := rootIdentity(r)
-	if err != nil || id.vol != c.Volume || id.idx != c.Folder {
-		return false
-	}
-	fs, err := checkDestNamespace(r)
-	return err == nil && destFingerprint(fs.chain) == c.Fingerprint
-}
-
-// recordCreatedUnderChoice notes the folders Obelisk created inside a folder the
-// user chose to use anyway, so later runs into them are covered by that choice.
-func (s *Store) recordCreatedUnderChoice(c *DestinationChoice, created []uint64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, rec := range s.c.DestinationChoices {
-		if rec.Volume == c.Volume && rec.Folder == c.Folder {
-			rec.Created = append(rec.Created, created...)
-			_ = s.save()
-			return
-		}
-	}
 }
 
 // ChooseUseAnyway records the user's "Use it anyway" for path. typed must be
@@ -267,7 +216,7 @@ func (s *Store) ChooseUseAnyway(path, fingerprint, typed string) (*DestinationCh
 	s.mu.Lock()
 	kept := s.c.DestinationChoices[:0]
 	for _, c := range s.c.DestinationChoices {
-		if c.Volume != rec.Volume || c.Folder != rec.Folder {
+		if (c.Volume != rec.Volume || c.Folder != rec.Folder) && normPath(c.Path) != normPath(rec.Path) {
 			kept = append(kept, c)
 		}
 	}
@@ -422,7 +371,7 @@ func (s *Store) ApplyMakePrivate(path, token string, confirmed bool) (*Destinati
 // ---- the notice ---------------------------------------------------------------
 
 // destNotice writes the plain-words notice for a destination's findings.
-func destNotice(folder string, findings []destFinding, stale *DestinationChoice, canMakePrivate bool) *DestinationNotice {
+func destNotice(folder string, findings []destFinding, stale *DestinationChoice, created []string, canMakePrivate bool) *DestinationNotice {
 	n := &DestinationNotice{}
 	var groups []string
 	var root, unchecked *destFinding
@@ -444,7 +393,10 @@ func destNotice(folder string, findings []destFinding, stale *DestinationChoice,
 		}
 	}
 	if stale != nil {
-		n.Lines = append(n.Lines, fmt.Sprintf("✗ You chose to use this folder on %s, but its permissions or its drive have changed since, so Obelisk is asking again.", stale.ChosenAt.Format("2 January 2006")))
+		n.Lines = append(n.Lines, fmt.Sprintf("✗ You chose to use this folder on %s, but the folder, its permissions or its drive have changed since, so Obelisk is asking again.", stale.ChosenAt.Format("2 January 2006")))
+	}
+	if len(created) > 0 {
+		n.Lines = append(n.Lines, fmt.Sprintf("✓ Obelisk created the empty folder %s so it could read the permissions it was given. Nothing else is written there until you choose.", strings.Join(created, ", ")))
 	}
 	switch {
 	case len(groups) > 0:
@@ -484,6 +436,10 @@ func destNotice(folder string, findings []destFinding, stale *DestinationChoice,
 		n.Lines = append(n.Lines, "✓ Who it's fine for: If you're the only person who signs in to this PC, this is usually fine.")
 	}
 
+	pickAnother := "Nothing is written here. Choose a different folder, such as one inside your user folder or on another drive."
+	if len(created) > 0 {
+		pickAnother = "Nothing more is written here, and you can delete the empty folder Obelisk made. Choose a different folder, such as one inside your user folder or on another drive."
+	}
 	if canMakePrivate {
 		n.Choices = append(n.Choices, DestinationOption{ID: destChoiceMakePrivate, Label: "Make this folder private",
 			Detail: fmt.Sprintf("Obelisk removes %s from the permissions of %s, so only you, Administrators and Windows itself can change it. You'll see the exact change and confirm it first. Files and folders already inside keep the permissions they have, so other accounts may still be able to change them; Obelisk won't write into any of those.", joinAnd(groups), groupFolder)})
@@ -492,7 +448,7 @@ func destNotice(folder string, findings []destFinding, stale *DestinationChoice,
 		DestinationOption{ID: destChoiceUseAnyway, Label: "Use it anyway",
 			Detail: fmt.Sprintf("Type %s to confirm. Obelisk records your choice for this folder, with today's date, and asks again if its permissions or its drive change.", destUseAnywayWord)},
 		DestinationOption{ID: destChoicePickAnother, Label: "Pick another folder",
-			Detail: "Nothing is written here. Choose a different folder, such as one inside your user folder or on another drive."})
+			Detail: pickAnother})
 
 	var b strings.Builder
 	b.WriteString(n.Title + "\n\n")

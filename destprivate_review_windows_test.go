@@ -245,17 +245,18 @@ func TestDestChoice_MissingFolderChoiceIsNarrow(t *testing.T) {
 	}
 }
 
-// A folder Obelisk created under a choice, then moved somewhere that adds a group
-// the user never saw, is no longer covered by that choice.
+// A chosen folder moved somewhere that adds a group the user never saw is no
+// longer covered by that choice.
 func TestDestChoice_MovedCreatedFolderAskedAgain(t *testing.T) {
 	app := dockApp(t)
 	user, _ := destUserSID()
 	folder, _ := sharedFolder(t)
-	c := app.Store.CheckDestination(folder)
-	if _, err := app.Store.ChooseUseAnyway(folder, c.Fingerprint, destUseAnywayWord); err != nil {
+	newDir := filepath.Join(folder, "New")
+	c := app.Store.CheckDestination(newDir)
+	if _, err := app.Store.ChooseUseAnyway(newDir, c.Fingerprint, destUseAnywayWord); err != nil {
 		t.Fatal(err)
 	}
-	d, err := app.Store.AuthorizeDestination(filepath.Join(folder, "New"))
+	d, err := app.Store.AuthorizeDestination(newDir)
 	if err != nil {
 		t.Fatal(err)
 	}

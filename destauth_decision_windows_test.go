@@ -243,8 +243,8 @@ func fileSDDLOf(t *testing.T, path string) string {
 	return sd.String()
 }
 
-// A warned destination cannot be written to, or even created, until the user
-// has chosen.
+// A warned destination cannot be written to until the user has chosen. A missing
+// one is created, empty, so its real permissions can be read; nothing else is.
 func TestDestChoice_NoWriteBeforeChoice(t *testing.T) {
 	app := dockApp(t)
 	folder, _ := sharedFolder(t)
@@ -261,13 +261,19 @@ func TestDestChoice_NoWriteBeforeChoice(t *testing.T) {
 	if got := entriesOf(t, folder); len(got) != 0 {
 		t.Fatalf("a refused destination was written to: %q", got)
 	}
-	// A folder that does not exist yet is not created either.
+	// A folder that does not exist yet is created empty, and nothing is written in it.
 	sub := filepath.Join(folder, "new", "deeper")
 	if _, err := app.Store.AuthorizeDestination(sub); !errors.As(err, &ce) {
 		t.Fatalf("authorize a new folder inside before a choice: got %v, want a DestinationChoiceError", err)
 	}
-	if got := entriesOf(t, folder); len(got) != 0 {
-		t.Fatalf("a folder was created before the choice: %q", got)
+	if got := entriesOf(t, folder); len(got) != 1 || got[0] != "new" {
+		t.Fatalf("before the choice, %s holds %q, want only the new folder", folder, got)
+	}
+	if got := entriesOf(t, sub); len(got) != 0 {
+		t.Fatalf("a file was written into the new folder before the choice: %q", got)
+	}
+	if err := os.RemoveAll(filepath.Join(folder, "new")); err != nil {
+		t.Fatal(err)
 	}
 	// And a mirror is refused before copying anything.
 	app2, collID, _, vol := mirrorSetup(t, "Gate", map[string]string{"a.txt": "alpha"})
@@ -314,10 +320,19 @@ func TestDestChoice_UseAnywayNeedsTypedWord(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.Close() // one job per volume at a time: release the lease before the next
-	// A folder Obelisk creates inside the chosen folder is covered by the choice.
-	d2, err := app.Store.AuthorizeDestination(filepath.Join(folder, "Photos"))
+	// A new folder inside the chosen folder is a different folder: it is created,
+	// its real permissions read, and the user asked about it.
+	photos := filepath.Join(folder, "Photos")
+	var ce *DestinationChoiceError
+	if _, err := app.Store.AuthorizeDestination(photos); !errors.As(err, &ce) {
+		t.Fatalf("authorize a new folder inside a chosen folder: got %v, want a DestinationChoiceError", err)
+	}
+	if _, err := app.Store.ChooseUseAnyway(photos, ce.Check.Fingerprint, destUseAnywayWord); err != nil {
+		t.Fatal(err)
+	}
+	d2, err := app.Store.AuthorizeDestination(photos)
 	if err != nil {
-		t.Fatalf("authorize a new folder inside a chosen folder: %v", err)
+		t.Fatalf("authorize the new folder after its own choice: %v", err)
 	}
 	d2.Close()
 	d3, err := app.Store.AuthorizeDestination(filepath.Join(folder, "Photos"))

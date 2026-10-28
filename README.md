@@ -104,9 +104,12 @@ replace.
   your choice first: a folder other accounts on this PC can change through
   Windows' default groups (Authenticated Users or Users, inherited), a drive's
   top folder, or an exFAT or FAT32 drive, where permissions, hard links and file
-  IDs cannot be checked. Obelisk explains what it found and writes nothing there
-  until you pick **Make this folder private**, **Use it anyway** (type
-  `Continue`; asked again if the permissions change) or **Pick another folder**.
+  IDs cannot be checked. A folder that doesn't exist yet is created first, empty,
+  so Obelisk asks about the permissions it really got. Obelisk explains what it
+  found and writes nothing else there until you pick **Make this folder private**,
+  **Use it anyway** (type `Continue`; it covers only that folder, and Obelisk asks
+  again if the folder is replaced or its permissions change, and stops a job
+  that is running) or **Pick another folder**.
   Grants to Everyone, Guests, Anonymous Logon or any other account are refused.
   FAT32 refuses files over 4 GB before copying. On Linux,
   ext4, XFS, Btrfs, exFAT and FAT are accepted and a Docker overlay folder is
