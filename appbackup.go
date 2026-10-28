@@ -189,11 +189,11 @@ func (a *App) exportAppBackupTo(tarPath string, includeKeys bool) (ExportResult,
 	if err := os.MkdirAll(filepath.Dir(tarPath), 0o755); err != nil {
 		return ExportResult{}, err
 	}
-	tmp := tarPath + ".tmp"
-	f, err := os.Create(tmp)
+	f, err := createStage(tarPath, 0o644)
 	if err != nil {
 		return ExportResult{}, err
 	}
+	tmp := f.Name()
 	tw := tar.NewWriter(f)
 	now := time.Now().UTC()
 	// MANIFEST.json first, then every gathered member.
@@ -465,8 +465,8 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			return err
 		}
-		tmp := dest + ".tmp"
-		if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		tmp, err := writeStage(dest, b, 0o644)
+		if err != nil {
 			return err
 		}
 		if err := atomicRename(tmp, dest); err != nil {

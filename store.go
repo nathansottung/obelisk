@@ -1458,20 +1458,23 @@ func (s *Store) writeCatalog() error {
 	// flushed (a zero-length or torn catalog). So fsync the temp file's bytes BEFORE
 	// the rename, then fsync the parent directory AFTER so the rename itself is
 	// durable. On Windows syncDir is a no-op (directory fsync is unsupported there).
-	tmp := s.path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	f, err := createStage(s.path, 0o644)
 	if err != nil {
 		return err
 	}
+	tmp := f.Name()
 	if _, err := f.Write(b); err != nil {
 		f.Close()
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := f.Sync(); err != nil {
 		f.Close()
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := renameReplacing(tmp, s.path); err != nil {
@@ -3567,20 +3570,8 @@ func (s *Store) writeJobsRows() error {
 	if err != nil {
 		return err
 	}
-	tmp := s.jobs.path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	tmp, err := writeStage(s.jobs.path, b, 0o644)
 	if err != nil {
-		return err
-	}
-	if _, err := f.Write(b); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
 		return err
 	}
 	if err := renameReplacing(tmp, s.jobs.path); err != nil {

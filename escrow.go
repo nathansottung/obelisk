@@ -545,11 +545,11 @@ func fetchEscrowArtifact(url, dest, want string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
-	tmp := dest + ".part"
-	out, err := os.Create(tmp)
+	out, err := createStage(dest, 0o644)
 	if err != nil {
 		return err
 	}
+	tmp := out.Name()
 	h := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(out, h), resp.Body); err != nil {
 		out.Close()

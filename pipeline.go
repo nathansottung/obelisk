@@ -348,8 +348,8 @@ func writeStoreObserved(path string, ks *keystoreFile, observe func(string)) err
 	}
 	ks.Marker, ks.SchemaVersion = 1, currentSchemaVersion
 	b, _ := json.MarshalIndent(ks, "", "  ")
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	tmp, err := writeStage(path, b, 0o600)
+	if err != nil {
 		return err
 	}
 	if err := renameReplacing(tmp, path); err != nil {

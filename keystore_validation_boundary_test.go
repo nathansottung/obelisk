@@ -113,9 +113,7 @@ func TestKeystoreValidation_MissingMutationBoundary(t *testing.T) {
 func TestKeystoreValidation_PublicationBoundary(t *testing.T) {
 	f := newKV(t, []map[string]any{kvKey("A", "synthetic-secret-A")}, []map[string]any{kvKey("B", "synthetic-secret-B")})
 	before := kvRead(t, f.paths[1])
-	if e := os.Mkdir(f.paths[1]+".tmp", 0700); e != nil {
-		t.Fatal(e)
-	}
+	failPublicationTo(t, f.paths[1])
 	attempts := 0
 	f.app.keystoreMutationObserver = func(string) { attempts++ }
 	n, e := f.app.SyncKeystores()
