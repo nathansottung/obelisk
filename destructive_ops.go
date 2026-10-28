@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"sort"
 )
 
 func init() {
@@ -173,12 +174,13 @@ func recordDeleteTargets(a *App, p map[string]any) ([]destructiveTarget, error) 
 		if ev == nil {
 			return nil, refuseDestructive(404, "event %d not found", id)
 		}
+		// Deleting an event clears membership on every file assigned to it, in
+		// any archive (an event need not belong to one), so list exactly those.
 		var members []int
-		for _, f := range a.Store.FilesOf(ev.CollectionID) {
-			if f.EventID == id {
-				members = append(members, f.ID)
-			}
+		for _, f := range a.Store.FilesOfEvent(id) {
+			members = append(members, f.ID)
 		}
+		sort.Ints(members)
 		return []destructiveTarget{
 			recordTarget(fmt.Sprintf("event %d (%s)", id, ev.Name), ev, "deleted"),
 			recordTarget(fmt.Sprintf("%d file(s) in event %d", len(members), id), members, "left in the catalog, no longer in the event"),

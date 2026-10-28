@@ -253,3 +253,25 @@ func TestDestructive_RewriteCopy(t *testing.T) {
 		t.Errorf("%d superseded copies after the re-write, want 1", superseded)
 	}
 }
+
+// Deleting an event clears membership on every file assigned to it, in any
+// archive, so its targets list exactly those files: one assigned after prepare,
+// from outside the event's archive, refuses the delete.
+func TestDestructive_EventDeleteListsAllItsFiles(t *testing.T) {
+	app := dockApp(t)
+	src := t.TempDir()
+	writeTree(t, src, map[string]string{"a.txt": "A"})
+	c := app.Store.AddCollection("Elsewhere")
+	if _, _, err := app.ScanFolder(c.ID, src, noProgMirror); err != nil {
+		t.Fatal(err)
+	}
+	ev := app.Store.AddEvent(&Event{Name: "Across archives"}) // no archive of its own
+	params := map[string]any{"kind": "event", "id": float64(ev.ID)}
+	p := prepareForTest(t, app, "record-delete", params)
+	app.Store.AssignFilesToEvent([]int{app.Store.FilesOf(c.ID)[0].ID}, ev.ID)
+	_, err := app.ExecuteDestructive(testSession, p.Token, "Delete")
+	refusedWith(t, err, 409, "a file assigned after prepare")
+	if app.Store.Event(ev.ID) == nil || len(app.Store.FilesOfEvent(ev.ID)) != 1 {
+		t.Fatal("the event was deleted, or its new member unassigned, although the list changed")
+	}
+}
