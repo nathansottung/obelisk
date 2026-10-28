@@ -4019,12 +4019,20 @@ async function appRestoreInspect(){
     if(el)el.innerHTML=`<span style="color:var(--ok)">✓ Valid backup</span> — schema v${m.schema_version}, made ${esc((m.created||'').slice(0,10))} by ${esc(m.app_version||'?')}, ${(m.members||[]).length} item(s)${m.includes_keys?' · <b>includes keystores</b>':''}.`;
   }catch(e){if(el)el.innerHTML=`<span class="err">${esc(e.message)}</span>`;}
 }
+async function applyHeldSettings(){
+  const w=prompt('These settings choose which programs run on this computer.\nType Confirm to apply the settings from the backup:','');
+  if(w!=='Confirm'){toast('Not applied: type Confirm to apply them',1);return}
+  try{await api('POST','/api/config/held-settings/apply',{confirm:w});toast('Settings from the backup applied')}catch(e){toast(e.message,1)}}
+async function discardHeldSettings(){
+  try{await api('POST','/api/config/held-settings/discard',{});toast('Settings from the backup discarded')}catch(e){toast(e.message,1)}}
 function appRestoreSummary(r){
   dlg(`<h1>Records restored</h1>
     <div class="panel"><div style="font-size:14px">Recovered <b>${r.archives}</b> archive(s), <b>${(r.files||0).toLocaleString()}</b> file(s), <b>${r.volumes}</b> volume(s), <b>${r.packages}</b> package(s), and <b>${r.jobs}</b> job(s). Verification history (<b>${r.verify_events}</b> recorded check(s)) came across intact.</div>
     ${r.included_keys?'<div class="dim" style="margin-top:6px">Encryption keystores were included and restored.</div>':'<div class="dim" style="margin-top:6px">Encryption keys were not in this backup — copy your keystore files onto this machine and point <b>Settings → keystores</b> at them.</div>'}
     <div class="dim" style="margin-top:8px">Your previous records were saved to <span class="mono">${esc(r.pre_restore_dir||'')}</span>.</div>
     ${r.read_only?`<div class="err" style="margin-top:8px">${esc(r.read_only_why||'')}</div>`:''}
+    ${r.held_settings?`<div class="err" style="margin-top:8px">The backup's program settings were <b>not</b> applied, because they choose what runs on this computer: burn command <span class="mono">${esc(r.held_settings.burn_command||'(none)')}</span>, par2 extra arguments <span class="mono">${esc(r.held_settings.par2_extra_args||'(none)')}</span>, tool paths <span class="mono">${esc(Object.entries(r.held_settings.tools||{}).map(([k,v])=>k+'='+v).join(', ')||'(none)')}</span>. Your current ones are kept.
+      <div class="row" style="margin-top:6px"><button class="btn ghost" type="button" onclick="applyHeldSettings()">Apply them…</button> <button class="btn ghost" type="button" onclick="discardHeldSettings()">Discard them</button></div></div>`:''}
     <div style="margin-top:10px;font-size:13px"><b>Next:</b> plug in any drive and the app will recognize it by its serial — no re-adopting needed.</div></div>
     <div class="row" style="margin-top:14px"><button class="btn" onclick="go()">Go to Home</button></div>`,
   async()=>{loc('home');});

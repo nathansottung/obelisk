@@ -755,6 +755,23 @@ func api(mux *http.ServeMux, app *App) {
 		}
 		jsonOut(w, configResponse(cfg, app.KeystoreStatus()))
 	})
+	// Program settings held from an app-backup restore (see heldsettings.go):
+	// shown, applied with the typed word "Confirm", or discarded.
+	mux.HandleFunc("GET /api/config/held-settings", func(w http.ResponseWriter, r *http.Request) {
+		h, err := app.HeldSettings()
+		jsonResult(w, map[string]any{"held": h}, err)
+	})
+	mux.HandleFunc("POST /api/config/held-settings/apply", func(w http.ResponseWriter, r *http.Request) {
+		cfg, err := app.ApplyHeldSettings(s(body(r), "confirm"))
+		if err != nil {
+			jsonErr(w, 400, err)
+			return
+		}
+		jsonOut(w, configResponse(cfg, app.KeystoreStatus()))
+	})
+	mux.HandleFunc("POST /api/config/held-settings/discard", func(w http.ResponseWriter, r *http.Request) {
+		jsonResult(w, map[string]any{"discarded": true}, app.DiscardHeldSettings())
+	})
 	// First-run setup interview (see setup.go). GET returns the derived state for the
 	// current config (summary + scoped checklist facts); POST applies answers coherently.
 	mux.HandleFunc("GET /api/setup", func(w http.ResponseWriter, r *http.Request) {
