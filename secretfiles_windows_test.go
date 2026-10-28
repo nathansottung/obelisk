@@ -4,41 +4,49 @@ package main
 
 import (
 	"fmt"
-	"regexp"
-	"strings"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
-var aceSIDPattern = regexp.MustCompile(`\(([^;]*);[^;]*;[^;]*;[^;]*;[^;]*;([^)]*)\)`)
-
 // ownerOnlyACLForTest requires p's DACL to be protected (nothing inherited) and
-// to allow access to the current user only.
+// every allow entry in it to name the current user. SIDs are compared as SIDs:
+// the text form abbreviates some (the built-in Administrator account is "LA").
 func ownerOnlyACLForTest(p string) error {
-	user, err := destUserSID()
+	tok, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		return err
 	}
+	user := tok.User.Sid
 	sd, err := windows.GetNamedSecurityInfo(p, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		return err
 	}
-	s := sd.String()
-	i := strings.Index(s, "D:")
-	if i < 0 {
-		return fmt.Errorf("no DACL: %s", s)
+	ctl, _, err := sd.Control()
+	if err != nil {
+		return err
 	}
-	dacl := s[i:]
-	if !strings.HasPrefix(dacl, "D:P") {
-		return fmt.Errorf("the DACL inherits from the folder: %s", dacl)
+	if ctl&windows.SE_DACL_PROTECTED == 0 {
+		return fmt.Errorf("the DACL inherits from the folder: %s", sd.String())
 	}
-	aces := aceSIDPattern.FindAllStringSubmatch(dacl, -1)
-	if len(aces) == 0 {
-		return fmt.Errorf("the DACL grants nobody access: %s", dacl)
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return err
 	}
-	for _, a := range aces {
-		if a[1] == "A" && a[2] != user {
-			return fmt.Errorf("the DACL grants access to %s as well as the owner: %s", a[2], dacl)
+	if dacl == nil || dacl.AceCount == 0 {
+		return fmt.Errorf("the DACL grants nobody access: %s", sd.String())
+	}
+	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			return err
+		}
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			continue
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		if !sid.Equals(user) {
+			return fmt.Errorf("the DACL grants access to %s as well as the owner: %s", sid.String(), sd.String())
 		}
 	}
 	return nil
