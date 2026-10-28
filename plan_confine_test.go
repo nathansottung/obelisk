@@ -139,3 +139,44 @@ func TestPlan_ExecuteCreditsAFilePlacedButNotRecorded(t *testing.T) {
 	}
 	assertFileBytes(t, filepath.Join(destRoot, "photos", "a.jpg"), "AAA")
 }
+
+// Template routes are normalised when the plan's paths are worked out: a
+// leading slash, "." parts and doubled slashes mean the same folder inside the
+// destination, so the files are placed there. A route that would still leave
+// the destination stops the compile, before anything runs.
+func TestPlan_RoutesAreNormalisedAtCompile(t *testing.T) {
+	app := dockApp(t)
+	d1 := t.TempDir()
+	writeTree(t, d1, map[string]string{"a.jpg": "AAA", "b.jpg": "BBB"})
+	makeSnapshotDrive(t, app, d1, "NORM", "DRIVE-N")
+	for route, want := range map[string]string{
+		"/Photos/{orig_name}":        "Photos",
+		"./out/./{orig_name}":        "out",
+		`kept\{orig_name}`:           "kept",
+		"deep//./nested/{orig_name}": "deep/nested",
+	} {
+		tmpl := app.Store.AddTemplate(&Template{Name: "R " + route, Routes: map[string]string{RoleDeliverables: route}})
+		dest := createdForTest(t, app, filepath.Join(t.TempDir(), "dest"))
+		plan := app.Store.AddPlan(&Plan{Name: "N " + route, TemplateID: tmpl.ID, DestinationRoot: dest})
+		if rep, err := app.CompilePlan(plan.ID); err != nil || !rep.Compilable {
+			t.Fatalf("route %q: compile %+v, %v", route, rep, err)
+		}
+		r, err := app.ExecutePlanFromDrive(plan.ID, d1, "NORM", func(float64, string) {})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Copied != 2 || r.Refused != 0 {
+			t.Errorf("route %q: copied %d, refused %d, want both placed", route, r.Copied, r.Refused)
+		}
+		assertFileBytes(t, filepath.Join(dest, filepath.FromSlash(want), "a.jpg"), "AAA")
+	}
+
+	tmpl := app.Store.AddTemplate(&Template{Name: "Escape", Routes: map[string]string{RoleDeliverables: "../{orig_name}"}})
+	plan := app.Store.AddPlan(&Plan{Name: "Escape", TemplateID: tmpl.ID, DestinationRoot: t.TempDir()})
+	if _, err := app.CompilePlan(plan.ID); err == nil {
+		t.Error("a plan whose route leaves the destination compiled")
+	}
+	if p := app.Store.Plan(plan.ID); p.Status == PlanCompiled {
+		t.Error("the plan is marked compiled")
+	}
+}

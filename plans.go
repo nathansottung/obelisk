@@ -202,7 +202,7 @@ func (a *App) planFiles(plan *Plan) []PlanFile {
 		pf.Parked = plan.Parked[h]
 		pf.Satisfied = plan.Satisfied[h]
 		if ov, ok := plan.Overrides[h]; ok {
-			pf.Planned, pf.Overridden = ov, true
+			pf.Planned, pf.Overridden = normalisePlanned(ov), true
 		} else if frozen {
 			pf.Planned = plan.Mapping[h]
 		} else if tmpl != nil {
@@ -214,7 +214,7 @@ func (a *App) planFiles(plan *Plan) []PlanFile {
 			}
 			f := &File{RelPath: pf.RelPath, Role: role, ShotAt: ac.shotAt, CameraSerial: ac.serial, EventID: hashEvent[h]}
 			if dest, ok := routeForFile(tmpl, reg, f, events[hashEvent[h]]); ok {
-				pf.Planned = dest
+				pf.Planned = normalisePlanned(dest)
 			}
 		}
 		out = append(out, pf)
@@ -585,11 +585,25 @@ func (a *App) CompilePlan(planID int) (PlanReport, error) {
 		return rep, nil
 	}
 	mapping := make(map[string]string, rep.Files)
+	var outside []string
 	for _, f := range files {
 		if f.Parked || f.Planned == "" {
 			continue
 		}
+		if _, err := planRel(f.Planned); err != nil {
+			outside = append(outside, f.Planned)
+			continue
+		}
 		mapping[f.Hash] = f.Planned
+	}
+	if len(outside) > 0 {
+		a.Store.UpdatePlan(plan)
+		sort.Strings(outside)
+		shown := outside
+		if len(shown) > 3 {
+			shown = shown[:3]
+		}
+		return rep, fmt.Errorf("plan %q not compiled: %d planned path(s) are not inside the destination (%s). Fix the template route or the placement, then compile again", plan.Name, len(outside), strings.Join(shown, ", "))
 	}
 	now := time.Now().UTC()
 	plan.Mapping, plan.Status, plan.CompiledAt = mapping, PlanCompiled, &now
@@ -835,6 +849,20 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 	}
 	a.Store.Log("plan", res.Message)
 	return res, nil
+}
+
+// normalisePlanned tidies a planned path from a template route or a placement:
+// backslashes become slashes, and a leading slash, "." parts and empty parts are
+// dropped, since they all name the same folder inside the destination. ".." and
+// drive letters are kept, so planRel still refuses them.
+func normalisePlanned(p string) string {
+	var parts []string
+	for _, el := range strings.Split(strings.ReplaceAll(p, `\`, "/"), "/") {
+		if el != "" && el != "." {
+			parts = append(parts, el)
+		}
+	}
+	return strings.Join(parts, "/")
 }
 
 // planRel validates a plan path: a planned path below the destination root, or
