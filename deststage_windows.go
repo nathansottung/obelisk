@@ -11,6 +11,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -49,10 +50,11 @@ func createDestStage(parent *os.Root, name string) (*destStage, error) {
 }
 
 // publishDestStage renames the staged file, by its handle, to final in its parent
-// folder, replacing any existing entry. A rename blocked by a transient lock (for
+// folder. With replace it replaces any existing entry; without, the rename fails
+// if final exists (reported as fs.ErrExist). A rename blocked by a transient lock (for
 // example antivirus scanning the replaced file) is retried for a bounded time, as
 // pathname renames are; see retryTransientRename.
-func publishDestStage(s *destStage, final string) error {
+func publishDestStage(s *destStage, final string, replace bool) error {
 	p, err := s.parent.Open(".")
 	if err != nil {
 		return err
@@ -73,7 +75,10 @@ func publishDestStage(s *destStage, final string) error {
 	offset := unsafe.Offsetof(layout.Name)
 	buf := make([]byte, int(offset)+2*len(name))
 	info := (*renameInfo)(unsafe.Pointer(&buf[0]))
-	info.Replace, info.Root, info.Length = 1, windows.Handle(p.Fd()), uint32(2*(len(name)-1))
+	info.Root, info.Length = windows.Handle(p.Fd()), uint32(2*(len(name)-1))
+	if replace {
+		info.Replace = 1
+	}
 	copy(unsafe.Slice((*uint16)(unsafe.Pointer(&buf[offset])), len(name)), name)
 	err = retryTransientRename(func() error {
 		var iosb windows.IO_STATUS_BLOCK
@@ -81,6 +86,10 @@ func publishDestStage(s *destStage, final string) error {
 	})
 	runtime.KeepAlive(s.file)
 	runtime.KeepAlive(p)
+	var status windows.NTStatus
+	if !replace && errors.As(err, &status) && status == windows.STATUS_OBJECT_NAME_COLLISION {
+		return fmt.Errorf("%w: %w", fs.ErrExist, err)
+	}
 	return err
 }
 

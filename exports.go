@@ -508,6 +508,18 @@ func (a *App) ImportPlan(exp PlanExport) (res map[string]any, err error) {
 	if exp.Format != planFormat && exp.Format != planFormatLegacy {
 		return nil, fmt.Errorf("not an Obelisk plan export")
 	}
+	// Every path in the export must stay inside its root — the planned path inside
+	// the destination, the source path inside its drive — or nothing is imported.
+	for _, d := range exp.Drives {
+		for _, f := range d.Files {
+			if _, err := planRel(f.Planned); err != nil {
+				return nil, fmt.Errorf("refusing to import this plan: planned path %q is not inside the destination: %w", f.Planned, err)
+			}
+			if _, err := planRel(f.SrcRel); err != nil {
+				return nil, fmt.Errorf("refusing to import this plan: source path %q is not inside its drive: %w", f.SrcRel, err)
+			}
+		}
+	}
 	a.Store.BeginBatch()
 	defer endBatchInto(a.Store, &err)
 

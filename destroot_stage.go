@@ -98,6 +98,18 @@ func (d *DestRoot) stage(rel string) *destStage {
 // destination leaf that is a hard link to a protected original intact — the rename
 // replaces the NAME, leaving the shared object untouched.
 func (d *DestRoot) Publish(tmpRel, finalRel string) error {
+	return d.publish(tmpRel, finalRel, true)
+}
+
+// PublishNew is Publish for a name that must not exist yet: the rename itself
+// refuses an existing entry (file, folder or link) in the same filesystem
+// operation, so nothing already at finalRel is ever replaced, even one created
+// a moment before. That refusal is reported as an error wrapping fs.ErrExist.
+func (d *DestRoot) PublishNew(tmpRel, finalRel string) error {
+	return d.publish(tmpRel, finalRel, false)
+}
+
+func (d *DestRoot) publish(tmpRel, finalRel string, replace bool) error {
 	t, err := destRel(tmpRel)
 	if err != nil {
 		return err
@@ -125,7 +137,10 @@ func (d *DestRoot) Publish(tmpRel, finalRel string) error {
 	if err := d.checkParent(stage.parent); err != nil {
 		return err
 	}
-	if err := publishDestStage(stage, path.Base(f)); err != nil {
+	if err := publishDestStage(stage, path.Base(f), replace); err != nil {
+		if !replace && errors.Is(err, fs.ErrExist) {
+			return fmt.Errorf("publish %s: %w: Obelisk never replaces an existing file here", finalRel, fs.ErrExist)
+		}
 		return fmt.Errorf("publish %s: %w", finalRel, err)
 	}
 	stage.published = true

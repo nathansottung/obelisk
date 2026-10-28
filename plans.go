@@ -17,7 +17,9 @@ package main
 // never wiped; the destination is only ever created under DestinationRoot.
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -363,6 +365,9 @@ func (a *App) SetOverride(planID int, hash, dest string) error {
 		if strings.HasSuffix(dest, "/") { // dropped onto a folder — keep the filename
 			dest += path.Base(planRelForHash(a, plan, hash))
 		}
+		if _, err := planRel(dest); err != nil {
+			return fmt.Errorf("%q is not a path inside the plan's destination: %w", dest, err)
+		}
 		plan.Overrides[hash] = dest
 	}
 	a.Store.UpdatePlan(plan)
@@ -380,6 +385,11 @@ func (a *App) MoveFolder(planID int, srcPrefix, dstPrefix string) (int, error) {
 	dstPrefix = strings.Trim(filepath.ToSlash(dstPrefix), "/")
 	if srcPrefix == "" {
 		return 0, fmt.Errorf("source folder required")
+	}
+	if dstPrefix != "" {
+		if _, err := planRel(dstPrefix); err != nil {
+			return 0, fmt.Errorf("%q is not a folder inside the plan's destination: %w", dstPrefix, err)
+		}
 	}
 	files := a.planFiles(plan)
 	if plan.Overrides == nil {
@@ -654,6 +664,8 @@ type PlanExecResult struct {
 	Bytes        int64        `json:"bytes"`
 	DriveDiffers int          `json:"drive_differs"` // source bytes != snapshot hash — skipped to review
 	Unreadable   int          `json:"unreadable"`
+	Refused      int          `json:"refused"`         // planned path not confined to the destination, or already taken
+	Notes        []string     `json:"notes,omitempty"` // destination notes (e.g. permissions not checked)
 	Coverage     PlanCoverage `json:"coverage"`
 	Message      string       `json:"message"`
 }
@@ -682,10 +694,6 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 	if fi, err := os.Stat(mountPath); err != nil || !fi.IsDir() {
 		return nil, fmt.Errorf("cannot read source drive %s", mountPath)
 	}
-	// The destination is WRITTEN — it must never resolve inside a registered source.
-	if err := a.Store.AssertOutsideSources(plan.DestinationRoot); err != nil {
-		return nil, err
-	}
 
 	serial = strings.TrimSpace(serial)
 	var vol *Volume
@@ -705,9 +713,18 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 		return nil, fmt.Errorf("no snapshot for %s — dock-ingest the drive first", vol.Label)
 	}
 
-	if err := os.MkdirAll(plan.DestinationRoot, 0o755); err != nil {
+	// The destination is written only through the destination guard: it is opened
+	// and checked against every registered source by its real identity, every
+	// write goes through that handle, and a missing folder must have been created
+	// (and a shared one chosen) by the user first.
+	dest, err := a.Store.AuthorizeDestination(plan.DestinationRoot)
+	if err != nil {
 		return nil, err
 	}
+	defer dest.Close()
+	res := &PlanExecResult{PlanID: plan.ID, VolumeID: vol.ID, Drive: vol.Label}
+	res.Notes = dest.Notes()
+	logDestinationNotes(a.Store, "plan", dest)
 	a.ensurePlanDestVolume(plan)
 	a.Store.BeginBatch()
 	defer endBatchInto(a.Store, &err)
@@ -718,7 +735,6 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 		plan.Satisfied = map[string]bool{}
 	}
 
-	res := &PlanExecResult{PlanID: plan.ID, VolumeID: vol.ID, Drive: vol.Label}
 	th := &throttler{bps: cfg.ThrottleMbps * 1e6, start: time.Now()}
 	var refs []ChunkFileRef
 	// Deterministic order so resume is stable and progress reads sensibly.
@@ -738,42 +754,46 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 			res.Confirmed++ // an earlier drive already placed this content
 			continue
 		}
-		src := filepath.Join(mountPath, filepath.FromSlash(sf.RelPath))
-		dest := filepath.Join(plan.DestinationRoot, filepath.FromSlash(planned))
-		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-			res.Unreadable++
+		// Both paths come from the catalog or an imported plan; each must stay
+		// inside its root.
+		srcRel, serr := planRel(sf.RelPath)
+		rel, perr := planRel(planned)
+		if serr != nil || perr != nil {
+			res.Refused++
+			a.Store.Log("plan", fmt.Sprintf("refused %s → %q: the path is not inside its folder (%v)", sf.RelPath, planned, errors.Join(serr, perr)))
 			continue
 		}
-		tmp := dest + mirrorTmpSuffix
-		streamHash, n, err := mirrorCopyFile(src, tmp, th, func(int64) {})
-		if err != nil {
-			_ = os.Remove(tmp)
-			res.Unreadable++
-			continue
-		}
-		// Re-verify the SOURCE against its snapshot hash. A mismatch means the drive
-		// no longer matches what we cataloged — flag loudly and skip; never guess.
-		if streamHash != sf.Hash {
-			_ = os.Remove(tmp)
+		src := filepath.Join(mountPath, filepath.FromSlash(srcRel))
+		// Copy-then-verify into a new file only. The source is re-checked against
+		// its snapshot hash as it streams, and an existing file at the planned
+		// path is never replaced.
+		_, n, err := copyVerifyNewToRoot(dest, src, rel, sf.Hash, th, func(int64) {})
+		switch {
+		case errors.Is(err, errSourceDiffers):
 			res.DriveDiffers++
 			a.Store.Log("plan", fmt.Sprintf("%s DIFFERS FROM ITS SNAPSHOT at %s — skipped to review", vol.Label, sf.RelPath))
 			continue
-		}
-		// Copy-then-verify: read the destination back before it gets its real name.
-		if rb, rerr := hashFileHex(tmp); rerr != nil || rb != streamHash {
-			_ = os.Remove(tmp)
-			res.Unreadable++
+		case errors.Is(err, fs.ErrExist):
+			res.Refused++
+			a.Store.Log("plan", fmt.Sprintf("refused %s: a file is already at %s and is never replaced. Move it aside, or use Adopt destination if it is this content", sf.RelPath, rel))
 			continue
-		}
-		if err := atomicRename(tmp, dest); err != nil {
-			_ = os.Remove(tmp)
+		case err != nil:
+			if stop := a.stopOnDestinationChange("plan", err, res.Copied); stop != nil {
+				// This run's copies are not recorded: they are no longer known to
+				// be in the folder that was checked.
+				for _, r := range refs {
+					delete(plan.Satisfied, r.Hash)
+				}
+				a.Store.UpdatePlan(plan)
+				return nil, stop
+			}
 			res.Unreadable++
 			continue
 		}
 		plan.Satisfied[sf.Hash] = true
 		res.Copied++
 		res.Bytes += n
-		refs = append(refs, ChunkFileRef{RelPath: planned, SizeBytes: n, Hash: sf.Hash})
+		refs = append(refs, ChunkFileRef{RelPath: rel, SizeBytes: n, Hash: sf.Hash})
 		if res.Copied%25 == 0 {
 			a.Store.UpdatePlan(plan) // periodic persist → resumable mid-drive
 		}
@@ -788,11 +808,22 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 	res.Coverage = a.PlanCoverage(plan)
 	res.Message = fmt.Sprintf("%s: copied %d, confirmed %d, %d differ from snapshot. Plan %q %.0f%% complete.",
 		vol.Label, res.Copied, res.Confirmed, res.DriveDiffers, plan.Name, res.Coverage.Pct)
+	if res.Refused > 0 {
+		res.Message += fmt.Sprintf(" %d file(s) refused (a path outside the destination, or a file already there); see the log.", res.Refused)
+	}
 	if len(res.Coverage.RemainingDrives) > 0 {
 		res.Message += " Remaining files live on: " + strings.Join(res.Coverage.RemainingDrives, ", ") + "."
 	}
 	a.Store.Log("plan", res.Message)
 	return res, nil
+}
+
+// planRel validates a plan path: a planned path below the destination root, or
+// a file's path on its source drive. It must be relative and stay inside its
+// root (see destRel). A backslash is treated as a separator on every host, so a
+// plan made on Windows cannot climb out of its root when run elsewhere.
+func planRel(p string) (string, error) {
+	return destRel(strings.ReplaceAll(p, `\`, "/"))
 }
 
 // ensurePlanDestVolume lazily creates the volume the reorganized copies are recorded

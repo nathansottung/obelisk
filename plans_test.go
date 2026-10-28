@@ -78,7 +78,8 @@ func TestPlan_ExecuteReverseAcrossRestart(t *testing.T) {
 		t.Errorf("workload wrong: DRIVE-01=%d (want 3), DRIVE-02=%d (want 2)", wl["DRIVE-01"], wl["DRIVE-02"])
 	}
 
-	// --- execute DRIVE-02 first (reverse order) ---
+	// --- execute DRIVE-02 first (reverse order); the user creates the folder ---
+	createdForTest(t, app, destRoot)
 	r2, err := app.ExecutePlanFromDrive(plan.ID, d2, "SER2", func(float64, string) {})
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +143,7 @@ func TestPlan_DriveDiffersFromSnapshot(t *testing.T) {
 	writeTree(t, d1, map[string]string{"x.jpg": "ORIGINAL"})
 	makeSnapshotDrive(t, app, d1, "SERX", "DRIVE-X")
 	tmpl := app.Store.AddTemplate(&Template{Name: "M", Routes: map[string]string{RoleDeliverables: "out/{orig_name}"}})
-	dest := filepath.Join(t.TempDir(), "out-root")
+	dest := createdForTest(t, app, filepath.Join(t.TempDir(), "out-root"))
 	plan := app.Store.AddPlan(&Plan{Name: "P", TemplateID: tmpl.ID, DestinationRoot: dest})
 	if _, err := app.CompilePlan(plan.ID); err != nil {
 		t.Fatal(err)

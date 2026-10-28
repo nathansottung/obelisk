@@ -1788,6 +1788,9 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("mount_path (the docked source drive) required"))
 			return
 		}
+		if p := app.Store.Plan(id); p != nil && strings.TrimSpace(p.DestinationRoot) != "" && !destinationGate(w, app, p.DestinationRoot) {
+			return
+		}
 		startedOn(w).write(runJob(app, "plan", "Execute plan from "+mount, func(p func(float64, string)) (map[string]any, error) {
 			res, err := app.ExecutePlanFromDrive(id, mount, serial, p)
 			if err != nil {

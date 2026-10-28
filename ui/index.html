@@ -3258,8 +3258,14 @@ async function refreshCandidates(sid){
       <div style="flex:1"><span class="mono">${esc(c.path)}</span> ${reverify?'<span class="etag due">seen before</span>':''}${c.processed_in_session?'<span class="etag">this session</span>':''}<div class="dim" style="font-size:11.5px">${bits||'identity not resolved (external bridge?)'}</div></div>${planBtns}${btn}</div>`;
   }).join('');
 }
+// planDestGate asks about a plan's destination (create it, or choose about a
+// shared folder) before any plan work is started there.
+async function planDestGate(planId){
+  const p=await api('GET','/api/plans/'+planId);const root=(p.plan||{}).destination_root;
+  if(root&&!(await destGate(root)))throw new Error('Nothing executed: choose what to do about '+root+' first');
+}
 async function planExecFromDock(planId,path,serial){
-  try{const r=await api('POST','/api/plans/'+planId+'/execute',{mount_path:path,serial});
+  try{await planDestGate(planId);const r=await api('POST','/api/plans/'+planId+'/execute',{mount_path:path,serial});
     toast('Executing plan work from this drive — see Jobs');loc('jobs')}catch(e){toast(e.message,1)}}
 function dockReverifyDlg(sid,path){dlg(`<h1>Re-verify drive</h1>
   <div class="dim mono" style="font-size:11.5px;margin-bottom:8px">${esc(path)}</div>
@@ -4338,7 +4344,7 @@ function execPlanDlg(id){dlg(`<h1>Execute plan work from a drive</h1>
   <label>Mounted path of the source drive</label><input id="ex_mount" class="full" placeholder="E:\\ or /mnt/drive">${browseBtn('ex_mount')}
   <label>Serial (blank = detect)</label><input id="ex_serial" class="full" placeholder="optional">
   <div class="row" style="margin-top:14px"><button class="btn" onclick="go()">Execute from this drive</button></div>`,
-  async()=>{const r=await api('POST','/api/plans/'+id+'/execute',{mount_path:$('#ex_mount').value.trim(),serial:$('#ex_serial').value.trim()});
+  async()=>{await planDestGate(id);const r=await api('POST','/api/plans/'+id+'/execute',{mount_path:$('#ex_mount').value.trim(),serial:$('#ex_serial').value.trim()});
     toast('Execution started — see Jobs');loc('jobs')})}
 
 /* ---- portable export / import ---- */

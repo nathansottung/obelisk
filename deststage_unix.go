@@ -81,7 +81,7 @@ func stageEntryOwned(s *destStage) error {
 // Characterization seam for the expressly excluded late same-principal attack.
 var beforeUnixDestRename = func(s *destStage) error { return nil }
 
-func publishDestStage(s *destStage, final string) error {
+func publishDestStage(s *destStage, final string, replace bool) error {
 	var st unix.Stat_t
 	err := unix.Fstat(int(s.file.Fd()), &st)
 	runtime.KeepAlive(s.file)
@@ -107,7 +107,11 @@ func publishDestStage(s *destStage, final string) error {
 	if err := beforeUnixDestRename(s); err != nil {
 		return err
 	}
-	err = unix.Renameat(int(from.Fd()), "payload"+mirrorTmpSuffix, int(to.Fd()), final)
+	if replace {
+		err = unix.Renameat(int(from.Fd()), "payload"+mirrorTmpSuffix, int(to.Fd()), final)
+	} else {
+		err = renameNoReplace(int(from.Fd()), "payload"+mirrorTmpSuffix, int(to.Fd()), final)
+	}
 	runtime.KeepAlive(from)
 	runtime.KeepAlive(to)
 	return err
