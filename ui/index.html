@@ -403,11 +403,42 @@ function askToken(){if(_tokPrompt)return _tokPrompt;
 /* mediaURL appends the token as a query param for browser-native GETs (opening a
    label/QR/report in a new tab can't set an Authorization header). */
 function mediaURL(u){return _tok?u+(u.includes('?')?'&':'?')+'token='+encodeURIComponent(_tok):u;}
+// _sid names this page's session. A delete/overwrite confirmation is issued to it
+// and works only from it.
+const _sid=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():Array.from({length:32},()=>Math.floor(Math.random()*16).toString(16)).join('');
+/* confirmDestructive is the delete gate: it asks the server for the exact list of
+   what the action would touch, shows it, and runs it only when the user types the
+   action's word ("Delete" or "Overwrite"). Resolves with the action's result, or
+   null when the user backs out. */
+function confirmDestructive(op,params){
+  return new Promise(async(resolve,reject)=>{
+    let p;try{p=await api('POST','/api/destructive/prepare',{op,params});}catch(e){reject(e);return}
+    let d=$('#ddestructive');if(!d){d=document.createElement('dialog');d.id='ddestructive';document.body.append(d)}
+    const shown=p.targets.slice(0,50);
+    const row=t=>`<div class="mono" style="font-size:11.5px">${esc(t.kind)} · ${esc(t.path||t.record||'')}${t.size?' · '+commaN(t.size)+' bytes':''}${t.note?' <span class="dim">— '+esc(t.note)+'</span>':''}</div>`;
+    d.innerHTML=`<h1>${esc(p.title)}</h1>
+      <div style="margin:6px 0">This will ${p.word==='Overwrite'?'overwrite':'delete or move'} exactly these ${commaN(p.targets.length)} item(s):</div>
+      <div style="max-height:260px;overflow:auto;border:1px solid var(--line);padding:6px">${shown.map(row).join('')}${p.targets.length>shown.length?`<div class="dim">…and ${commaN(p.targets.length-shown.length)} more</div>`:''}</div>
+      <label style="margin-top:10px">Type <b>${esc(p.word)}</b> to confirm (it expires in 5 minutes)</label><input id="ddword" class="full" autocomplete="off">
+      <div class="row" style="margin-top:12px"><button class="btn" id="ddok" style="background:var(--bad)">${esc(p.word)}</button> <button class="btn ghost" id="ddno">Cancel</button></div>`;
+    let settled=false;
+    const done=v=>{if(settled)return;settled=true;d.close();resolve(v)};
+    d.onclose=()=>{if(!settled){settled=true;resolve(null)}};
+    d.querySelector('#ddno').onclick=()=>done(null);
+    d.querySelector('#ddok').onclick=async()=>{
+      const word=d.querySelector('#ddword').value;
+      if(word!==p.word){toast('Type '+p.word+' exactly to confirm',1);return}
+      try{const r=await api('POST','/api/destructive/execute',{token:p.token,confirm:word});settled=true;d.close();resolve(r)}
+      catch(e){settled=true;d.close();reject(e)}
+    };
+    d.showModal();
+  });
+}
 const api=async(m,u,b)=>{
   // X-Requested-By is the same-origin handshake the server requires on every /api
   // call: a cross-origin page can't set a custom header without a CORS preflight we
   // never grant, so this closes CSRF / DNS-rebinding. Set globally on every request.
-  const go=()=>{const h={'Content-Type':'application/json','X-Requested-By':'obelisk-ui'};if(_tok)h['Authorization']='Bearer '+_tok;
+  const go=()=>{const h={'Content-Type':'application/json','X-Requested-By':'obelisk-ui','X-Obelisk-Session':_sid};if(_tok)h['Authorization']='Bearer '+_tok;
     return fetch(u,{method:m,headers:h,body:b?JSON.stringify(b):undefined});};
   let r=await go();
   if(r.status===401){await askToken();r=await go();}
@@ -3963,7 +3994,8 @@ function appRestoreDlg(){
     <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Restore (replace current records)</button></div>`,
   async()=>{
     const p=(($('#arpath')||{}).value||'').trim();if(!p){toast('Backup file required',1);throw new Error('path')}
-    const r=await api('POST','/api/appbackup/restore',{tar_path:p});
+    const r=await confirmDestructive('appbackup-restore',{tar_path:p});
+    if(!r)throw new Error('Nothing restored');
     appRestoreSummary(r);
   });
 }

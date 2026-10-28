@@ -617,6 +617,7 @@ func register(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
 }
 
 func api(mux *http.ServeMux, app *App) {
+	destructiveRoutes(mux, app)
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		out := map[string]any{"ok": true, "version": appVersion, "schema_version": currentSchemaVersion}
 		if ro, why := app.Store.ReadOnly(); ro {
@@ -819,20 +820,9 @@ func api(mux *http.ServeMux, app *App) {
 	})
 	// Restore REPLACES current records (after backing them up first). Verifies the
 	// bundle end-to-end before touching anything; reopens + swaps the store on success.
+	// Gated: prepare op "appbackup-restore" {tar_path}, then execute with "Overwrite".
 	mux.HandleFunc("POST /api/appbackup/restore", func(w http.ResponseWriter, r *http.Request) {
-		tarPath := s(body(r), "tar_path")
-		if strings.TrimSpace(tarPath) == "" {
-			jsonErr(w, 400, fmt.Errorf("tar_path required"))
-			return
-		}
-		res, err := app.RestoreAppBackup(tarPath)
-		if err != nil {
-			jsonErr(w, 400, err)
-			return
-		}
-		app.Store.Log("restore", fmt.Sprintf("app backup restored: %d archives, %d files, %d volumes, %d packages, %d jobs",
-			res.Archives, res.Files, res.Volumes, res.Packages, res.Jobs))
-		jsonOut(w, res)
+		needsConfirmation(w, "appbackup-restore")
 	})
 	// Data-dir migration (see migrate.go): a Mnemosyne user whose records live in the
 	// pre-rename ~/.mnemo is running out of it via the silent fallback. Offer a

@@ -36,6 +36,9 @@ type itServer struct {
 	tools            map[string]string
 }
 
+// itSession is the browser session the integration harness sends.
+const itSession = "it-session-0123456789"
+
 func newIT(t *testing.T) *itServer {
 	t.Helper()
 	tools := nativeTools(t) // t.Skips if tar/gpg/par2 are unavailable
@@ -61,6 +64,7 @@ func (s *itServer) do(method, path string, body any) (int, []byte) {
 	}
 	req, _ := http.NewRequest(method, s.url+path, rdr)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(sessionHeader, itSession)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		s.t.Fatalf("%s %s: %v", method, path, err)
