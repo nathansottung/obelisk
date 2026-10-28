@@ -43,6 +43,11 @@ const (
 
 func init() {
 	base := strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe")
+	// A stand-in configured as a tool is named after that tool (tool paths must
+	// name their tool); its folder then names what it does.
+	if base == "tar" || base == "gpg" || base == "par2" {
+		base = filepath.Base(filepath.Dir(os.Args[0]))
+	}
 	switch base {
 	case helperDumpEnv:
 		report := func(k string) string {
@@ -90,7 +95,29 @@ func copySelfAs(t *testing.T, name string) string {
 // pointed at helper, waits for the job, and returns the app, chunk and job.
 func failBuildWith(t *testing.T, helper string) (*App, *Chunk, *Job) {
 	t.Helper()
-	app, _ := newTestApp(t, map[string]string{"tar": helper, "gpg": helper, "par2": helper})
+	// One copy of the stand-in per tool, each named after its tool, in a folder
+	// named for what the stand-in does.
+	mode := strings.TrimSuffix(filepath.Base(helper), ".exe")
+	dir := filepath.Join(t.TempDir(), mode)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(helper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := map[string]string{}
+	for _, name := range []string{"tar", "gpg", "par2"} {
+		p := filepath.Join(dir, name)
+		if runtime.GOOS == "windows" {
+			p += ".exe"
+		}
+		if err := os.WriteFile(p, b, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		tools[name] = p
+	}
+	app, _ := newTestApp(t, tools)
 	src := t.TempDir()
 	body := []byte("hardening fixture\n")
 	if err := os.WriteFile(filepath.Join(src, "a.txt"), body, 0o644); err != nil {

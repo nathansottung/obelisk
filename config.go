@@ -200,6 +200,17 @@ func (a *App) SaveConfig(in map[string]any) (Config, error) {
 	if cfg.Tools == nil {
 		cfg.Tools = map[string]string{}
 	}
+	if err := checkPar2ExtraArgs(cfg.Par2ExtraArgs); err != nil {
+		return Config{}, err
+	}
+	if tools, ok := in["tools"].(map[string]any); ok {
+		for name, v := range tools {
+			p, _ := v.(string)
+			if err := checkToolPath(name, p, true); err != nil {
+				return Config{}, err
+			}
+		}
+	}
 	if a.Store == nil {
 		return Config{}, fmt.Errorf("configuration update requires an open catalog")
 	}
