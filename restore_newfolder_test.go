@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -98,4 +99,58 @@ func TestRestore_NewFolderMatchesSourcesByIdentity(t *testing.T) {
 	if got := treeOf(t, src); !equalStrings(got, []string{"orig.nef"}) {
 		t.Errorf("a refused restore created something in the source: %v", got)
 	}
+}
+
+// A folder above the target that cannot be read is a refusal, not the end of
+// the identity check: a source above it could otherwise be missed. Both a new
+// restore folder and a quarantine are refused, and nothing is created or moved.
+func TestIdentityChain_UnreadableFolderAboveRefuses(t *testing.T) {
+	s := newIT(t)
+	pid, pkgDir := builtPlainPackageForTest(s, map[string][]byte{"a.txt": []byte("one\n")})
+	withoutDestGuard(t)
+	base := t.TempDir()
+	locked := filepath.Join(base, "locked")
+	writeTree(t, filepath.Join(locked, "sub"), map[string]string{"x.txt": "X"})
+	lockedReal := locked
+	if r, err := os.OpenRoot(locked); err == nil {
+		lockedReal, _ = rootCanonicalPath(r)
+		r.Close()
+	}
+	prev := openForIdentity
+	openForIdentity = func(p string) (*os.File, error) {
+		if normPath(p) == normPath(lockedReal) {
+			return nil, &os.PathError{Op: "open", Path: p, Err: os.ErrPermission}
+		}
+		return prev(p)
+	}
+	t.Cleanup(func() { openForIdentity = prev })
+
+	out := filepath.Join(locked, "sub", "restored")
+	if _, err := s.app.RestoreChunk(pid, pkgDir, out, nil, func(float64, string) {}); err == nil || !strings.Contains(err.Error(), "refusing") {
+		t.Errorf("restore below an unreadable folder: got %v, want a refusal", err)
+	}
+	if _, err := os.Lstat(out); !os.IsNotExist(err) {
+		t.Errorf("the restore folder was created: %v", err)
+	}
+}
+
+func TestIdentityChain_UnreadableFolderAboveRefusesQuarantine(t *testing.T) {
+	app, destRoot, _ := quarantineScenario(t)
+	above := filepath.Dir(destRoot)
+	if r, err := os.OpenRoot(above); err == nil {
+		above, _ = rootCanonicalPath(r)
+		r.Close()
+	}
+	prev := openForIdentity
+	openForIdentity = func(p string) (*os.File, error) {
+		if normPath(p) == normPath(above) {
+			return nil, &os.PathError{Op: "open", Path: p, Err: os.ErrPermission}
+		}
+		return prev(p)
+	}
+	t.Cleanup(func() { openForIdentity = prev })
+	if _, err := app.Quarantine(filepath.Join(destRoot, "raw"), "", ""); err == nil || !strings.Contains(err.Error(), "refusing") {
+		t.Errorf("quarantine below an unreadable folder: got %v, want a refusal", err)
+	}
+	assertFileBytes(t, filepath.Join(destRoot, "raw", "a.nef"), "AAA")
 }

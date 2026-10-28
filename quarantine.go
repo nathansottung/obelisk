@@ -196,7 +196,10 @@ func (s *Store) resolveQuarantine(absPath string) (quarantineTarget, error) {
 		return t, err
 	}
 	t.real = real
-	chain := identityChain(real, id)
+	chain, err := identityChain(real, id)
+	if err != nil {
+		return t, fmt.Errorf("refusing to quarantine %s: %w", absPath, err)
+	}
 
 	snap, err := s.sourceSnapshot()
 	if err != nil {
@@ -215,7 +218,12 @@ func (s *Store) resolveQuarantine(absPath string) (quarantineTarget, error) {
 			return t, fmt.Errorf("quarantine never moves source data: %s is registered source %s", absPath, src.registered)
 		case chainHas(chain[1:], sid):
 			return t, fmt.Errorf("quarantine never moves source data: %s is inside registered source %s", absPath, src.registered)
-		case chainHas(identityChain(src.canonical, sid)[1:], id):
+		}
+		srcChain, err := identityChain(src.canonical, sid)
+		if err != nil {
+			return t, fmt.Errorf("refusing to quarantine %s: %w", absPath, err)
+		}
+		if chainHas(srcChain[1:], id) {
 			return t, fmt.Errorf("quarantine never moves source data: %s holds registered source %s, which would move with it", absPath, src.registered)
 		}
 	}
@@ -278,25 +286,29 @@ type idEntry struct {
 
 // identityChain is the object at real (with identity id) followed by each
 // folder above it, up to its volume's root, each with the identity read from a
-// handle on it. A folder that cannot be opened ends the chain there.
-func identityChain(real string, id fileIdent) []idEntry {
+// handle on it. A folder on the way that cannot be opened is an error: a
+// chain cut short could miss a source above that folder, so callers refuse.
+func identityChain(real string, id fileIdent) ([]idEntry, error) {
 	chain := []idEntry{{real, id}}
 	for p := filepath.Dir(real); ; p = filepath.Dir(p) {
 		pid, err := pathIdentity(p)
 		if err != nil {
-			break
+			return chain, fmt.Errorf("cannot establish what %s is (needed to check it against the sources): %w", p, err)
 		}
 		chain = append(chain, idEntry{p, pid})
 		if filepath.Dir(p) == p {
-			break
+			return chain, nil
 		}
 	}
-	return chain
 }
+
+// openForIdentity opens an object to read its identity. A variable so a test
+// can make a folder unreadable.
+var openForIdentity = os.Open
 
 // pathIdentity is the identity of the object at p, read from a handle on it.
 func pathIdentity(p string) (fileIdent, error) {
-	f, err := os.Open(p)
+	f, err := openForIdentity(p)
 	if err != nil {
 		return fileIdent{}, err
 	}

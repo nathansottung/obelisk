@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -248,13 +249,13 @@ func (a *App) newRestoreFolder(outputDir string) (*restoreTarget, error) {
 	}
 	r, err := os.OpenRoot(abs)
 	if err != nil {
-		_ = os.Remove(abs) // removes the folder only while it is still empty
+		_ = syscall.Rmdir(abs) // removes only an empty folder, never a file
 		return nil, fmt.Errorf("cannot open the restore folder %s: %w", outputDir, err)
 	}
 	tgt := &restoreTarget{out: abs, into: abs, created: true, root: r}
 	fail := func(err error) (*restoreTarget, error) {
 		r.Close()
-		_ = os.Remove(abs) // still empty: remove only an empty folder
+		_ = syscall.Rmdir(abs) // still empty: removes only an empty folder, never a file
 		return nil, err
 	}
 	if tgt.id, err = rootIdentity(r); err != nil {
@@ -264,7 +265,11 @@ func (a *App) newRestoreFolder(outputDir string) (*restoreTarget, error) {
 	if err != nil {
 		return fail(err)
 	}
-	if err := a.Store.outsideSourcesByIdentity(identityChain(real, tgt.id), outputDir); err != nil {
+	chain, err := identityChain(real, tgt.id)
+	if err != nil {
+		return fail(fmt.Errorf("refusing to restore into %s: %w", outputDir, err))
+	}
+	if err := a.Store.outsideSourcesByIdentity(chain, outputDir); err != nil {
 		return fail(err)
 	}
 	if err := newRestoreFolderPathCheck(a.Store, real); err != nil {
@@ -311,7 +316,11 @@ func (s *Store) checkNewRestoreFolder(abs, display string) error {
 	if idErr != nil || realErr != nil {
 		return fmt.Errorf("cannot establish what holds %s: %w", display, errors.Join(idErr, realErr))
 	}
-	if err := s.outsideSourcesByIdentity(identityChain(preal, pid), display); err != nil {
+	chain, err := identityChain(preal, pid)
+	if err != nil {
+		return fmt.Errorf("refusing to restore into %s: %w", display, err)
+	}
+	if err := s.outsideSourcesByIdentity(chain, display); err != nil {
 		return err
 	}
 	return newRestoreFolderPathCheck(s, filepath.Join(preal, filepath.Base(abs)))
@@ -417,7 +426,7 @@ func (a *App) closeRestoreTarget(t *restoreTarget, succeeded bool) {
 	}
 	if err == nil {
 		if err = t.stillTheFolder(); err == nil {
-			err = os.Remove(t.out) // removes only an empty folder
+			err = syscall.Rmdir(t.out) // removes only an empty folder, never a file
 		}
 	}
 	if err != nil {
