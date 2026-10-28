@@ -635,8 +635,9 @@ time, in any order, over weeks.
   review, never guessed. Every planned path (and source path) must stay inside its
   root, so one with `..`, a leading slash or a drive letter is refused, imported
   plans included; and a file already at a planned path is **never replaced** (the
-  no-replace publish refuses it; *Adopt destination* credits it if it is the same
-  content). The **first** drive to
+  no-replace publish refuses it). If it has exactly the planned content (a run
+  that placed it and stopped before recording it), it is read and credited, so
+  execution still resumes; any other file there is refused. The **first** drive to
   carry a shared hash satisfies it; later drives just **confirm**. Progress lives in
   the persisted `Satisfied` set, so execution resumes mid-drive and across process
   restarts and weeks. `PlanCoverage` reports *"71% · remaining files live on:

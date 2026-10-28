@@ -664,6 +664,7 @@ type PlanExecResult struct {
 	Bytes        int64        `json:"bytes"`
 	DriveDiffers int          `json:"drive_differs"` // source bytes != snapshot hash — skipped to review
 	Unreadable   int          `json:"unreadable"`
+	Adopted      int          `json:"adopted"`         // already at its planned path with the planned content: credited, not copied
 	Refused      int          `json:"refused"`         // planned path not confined to the destination, or already taken
 	Notes        []string     `json:"notes,omitempty"` // destination notes (e.g. permissions not checked)
 	Coverage     PlanCoverage `json:"coverage"`
@@ -774,8 +775,19 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 			a.Store.Log("plan", fmt.Sprintf("%s DIFFERS FROM ITS SNAPSHOT at %s — skipped to review", vol.Label, sf.RelPath))
 			continue
 		case errors.Is(err, fs.ErrExist):
+			// Never replaced. If it is exactly the planned content (a run that
+			// placed it and stopped before recording it, say), it is credited:
+			// it is only read for that.
+			if h, herr := dest.HashRel(rel); herr == nil && strings.EqualFold(h, sf.Hash) {
+				plan.Satisfied[sf.Hash] = true
+				res.Adopted++
+				if fi, serr := dest.Stat(rel); serr == nil {
+					refs = append(refs, ChunkFileRef{RelPath: rel, SizeBytes: fi.Size(), Hash: sf.Hash})
+				}
+				continue
+			}
 			res.Refused++
-			a.Store.Log("plan", fmt.Sprintf("refused %s: a file is already at %s and is never replaced. Move it aside, or use Adopt destination if it is this content", sf.RelPath, rel))
+			a.Store.Log("plan", fmt.Sprintf("refused %s: a different file is already at %s and is never replaced. Move it aside and run the plan again", sf.RelPath, rel))
 			continue
 		case err != nil:
 			if stop := a.stopOnDestinationChange("plan", err, res.Copied); stop != nil {
@@ -808,6 +820,9 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 	res.Coverage = a.PlanCoverage(plan)
 	res.Message = fmt.Sprintf("%s: copied %d, confirmed %d, %d differ from snapshot. Plan %q %.0f%% complete.",
 		vol.Label, res.Copied, res.Confirmed, res.DriveDiffers, plan.Name, res.Coverage.Pct)
+	if res.Adopted > 0 {
+		res.Message += fmt.Sprintf(" %d file(s) were already in place with the planned content and are credited.", res.Adopted)
+	}
 	if res.Refused > 0 {
 		res.Message += fmt.Sprintf(" %d file(s) refused (a path outside the destination, or a file already there); see the log.", res.Refused)
 	}

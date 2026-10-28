@@ -109,3 +109,33 @@ func TestPlan_ImportRefusesUnconfinedPaths(t *testing.T) {
 		}
 	}
 }
+
+// A run that is interrupted after placing a file but before recording it leaves
+// that file at its planned path. The next run credits it (it is read, and has
+// exactly the planned content) instead of refusing it, so execution resumes.
+func TestPlan_ExecuteCreditsAFilePlacedButNotRecorded(t *testing.T) {
+	app := dockApp(t)
+	destRoot := createdForTest(t, app, filepath.Join(t.TempDir(), "dest"))
+	mount := t.TempDir()
+	plan := compiledPlanForTest(t, app, mount, "RESUME",
+		map[string]string{"a.jpg": "AAA", "b.jpg": "BBB"},
+		map[string]string{"a.jpg": "photos/a.jpg", "b.jpg": "photos/b.jpg"}, destRoot)
+	if _, err := app.ExecutePlanFromDrive(plan.ID, mount, "RESUME", func(float64, string) {}); err != nil {
+		t.Fatal(err)
+	}
+	// As if the run stopped before a.jpg was recorded.
+	ha, _ := hashFileHex(filepath.Join(mount, "a.jpg"))
+	p := app.Store.Plan(plan.ID)
+	delete(p.Satisfied, ha)
+	p.Status, p.ClosedAt = PlanExecuting, nil
+	app.Store.UpdatePlan(p)
+
+	r, err := app.ExecutePlanFromDrive(plan.ID, mount, "RESUME", func(float64, string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Refused != 0 || r.Adopted != 1 || r.Coverage.Pct != 100 {
+		t.Fatalf("refused %d, adopted %d, coverage %.0f%%: want the placed file credited and the plan complete", r.Refused, r.Adopted, r.Coverage.Pct)
+	}
+	assertFileBytes(t, filepath.Join(destRoot, "photos", "a.jpg"), "AAA")
+}
