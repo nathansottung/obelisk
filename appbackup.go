@@ -197,7 +197,11 @@ func (a *App) exportAppBackupTo(tarPath string, includeKeys bool) (ExportResult,
 	if err := os.MkdirAll(filepath.Dir(tarPath), 0o755); err != nil {
 		return ExportResult{}, err
 	}
-	f, err := createStage(tarPath, 0o644)
+	perm := os.FileMode(0o644)
+	if includeKeys {
+		perm = 0o600 // carries keystores: owner-only
+	}
+	f, err := createStage(tarPath, perm)
 	if err != nil {
 		return ExportResult{}, err
 	}
@@ -414,7 +418,7 @@ func (a *App) InspectAppBackup(tarPath string) (appBackupManifest, error) {
 // verification happens before ANYTHING is written, so a bad backup leaves the current
 // data dir untouched.
 // preRestoreWriteFile writes a pre-restore copy; a test seam.
-var preRestoreWriteFile = os.WriteFile
+var preRestoreWriteFile = func(name string, b []byte, _ os.FileMode) error { return writeSecretFile(name, b) }
 
 func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	man, members, err := verifyAppBackup(tarPath)

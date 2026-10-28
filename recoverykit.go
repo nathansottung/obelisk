@@ -139,7 +139,7 @@ func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string))
 			"KEYS.html key page (QR + typable grid, one key per printed page), and your\n"+
 			"keystore files. QR and typed forms carry the SAME secret.\n",
 			k.Ref, k.Fingerprint, k.Note, k.Ref)
-		if err := os.WriteFile(filepath.Join(keysDir, k.Ref+".txt"), []byte(card), 0o644); err != nil {
+		if err := writeSecretFile(filepath.Join(keysDir, k.Ref+".txt"), []byte(card)); err != nil {
 			return nil, err
 		}
 		pass, err := a.Passphrase(k.Ref)
@@ -152,12 +152,12 @@ func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string))
 			warnings = append(warnings, fmt.Sprintf("key %s: QR encode failed (%v)", k.Ref, err))
 			continue
 		}
-		if err := os.WriteFile(filepath.Join(keysDir, k.Ref+".png"), png, 0o644); err != nil {
+		if err := writeSecretFile(filepath.Join(keysDir, k.Ref+".png"), png); err != nil {
 			return nil, err
 		}
 		// Typable key sheet — same secret as the QR, no scanner required.
-		if err := os.WriteFile(filepath.Join(keysDir, k.Ref+".sheet.txt"),
-			[]byte(keySheet(k.Ref, k.Note, k.Fingerprint, pass)), 0o644); err != nil {
+		if err := writeSecretFile(filepath.Join(keysDir, k.Ref+".sheet.txt"),
+			[]byte(keySheet(k.Ref, k.Note, k.Fingerprint, pass))); err != nil {
 			return nil, err
 		}
 		// Printable page — QR and the typable grid together, one key per page.
@@ -168,8 +168,8 @@ func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string))
 	}
 	// One printable document, one key per page: open in a browser and print.
 	if len(keyPages) > 0 {
-		if err := os.WriteFile(filepath.Join(keysDir, "KEYS.html"),
-			[]byte(keyPagesDocument(strings.Join(keyPages, "\n"))), 0o644); err != nil {
+		if err := writeSecretFile(filepath.Join(keysDir, "KEYS.html"),
+			[]byte(keyPagesDocument(strings.Join(keyPages, "\n")))); err != nil {
 			return nil, err
 		}
 	}

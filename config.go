@@ -329,7 +329,8 @@ func (a *App) publishConfig(b []byte, initialize bool) (published bool, err erro
 	}
 	create := a.configIO.createTemp
 	if create == nil {
-		create = func(d, p string) (configTempFile, error) { return os.CreateTemp(d, p) }
+		// The settings hold the access token: owner-only.
+		create = func(d, p string) (configTempFile, error) { return createOwnerOnlyTemp(d, p) }
 	}
 	f, e := create(dir, ".config-*.tmp")
 	if e != nil {
