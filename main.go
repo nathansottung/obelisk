@@ -1637,14 +1637,9 @@ func api(mux *http.ServeMux, app *App) {
 	})
 	// Stage a path into quarantine: {"path":"...","reason":"..."}. Moves the bytes into
 	// _deleted (never deletes), pulls the copy from protection accounting, audit-logs.
+	// Gated: prepare op "quarantine" {path, reason}, then execute with "Delete".
 	mux.HandleFunc("POST /api/quarantine", func(w http.ResponseWriter, r *http.Request) {
-		b := body(r)
-		e, err := app.Quarantine(strings.TrimSpace(s(b, "path")), "user", s(b, "reason"))
-		if err != nil {
-			jsonErr(w, 400, err)
-			return
-		}
-		jsonOut(w, map[string]any{"ok": true, "entry": e})
+		needsConfirmation(w, "quarantine")
 	})
 	// Un-quarantine: reverse the move and re-credit the copy. Refuses to clobber.
 	mux.HandleFunc("POST /api/quarantine/{id}/restore", func(w http.ResponseWriter, r *http.Request) {

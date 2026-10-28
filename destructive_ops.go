@@ -10,6 +10,27 @@ import (
 )
 
 func init() {
+	destructiveOps["quarantine"] = &destructiveOp{
+		word: wordDelete,
+		title: func(a *App, p map[string]any) string {
+			return fmt.Sprintf("Quarantine %s (moved into %s; reversible)", paramString(p, "path"), QuarantineDir)
+		},
+		targets: func(a *App, p map[string]any) ([]destructiveTarget, error) {
+			path := paramString(p, "path")
+			t, err := a.Store.resolveQuarantine(path)
+			if err != nil {
+				return nil, err
+			}
+			return treeTargets(t.real, "moved into "+QuarantineDir)
+		},
+		run: func(a *App, p map[string]any) (any, error) {
+			e, err := a.Quarantine(paramString(p, "path"), "user", paramString(p, "reason"))
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"ok": true, "entry": e}, nil
+		},
+	}
 	destructiveOps["appbackup-restore"] = &destructiveOp{
 		word: wordOverwrite,
 		title: func(a *App, p map[string]any) string {
