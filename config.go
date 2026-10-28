@@ -187,25 +187,8 @@ func (a *App) SaveConfig(in map[string]any) (Config, error) {
 	if a.Store == nil {
 		return Config{}, fmt.Errorf("configuration update requires an open catalog")
 	}
-	if err := a.Store.AssertOutsideSources(cfg.StagingDir); err != nil {
+	if err := checkConfigPaths(cfg, a.Store); err != nil {
 		return Config{}, err
-	}
-	for _, p := range cfg.KeystorePaths {
-		if err := a.Store.AssertOutsideSources(p); err != nil {
-			return Config{}, err
-		}
-	}
-	if cfg.AutoExportDir != "" {
-		if err := a.Store.AssertOutsideSources(cfg.AutoExportDir); err != nil {
-			return Config{}, err
-		}
-	}
-	// The escrow cache is written by fetches, so it is held to the destination
-	// guard's source check (by real location).
-	if strings.TrimSpace(cfg.EscrowCacheDir) != "" {
-		if err := a.Store.CheckOutsideSources(cfg.EscrowCacheDir); err != nil {
-			return Config{}, fmt.Errorf("escrow_cache_dir: %w", err)
-		}
 	}
 	// Preserve unknown extension fields, while canonicalizing known field aliases.
 	var patch map[string]json.RawMessage
@@ -227,6 +210,34 @@ func (a *App) SaveConfig(in map[string]any) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// checkConfigPaths is the save-time check of the folders a configuration writes
+// into: the staging folder, keystores, the auto-export folder and the escrow
+// cache must each be outside every source registered in store. SaveConfig and
+// app-backup restore both apply it.
+func checkConfigPaths(cfg Config, store *Store) error {
+	if err := store.AssertOutsideSources(cfg.StagingDir); err != nil {
+		return err
+	}
+	for _, p := range cfg.KeystorePaths {
+		if err := store.AssertOutsideSources(p); err != nil {
+			return err
+		}
+	}
+	if cfg.AutoExportDir != "" {
+		if err := store.AssertOutsideSources(cfg.AutoExportDir); err != nil {
+			return err
+		}
+	}
+	// The escrow cache is written by fetches, so it is held to the destination
+	// guard's source check (by real location).
+	if strings.TrimSpace(cfg.EscrowCacheDir) != "" {
+		if err := store.CheckOutsideSources(cfg.EscrowCacheDir); err != nil {
+			return fmt.Errorf("escrow_cache_dir: %w", err)
+		}
+	}
+	return nil
 }
 
 // encodeConfig retains unknown extension fields, including when an optional known
