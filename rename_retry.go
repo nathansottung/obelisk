@@ -1,9 +1,12 @@
 package main
 
-import "time"
+import (
+	"os"
+	"time"
+)
 
-// renameRetryLimit bounds how long a rename that failed with a transient lock is
-// retried. The limit is checked before each wait, so the total time spent is at
+// renameRetryLimit bounds how long a rename (or a catalog or jobs read) that failed
+// with a transient lock is retried. The limit is checked before each wait, so the total time spent is at
 // most this plus one rename attempt.
 const renameRetryLimit = 2 * time.Second
 
@@ -20,6 +23,24 @@ const renameRetryMaxWait = 200 * time.Millisecond
 // left as it was. tmp is left in place; removing it is the caller's decision.
 func renameReplacing(tmp, final string) error {
 	return retryTransientRename(func() error { return renameFile(tmp, final) })
+}
+
+// readFileRetrying is os.ReadFile with the same bounded retry as renameReplacing:
+// on Windows, a read that fails only because another process briefly holds the
+// file open without sharing it (access denied, a sharing violation or a lock
+// violation) is tried again for about two seconds. Opening the catalog and the
+// jobs file use it, so a scan by antivirus or the search indexer just after a
+// save does not stop Obelisk from starting. Any other error, or reaching the
+// limit, returns the read's error; the bytes returned with an error are those of
+// the last attempt.
+func readFileRetrying(path string) ([]byte, error) {
+	var b []byte
+	err := retryTransientRename(func() error {
+		var rerr error
+		b, rerr = os.ReadFile(path)
+		return rerr
+	})
+	return b, err
 }
 
 // retryTransientRename runs rename and, on Windows, retries it while it fails only
