@@ -688,10 +688,19 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	progress(0.05, "par2 verify")
 	if _, err := os.Stat(par2f); err == nil {
 		if verr := run(par2Bin, "", "verify", par2f); verr != nil {
-			progress(0.10, "par2 repair")
-			if rerr := run(par2Bin, "", "repair", par2f); rerr != nil {
+			// Repair works on a copy in the restore's work folder. The medium (and
+			// whatever folder the package is read from, a source included) is only
+			// ever read: par2 rewrites the file it repairs and leaves the damaged
+			// original beside it.
+			progress(0.10, "par2 repair (on a copy)")
+			copied, cerr := copyForRepair(enc, filepath.Join(work.abs, "repair"))
+			if cerr != nil {
+				return nil, fmt.Errorf("copying the package for repair: %w", cerr)
+			}
+			if rerr := run(par2Bin, "", "repair", copied+".par2"); rerr != nil {
 				return nil, fmt.Errorf("par2 repair failed: %v", rerr)
 			}
+			enc = copied
 			repaired = true
 		}
 	} else if h, _ := hashFileHex(enc); h != c.EncHash {

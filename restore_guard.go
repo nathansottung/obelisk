@@ -53,6 +53,33 @@ func (d *DestRoot) removeWork(rel string) error {
 	return d.root.RemoveAll(v)
 }
 
+// copyForRepair copies the payload enc and every par2 file of its set (enc.par2,
+// enc.vol….par2) into dir, and returns the copy of the payload. Only enc's folder
+// is read; nothing is written there.
+func copyForRepair(enc, dir string) (string, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	src, base := filepath.Dir(enc), filepath.Base(enc)
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return "", err
+	}
+	names := []string{base}
+	for _, e := range entries {
+		n := e.Name()
+		if e.Type().IsRegular() && strings.HasPrefix(n, base+".") && strings.HasSuffix(strings.ToLower(n), ".par2") {
+			names = append(names, n)
+		}
+	}
+	for _, n := range names {
+		if err := copyFile(filepath.Join(src, n), filepath.Join(dir, n)); err != nil {
+			return "", err
+		}
+	}
+	return filepath.Join(dir, base), nil
+}
+
 // publishRestored moves what was extracted into w to its real names in dest.
 // Every name is checked first: if any file would replace something already in
 // the output folder, or a folder would replace a file, nothing is published and

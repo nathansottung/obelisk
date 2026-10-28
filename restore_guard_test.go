@@ -3,7 +3,9 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -91,5 +93,47 @@ func TestRestore_LeavesOnlyTheRestoredFiles(t *testing.T) {
 	}
 	for rel, b := range files {
 		assertFileBytes(t, filepath.Join(out, filepath.FromSlash(rel)), string(b))
+	}
+}
+
+// A damaged payload is repaired on a copy in the restore's work folder: the
+// medium is only read, so its bytes (damage included) and its file list are
+// exactly as they were, and the restore still comes out whole.
+func TestRestore_RepairsACopyNeverTheMedium(t *testing.T) {
+	s := newIT(t)
+	s.setConfig(nil)
+	files := map[string][]byte{
+		"a.txt":     bytes.Repeat([]byte("the quick brown fox\n"), 2000),
+		"sub/b.bin": bytes.Repeat([]byte{0xDE, 0xAD, 0xBE, 0xEF}, 5000),
+	}
+	src := s.makeSource(files)
+	c := s.scanPlanBuild(src, 1, false, 40)
+	pid, name := int(c["id"].(float64)), c["name"].(string)
+	medium := t.TempDir()
+	vid := s.addVolume("REPAIR-1", "lab")
+	s.job(s.obj("POST", fmt.Sprintf("/api/chunks/%d/write", pid), map[string]any{"dest_dir": medium, "volume_id": vid}))
+	pkgDir := filepath.Join(medium, name)
+	payload := filepath.Join(pkgDir, name+".tar")
+	corruptRun(t, payload, 24)
+	damaged, err := os.ReadFile(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := treeOf(t, pkgDir)
+
+	out := t.TempDir()
+	s.job(s.obj("POST", fmt.Sprintf("/api/chunks/%d/restore", pid), map[string]any{"source_dir": pkgDir, "output_dir": out}))
+	assertTreeMatches(t, src, out)
+
+	if after, _ := os.ReadFile(payload); !bytes.Equal(after, damaged) {
+		t.Error("the payload on the medium was changed: repair must work on a copy")
+	}
+	if after := treeOf(t, pkgDir); !equalStrings(after, before) {
+		t.Errorf("files on the medium changed from %v to %v", before, after)
+	}
+	for _, e := range treeOf(t, out) {
+		if strings.HasPrefix(e, ".obelisk-restore-") {
+			t.Errorf("the restore left its work folder behind: %s", e)
+		}
 	}
 }
