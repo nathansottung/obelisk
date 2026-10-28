@@ -201,7 +201,9 @@ type restoreTarget struct {
 	work    restoreWork
 	into    string // where the package is unpacked
 	notes   []string
-	created bool // out was created by this restore
+	created bool      // out was created by this restore
+	root    *os.Root  // a handle on the new folder (dest == nil)
+	id      fileIdent // the new folder's identity
 }
 
 // openRestoreTarget prepares where a restore into outputDir writes.
@@ -222,11 +224,17 @@ func (a *App) openRestoreTarget(outputDir string) (*restoreTarget, error) {
 }
 
 // newRestoreFolder is a restore's output where the destination guard is not
-// available. The folder must not exist yet and its parent must; it is checked
-// against every registered source by real location (it must not be, be inside
-// or hold one), created by this restore with mode 0700 (creation fails if
-// anything appeared at that name), and checked again once it exists. Because it
-// is new and empty, unpacking straight into it can replace nothing.
+// available. The folder must not exist yet and its parent must. Before anything
+// is created, the parent is opened and matched against every registered source
+// by identity (volume and file ID of it and each folder above it, as quarantine
+// does), so no spelling of a source (another letter case, a firmlink, a link)
+// can put the new folder inside one; the path check on real locations is applied
+// too. The folder is then created by this restore (mode 0700; creation fails if
+// anything appeared at that name), opened, and checked again by identity. From
+// then on the restore reaches it through that handle where it can: the work
+// folder is made in it, what was unpacked is checked through it, and a failed
+// restore empties it through it. tar is given its path, which is checked to
+// still be the same folder before and after unpacking.
 func (a *App) newRestoreFolder(outputDir string) (*restoreTarget, error) {
 	abs, err := filepath.Abs(outputDir)
 	if err != nil {
@@ -238,60 +246,154 @@ func (a *App) newRestoreFolder(outputDir string) (*restoreTarget, error) {
 	if err := os.Mkdir(abs, 0o700); err != nil {
 		return nil, fmt.Errorf("cannot create the restore folder %s: %w", outputDir, err)
 	}
-	tgt := &restoreTarget{out: abs, into: abs, created: true}
-	fail := func(err error) (*restoreTarget, error) {
+	r, err := os.OpenRoot(abs)
+	if err != nil {
 		_ = os.Remove(abs) // removes the folder only while it is still empty
+		return nil, fmt.Errorf("cannot open the restore folder %s: %w", outputDir, err)
+	}
+	tgt := &restoreTarget{out: abs, into: abs, created: true, root: r}
+	fail := func(err error) (*restoreTarget, error) {
+		r.Close()
+		_ = os.Remove(abs) // still empty: remove only an empty folder
 		return nil, err
 	}
-	if err := a.Store.CheckOutsideSources(abs); err != nil {
+	if tgt.id, err = rootIdentity(r); err != nil {
 		return fail(err)
 	}
-	if entries, err := os.ReadDir(abs); err != nil || len(entries) != 0 {
-		return fail(fmt.Errorf("the restore folder %s is not empty: something else wrote into it", outputDir))
-	}
-	work, err := os.MkdirTemp(abs, ".obelisk-restore-*")
+	real, err := rootCanonicalPath(r)
 	if err != nil {
 		return fail(err)
 	}
-	tgt.work = restoreWork{rel: filepath.Base(work), abs: work}
+	if err := a.Store.outsideSourcesByIdentity(identityChain(real, tgt.id), outputDir); err != nil {
+		return fail(err)
+	}
+	if err := newRestoreFolderPathCheck(a.Store, real); err != nil {
+		return fail(err)
+	}
+	if entries, err := fs.ReadDir(r.FS(), "."); err != nil || len(entries) != 0 {
+		return fail(fmt.Errorf("the restore folder %s is not empty: something else wrote into it", outputDir))
+	}
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return fail(err)
+	}
+	work := ".obelisk-restore-" + hex.EncodeToString(b)
+	if err := r.Mkdir(work, 0o700); err != nil {
+		return fail(err)
+	}
+	tgt.work = restoreWork{rel: work, abs: filepath.Join(abs, work)}
 	tgt.notes = []string{fmt.Sprintf("On %s a restore goes only into a new folder; Obelisk created %s for it.", runtime.GOOS, outputDir)}
 	return tgt, nil
 }
 
-// checkNewRestoreFolder is the check before a new restore folder is created.
+// newRestoreFolderPathCheck is the path check on real locations for a new
+// restore folder. A variable so a test can switch it off to show the identity
+// match refuses on its own.
+var newRestoreFolderPathCheck = (*Store).CheckOutsideSources
+
+// checkNewRestoreFolder is the check before a new restore folder is created:
+// it must not exist, its parent must, and neither the parent nor any folder
+// above it may be a registered source, by identity or by real location.
 func (s *Store) checkNewRestoreFolder(abs, display string) error {
 	if _, err := os.Lstat(abs); err == nil {
 		return fmt.Errorf("on %s a restore goes only into a new folder, and %s already exists. Choose a folder that does not exist yet; Obelisk creates it", runtime.GOOS, display)
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("cannot check %s: %w", display, err)
 	}
-	if fi, err := os.Stat(filepath.Dir(abs)); err != nil || !fi.IsDir() {
-		return fmt.Errorf("the folder that would hold %s does not exist; create it first", display)
+	parent := filepath.Dir(abs)
+	pr, err := os.OpenRoot(parent)
+	if err != nil {
+		return fmt.Errorf("the folder that would hold %s does not exist or cannot be opened; create it first: %w", display, err)
 	}
-	return s.CheckOutsideSources(abs)
+	pid, idErr := rootIdentity(pr)
+	preal, realErr := rootCanonicalPath(pr)
+	pr.Close()
+	if idErr != nil || realErr != nil {
+		return fmt.Errorf("cannot establish what holds %s: %w", display, errors.Join(idErr, realErr))
+	}
+	if err := s.outsideSourcesByIdentity(identityChain(preal, pid), display); err != nil {
+		return err
+	}
+	return newRestoreFolderPathCheck(s, filepath.Join(preal, filepath.Base(abs)))
+}
+
+// outsideSourcesByIdentity refuses when any entry of chain (a folder and the
+// folders above it) is a registered source, matched by identity. An identity
+// with no file ID (some network shares report none) matches nothing; the path
+// checks cover those.
+func (s *Store) outsideSourcesByIdentity(chain []idEntry, display string) error {
+	snap, err := s.sourceSnapshot()
+	if err != nil {
+		return err
+	}
+	for _, src := range snap.srcs {
+		if src.offline || !src.fromHandle {
+			continue
+		}
+		sid, err := pathIdentity(src.canonical)
+		if err != nil || sid.idx == 0 {
+			continue
+		}
+		for _, e := range chain {
+			if e.id == sid {
+				return fmt.Errorf("refusing: %s would be inside registered source %s (%s is that folder); Obelisk never writes into source data", display, src.registered, e.path)
+			}
+		}
+	}
+	return nil
+}
+
+// stillTheFolder checks that the new folder's path still names the folder that
+// was created and is held open.
+func (t *restoreTarget) stillTheFolder() error {
+	id, err := pathIdentity(t.out)
+	if err != nil || id != t.id {
+		return fmt.Errorf("the restore folder %s was replaced while restoring; stopped", t.out)
+	}
+	return nil
 }
 
 // publish gives the unpacked files their real names (see publishRestored). In
-// a new folder they are already in place.
+// a new folder they are already in place: the work folder is removed and what
+// was unpacked is checked through the folder's handle. Links and other special
+// entries are removed and reported, as a guarded restore does not restore them.
 func (t *restoreTarget) publish() (int, []string, error) {
 	if t.dest != nil {
 		return publishRestored(t.dest, t.work)
 	}
-	if err := os.RemoveAll(t.work.abs); err != nil {
+	if err := t.stillTheFolder(); err != nil {
+		return 0, nil, err
+	}
+	if err := t.root.RemoveAll(t.work.rel); err != nil {
 		return 0, nil, err
 	}
 	n := 0
-	err := filepath.WalkDir(t.out, func(p string, d fs.DirEntry, err error) error {
-		if err == nil && d.Type().IsRegular() {
+	var warnings, special []string
+	err := fs.WalkDir(t.root.FS(), ".", func(p string, d fs.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return err
+		case p == "." || d.IsDir():
+		case d.Type().IsRegular():
 			n++
+		default:
+			special = append(special, p)
 		}
-		return err
+		return nil
 	})
-	return n, nil, err
+	for _, p := range special {
+		if rerr := t.root.Remove(p); rerr != nil {
+			err = errors.Join(err, rerr)
+		}
+		warnings = append(warnings, fmt.Sprintf("%s was not restored: it is a link or special file, not a regular file", p))
+	}
+	return n, warnings, err
 }
 
-// closeRestoreTarget removes the work folder, and a new restore folder that a
-// failed restore leaves behind (everything in it came from this restore).
+// closeRestoreTarget removes the work folder, and empties and removes a new
+// restore folder that a failed restore leaves behind (everything in it came
+// from this restore). The new folder is emptied through its handle; the folder
+// itself is removed only while its path still names it.
 func (a *App) closeRestoreTarget(t *restoreTarget, succeeded bool) {
 	if t.dest != nil {
 		if err := t.dest.removeWork(t.work.rel); err != nil {
@@ -300,10 +402,25 @@ func (a *App) closeRestoreTarget(t *restoreTarget, succeeded bool) {
 		t.dest.Close()
 		return
 	}
-	_ = os.RemoveAll(t.work.abs)
-	if !succeeded && t.created {
-		if err := os.RemoveAll(t.out); err != nil {
-			a.Store.Log("restore", fmt.Sprintf("could not remove the restore folder %s after the restore failed: %v", t.out, err))
+	defer t.root.Close()
+	_ = t.root.RemoveAll(t.work.rel)
+	if succeeded || !t.created {
+		return
+	}
+	var err error
+	if entries, rerr := fs.ReadDir(t.root.FS(), "."); rerr != nil {
+		err = rerr
+	} else {
+		for _, e := range entries {
+			err = errors.Join(err, t.root.RemoveAll(e.Name()))
 		}
+	}
+	if err == nil {
+		if err = t.stillTheFolder(); err == nil {
+			err = os.Remove(t.out) // removes only an empty folder
+		}
+	}
+	if err != nil {
+		a.Store.Log("restore", fmt.Sprintf("could not remove the restore folder %s after the restore failed: %v", t.out, err))
 	}
 }

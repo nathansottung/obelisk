@@ -67,3 +67,35 @@ func TestRestore_WithoutGuardOnlyIntoANewFolder(t *testing.T) {
 		t.Errorf("the check does not say only a new folder is possible: %+v", c)
 	}
 }
+
+// The new restore folder is matched against the sources by identity, on its
+// own: with the path check switched off, a new folder whose parent is a source
+// (reached here through a folder link, as a different letter case or a
+// firmlink reaches it on macOS) is still refused, and nothing is created.
+func TestRestore_NewFolderMatchesSourcesByIdentity(t *testing.T) {
+	s := newIT(t)
+	pid, pkgDir := builtPlainPackageForTest(s, map[string][]byte{"a.txt": []byte("one\n")})
+	withoutDestGuard(t)
+	prev := newRestoreFolderPathCheck
+	newRestoreFolderPathCheck = func(*Store, string) error { return nil }
+	t.Cleanup(func() { newRestoreFolderPathCheck = prev })
+
+	src := t.TempDir()
+	writeTree(t, src, map[string]string{"orig.nef": "ORIG"})
+	s.app.Store.AddFolder(s.app.Store.AddCollection("Live").ID, src)
+	link := filepath.Join(t.TempDir(), "alias")
+	mustDirLink(t, link, src)
+
+	for _, out := range []string{filepath.Join(link, "restored"), filepath.Join(link, "deeper")} {
+		if reason := restoreRefusedForTest(s, pid, pkgDir, out); !strings.Contains(reason, "source") {
+			t.Errorf("restore into %s: refused for another reason: %q", out, reason)
+		}
+		// The job's own check, past the route.
+		if _, err := s.app.RestoreChunk(pid, pkgDir, out, nil, func(float64, string) {}); err == nil || !strings.Contains(err.Error(), "source") {
+			t.Errorf("restore job into %s: got %v, want a refusal naming the source", out, err)
+		}
+	}
+	if got := treeOf(t, src); !equalStrings(got, []string{"orig.nef"}) {
+		t.Errorf("a refused restore created something in the source: %v", got)
+	}
+}

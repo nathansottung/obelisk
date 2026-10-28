@@ -702,6 +702,13 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 		return nil, fmt.Errorf("no par2 present and ciphertext hash mismatch — data damaged")
 	}
 
+	// A new restore folder (no destination guard) is unpacked into by path: it
+	// must still be the folder that was created and checked.
+	if tgt.dest == nil {
+		if err := tgt.stillTheFolder(); err != nil {
+			return nil, err
+		}
+	}
 	if !c.Encrypted {
 		// Unencrypted: the payload is a plain tar; extract it directly, no gpg.
 		progress(0.25, "extract")
