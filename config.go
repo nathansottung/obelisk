@@ -171,6 +171,22 @@ func (a *App) SaveConfig(in map[string]any) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	// A change of burn_command needs the typed confirmation, which is not saved.
+	confirmBurn, _ := in["burn_command_confirm"].(string)
+	delete(in, "burn_command_confirm")
+	if v, ok := in["burn_command"]; ok {
+		next, _ := v.(string)
+		if strings.TrimSpace(next) != strings.TrimSpace(cfg.BurnCommand) {
+			if confirmBurn != burnCommandConfirmWord {
+				return Config{}, fmt.Errorf("changing burn_command runs a different program when discs are burned: type %q to confirm the change", burnCommandConfirmWord)
+			}
+			if strings.TrimSpace(next) != "" {
+				if _, err := parseBurnCommand(next); err != nil {
+					return Config{}, err
+				}
+			}
+		}
+	}
 	b, err := json.Marshal(in)
 	if err != nil {
 		return Config{}, fmt.Errorf("cannot serialize configuration update")

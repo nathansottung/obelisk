@@ -177,16 +177,11 @@ func helperCommandContext(ctx context.Context, name string, args ...string) *exe
 	return cmd
 }
 
-// burnShellCommand runs a user-written burn command line through the platform
-// shell. The command may call any installed program, so it keeps the caller's
-// PATH; every other variable follows the helper allowlist.
-func burnShellCommand(cmdline string) *exec.Cmd {
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/C", cmdline)
-	} else {
-		cmd = exec.Command("sh", "-c", cmdline)
-	}
+// burnProgramCommand runs the burn program with its argument list, without a
+// shell (see burncmd.go). The burner may be anywhere on the PATH, so it keeps the
+// caller's PATH; every other variable follows the helper environment.
+func burnProgramCommand(argv []string) *exec.Cmd {
+	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = helperEnv(cmd.Path, true)
 	return cmd
 }

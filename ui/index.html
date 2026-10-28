@@ -3921,6 +3921,12 @@ async function saveCfg(){
   put('escrow_on_media',gv('eom'));put('escrow_include_readers',gc('eir'));
   put('finalize_verify_days',int('fvd',30));put('buffer_pct',num('bpc',5));put('smart_block_finalize',gc('sbf'));
   put('burn_command',gt('bc'));put('burn_verify_mount',gt('bv'));put('burn_ecc',gv('becc'));
+  // A different burn command runs a different program when discs are burned: it
+  // needs the typed word, which the server checks.
+  {const bce=$('#bc');if(bce&&bce.value.trim()!==(bce.defaultValue||'').trim()){
+    const w=prompt('The burn command runs a program on this computer every time a disc is burned.\nType Confirm to change it:','');
+    if(w!=='Confirm'){toast('Burn command not changed: type Confirm to change it',1);return}
+    body.burn_command_confirm=w;}}
   put('burn_ecc_device',gt('beccd'));put('burn_ecc_carry',gc('becccarry'));put('optical_ecc',gc('oecc'));
   try{await api('PUT','/api/config',body);toast('Settings saved');lamp();vSettings();}catch(e){toast(e.message,1)}
 }

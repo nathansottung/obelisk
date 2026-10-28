@@ -181,9 +181,12 @@ func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, 
 			}
 		}
 	}
-	cmdline := strings.ReplaceAll(cfg.BurnCommand, "{SRC}", c.StagedDir)
-	cmdline = strings.ReplaceAll(cmdline, "{LABEL}", c.Name)
-	if err := runShell(cmdline); err != nil {
+	argv, err := burnArgv(cfg.BurnCommand, c.StagedDir, c.Name)
+	if err != nil {
+		set("FAILED", "burn command refused: "+err.Error())
+		return nil, err
+	}
+	if err := runBurnProgram(argv); err != nil {
 		set("FAILED", "burn command failed: "+err.Error())
 		return nil, err
 	}
@@ -304,14 +307,4 @@ func (a *App) carryEccToNextDisc(q *BurnQueue, current *BurnDisc, c *Chunk, eccP
 		return
 	}
 	a.Store.Log("ecc", fmt.Sprintf("%s: ECC carried onto next disc %s (%s)", c.Name, nc.Name, dst))
-}
-
-// runShell runs a burn command line through the platform shell. Exit code 0
-// (nil error) is success; anything else fails the disc with the tail of output.
-func runShell(cmdline string) error {
-	out, err := burnShellCommand(cmdline).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%v: %s", err, toolOutputTail(out))
-	}
-	return nil
 }
