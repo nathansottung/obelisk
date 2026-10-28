@@ -159,10 +159,11 @@ func (s *itServer) setConfig(extra map[string]any) {
 
 func (s *itServer) makeKeystores(n int) []string {
 	s.t.Helper()
-	dir := s.t.TempDir()
 	var paths []string
 	for i := 0; i < n; i++ {
-		p := filepath.Join(dir, fmt.Sprintf("keystore%d.json", i))
+		// Each keystore in its own folder: keystores must be on separate devices,
+		// and tests count each folder as one (see testmain_test.go).
+		p := filepath.Join(s.t.TempDir(), fmt.Sprintf("keystore%d.json", i))
 		if err := writeStore(p, &keystoreFile{Marker: 1}); err != nil {
 			s.t.Fatal(err)
 		}

@@ -91,6 +91,9 @@ type RestoreResult struct {
 	// HeldSettings are the backup's program settings, not applied (see
 	// heldsettings.go); nil when they match the current ones.
 	HeldSettings *HeldSettings `json:"held_settings,omitempty"`
+	// KeystoreNote says where restored keystores are when they were not made
+	// the keystore paths.
+	KeystoreNote string `json:"keystore_note,omitempty"`
 }
 
 // rawMember is a gathered file: its in-tar name and exact bytes.
@@ -432,6 +435,7 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	// partial restore and must reach its caller without a success result.
 	var restoredConfig []byte
 	var held *HeldSettings
+	keystoreNote := ""
 	if cfgBytes, ok := members["config.json"]; ok {
 		restored, fields, e := decodeConfig(cfgBytes)
 		if e != nil {
@@ -450,8 +454,17 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 				paths = append(paths, filepath.Join(a.DataDir, "keystores", filepath.Base(m.Name)))
 			}
 		}
+		// The restored keystores land in this data folder. They become the
+		// keystore paths only if that is still a valid set (one keystore, or
+		// several on separate devices): restoring never puts two keystores on
+		// one device. Otherwise the current paths are kept.
 		if len(paths) > 0 {
-			restored.KeystorePaths = paths
+			if err := checkKeystorePaths(paths); err == nil {
+				restored.KeystorePaths = paths
+			} else {
+				restored.KeystorePaths = cfg.KeystorePaths
+				keystoreNote = fmt.Sprintf("The backup's %d keystore(s) were restored to %s, all on one device, so your keystore paths were left as they were. Copy each to a different device and set the keystore paths to them.", len(paths), filepath.Join(a.DataDir, "keystores"))
+			}
 		}
 		// The settings a backup brings get the same checks as settings being
 		// saved, against the sources of the catalog in use and of the catalog
@@ -553,7 +566,7 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	// (7) Summary.
 	res := RestoreResult{
 		SchemaVersion: man.SchemaVersion, AppVersion: man.AppVersion, Created: man.Created,
-		IncludedKeys: man.IncludesKeys, PreRestoreDir: preDir, HeldSettings: held,
+		IncludedKeys: man.IncludesKeys, PreRestoreDir: preDir, HeldSettings: held, KeystoreNote: keystoreNote,
 		Archives: len(ns.Collections()), Files: len(ns.AllFiles()),
 		Volumes: len(ns.Volumes()), Jobs: len(ns.Jobs()),
 	}

@@ -203,6 +203,11 @@ func (a *App) SaveConfig(in map[string]any) (Config, error) {
 	if err := checkPar2ExtraArgs(cfg.Par2ExtraArgs); err != nil {
 		return Config{}, err
 	}
+	if _, ok := in["keystore_paths"]; ok {
+		if err := checkKeystorePaths(cfg.KeystorePaths); err != nil {
+			return Config{}, err
+		}
+	}
 	if tools, ok := in["tools"].(map[string]any); ok {
 		for name, v := range tools {
 			p, _ := v.(string)
