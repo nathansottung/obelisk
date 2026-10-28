@@ -1465,7 +1465,9 @@ func (s *Store) writeCatalog() error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, s.path); err != nil {
+	if err := renameReplacing(tmp, s.path); err != nil {
+		// The catalog is untouched and the bytes are still in memory; drop the stage.
+		_ = os.Remove(tmp)
 		return err
 	}
 	// Best-effort; gracefully skipped where the platform/filesystem does not support
@@ -3525,7 +3527,8 @@ func (s *Store) writeJobsRows() error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, s.jobs.path); err != nil {
+	if err := renameReplacing(tmp, s.jobs.path); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	// Best-effort, and a no-op on Windows: the bytes are already durable via Sync

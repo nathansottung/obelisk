@@ -316,10 +316,11 @@ func copyVerifyToDest(srcPath, destPath string, th *throttler, onBytes func(int6
 	return streamHash, n, nil
 }
 
-// renameFile is the one rename primitive behind atomicRename, and a test-only
-// fault-injection seam: production always holds os.Rename. Tests replace it to drive
-// the REAL failure handling below; an injected error demonstrates how a failure is
-// handled, not that a given OS produces that error in the simulated circumstance.
+// renameFile is the one rename primitive behind renameReplacing (and so behind
+// atomicRename), and a test-only fault-injection seam: production always holds
+// os.Rename. Tests replace it to drive the REAL failure handling; an injected error
+// demonstrates how a failure is handled, not that a given OS produces that error in
+// the simulated circumstance.
 var renameFile = os.Rename
 
 // atomicRename publishes the staged file tmp under its real name final, replacing
@@ -349,8 +350,11 @@ var renameFile = os.Rename
 // rather than being silently downgraded to a copy that would have to delete or
 // overwrite final to finish. On failure tmp is left alone — discarding it is each
 // caller's decision, since only the caller knows whether it can be rebuilt.
+//
+// On Windows a rename blocked by a transient lock is retried for a bounded time; see
+// renameReplacing.
 func atomicRename(tmp, final string) error {
-	if err := renameFile(tmp, final); err != nil {
+	if err := renameReplacing(tmp, final); err != nil {
 		// Wrapped for context, %w so callers can still inspect the cause.
 		return fmt.Errorf("publish %s: %w", final, err)
 	}

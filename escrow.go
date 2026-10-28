@@ -556,7 +556,11 @@ func fetchEscrowArtifact(url, dest, want string) error {
 		os.Remove(tmp)
 		return fmt.Errorf("checksum mismatch: got %s, want %s", got, want)
 	}
-	return os.Rename(tmp, dest)
+	if err := renameReplacing(tmp, dest); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // looksLikeReleaseTag reports whether v is a vMAJOR… tag we can build release URLs
