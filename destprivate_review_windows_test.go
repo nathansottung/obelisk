@@ -297,8 +297,7 @@ func TestDestPredict_UnknownInheritableEntryRefusedBeforeCreating(t *testing.T) 
 	parent := t.TempDir()
 	setDestFixtureDACL(t, parent, "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;SY)"+`(XA;OICIIO;FA;;;WD;(@User.title == "x"))`)
 	newDir := filepath.Join(parent, "New")
-	if d, err := app.Store.AuthorizeDestination(newDir); err == nil {
-		d.Close()
+	if err := refusedForTest(t, app, newDir); err == nil {
 		t.Fatal("a folder that would inherit an entry Obelisk cannot evaluate was authorized")
 	}
 	if _, err := os.Stat(newDir); err == nil {

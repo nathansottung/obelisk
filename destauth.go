@@ -257,11 +257,39 @@ func (snap *sourceSnapshot) decideCreate(intended, display string) error {
 		if !s.offline || s.abs == "" {
 			continue
 		}
-		if a := normPath(s.abs); a == d || canonicalWithin(a, d) {
-			return fmt.Errorf("refusing: creating %s would make the folder of registered source %s, which is not there now. Obelisk won't create a source's folder; choose another destination", display, s.registered)
+		// Compared as registered and as its real location: a registered spelling
+		// (an 8.3 short name, a junction, a different case) is not the real path
+		// the destination is named by.
+		for _, p := range []string{s.abs, canonicalOfMissing(s.abs)} {
+			if p == "" {
+				continue
+			}
+			if a := normPath(p); a == d || canonicalWithin(a, d) {
+				return fmt.Errorf("refusing: creating %s would make the folder of registered source %s, which is not there now. Obelisk won't create a source's folder; choose another destination", display, s.registered)
+			}
 		}
 	}
 	return nil
+}
+
+// canonicalOfMissing is the real location a path that does not exist would have:
+// its deepest existing folder, read back from a handle, with the missing names
+// below it. It is "" when no folder of it exists or it cannot be read.
+func canonicalOfMissing(abs string) string {
+	ancestor, missing, err := deepestExistingDir(abs)
+	if err != nil {
+		return ""
+	}
+	r, err := os.OpenRoot(ancestor)
+	if err != nil {
+		return ""
+	}
+	defer r.Close()
+	canon, err := rootCanonicalPath(r)
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(append([]string{canon}, missing...)...)
 }
 
 // decideOffline applies the offline sources to a destination on the volume named

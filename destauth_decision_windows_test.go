@@ -264,13 +264,14 @@ func TestDestChoice_NoWriteBeforeChoice(t *testing.T) {
 	// A folder that does not exist yet is not created by checking or authorizing it:
 	// the user is asked to create it first.
 	sub := filepath.Join(folder, "new", "deeper")
-	if c := app.Store.CheckDestination(sub); c.Status != destStatusCreate || c.Notice == nil {
-		t.Fatalf("check a missing folder: status %q, want create", c.Status)
+	shown := app.Store.CheckDestination(sub)
+	if shown.Status != destStatusCreate || shown.Notice == nil {
+		t.Fatalf("check a missing folder: status %q, want create", shown.Status)
 	}
 	if _, err := app.Store.AuthorizeDestination(sub); !errors.As(err, &ce) || ce.Check.Status != destStatusCreate {
 		t.Fatalf("authorize a missing folder: got %v, want a DestinationChoiceError asking to create it", err)
 	}
-	if _, err := app.Store.CreateDestination(sub, sub, false); err == nil {
+	if _, err := app.Store.CreateDestination(sub, shown.Folder, false); err == nil {
 		t.Fatal("a folder was created without the user's confirmation")
 	}
 	if _, err := app.Store.CreateDestination(sub, filepath.Join(folder, "elsewhere"), true); err == nil {
@@ -280,7 +281,7 @@ func TestDestChoice_NoWriteBeforeChoice(t *testing.T) {
 		t.Fatalf("a folder was created before the user confirmed: %q", got)
 	}
 	// Once confirmed, it is created empty and its real permissions are asked about.
-	if c, err := app.Store.CreateDestination(sub, sub, true); err != nil || c.Status != destStatusChoose {
+	if c, err := app.Store.CreateDestination(sub, shown.Folder, true); err != nil || c.Status != destStatusChoose {
 		t.Fatalf("create after confirming: %+v %v, want a choice", c, err)
 	}
 	if got := entriesOf(t, sub); len(got) != 0 {

@@ -35,8 +35,7 @@ func TestDestAuth_MissingSourceUnderJunction(t *testing.T) {
 	id := identOf(t, filepath.Join(realParent, "sentinel"))
 	before := treeOf(t, realParent)
 	for _, dest := range []string{filepath.Join(realParent, "missing-source", "descendant"), filepath.Join(realParent, "missing-source"), filepath.Join(realParent, "missing-source", "descendant", "inside")} {
-		if d, err := app.Store.AuthorizeDestination(dest); err == nil {
-			d.Close()
+		if err := refusedForTest(t, app, dest); err == nil {
 			t.Errorf("authorized absent registered source relationship: %s", dest)
 		}
 	}

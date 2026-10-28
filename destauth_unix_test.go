@@ -25,8 +25,7 @@ func TestDestAuth_DanglingBootstrap(t *testing.T) {
 	if err := os.Symlink("protected/missing", filepath.Join(base, "alias")); err != nil {
 		t.Fatalf("Unix symlink fixture unavailable (NOT TESTED): %v", err)
 	}
-	if d, err := app.Store.AuthorizeDestination(filepath.Join(base, "alias", "child")); err == nil {
-		d.Close()
+	if err := refusedForTest(t, app, filepath.Join(base, "alias", "child")); err == nil {
 		t.Fatal("dangling bootstrap authorized")
 	}
 	if got := treeOf(t, prot); !equalStrings(before, got) {
@@ -37,7 +36,7 @@ func TestDestAuth_DanglingBootstrap(t *testing.T) {
 		t.Fatal("sentinel replaced")
 	}
 	// Ordinary missing sibling creation remains supported on Unix.
-	d, err := app.Store.AuthorizeDestination(filepath.Join(base, "safe", "child"))
+	d, err := app.Store.AuthorizeDestination(createdForTest(t, app, filepath.Join(base, "safe", "child")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,8 +78,7 @@ func TestDestAuth_BootstrapComponentSubstitution(t *testing.T) {
 				}
 				return old(r, component)
 			}
-			if d, err := app.Store.AuthorizeDestination(filepath.Join(base, "absent", "child")); err == nil {
-				d.Close()
+			if err := refusedForTest(t, app, filepath.Join(base, "absent", "child")); err == nil {
 				t.Fatal("substituted component authorized")
 			}
 			if !fired {
@@ -110,8 +108,7 @@ func TestDestAuth_MissingSourceUnderSymlink(t *testing.T) {
 	id := identOf(t, filepath.Join(realParent, "sentinel"))
 	before := treeOf(t, realParent)
 	for _, dest := range []string{filepath.Join(realParent, "missing"), filepath.Join(realParent, "missing", "descendant"), filepath.Join(realParent, "missing", "descendant", "inside")} {
-		if d, err := app.Store.AuthorizeDestination(dest); err == nil {
-			d.Close()
+		if err := refusedForTest(t, app, dest); err == nil {
 			t.Errorf("authorized %s", dest)
 		}
 	}
@@ -122,7 +119,7 @@ func TestDestAuth_MissingSourceUnderSymlink(t *testing.T) {
 		t.Fatal("sentinel replaced")
 	}
 	assertFileBytes(t, filepath.Join(realParent, "sentinel"), "KEEP")
-	d, err := app.Store.AuthorizeDestination(filepath.Join(realParent, "safe"))
+	d, err := app.Store.AuthorizeDestination(createdForTest(t, app, filepath.Join(realParent, "safe")))
 	if err != nil {
 		t.Fatal(err)
 	}
