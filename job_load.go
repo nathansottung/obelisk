@@ -100,7 +100,7 @@ func readJobBoard(path string, read func(string) ([]byte, error)) (jobBoard, boo
 	return in, true, err
 }
 
-func (s *Store) loadJobs() error { return s.loadJobsFrom(os.ReadFile) }
+func (s *Store) loadJobs() error { return s.loadJobsFrom(readFileRetrying) }
 
 // Restore and migration keep the original Store when reopen fails. Validate
 // without adopting or reconciling rows: workers may still own the old board. This does
@@ -108,7 +108,7 @@ func (s *Store) loadJobs() error { return s.loadJobsFrom(os.ReadFile) }
 func (s *Store) checkJobsAfterFailedReopen() {
 	s.jobs.mu.Lock()
 	defer s.jobs.mu.Unlock()
-	_, exists, err := readJobBoard(s.jobs.path, os.ReadFile)
+	_, exists, err := readJobBoard(s.jobs.path, readFileRetrying)
 	if err == nil && !exists && s.jobs.loaded {
 		err = fmt.Errorf("expected jobs.json is missing after failed reopen: %w", os.ErrNotExist)
 	}

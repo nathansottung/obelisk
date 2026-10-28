@@ -1168,7 +1168,7 @@ var openStoreFailSave func() error
 func decodeCatalogJSON(raw []byte, c *catalog) error { return json.Unmarshal(raw, c) }
 
 func OpenStore(dataDir string) (*Store, error) {
-	return openStore(dataDir, os.ReadFile, nil)
+	return openStore(dataDir, readFileRetrying, nil)
 }
 
 // openStore is OpenStore with its two boundaries injected, so a test can drive the
@@ -1177,7 +1177,7 @@ func OpenStore(dataDir string) (*Store, error) {
 // classification switches on, so an injected failure and a genuine one travel the
 // identical branch. persistObserver, when non-nil, records attempted authority
 // writes (see the Store field). Production has exactly one caller, OpenStore, which
-// passes os.ReadFile and nil. Keeping these as parameters rather than package-level
+// passes readFileRetrying and nil. Keeping these as parameters rather than package-level
 // hooks means no shared mutable test state, no cleanup, and no way for one test's
 // injected fault to reach another.
 func openStore(dataDir string, readFile func(string) ([]byte, error), persistObserver func(op, path string)) (*Store, error) {
