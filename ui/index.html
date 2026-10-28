@@ -1696,6 +1696,7 @@ async function mirrorDlg(id,name,scope){
       const vid=parseInt(row.querySelector('.mvol').value)||0;
       return dest&&vid?{dest_dir:dest,volume_id:vid}:null}).filter(Boolean);
     if(!targets.length){toast('Add at least one target (dest folder + volume)',1);return}
+    for(const t of targets){if(!(await destGate(t.dest_dir)))throw new Error('No mirror started: choose what to do about '+t.dest_dir+' first');}
     const r=await api('POST','/api/mirror',{collection_id:id,folder_ids:folder_ids,
       throttle_mbps:parseFloat($('#mthrottle').value)||0,targets:targets,scope_prefix:window._mscope||''});
     toast(`${(r.jobs||[]).length} mirror job(s) started — see Jobs`);loc('jobs');
@@ -1710,6 +1711,91 @@ function addMirrorTarget(){
     <select class="mvol" style="flex:1">${opts}</select>
     <button class="btn ghost" onclick="this.parentNode.remove()" title="remove target">×</button>`;
   c.appendChild(row);
+}
+
+/* ---- Destination choice. A folder other accounts on this PC can change, a drive
+   root, or an exFAT/FAT32 drive needs the user's choice before Obelisk writes there.
+   The server decides and enforces this (POST /api/destinations/*); the page shows
+   its notice, offers the three choices with none preselected, and records the one
+   picked. Resolves true when the folder may be used now. ---- */
+async function destGate(path){
+  let c=await api('POST','/api/destinations/check',{path});
+  if(c.status==='create'){
+    // The folder does not exist yet: nothing is created until the user confirms.
+    if(!(await destCreateDlg(c)))return false;
+    c=await api('POST','/api/destinations/create',{path:c.path,folder:c.folder,confirm:true});
+  }
+  if(c.status==='refuse'){toast(c.reason,1);return false}
+  if(c.status!=='choose')return true;
+  return destChoiceDlg(c);
+}
+function destCreateDlg(c){
+  return new Promise(resolve=>{
+    let d=$('#dcreate');if(!d){d=document.createElement('dialog');d.id='dcreate';document.body.append(d)}
+    const n=c.notice;
+    d.innerHTML=`<h1>${esc(n.title)}</h1>
+      ${n.lines.map(l=>`<div style="margin:6px 0;white-space:pre-wrap">${esc(l)}</div>`).join('')}
+      <div class="row" style="margin-top:12px"><button class="btn" id="dcrok">Create ${esc(c.folder)}</button> <button class="btn ghost" id="dcrno">Pick another folder</button></div>`;
+    let settled=false;
+    const done=v=>{if(settled)return;settled=true;d.close();resolve(v)};
+    d.onclose=()=>{if(!settled){settled=true;resolve(false)}};
+    d.querySelector('#dcrok').onclick=()=>done(true);
+    d.querySelector('#dcrno').onclick=()=>done(false);
+    d.showModal();
+  });
+}
+function destChoiceDlg(c){
+  return new Promise(resolve=>{
+    let d=$('#dchoice');if(!d){d=document.createElement('dialog');d.id='dchoice';document.body.append(d)}
+    const n=c.notice;
+    d.innerHTML=`<h1>${esc(n.title)}</h1>
+      ${n.lines.map(l=>`<div style="margin:6px 0;white-space:pre-wrap">${esc(l)}</div>`).join('')}
+      <label style="margin-top:12px">Choose one</label>
+      ${n.choices.map(o=>`<label class="row" style="gap:8px;align-items:flex-start;margin-top:6px"><input type="radio" name="dchoice" value="${esc(o.id)}" style="width:auto;margin-top:3px"> <span><b>${esc(o.label)}</b>: ${esc(o.detail)}</span></label>`).join('')}
+      <div id="dcextra" style="margin-top:10px"></div>
+      <div class="row" style="margin-top:12px"><button class="btn" id="dcnext" disabled>Next</button> <button class="btn ghost" id="dccancel">Cancel</button></div>`;
+    let settled=false;
+    const done=v=>{if(settled)return;settled=true;d.close();resolve(v)};
+    d.onclose=()=>{if(!settled){settled=true;resolve(false)}};
+    const next=d.querySelector('#dcnext'),extra=d.querySelector('#dcextra');
+    d.querySelector('#dccancel').onclick=()=>done(false);
+    d.querySelectorAll('input[name=dchoice]').forEach(r=>r.onchange=()=>{
+      next.disabled=false;extra.innerHTML='';
+      if(r.value==='use_anyway'){
+        next.textContent='Use this folder';
+        extra.innerHTML=`<label>Type Continue to use ${esc(c.folder)} anyway</label><input id="dctyped" class="full" autocomplete="off">`;
+      }else if(r.value==='make_private'){next.textContent='Show the exact change'}
+      else{next.textContent='Pick another folder'}
+    });
+    next.onclick=async()=>{
+      const pick=(d.querySelector('input[name=dchoice]:checked')||{}).value;
+      try{
+        if(pick==='use_anyway'){
+          await api('POST','/api/destinations/use-anyway',{path:c.path,fingerprint:c.fingerprint,typed:(d.querySelector('#dctyped')||{}).value||''});
+          done(true);
+        }else if(pick==='make_private'){
+          const plan=await api('POST','/api/destinations/make-private/preview',{path:c.path});
+          const list=a=>a.length?'<ul>'+a.map(x=>`<li>${esc(x)}</li>`).join('')+'</ul>':'<div class="dim">(none)</div>';
+          const more=plan.still_shared_more?`<div class="dim">…and ${plan.still_shared_more} more</div>`:'';
+          extra.innerHTML=`<div class="panel"><div>${esc(plan.note)}</div>
+            ${plan.still_shared.length?`<div style="margin-top:8px"><b>Other accounts can still change these folders inside</b>${list(plan.still_shared)}${more}</div>`:''}
+            <div style="margin-top:8px"><b>Removed</b>${list(plan.removed)}</div>
+            <div><b>Now</b>${list(plan.before)}</div><div><b>After</b>${list(plan.after)}</div>
+            <button class="btn" id="dcapply" style="margin-top:8px">Change permissions</button></div>`;
+          next.disabled=true;
+          extra.querySelector('#dcapply').onclick=async()=>{
+            if(!confirm('Change the permissions of '+plan.folder+' now? Only this folder\'s own permissions change; nothing inside it is touched.'))return;
+            try{
+              const after=await api('POST','/api/destinations/make-private/apply',{path:c.path,token:plan.token,confirm:true});
+              if(after.status==='pass'||after.status==='chosen'){toast('Made '+plan.folder+' private');done(true)}
+              else{toast('The folder still needs a choice: '+((after.notice||{}).title||after.reason||''),1);done(false)}
+            }catch(e){toast(e.message,1)}
+          };
+        }else{done(false)}
+      }catch(e){toast(e.message,1)}
+    };
+    d.showModal();
+  });
 }
 
 /* ---- Incremental "Back up changes": copy only what's new/changed to a volume ----
@@ -1753,6 +1839,7 @@ async function backupChangesDlg(id,name,scope){
     if(vsel==='__new'){const lbl=($('#bcnewlabel').value||'').trim();if(!lbl){toast('Name the new volume first',1);throw new Error('vol');}
       payload.new_volume={label:lbl,kind:$('#bcnewkind').value};}
     else{const vid=parseInt(vsel)||0;if(!vid){toast('Pick a destination volume',1);throw new Error('vol');}payload.volume_id=vid;}
+    if(payload.dest_dir&&!(await destGate(payload.dest_dir)))throw new Error('Nothing backed up: choose what to do about '+payload.dest_dir+' first');
     await api('POST','/api/collections/'+id+'/backup-changes',payload);
     toast('Back up changes started — see Jobs');loc('jobs');
   });

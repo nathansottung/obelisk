@@ -19,7 +19,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -248,6 +247,9 @@ type BackupChangesResult struct {
 	Planned   []string `json:"planned_packages,omitempty"` // package mode: the PLANNED chunks to build & write
 	Name      string   `json:"name,omitempty"`
 	Message   string   `json:"message,omitempty"`
+	// DestinationNotes lists warnings the mirror destination was accepted with and
+	// checks that could not run on its filesystem (for example on exFAT or FAT32).
+	DestinationNotes []string `json:"destination_notes,omitempty"`
 }
 
 // BackupChanges runs an incremental backup of the delta onto a volume. Mirror mode
@@ -301,12 +303,22 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 	if strings.TrimSpace(destDir) == "" {
 		return nil, fmt.Errorf("dest_dir (the mirror target on the volume) required for a drive backup")
 	}
-	if err := a.Store.AssertOutsideSources(destDir); err != nil {
+	// SOURCE-SAFETY. Mirror-mode "back up changes" writes
+	// payload files AND the inventory sidecar into destDir, through the same leaf
+	// primitive a full mirror uses. It is authorized here on the identity of the
+	// object actually opened, and every destination mutation below — payload,
+	// read-back, sidecar, cleanup — goes through the returned handle. This is the
+	// full set of this caller's destination effects, not just the shared helper.
+	dest, err := a.Store.AuthorizeDestination(destDir)
+	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
+	defer dest.Close()
+	if err := dest.CheckFileSizes(fileSizes(files)); err != nil {
 		return nil, err
 	}
+	res.DestinationNotes = dest.Notes()
+	logDestinationNotes(a.Store, "backup", dest)
 
 	a.Store.BeginBatch()
 	defer endBatchInto(a.Store, &err)
@@ -321,7 +333,9 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 		usedFolders[f.FolderID] = true
 		totalBytes += f.SizeBytes
 	}
-	if free, err := diskFree(destDir); err == nil && free < totalBytes {
+	// Read-only query against the authorized canonical name; nothing is mutated
+	// through it.
+	if free, err := diskFree(dest.Canonical()); err == nil && free < totalBytes {
 		return nil, fmt.Errorf("destination too small: need %.1f GB, free %.1f GB", float64(totalBytes)/1e9, float64(free)/1e9)
 	}
 	label := mirrorFolderLabels(usedFolders, folderPath)
@@ -350,11 +364,10 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 		if multi {
 			mrel = label[f.FolderID] + "/" + f.RelPath
 		}
-		destPath := filepath.Join(destDir, filepath.FromSlash(mrel))
 		if i%25 == 0 || len(files) < 50 {
 			report(fmt.Sprintf("backing up %d/%d — %s", i+1, len(files), f.RelPath))
 		}
-		streamHash, n, cerr := copyVerifyToDest(srcPath, destPath, th, func(d int64) {
+		streamHash, n, cerr := copyVerifyToRoot(dest, srcPath, mrel, th, func(d int64) {
 			doneBytes += d
 			now := time.Now()
 			// Feed the Performance strip: the source root and destination volume rows
@@ -367,27 +380,41 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 			}
 		})
 		if cerr != nil {
+			if stop := a.stopOnDestinationChange("backup", cerr, res.Files); stop != nil {
+				return nil, stop
+			}
 			res.Failed++
 			continue
 		}
 		if streamHash != f.Hash {
 			res.Changed++ // faithful copy of the CURRENT source, which drifted from the catalog
 		}
-		sample, _ := sampleHashHex(destPath)
+		sample, _ := dest.SampleHashRel(mrel)
 		refs = append(refs, ChunkFileRef{FileID: f.ID, RelPath: f.RelPath, SizeBytes: n, Hash: streamHash, SampleHash: sample})
 		res.Files++
 		res.Bytes += n
 	}
 
+	// The copies are recorded only if the destination is still the folder checked.
+	if stop := a.stopOnDestinationChange("backup", dest.checkRoot(), res.Files); stop != nil {
+		return nil, stop
+	}
+	// The copies and this run's history entry are recorded together, before the
+	// inventory files are written, so a stop while writing them never leaves
+	// copies recorded without the backup that made them.
 	if len(refs) > 0 {
 		a.mergeMirrorRefs(collectionID, vol, destDir, refs)
 	}
-	progress(0.96, "refreshing volume inventory sidecar")
-	if sc, err := a.writeVolumeInventory(destDir, vol); err == nil {
-		res.Sidecar = sc
-	}
 	if res.Files > 0 {
 		a.recordBackupSession(collectionID, vol, base, mode, res.Files, res.Bytes, folderIDs, scopePrefix, destDir, res)
+	}
+	progress(0.96, "refreshing volume inventory sidecar")
+	sc, serr := a.writeVolumeInventoryTo(dest, vol)
+	if stop := a.stopOnDestinationChange("backup", serr, -1); stop != nil {
+		return nil, stop
+	}
+	if serr == nil {
+		res.Sidecar = sc
 	}
 	a.Store.Log("incremental", fmt.Sprintf("%s → %s (%s, base=%s): %d files (%.1f GB), %d changed, %d failed",
 		coll.Name, vol.Label, destDir, base, res.Files, float64(res.Bytes)/1e9, res.Changed, res.Failed))

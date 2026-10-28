@@ -117,10 +117,15 @@ func TestMirror_RefusesSourceDest(t *testing.T) {
 		t.Fatal(err)
 	}
 	vol := app.Store.AddVolume(Volume{Label: "V", Kind: "HDD"})
-	// Mirroring back into the source root must be refused up front.
-	_, err := app.MirrorToVolume(coll.ID, nil, filepath.Join(src, "mirror"), vol.ID, 0, "", noProgMirror)
-	if err == nil {
-		t.Fatal("expected refusal to mirror into a source root")
+	// Mirroring back into the source root must be refused up front, as a source
+	// (not merely because the folder does not exist yet), and creating it must be
+	// refused too.
+	dest := filepath.Join(src, "mirror")
+	_, err := app.MirrorToVolume(coll.ID, nil, dest, vol.ID, 0, "", noProgMirror)
+	assertSourceRefusal(t, "mirror into the source", err)
+	assertSourceRefusal(t, "check and create inside the source", refusedForTest(t, app, dest))
+	if _, serr := os.Lstat(dest); !os.IsNotExist(serr) {
+		t.Errorf("a folder was created inside the source: %v", serr)
 	}
 }
 

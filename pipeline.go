@@ -630,8 +630,15 @@ func hashFileHex(path string) (string, error) {
 		return "", err
 	}
 	defer f.Close()
+	return hashReader(f)
+}
+
+// hashReader is the same SHA-256 as hashFileHex over an already-open reader — the
+// one hash implementation, so a read-back through an authorized destination handle
+// (DestRoot.HashRel) and a read-back by pathname cannot drift apart.
+func hashReader(r io.Reader) (string, error) {
 	h := sha256.New()
-	if _, err := io.CopyBuffer(h, f, make([]byte, 8<<20)); err != nil {
+	if _, err := io.CopyBuffer(h, r, make([]byte, 8<<20)); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil

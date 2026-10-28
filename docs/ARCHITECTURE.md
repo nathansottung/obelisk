@@ -1,7 +1,7 @@
 # Architecture
 
 Obelisk is deliberately small and boring: one Go binary, the standard
-library plus a single dependency (QR generation), and a **flat-file catalog**
+library plus a few focused pure-Go dependencies, and a **flat-file catalog**
 you can read with a text editor in 30 years. There is no database service, no
 CGO, no background daemon. The whole thing is ~4k lines of Go plus one HTML
 file.
@@ -674,7 +674,7 @@ back, and an import reconstructs the graph rather than the bytes.
 
 ## Dependencies
 
-Two tiny, pure-Go, CGO-free libraries — each earns its place against the
+Small, pure-Go, CGO-free libraries — each earns its place against the
 "one static binary, hand-restorable, no service" bargain:
 
 - **`github.com/skip2/go-qrcode`** — QR images for key recovery cards and
@@ -684,10 +684,66 @@ Two tiny, pure-Go, CGO-free libraries — each earns its place against the
   ourselves. A printed label that scans back into the catalog is worth one small
   dependency; rolling our own Code128 encoder would be more code and more risk
   than importing a focused, widely-used one.
+- **`github.com/zeebo/blake3`** — the catalog-internal content hash (see Hashing).
+- **`golang.org/x/sys`** — the native calls behind the destination guard
+  (`destauth.go`): on Windows, creating, renaming and discarding a staged file by
+  its handle, reading folder ACLs and volume information; on Linux, `renameat`,
+  `fstatfs` and `flock`. The standard library has no handle-relative rename or ACL
+  reader, and doing these by pathname is exactly what the guard exists to avoid.
 
 Everything else — tar, gpg, par2 — is an **external tool** shelled out to, on
 purpose (see the custody chain and Recovery Kit): the restore story must not
 depend on Obelisk's Go code existing.
+
+## Destination guard
+
+Mirrors and mirror-mode "back up changes" write through `Store.AuthorizeDestination`
+(`destauth.go`) rather than the older pathname check, `AssertOutsideSources`:
+
+1. **Decide on the folder actually opened.** The destination is opened (missing
+   folders are created one component at a time), its real location is read back
+   from the open handle, and it is refused when it is, is inside, or contains a
+   registered source. Aliases resolve to the same answer as the real path.
+2. **Write only through that handle.** Every file is created as an exclusively
+   owned staging object in its final folder, verified through the same handle,
+   then renamed into place relative to the authorized folder. A failed rename
+   never deletes the existing file. Before every write the destination is
+   re-read: if it is no longer the same folder (volume and file ID at its path)
+   or its real permissions, or those of a folder above it, changed, the write is
+   refused with `DestinationChangedError`, and the mirror or back-up-changes job
+   stops at once with that reason: nothing more is written and nothing more is
+   recorded. Copies made before the change are not recorded (if it is found only
+   while writing the two inventory files at the end, the copies, and for a
+   back-up-changes run its history entry, are already recorded together, and the
+   inventory files may be missing or only partly updated). The next check asks
+   again.
+   Each parent folder is re-checked too.
+3. **Platform policy.** The folder and its ancestors must be on an accepted
+   filesystem and, where it keeps permissions, changeable only by this user and
+   the system. The check is read-only. A missing destination comes back as
+   "create": nothing is made until the user confirms Create for that exact
+   folder (`CreateDestination`), and then its real permissions, not a prediction
+   of them, are what the user is asked about. Creating a folder that would be a
+   registered source's own path, or one beneath it, is refused before anything
+   is made. Three cases need the user's choice before anything is written
+   (`destchoice.go`): a folder Authenticated Users or Users can change through
+   an inherited grant, a drive root with Windows' default "create folders"
+   grant, and an exFAT or FAT drive. The choices are Make this folder private (removes those groups from
+   that one folder's permissions, by handle, after showing the exact change),
+   Use it anyway (typed `Continue`, recorded against the destination folder's
+   own volume and file ID with a digest of its real owner and permissions and
+   those of every folder up to the drive root, and asked again when the folder
+   is replaced or any of that changes; a choice covers no other folder,
+   including new folders made inside it), or Pick another folder. Grants to Everyone,
+   Guests, Anonymous Logon or any other account, or set explicitly on the folder,
+   refuse. A Docker overlay is refused; macOS and BSD are refused for now.
+4. **Offline sources.** Source folders record the volume they were seen on. A
+   source whose drive is not attached blocks only a destination on that volume, or,
+   with no recorded volume, only a destination whose path could be its path.
+
+The guard does not establish *which medium* a folder is on, does not confine the
+external helpers (tar, gpg, par2), and covers only these two jobs so far; every
+other writer still uses `AssertOutsideSources`.
 
 ## Request/job lifecycle
 
