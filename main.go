@@ -617,6 +617,7 @@ func register(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
 }
 
 func api(mux *http.ServeMux, app *App) {
+	destructiveRoutes(mux, app)
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		out := map[string]any{"ok": true, "version": appVersion, "schema_version": currentSchemaVersion}
 		if ro, why := app.Store.ReadOnly(); ro {
@@ -819,20 +820,9 @@ func api(mux *http.ServeMux, app *App) {
 	})
 	// Restore REPLACES current records (after backing them up first). Verifies the
 	// bundle end-to-end before touching anything; reopens + swaps the store on success.
+	// Gated: prepare op "appbackup-restore" {tar_path}, then execute with "Overwrite".
 	mux.HandleFunc("POST /api/appbackup/restore", func(w http.ResponseWriter, r *http.Request) {
-		tarPath := s(body(r), "tar_path")
-		if strings.TrimSpace(tarPath) == "" {
-			jsonErr(w, 400, fmt.Errorf("tar_path required"))
-			return
-		}
-		res, err := app.RestoreAppBackup(tarPath)
-		if err != nil {
-			jsonErr(w, 400, err)
-			return
-		}
-		app.Store.Log("restore", fmt.Sprintf("app backup restored: %d archives, %d files, %d volumes, %d packages, %d jobs",
-			res.Archives, res.Files, res.Volumes, res.Packages, res.Jobs))
-		jsonOut(w, res)
+		needsConfirmation(w, "appbackup-restore")
 	})
 	// Data-dir migration (see migrate.go): a Mnemosyne user whose records live in the
 	// pre-rename ~/.mnemo is running out of it via the silent fallback. Offer a
@@ -1030,13 +1020,9 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("archive not found"))
 			return
 		}
-		b := body(r)
-		counts, err := app.RemoveArchive(id, s(b, "confirm_name"), s(b, "export_dir"))
-		if err != nil {
-			jsonErr(w, 400, err) // guard not met (wrong name / export required)
-			return
-		}
-		jsonOut(w, map[string]any{"removed": true, "counts": counts})
+		// Gated: prepare op "archive-remove" {id, confirm_name, export_dir}, then
+		// execute with "Delete".
+		needsConfirmation(w, "archive-remove")
 	})
 	register(mux, "POST /api/collections/{id}/scan", func(w http.ResponseWriter, r *http.Request) {
 		id := pathID(r)
@@ -1473,9 +1459,9 @@ func api(mux *http.ServeMux, app *App) {
 		app.Store.UpdateEvent(ev)
 		jsonOut(w, ev)
 	})
+	// Gated: prepare op "record-delete" {kind:"event", id}, then execute with "Delete".
 	mux.HandleFunc("POST /api/events/{id}/delete", func(w http.ResponseWriter, r *http.Request) {
-		app.Store.DeleteEvent(pathID(r))
-		jsonOut(w, map[string]any{"ok": true})
+		needsConfirmation(w, "record-delete")
 	})
 	// Magnet suggestions: unassigned files whose capture dates fall in this event's
 	// range, grouped for accept/reject.
@@ -1549,9 +1535,9 @@ func api(mux *http.ServeMux, app *App) {
 		app.Store.UpdateTemplate(t)
 		jsonOut(w, t)
 	})
+	// Gated: prepare op "record-delete" {kind:"template", id}, then execute with "Delete".
 	mux.HandleFunc("POST /api/templates/{id}/delete", func(w http.ResponseWriter, r *http.Request) {
-		app.Store.DeleteTemplate(pathID(r))
-		jsonOut(w, map[string]any{"ok": true})
+		needsConfirmation(w, "record-delete")
 	})
 	// Live consequence preview for an UNSAVED (being-edited) template against the real
 	// catalog: how many files it places, match no route, and collide.
@@ -1647,14 +1633,9 @@ func api(mux *http.ServeMux, app *App) {
 	})
 	// Stage a path into quarantine: {"path":"...","reason":"..."}. Moves the bytes into
 	// _deleted (never deletes), pulls the copy from protection accounting, audit-logs.
+	// Gated: prepare op "quarantine" {path, reason}, then execute with "Delete".
 	mux.HandleFunc("POST /api/quarantine", func(w http.ResponseWriter, r *http.Request) {
-		b := body(r)
-		e, err := app.Quarantine(strings.TrimSpace(s(b, "path")), "user", s(b, "reason"))
-		if err != nil {
-			jsonErr(w, 400, err)
-			return
-		}
-		jsonOut(w, map[string]any{"ok": true, "entry": e})
+		needsConfirmation(w, "quarantine")
 	})
 	// Un-quarantine: reverse the move and re-credit the copy. Refuses to clobber.
 	mux.HandleFunc("POST /api/quarantine/{id}/restore", func(w http.ResponseWriter, r *http.Request) {
@@ -1741,9 +1722,9 @@ func api(mux *http.ServeMux, app *App) {
 		app.Store.UpdatePlan(p)
 		jsonOut(w, p)
 	})
+	// Gated: prepare op "record-delete" {kind:"plan", id}, then execute with "Delete".
 	mux.HandleFunc("POST /api/plans/{id}/delete", func(w http.ResponseWriter, r *http.Request) {
-		app.Store.DeletePlan(pathID(r))
-		jsonOut(w, map[string]any{"ok": true})
+		needsConfirmation(w, "record-delete")
 	})
 	// One browsable level of the virtual destination tree (from the mapping only).
 	mux.HandleFunc("GET /api/plans/{id}/tree", func(w http.ResponseWriter, r *http.Request) {
@@ -2054,26 +2035,10 @@ func api(mux *http.ServeMux, app *App) {
 			return app.WriteChunk(id, dest, f(b, "buffer_gb"), int(f(b, "block_mb")), f(b, "throttle_mbps"), vol, p)
 		}))
 	})
+	// Gated: prepare op "rewrite-copy" {id, volume_id, ...}, then execute with
+	// "Overwrite".
 	register(mux, "POST /api/chunks/{id}/rewrite-copy", func(w http.ResponseWriter, r *http.Request) {
-		id := pathID(r)
-		b := body(r)
-		c := app.Store.Chunk(id)
-		if c == nil {
-			jsonErr(w, 404, fmt.Errorf("package not found"))
-			return
-		}
-		vol := int(f(b, "volume_id"))
-		if vol <= 0 {
-			jsonErr(w, 400, fmt.Errorf("volume_id required (the volume whose copy to re-write)"))
-			return
-		}
-		if err := sealGuard(app, vol); err != nil {
-			jsonErr(w, 409, err)
-			return
-		}
-		startedOn(w).write(runJob(app, "write", "Re-write "+c.Name+" copy", func(p func(float64, string)) (map[string]any, error) {
-			return app.RewriteCopy(id, vol, f(b, "buffer_gb"), int(f(b, "block_mb")), f(b, "throttle_mbps"), p)
-		}))
+		needsConfirmation(w, "rewrite-copy")
 	})
 	register(mux, "POST /api/chunks/{id}/span-write", func(w http.ResponseWriter, r *http.Request) {
 		id := pathID(r)
@@ -3005,12 +2970,9 @@ func api(mux *http.ServeMux, app *App) {
 		// An edit can invalidate prior compliance anywhere the profile is assigned.
 		jsonOut(w, map[string]any{"profile": app.Store.Profile(p.ID), "recompute": app.recomputeJob()})
 	})
+	// Gated: prepare op "record-delete" {kind:"profile", id}, then execute with "Delete".
 	mux.HandleFunc("DELETE /api/profiles/{id}", func(w http.ResponseWriter, r *http.Request) {
-		if err := app.Store.DeleteProfile(r.PathValue("id")); err != nil {
-			jsonErr(w, 409, err)
-			return
-		}
-		jsonOut(w, map[string]any{"deleted": true})
+		needsConfirmation(w, "record-delete")
 	})
 
 	// Assign a profile to an Archive (path "") or a folder path within it. An

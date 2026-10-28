@@ -409,7 +409,7 @@ func runUIHarness(t *testing.T, name, assertions, skipMsg string) {
 	}
 	out, err := exec.Command(node, harness).CombinedOutput()
 	if err != nil {
-		t.Fatalf("ui/index.html job consumers do not honour the recording-state contract:\n%s", out)
+		t.Fatalf("ui/index.html harness %s failed:\n%s", name, out)
 	}
 	if !strings.Contains(string(out), "PASS") {
 		t.Fatalf("harness produced no verdict:\n%s", out)

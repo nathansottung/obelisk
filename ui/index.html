@@ -403,11 +403,49 @@ function askToken(){if(_tokPrompt)return _tokPrompt;
 /* mediaURL appends the token as a query param for browser-native GETs (opening a
    label/QR/report in a new tab can't set an Authorization header). */
 function mediaURL(u){return _tok?u+(u.includes('?')?'&':'?')+'token='+encodeURIComponent(_tok):u;}
+// _sid names this page's session. A delete/overwrite confirmation is issued to it
+// and works only from it.
+const _sid=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():Array.from({length:32},()=>Math.floor(Math.random()*16).toString(16)).join('');
+/* confirmDestructive is the delete gate: it asks the server for the exact list of
+   what the action would touch, shows it, and runs it only when the user types the
+   action's word ("Delete" or "Overwrite"). Resolves with the action's result, or
+   null when the user backs out. */
+function confirmDestructive(op,params){
+  return new Promise(async(resolve,reject)=>{
+    let p;try{p=await api('POST','/api/destructive/prepare',{op,params});}catch(e){reject(e);return}
+    let d=$('#ddestructive');if(!d){d=document.createElement('dialog');d.id='ddestructive';document.body.append(d)}
+    const shown=p.targets.slice(0,50);
+    const row=t=>`<div class="mono" style="font-size:11.5px">${esc(t.kind)} · ${esc(t.path||t.record||'')}${t.size?' · '+commaN(t.size)+' bytes':''}${t.note?' <span class="dim">— '+esc(t.note)+'</span>':''}</div>`;
+    d.innerHTML=`<h1>${esc(p.title)}</h1>
+      <div style="margin:6px 0">This will ${p.word==='Overwrite'?'overwrite':'delete or move'} exactly these ${commaN(p.targets.length)} item(s):</div>
+      <div style="max-height:260px;overflow:auto;border:1px solid var(--line);padding:6px">${shown.map(row).join('')}${p.targets.length>shown.length?`<div class="dim">…and ${commaN(p.targets.length-shown.length)} more</div>`:''}</div>
+      <label style="margin-top:10px">Type <b>${esc(p.word)}</b> to confirm (it expires in 5 minutes)</label><input id="ddword" class="full" autocomplete="off">
+      <div class="row" style="margin-top:12px"><button class="btn" id="ddok" style="background:var(--bad)">${esc(p.word)}</button> <button class="btn ghost" id="ddno">Cancel</button></div>`;
+    // Once confirmed, the action is running on the server: closing the dialog
+    // (Esc) or clicking again must neither report that nothing happened nor send
+    // a second execute. The outcome of the one execute decides.
+    let settled=false,running=false;
+    const done=v=>{if(settled||running)return;settled=true;d.close();resolve(v)};
+    d.oncancel=e=>{if(running&&e&&e.preventDefault)e.preventDefault()};
+    d.onclose=()=>{if(!settled&&!running){settled=true;resolve(null)}};
+    d.querySelector('#ddno').onclick=()=>done(null);
+    const ok=d.querySelector('#ddok');
+    ok.onclick=async()=>{
+      if(running||settled)return;
+      const word=d.querySelector('#ddword').value;
+      if(word!==p.word){toast('Type '+p.word+' exactly to confirm',1);return}
+      running=true;ok.disabled=true;
+      try{const r=await api('POST','/api/destructive/execute',{token:p.token,confirm:word});settled=true;d.close();resolve(r)}
+      catch(e){settled=true;d.close();reject(e)}
+    };
+    d.showModal();
+  });
+}
 const api=async(m,u,b)=>{
   // X-Requested-By is the same-origin handshake the server requires on every /api
   // call: a cross-origin page can't set a custom header without a CORS preflight we
   // never grant, so this closes CSRF / DNS-rebinding. Set globally on every request.
-  const go=()=>{const h={'Content-Type':'application/json','X-Requested-By':'obelisk-ui'};if(_tok)h['Authorization']='Bearer '+_tok;
+  const go=()=>{const h={'Content-Type':'application/json','X-Requested-By':'obelisk-ui','X-Obelisk-Session':_sid};if(_tok)h['Authorization']='Bearer '+_tok;
     return fetch(u,{method:m,headers:h,body:b?JSON.stringify(b):undefined});};
   let r=await go();
   if(r.status===401){await askToken();r=await go();}
@@ -936,8 +974,8 @@ function profileForm(p){const e=p||{required_copies:3,required_distinct_media_ki
     vProtection()})}
 async function dupProfile(id,name){try{await api('POST','/api/profiles/'+encodeURIComponent(id)+'/duplicate',{name:name+' (copy)'});
   toast('Duplicated — edit the copy');vProtection()}catch(e){toast(e.message,1)}}
-async function delProfile(id,name){if(!confirm('Delete profile “'+name+'”? In-use profiles are refused until reassigned.'))return;
-  try{await api('DELETE','/api/profiles/'+encodeURIComponent(id));toast('Profile deleted');vProtection()}catch(e){toast(e.message,1)}}
+async function delProfile(id,name){
+  try{if(!(await confirmDestructive('record-delete',{kind:'profile',id})))return;toast('Profile deleted');vProtection()}catch(e){toast(e.message,1)}}
 
 /* ---------------- Integrity presets ----------------
    Unify the assurance knobs (build verify, par2, verify level, verify due,
@@ -1536,7 +1574,8 @@ async function removeDlg(id,name){
     <div class="doctrine">This app never deletes files. This only changes what the app remembers.</div>
     <div class="row" style="margin-top:14px"><button class="btn" id="rm_go" disabled style="background:var(--bad);border-color:var(--bad);color:#fff" onclick="go()">Remove permanently</button></div>`,
   async()=>{
-    const r=await api('DELETE','/api/collections/'+id,{confirm_name:(($('#rm_name')||{}).value||''),export_dir:_rmExportDir});
+    const r=await confirmDestructive('archive-remove',{id,confirm_name:(($('#rm_name')||{}).value||''),export_dir:_rmExportDir});
+    if(!r)throw new Error('Nothing removed');
     const cc=(r&&r.counts)||{};
     toast(`Removed — forgot ${commaN(cc.files||0)} file record(s); kept ${commaN(cc.packages||0)} package(s) on your media.`);
     vVault();
@@ -2336,8 +2375,7 @@ function copiesLine(c,volmap){const cur=currentCopies(c);const sup=(c.copies||[]
   if(sup.length)h+=`<div class="dim" style="font-size:10.5px;opacity:.65">superseded: ${sup.map(cp=>{const v=volmap[cp.volume_id]||{};return esc(v.label||'vol#'+cp.volume_id)+' '+copyMark(cp.verify_ok)}).join(' · ')}</div>`;
   return h}
 async function doRewriteCopy(id,vol,label){
-  if(!confirm('Re-write this package to '+label+' from staging?\n\nThe failed copy is kept in history (superseded); a fresh copy is written and read-back verified.'))return;
-  try{await api('POST',`/api/chunks/${id}/rewrite-copy`,{volume_id:vol});
+  try{if(!(await confirmDestructive('rewrite-copy',{id:Number(id),volume_id:Number(vol)})))return;
     toast('Re-write started — see Jobs. When it verifies, the copy is protected again.');loc('jobs')}catch(e){toast(e.message,1)}}
 
 function volPicker(vols){
@@ -3963,7 +4001,8 @@ function appRestoreDlg(){
     <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Restore (replace current records)</button></div>`,
   async()=>{
     const p=(($('#arpath')||{}).value||'').trim();if(!p){toast('Backup file required',1);throw new Error('path')}
-    const r=await api('POST','/api/appbackup/restore',{tar_path:p});
+    const r=await confirmDestructive('appbackup-restore',{tar_path:p});
+    if(!r)throw new Error('Nothing restored');
     appRestoreSummary(r);
   });
 }
@@ -4037,8 +4076,8 @@ async function eventSuggest(id){const box=$('#magbox');if(box)box.innerHTML='<di
   h+='</div>';if(box)box.innerHTML=h;
 }
 async function acceptSuggest(id,ids){try{await api('POST','/api/events/'+id+'/assign',{file_ids:ids});toast('Assigned '+ids.length+' file(s)');vEventDetail(id)}catch(e){toast(e.message,1)}}
-async function delEvent(id){if(!confirm('Delete this event? Files stay in the catalog; their membership is cleared.'))return;
-  try{await api('POST','/api/events/'+id+'/delete',{});toast('Event deleted');loc('events')}catch(e){toast(e.message,1)}}
+async function delEvent(id){
+  try{if(!(await confirmDestructive('record-delete',{kind:'event',id:Number(id)})))return;toast('Event deleted');loc('events')}catch(e){toast(e.message,1)}}
 function newEventDlg(){dlg(`<h1>New event</h1>
   <label>Name</label><input id="ne_name" class="full" placeholder="e.g. Summer Sessions 2024">
   <label>Type / category</label><input id="ne_type" class="full" placeholder="e.g. session">
@@ -4240,7 +4279,8 @@ function quarantineDlg(){dlg(`<h1>Quarantine a path</h1>
   <div class="row" style="margin-top:14px"><button class="btn ghost" type="button" onclick="quarantinePreview()">Preview consequence</button>
     <button class="btn danger" id="q_go" disabled onclick="go()">Quarantine</button></div>`,
   async()=>{const path=$('#q_path').value.trim();if(!path)throw new Error('choose a path');
-    await api('POST','/api/quarantine',{path,reason:$('#q_reason').value.trim()});
+    const r=await confirmDestructive('quarantine',{path,reason:$('#q_reason').value.trim()});
+    if(!r)throw new Error('Nothing quarantined');
     toast('Quarantined — reversible from this screen');vQuarantine()})}
 async function quarantinePreview(){const path=($('#q_path').value||'').trim();const box=$('#q_preview');const go=$('#q_go');
   if(!path){box.innerHTML='<div class="err">Enter a path first.</div>';return}
@@ -4341,8 +4381,8 @@ function editPlanDlg(id){api('GET','/api/plans/'+id).then(d=>{const p=d.plan;
     <label>Destination root</label><input id="ep_dest" class="full" value="${esc(p.destination_root||'')}">${browseBtn('ep_dest')}
     <div class="row" style="margin-top:14px"><button class="btn" onclick="go()">Save</button></div>`,
   async()=>{await api('POST','/api/plans/'+id+'/update',{name:$('#ep_name').value.trim(),destination_root:$('#ep_dest').value.trim()});toast('Saved');vPlanDetail(id)})})}
-async function delPlan(id){if(!confirm('Delete this plan? Nothing on disk is affected.'))return;
-  try{await api('POST','/api/plans/'+id+'/delete',{});toast('Deleted');loc('plans')}catch(e){toast(e.message,1)}}
+async function delPlan(id){
+  try{if(!(await confirmDestructive('record-delete',{kind:'plan',id:Number(id)})))return;toast('Deleted');loc('plans')}catch(e){toast(e.message,1)}}
 function adoptDest(id){if(!confirm('Check the destination drive and mark the files it already has (matched by content) as done?'))return;
   // No 'Destination adopted' toast on the unrecorded path — the adoption happened, but
   // saying so plainly would claim a recorded outcome. Warn, and still refresh the view

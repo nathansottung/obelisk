@@ -23,8 +23,10 @@ package main
 import (
 	"archive/tar"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -405,6 +407,9 @@ func (a *App) InspectAppBackup(tarPath string) (appBackupManifest, error) {
 // data-dir files and reopens the store (migrating an older backup forward). All
 // verification happens before ANYTHING is written, so a bad backup leaves the current
 // data dir untouched.
+// preRestoreWriteFile writes a pre-restore copy; a test seam.
+var preRestoreWriteFile = os.WriteFile
+
 func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	man, members, err := verifyAppBackup(tarPath)
 	if err != nil {
@@ -464,23 +469,23 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	// (4) Back up the current records first, so the restore is itself reversible.
 	stamp := time.Now().UTC().Format("20060102-150405")
 	preDir := filepath.Join(a.DataDir, "pre-restore-"+stamp)
-	if err := os.MkdirAll(preDir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(preDir, "keystores"), 0o700); err != nil {
 		return RestoreResult{}, fmt.Errorf("prepare pre-restore backup: %w", err)
 	}
-	for _, name := range []string{"catalog.json", "config.json", "jobs.json", "formats.json"} {
-		src := filepath.Join(a.DataDir, name)
-		if b, err := os.ReadFile(src); err == nil {
-			_ = os.WriteFile(filepath.Join(preDir, name), b, 0o644)
-		}
+	// Every current record and keystore is copied first, the keystores included
+	// (a restore replaces them, and a key held only in the current one would
+	// otherwise be lost). If any copy fails, nothing is restored.
+	if err := a.copyPreRestore(cfg, preDir); err != nil {
+		return RestoreResult{}, fmt.Errorf("the restore stopped before changing anything: the pre-restore copy in %s failed: %w", preDir, err)
 	}
 
 	// (5) Extract members (except the manifest + config, handled below). Keystores land
 	// in <data>/keystores/ and the restored config is repointed at them.
-	writeFile := func(dest string, b []byte) error {
+	writeFile := func(dest string, b []byte, perm os.FileMode) error {
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			return err
 		}
-		tmp, err := writeStage(dest, b, 0o644)
+		tmp, err := writeStage(dest, b, perm)
 		if err != nil {
 			return err
 		}
@@ -502,11 +507,11 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 			continue // handled last, after keystore paths are known
 		case strings.HasPrefix(m.Name, "keystores/"):
 			dest := filepath.Join(a.DataDir, "keystores", filepath.Base(m.Name))
-			if err := writeFile(dest, b); err != nil {
+			if err := writeFile(dest, b, 0o600); err != nil { // key material: owner only
 				return RestoreResult{}, fmt.Errorf("restore %s: %w", m.Name, err)
 			}
 		default: // catalog.json, jobs.json, formats.json
-			if err := writeFile(filepath.Join(a.DataDir, m.Name), b); err != nil {
+			if err := writeFile(filepath.Join(a.DataDir, m.Name), b, 0o644); err != nil {
 				return RestoreResult{}, fmt.Errorf("restore %s: %w", m.Name, err)
 			}
 		}
@@ -607,4 +612,50 @@ func (a *App) maybeAutoExport(now time.Time) error {
 	}
 	_, err := a.exportAppBackupTo(target, false)
 	return err
+}
+
+// copyPreRestore copies the current records and every current keystore into
+// preDir before a restore changes anything: catalog, config, jobs and formats,
+// each file in the data folder's keystores folder, and each configured
+// keystore (under keystores/configured-N-<name>). A file that does not exist is
+// skipped; any other read or write failure is returned.
+func (a *App) copyPreRestore(cfg Config, preDir string) error {
+	copyOne := func(src, dst string, perm os.FileMode) error {
+		b, err := os.ReadFile(src)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read %s: %w", src, err)
+		}
+		if err := preRestoreWriteFile(dst, b, perm); err != nil {
+			return fmt.Errorf("copy %s: %w", src, err)
+		}
+		return nil
+	}
+	for _, name := range []string{"catalog.json", "config.json", "jobs.json", "formats.json"} {
+		if err := copyOne(filepath.Join(a.DataDir, name), filepath.Join(preDir, name), 0o600); err != nil {
+			return err
+		}
+	}
+	ksDir := filepath.Join(a.DataDir, "keystores")
+	entries, err := os.ReadDir(ksDir)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("read %s: %w", ksDir, err)
+	}
+	for _, e := range entries {
+		if !e.Type().IsRegular() {
+			continue
+		}
+		if err := copyOne(filepath.Join(ksDir, e.Name()), filepath.Join(preDir, "keystores", e.Name()), 0o600); err != nil {
+			return err
+		}
+	}
+	for i, p := range cfg.KeystorePaths {
+		dst := filepath.Join(preDir, "keystores", fmt.Sprintf("configured-%d-%s", i+1, filepath.Base(p)))
+		if err := copyOne(p, dst, 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
 }
