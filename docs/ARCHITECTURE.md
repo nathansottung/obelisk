@@ -629,9 +629,15 @@ time, in any order, over weeks.
   is keyed by the source drive's snapshot; when a known serial with pending work is
   docked, the dock offers *"Execute plan work from this drive."* Each pending file
   the drive holds is copied into its planned path via **copy-then-hash-verify**
-  (reusing `mirrorCopyFile`/`atomicRename`), and the source is **re-checked against
-  its snapshot hash as it reads** — a mismatch loudly flags *"drive differs from its
-  snapshot"* and skips the file to review, never guessed. The **first** drive to
+  through the destination guard (`AuthorizeDestination`, `copyVerifyNewToRoot`),
+  and the source is **re-checked against its snapshot hash as it reads** — a
+  mismatch loudly flags *"drive differs from its snapshot"* and skips the file to
+  review, never guessed. Every planned path (and source path) must stay inside its
+  root, so one with `..`, a leading slash or a drive letter is refused, imported
+  plans included; and a file already at a planned path is **never replaced** (the
+  no-replace publish refuses it). If it has exactly the planned content (a run
+  that placed it and stopped before recording it), it is read and credited, so
+  execution still resumes; any other file there is refused. The **first** drive to
   carry a shared hash satisfies it; later drives just **confirm**. Progress lives in
   the persisted `Satisfied` set, so execution resumes mid-drive and across process
   restarts and weeks. `PlanCoverage` reports *"71% · remaining files live on:

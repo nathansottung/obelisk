@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -339,6 +340,30 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 // A source-side failure is wrapped with errCopySource so callers can keep counting
 // "skipped" (unreadable source) apart from "failed" (destination would not take it).
 func copyVerifyToRoot(dest *DestRoot, srcPath, rel string, th *throttler, onBytes func(int64)) (string, int64, error) {
+	return copyVerifyToRootAs(dest, srcPath, rel, "", true, nil, th, onBytes)
+}
+
+// fileMeta is metadata given to a copy before it is published: permission bits
+// (when mode is non-zero) and a modification time (when mtime is set). It is
+// applied to the staged file through its own handle.
+type fileMeta struct {
+	mode  fs.FileMode
+	mtime time.Time
+}
+
+// errSourceDiffers is returned by copyVerifyNewToRoot when the bytes read from the
+// source are not the content it was expected to hold. Nothing is published.
+var errSourceDiffers = errors.New("source differs from the content expected")
+
+// copyVerifyNewToRoot is copyVerifyToRoot for a file that must not exist yet: it
+// is published with PublishNew, so an existing file at rel is never replaced
+// (the error wraps fs.ErrExist). When expect is set, the source must stream
+// exactly that SHA-256 or nothing is published (errSourceDiffers).
+func copyVerifyNewToRoot(dest *DestRoot, srcPath, rel, expect string, meta *fileMeta, th *throttler, onBytes func(int64)) (string, int64, error) {
+	return copyVerifyToRootAs(dest, srcPath, rel, expect, false, meta, th, onBytes)
+}
+
+func copyVerifyToRootAs(dest *DestRoot, srcPath, rel, expect string, replace bool, meta *fileMeta, th *throttler, onBytes func(int64)) (string, int64, error) {
 	v, err := destRel(rel)
 	if err != nil {
 		return "", 0, err
@@ -363,17 +388,44 @@ func copyVerifyToRoot(dest *DestRoot, srcPath, rel string, th *throttler, onByte
 		_ = dest.Discard(tmpRel)
 		return "", n, err
 	}
+	if expect != "" && !strings.EqualFold(streamHash, expect) {
+		_ = dest.Discard(tmpRel)
+		return streamHash, n, errSourceDiffers
+	}
 	// Read the bytes back off the destination and confirm byte-identity before the
 	// file gets its real name.
 	if rerr := dest.VerifyStage(tmpRel, streamHash); rerr != nil {
 		_ = dest.Discard(tmpRel)
 		return "", n, fmt.Errorf("read-back check failed for %s: the copy on the drive does not match the source. The drive may be failing, or the file changed while copying. Copy it again; if it keeps failing, check the drive's health", path.Base(v))
 	}
-	if err := dest.Publish(tmpRel, v); err != nil {
+	if meta != nil {
+		if err := applyFileMeta(out, *meta); err != nil {
+			_ = dest.Discard(tmpRel)
+			return "", n, fmt.Errorf("setting the time and mode of %s: %w", path.Base(v), err)
+		}
+	}
+	publish := dest.Publish
+	if !replace {
+		publish = dest.PublishNew
+	}
+	if err := publish(tmpRel, v); err != nil {
 		_ = dest.Discard(tmpRel)
 		return "", n, err
 	}
 	return streamHash, n, nil
+}
+
+// applyFileMeta sets m on the open file f.
+func applyFileMeta(f *os.File, m fileMeta) error {
+	if m.mode != 0 {
+		if err := f.Chmod(m.mode.Perm()); err != nil {
+			return err
+		}
+	}
+	if !m.mtime.IsZero() {
+		return setFileMtime(f, m.mtime)
+	}
+	return nil
 }
 
 // renameFile is the one rename primitive behind renameReplacing (and so behind
@@ -581,6 +633,8 @@ func (a *App) stopOnDestinationChange(kind string, err error, copied int) error 
 	}
 	var what string
 	switch {
+	case kind == "restore":
+		what = fmt.Sprintf("%d file(s) were restored before the change; nothing more was written.", copied)
 	case copied < 0 && kind == "backup":
 		what = "The copies and this backup were recorded before the change; the inventory files on the drive may not be up to date."
 	case copied < 0:

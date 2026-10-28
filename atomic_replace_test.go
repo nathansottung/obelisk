@@ -229,8 +229,8 @@ func TestExportAppBackup_FailedPublishPreservesPreviousBundle(t *testing.T) {
 		t.Fatal("the previous bundle must be byte-identical after a failed export")
 	}
 	// And the caller still tidies up its own staging file.
-	if fileExists(tarPath + ".tmp") {
-		t.Error("the export's temporary should not be left behind after a reported failure")
+	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(tarPath), "."+filepath.Base(tarPath)+".*.tmp")); len(left) > 0 {
+		t.Errorf("the export's temporary should not be left behind after a reported failure: %v", left)
 	}
 }
 
@@ -256,9 +256,11 @@ func TestRestoreAppBackup_FailedPublishPreservesExistingFile(t *testing.T) {
 	// afterwards" assertion below could pass vacuously — a file never created is also
 	// a file not found.
 	stagedAtFailure := map[string]bool{}
+	stagedFor := map[string]string{} // final -> the staging file published to it
 	prevRename := renameFile
 	renameFile = func(tmp, final string) error {
 		stagedAtFailure[tmp] = fileExists(tmp)
+		stagedFor[final] = tmp
 		return fs.ErrPermission
 	}
 	t.Cleanup(func() { renameFile = prevRename })
@@ -273,8 +275,8 @@ func TestRestoreAppBackup_FailedPublishPreservesExistingFile(t *testing.T) {
 	// first (config.json is handled last), so with includeKeys=false the file exercised
 	// here is the CATALOG staging file. Keystore staging is the same code path but is
 	// NOT covered by this fixture — no keystore member exists in this bundle.
-	catalogTmp := catalog + ".tmp"
-	if !stagedAtFailure[catalogTmp] {
+	catalogTmp := stagedFor[catalog]
+	if catalogTmp == "" || !stagedAtFailure[catalogTmp] {
 		t.Fatalf("fixture proves nothing: %s was never created before publication failed (observed: %v)",
 			filepath.Base(catalogTmp), stagedAtFailure)
 	}

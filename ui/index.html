@@ -1718,6 +1718,14 @@ function addMirrorTarget(){
    The server decides and enforces this (POST /api/destinations/*); the page shows
    its notice, offers the three choices with none preselected, and records the one
    picked. Resolves true when the folder may be used now. ---- */
+// restoreGate asks about a restore's output folder. Where the destination guard
+// is not available (macOS, the BSDs) a restore goes only into a new folder that
+// Obelisk creates, and the server checks that; there is nothing to ask here.
+async function restoreGate(path){
+  const c=await api('POST','/api/destinations/check',{path});
+  if(c.new_folder_only)return true;
+  return destGate(path);
+}
 async function destGate(path){
   let c=await api('POST','/api/destinations/check',{path});
   if(c.status==='create'){
@@ -2062,7 +2070,8 @@ async function restoreFileVersion(fileId,index,label){
   const out=prompt('Restore '+label+' to which folder? (must be OUTSIDE any source root)');
   if(!out)return;
   const src=prompt('Package medium mounted at? (blank = use the recorded written destination)','')||'';
-  try{await api('POST','/api/files/'+fileId+'/restore',{output_dir:out,source_dir:src,version:index});
+  try{if(!(await restoreGate(out)))return;
+    await api('POST','/api/files/'+fileId+'/restore',{output_dir:out,source_dir:src,version:index});
     toast('Restoring '+label+' — see Jobs',1);loc('jobs');}
   catch(e){toast(e.message,1)}}
 function bagExportDlg(id,name){dlg(`<h1>Export a BagIt bag — “${esc(name)}”</h1>
@@ -2232,6 +2241,7 @@ function restoreDlg(id,name){dlg(`<h1>Restore ${esc(name)}</h1>
   <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">par2 → decrypt → extract</button></div>`,
   async()=>{const out=$('#d2').value.trim();if(!out)return;
     const mem=$('#d3').value.split('\\n').map(s=>s.trim()).filter(Boolean);
+    if(!(await restoreGate(out)))throw new Error('Nothing restored: choose what to do about '+out+' first');
     await api('POST',`/api/chunks/${id}/restore`,{source_dir:$('#d1').value.trim(),output_dir:out,members:mem.length?mem:undefined});
     toast('Restore started — see Jobs');loc('jobs')});}
 
@@ -3258,8 +3268,14 @@ async function refreshCandidates(sid){
       <div style="flex:1"><span class="mono">${esc(c.path)}</span> ${reverify?'<span class="etag due">seen before</span>':''}${c.processed_in_session?'<span class="etag">this session</span>':''}<div class="dim" style="font-size:11.5px">${bits||'identity not resolved (external bridge?)'}</div></div>${planBtns}${btn}</div>`;
   }).join('');
 }
+// planDestGate asks about a plan's destination (create it, or choose about a
+// shared folder) before any plan work is started there.
+async function planDestGate(planId){
+  const p=await api('GET','/api/plans/'+planId);const root=(p.plan||{}).destination_root;
+  if(root&&!(await destGate(root)))throw new Error('Nothing executed: choose what to do about '+root+' first');
+}
 async function planExecFromDock(planId,path,serial){
-  try{const r=await api('POST','/api/plans/'+planId+'/execute',{mount_path:path,serial});
+  try{await planDestGate(planId);const r=await api('POST','/api/plans/'+planId+'/execute',{mount_path:path,serial});
     toast('Executing plan work from this drive — see Jobs');loc('jobs')}catch(e){toast(e.message,1)}}
 function dockReverifyDlg(sid,path){dlg(`<h1>Re-verify drive</h1>
   <div class="dim mono" style="font-size:11.5px;margin-bottom:8px">${esc(path)}</div>
@@ -4338,7 +4354,7 @@ function execPlanDlg(id){dlg(`<h1>Execute plan work from a drive</h1>
   <label>Mounted path of the source drive</label><input id="ex_mount" class="full" placeholder="E:\\ or /mnt/drive">${browseBtn('ex_mount')}
   <label>Serial (blank = detect)</label><input id="ex_serial" class="full" placeholder="optional">
   <div class="row" style="margin-top:14px"><button class="btn" onclick="go()">Execute from this drive</button></div>`,
-  async()=>{const r=await api('POST','/api/plans/'+id+'/execute',{mount_path:$('#ex_mount').value.trim(),serial:$('#ex_serial').value.trim()});
+  async()=>{await planDestGate(id);const r=await api('POST','/api/plans/'+id+'/execute',{mount_path:$('#ex_mount').value.trim(),serial:$('#ex_serial').value.trim()});
     toast('Execution started — see Jobs');loc('jobs')})}
 
 /* ---- portable export / import ---- */

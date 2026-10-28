@@ -630,21 +630,27 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 		sourceDir = c.WrittenDest
 	}
 	var restoreWarnings []string // non-fatal issues the operator must still see (e.g. a missing par2 set)
-	// Restore WRITES extracted files into outputDir — it must never target source
-	// data (that would overwrite the very originals we exist to protect).
-	if err := a.Store.AssertOutsideSources(outputDir); err != nil {
+	// Restore writes only into an output folder authorized by the destination
+	// guard: never a source, inside one or holding one, by real location. The
+	// package is unpacked into a private work folder there, and each file then
+	// gets its real name without ever replacing one (see restore_guard.go).
+	// Where the guard is not available (macOS, the BSDs) a restore goes only into
+	// a new folder that this restore creates (see newRestoreFolder).
+	tgt, err := a.openRestoreTarget(outputDir)
+	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		return nil, err
-	}
+	succeeded := false
+	defer func() { a.closeRestoreTarget(tgt, succeeded) }()
+	work := tgt.work
+	restoreWarnings = append(restoreWarnings, tgt.notes...)
 	enc := findPayload(sourceDir, c)
 	if enc == "" {
 		// Spanned restore drill: if the joined payload isn't present but the
 		// segment files are (all copied into one scratch dir), rejoin them —
 		// the same `cat seg* > payload` step RESTORE.txt documents by hand.
 		if c.Spanned {
-			joined, warns, jerr := rejoinSegments(sourceDir, outputDir, c, progress)
+			joined, warns, jerr := rejoinSegments(sourceDir, work.abs, c, progress)
 			if jerr != nil {
 				return nil, jerr
 			}
@@ -677,30 +683,46 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	progress(0.05, "par2 verify")
 	if _, err := os.Stat(par2f); err == nil {
 		if verr := run(par2Bin, "", "verify", par2f); verr != nil {
-			progress(0.10, "par2 repair")
-			if rerr := run(par2Bin, "", "repair", par2f); rerr != nil {
+			// Repair works on a copy in the restore's work folder. The medium (and
+			// whatever folder the package is read from, a source included) is only
+			// ever read: par2 rewrites the file it repairs and leaves the damaged
+			// original beside it.
+			progress(0.10, "par2 repair (on a copy)")
+			copied, cerr := copyForRepair(enc, filepath.Join(work.abs, "repair"))
+			if cerr != nil {
+				return nil, fmt.Errorf("copying the package for repair: %w", cerr)
+			}
+			if rerr := run(par2Bin, "", "repair", copied+".par2"); rerr != nil {
 				return nil, fmt.Errorf("par2 repair failed: %v", rerr)
 			}
+			enc = copied
 			repaired = true
 		}
 	} else if h, _ := hashFileHex(enc); h != c.EncHash {
 		return nil, fmt.Errorf("no par2 present and ciphertext hash mismatch — data damaged")
 	}
 
+	// A new restore folder (no destination guard) is unpacked into by path: it
+	// must still be the folder that was created and checked.
+	if tgt.dest == nil {
+		if err := tgt.stillTheFolder(); err != nil {
+			return nil, err
+		}
+	}
 	if !c.Encrypted {
 		// Unencrypted: the payload is a plain tar; extract it directly, no gpg.
 		progress(0.25, "extract")
 		// "--" ends option parsing: members are archive member names chosen by the
 		// caller, and a member beginning with "-" would otherwise be read as a tar
 		// option rather than as the file to restore.
-		targs := []string{"-xf", enc, "-C", outputDir, "--"}
+		targs := []string{"-xf", enc, "-C", tgt.into, "--"}
 		targs = append(targs, members...)
 		if err := run(tarBin, "", targs...); err != nil {
 			return nil, fmt.Errorf("tar extract failed: %v", err)
 		}
-		progress(1.0, "restored")
-		a.Store.Log("restore", fmt.Sprintf("%s -> %s (repaired=%v)", c.Name, outputDir, repaired))
-		return restoreResult(c, outputDir, repaired, restoreWarnings), nil
+		res, err := a.finishRestore(c, tgt, outputDir, repaired, restoreWarnings, progress)
+		succeeded = err == nil
+		return res, err
 	}
 
 	progress(0.25, "decrypt + extract")
@@ -715,7 +737,7 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	if err != nil {
 		return nil, err
 	}
-	targs := []string{"-xf", "-", "-C", outputDir, "--"} // "--": member names are never options
+	targs := []string{"-xf", "-", "-C", tgt.into, "--"} // "--": member names are never options
 	targs = append(targs, members...)
 	tarc := helperCommand(tarBin, targs...)
 	tarc.Stdin = pipe
@@ -738,9 +760,28 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	if terr != nil {
 		return nil, fmt.Errorf("tar extract failed: %s", tail(tarErr.String(), 400))
 	}
+	res, err := a.finishRestore(c, tgt, outputDir, repaired, restoreWarnings, progress)
+	succeeded = err == nil
+	return res, err
+}
+
+// finishRestore publishes what was extracted into the work folder to its real
+// names in the output folder (refusing any name already taken) and reports.
+func (a *App) finishRestore(c *Chunk, tgt *restoreTarget, outputDir string, repaired bool, warnings []string, progress func(float64, string)) (map[string]any, error) {
+	progress(0.9, "placing restored files")
+	n, warns, err := tgt.publish()
+	if err != nil {
+		if stop := a.stopOnDestinationChange("restore", err, n); stop != nil {
+			return nil, stop
+		}
+		return nil, err
+	}
+	warnings = append(warnings, warns...)
 	progress(1.0, "restored")
-	a.Store.Log("restore", fmt.Sprintf("%s -> %s (repaired=%v)", c.Name, outputDir, repaired))
-	return restoreResult(c, outputDir, repaired, restoreWarnings), nil
+	a.Store.Log("restore", fmt.Sprintf("%s -> %s: %d file(s) (repaired=%v)", c.Name, outputDir, n, repaired))
+	res := restoreResult(c, outputDir, repaired, warnings)
+	res["files"] = n
+	return res, nil
 }
 
 // restoreResult builds the restore job's result map, attaching any non-fatal

@@ -116,7 +116,9 @@ replace.
   Grants to Everyone, Guests, Anonymous Logon or any other account are refused.
   FAT32 refuses files over 4 GB before copying. On Linux,
   ext4, XFS, Btrfs, exFAT and FAT are accepted and a Docker overlay folder is
-  refused. On macOS these jobs are not yet supported and are refused.
+  refused. On macOS (and the BSDs) these jobs, and plan execution, are not yet
+  supported and are refused; a restore there goes only into a new folder, outside
+  every source, that Obelisk creates for it.
 - **Drift reports changes to your originals.** Delete or move a source file
   yourself and drift will report it.
 
@@ -906,6 +908,8 @@ also re-credits the copy. Crucially, quarantine exists **only inside managed ter
 — the destination roots Obelisk itself populated via Plans — enforced by the very same
 read-only guard that keeps the tool out of your source data: on adopted media and source
 roots the action simply does not appear, because there is nothing there the tool created.
+It is decided by where a path really is (a folder link or another spelling of a source is
+still the source), and a folder that holds a source is never moved either.
 The Quarantine view lists everything staged (contents, age, total bytes) under one
 standing promise: *removing these permanently is a manual act you perform in your file
 manager — this tool has no delete button and never will.* The tool **never empties

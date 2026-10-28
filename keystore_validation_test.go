@@ -287,9 +287,7 @@ func TestKeystoreValidation_OfflineRecovery(t *testing.T) {
 func TestKeystoreValidation_PublicationFailureAPI(t *testing.T) {
 	f := newKV(t, []map[string]any{kvKey("A", "synthetic-secret-A")}, []map[string]any{kvKey("B", "synthetic-secret-B")})
 	before := kvRead(t, f.paths[1])
-	if e := os.Mkdir(f.paths[1]+".tmp", 0700); e != nil {
-		t.Fatal(e)
-	}
+	failPublicationTo(t, f.paths[1])
 	mux := http.NewServeMux()
 	api(mux, f.app)
 	rec := httptest.NewRecorder()
@@ -332,4 +330,18 @@ func TestKeystoreValidation_FirstUseCompatibility(t *testing.T) {
 	if !f.app.KeystoreStatus()["ok"].(bool) {
 		t.Fatal("initialized stores not consistent")
 	}
+}
+
+// failPublicationTo makes every publication rename onto final fail the way a
+// refused one does, with the OS error intact, for the rest of the test.
+func failPublicationTo(t *testing.T, final string) {
+	t.Helper()
+	prev := renameFile
+	renameFile = func(tmp, to string) error {
+		if to == final {
+			return &os.PathError{Op: "rename", Path: to, Err: fs.ErrPermission}
+		}
+		return prev(tmp, to)
+	}
+	t.Cleanup(func() { renameFile = prev })
 }

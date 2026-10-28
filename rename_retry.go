@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -23,6 +24,45 @@ const renameRetryMaxWait = 200 * time.Millisecond
 // left as it was. tmp is left in place; removing it is the caller's decision.
 func renameReplacing(tmp, final string) error {
 	return retryTransientRename(func() error { return renameFile(tmp, final) })
+}
+
+// createStage creates the staging file for final: a new, uniquely named file in
+// final's folder, created exclusively (os.CreateTemp uses O_EXCL), so nothing
+// already in that folder is ever opened, truncated or later renamed into place.
+// The file is given perm. The caller writes it, closes it and renames it to final
+// (renameReplacing), and removes it on failure.
+func createStage(final string, perm os.FileMode) (*os.File, error) {
+	f, err := os.CreateTemp(filepath.Dir(final), "."+filepath.Base(final)+".*.tmp")
+	if err != nil {
+		return nil, err
+	}
+	if err := f.Chmod(perm); err != nil {
+		f.Close()
+		_ = os.Remove(f.Name())
+		return nil, err
+	}
+	return f, nil
+}
+
+// writeStage writes data into a new staging file for final (see createStage),
+// flushed to disk, and returns its name.
+func writeStage(final string, data []byte, perm os.FileMode) (string, error) {
+	f, err := createStage(final, perm)
+	if err != nil {
+		return "", err
+	}
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
 }
 
 // readFileRetrying is os.ReadFile with the same bounded retry as renameReplacing:

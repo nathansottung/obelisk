@@ -366,6 +366,24 @@ func destinationGate(w http.ResponseWriter, app *App, dest string) bool {
 	return true
 }
 
+// restoreGate is destinationGate for a restore's output folder. Where the
+// destination guard is not available, a restore may only go into a new folder,
+// so that is checked instead (the job checks it again and creates the folder).
+func restoreGate(w http.ResponseWriter, app *App, out string) bool {
+	if destGuardAvailable {
+		return destinationGate(w, app, out)
+	}
+	abs, err := filepath.Abs(out)
+	if err == nil {
+		err = app.Store.checkNewRestoreFolder(abs, out)
+	}
+	if err != nil {
+		jsonErr(w, 400, err)
+		return false
+	}
+	return true
+}
+
 func body(r *http.Request) map[string]any {
 	var m map[string]any
 	_ = json.NewDecoder(r.Body).Decode(&m)
@@ -1788,6 +1806,9 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("mount_path (the docked source drive) required"))
 			return
 		}
+		if p := app.Store.Plan(id); p != nil && strings.TrimSpace(p.DestinationRoot) != "" && !destinationGate(w, app, p.DestinationRoot) {
+			return
+		}
 		startedOn(w).write(runJob(app, "plan", "Execute plan from "+mount, func(p func(float64, string)) (map[string]any, error) {
 			res, err := app.ExecutePlanFromDrive(id, mount, serial, p)
 			if err != nil {
@@ -2152,6 +2173,9 @@ func api(mux *http.ServeMux, app *App) {
 				}
 			}
 		}
+		if !restoreGate(w, app, out) {
+			return
+		}
 		startedOn(w).write(runJob(app, "restore", "Restore "+c.Name, func(p func(float64, string)) (map[string]any, error) {
 			return app.RestoreChunk(id, s(b, "source_dir"), out, members, p)
 		}))
@@ -2199,6 +2223,9 @@ func api(mux *http.ServeMux, app *App) {
 				return
 			}
 			sel.AsOf = &t
+		}
+		if !restoreGate(w, app, out) {
+			return
 		}
 		startedOn(w).write(runJob(app, "restore", fmt.Sprintf("Restore file %d", id), func(p func(float64, string)) (map[string]any, error) {
 			return app.RestoreFileVersion(id, sel, s(b, "source_dir"), out, p)

@@ -58,6 +58,10 @@ type DestinationCheck struct {
 	Fingerprint string             `json:"fingerprint,omitempty"`
 	Notice      *DestinationNotice `json:"notice,omitempty"`
 	ChosenAt    *time.Time         `json:"chosen_at,omitempty"`
+	// NewFolderOnly: this platform has no destination guard, so the only write
+	// allowed is a restore into a folder that does not exist yet (see
+	// newRestoreFolder). The UI then skips the guard's questions.
+	NewFolderOnly bool `json:"new_folder_only,omitempty"`
 }
 
 // Destination check statuses.
@@ -119,10 +123,12 @@ func destFingerprint(chain []destLevel) string {
 func (s *Store) CheckDestination(path string) *DestinationCheck {
 	in, err := s.inspectDestination(path)
 	if err != nil {
-		return &DestinationCheck{Path: path, Status: destStatusRefuse, Reason: err.Error()}
+		return &DestinationCheck{Path: path, Status: destStatusRefuse, Reason: err.Error(), NewFolderOnly: !destGuardAvailable}
 	}
 	defer in.anchor.Close()
-	return s.checkFromInspection(in)
+	c := s.checkFromInspection(in)
+	c.NewFolderOnly = !destGuardAvailable
+	return c
 }
 
 func (s *Store) checkFromInspection(in *destInspection) *DestinationCheck {

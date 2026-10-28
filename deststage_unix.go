@@ -25,6 +25,7 @@ import (
 	"path"
 	"runtime"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -81,7 +82,7 @@ func stageEntryOwned(s *destStage) error {
 // Characterization seam for the expressly excluded late same-principal attack.
 var beforeUnixDestRename = func(s *destStage) error { return nil }
 
-func publishDestStage(s *destStage, final string) error {
+func publishDestStage(s *destStage, final string, replace bool) error {
 	var st unix.Stat_t
 	err := unix.Fstat(int(s.file.Fd()), &st)
 	runtime.KeepAlive(s.file)
@@ -107,7 +108,11 @@ func publishDestStage(s *destStage, final string) error {
 	if err := beforeUnixDestRename(s); err != nil {
 		return err
 	}
-	err = unix.Renameat(int(from.Fd()), "payload"+mirrorTmpSuffix, int(to.Fd()), final)
+	if replace {
+		err = unix.Renameat(int(from.Fd()), "payload"+mirrorTmpSuffix, int(to.Fd()), final)
+	} else {
+		err = renameNoReplace(int(from.Fd()), "payload"+mirrorTmpSuffix, int(to.Fd()), final)
+	}
 	runtime.KeepAlive(from)
 	runtime.KeepAlive(to)
 	return err
@@ -159,4 +164,12 @@ func removeOwnContainer(s *destStage) {
 	}
 	_ = unix.Unlinkat(int(p.Fd()), s.container, unix.AT_REMOVEDIR)
 	runtime.KeepAlive(p)
+}
+
+// setFileMtime sets f's modification time through its descriptor.
+func setFileMtime(f *os.File, t time.Time) error {
+	tv := []unix.Timeval{unix.NsecToTimeval(time.Now().UnixNano()), unix.NsecToTimeval(t.UnixNano())}
+	err := unix.Futimes(int(f.Fd()), tv)
+	runtime.KeepAlive(f)
+	return err
 }

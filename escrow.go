@@ -340,7 +340,8 @@ func (a *App) WriteEscrowBundle(destDir string, plan EscrowPlan, progress func(f
 	if plan.Skipped || plan.Mode == EscrowOff {
 		return map[string]any{"skipped": true, "reason": "escrow_on_media=off"}, nil
 	}
-	if err := a.Store.AssertOutsideSources(destDir); err != nil {
+	// Decided by real location: never a source, inside one or holding one.
+	if err := a.Store.CheckOutsideSources(destDir); err != nil {
 		return nil, err
 	}
 	root := filepath.Join(destDir, escrowBundleDir)
@@ -452,11 +453,16 @@ func (a *App) FetchEscrowCache(includeReaders bool, census Census, progress func
 	if progress == nil {
 		progress = func(float64, string) {}
 	}
+	// The cache is written by this fetch: it is checked against the sources (by
+	// real location) before anything is fetched or created.
+	cache := a.escrowCacheDir(cfg)
+	if err := a.Store.CheckOutsideSources(cache); err != nil {
+		return nil, fmt.Errorf("escrow cache: %w", err)
+	}
 	version := appVersion
 	if !looksLikeReleaseTag(version) {
 		return nil, fmt.Errorf("this build reports version %q, not a release tag (vMAJOR.MINOR.PATCH) — release binaries can only be fetched for a tagged build; the bundle still ships whatever is already cached", version)
 	}
-	cache := a.escrowCacheDir(cfg)
 	verDir := filepath.Join(cache, fsSafe(version))
 	if err := os.MkdirAll(verDir, 0o755); err != nil {
 		return nil, err
@@ -539,11 +545,11 @@ func fetchEscrowArtifact(url, dest, want string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
-	tmp := dest + ".part"
-	out, err := os.Create(tmp)
+	out, err := createStage(dest, 0o644)
 	if err != nil {
 		return err
 	}
+	tmp := out.Name()
 	h := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(out, h), resp.Body); err != nil {
 		out.Close()

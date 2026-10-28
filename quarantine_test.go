@@ -63,7 +63,7 @@ func quarantineScenario(t *testing.T) (*App, string, int) {
 
 	// A plan reorganizes them into a fresh managed destination root, then executes.
 	tmpl := app.Store.AddTemplate(&Template{Name: "Move", Routes: map[string]string{RoleOriginals: "raw/{orig_name}"}})
-	destRoot := filepath.Join(t.TempDir(), "NAS")
+	destRoot := createdForTest(t, app, filepath.Join(t.TempDir(), "NAS"))
 	plan := app.Store.AddPlan(&Plan{Name: "NAS Move", TemplateID: tmpl.ID, ArchiveIDs: []int{coll.ID}, DestinationRoot: destRoot})
 	if _, err := app.CompilePlan(plan.ID); err != nil {
 		t.Fatal(err)
