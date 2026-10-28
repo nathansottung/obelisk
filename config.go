@@ -200,6 +200,13 @@ func (a *App) SaveConfig(in map[string]any) (Config, error) {
 			return Config{}, err
 		}
 	}
+	// The escrow cache is written by fetches, so it is held to the destination
+	// guard's source check (by real location).
+	if strings.TrimSpace(cfg.EscrowCacheDir) != "" {
+		if err := a.Store.CheckOutsideSources(cfg.EscrowCacheDir); err != nil {
+			return Config{}, fmt.Errorf("escrow_cache_dir: %w", err)
+		}
+	}
 	// Preserve unknown extension fields, while canonicalizing known field aliases.
 	var patch map[string]json.RawMessage
 	if err := json.Unmarshal(b, &patch); err != nil {

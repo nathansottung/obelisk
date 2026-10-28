@@ -363,6 +363,43 @@ func sameFolderOtherLetter(s sourceRef, canonical, display string) error {
 	return nil
 }
 
+// CheckOutsideSources is the destination guard's source check for a folder that
+// is written by path rather than through a DestRoot: it refuses a folder that is
+// a registered source, is inside one or contains one, deciding on the folder's
+// real location (its deepest existing folder is opened and the platform asked
+// where it is; the missing rest is appended), so a link, short name or other
+// spelling of a source is refused too. Offline sources are applied as they are
+// for a destination. The answer is about the folder now; it does not hold a
+// handle, so it is not write authority (see AuthorizeDestination).
+func (s *Store) CheckOutsideSources(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("no folder given")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	canon := canonicalOfMissing(abs)
+	if canon == "" {
+		return fmt.Errorf("refusing: could not establish the real location of %s", path)
+	}
+	snap, err := s.sourceSnapshot()
+	if err != nil {
+		return err
+	}
+	if err := snap.decide(canon, path); err != nil {
+		return err
+	}
+	vol := ""
+	if ancestor, _, err := deepestExistingDir(abs); err == nil {
+		vol = pathVolumeID(ancestor)
+	}
+	if err := snap.decideOffline(vol, abs, canon, path); err != nil {
+		return err
+	}
+	return snap.decideCreate(abs, path)
+}
+
 // overlapError reports whether destination d and source r (both normPath keys)
 // are the same folder or one contains the other.
 func overlapError(d, r, display, destName, registered string) error {
