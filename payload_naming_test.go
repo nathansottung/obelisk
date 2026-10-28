@@ -299,12 +299,14 @@ func TestSpannedPayloadNaming(t *testing.T) {
 			// The joined payload does not exist on the medium — only segments do.
 			mustNotExist(t, filepath.Join(pkgDir, tc.payload))
 
-			// Restore drills the rejoin path; the joined payload lands in out/.
+			// Restore drills the rejoin path. The payload is rejoined under the right
+			// name (par2 finds and checks it by that name) in the restore's work
+			// folder, so only the package's files land in out/.
 			out := t.TempDir()
 			if _, err := app.RestoreChunk(c.ID, pkgDir, out, nil, noProg); err != nil {
 				t.Fatalf("RestoreChunk (spanned): %v", err)
 			}
-			mustExist(t, filepath.Join(out, tc.payload)) // rejoined under the right name
+			mustNotExist(t, filepath.Join(out, tc.payload))
 			assertRestored(t, src, out, refs)
 		})
 	}

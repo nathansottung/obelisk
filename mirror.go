@@ -605,6 +605,8 @@ func (a *App) stopOnDestinationChange(kind string, err error, copied int) error 
 	}
 	var what string
 	switch {
+	case kind == "restore":
+		what = fmt.Sprintf("%d file(s) were restored before the change; nothing more was written.", copied)
 	case copied < 0 && kind == "backup":
 		what = "The copies and this backup were recorded before the change; the inventory files on the drive may not be up to date."
 	case copied < 0:

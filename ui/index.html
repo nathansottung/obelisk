@@ -2062,7 +2062,8 @@ async function restoreFileVersion(fileId,index,label){
   const out=prompt('Restore '+label+' to which folder? (must be OUTSIDE any source root)');
   if(!out)return;
   const src=prompt('Package medium mounted at? (blank = use the recorded written destination)','')||'';
-  try{await api('POST','/api/files/'+fileId+'/restore',{output_dir:out,source_dir:src,version:index});
+  try{if(!(await destGate(out)))return;
+    await api('POST','/api/files/'+fileId+'/restore',{output_dir:out,source_dir:src,version:index});
     toast('Restoring '+label+' — see Jobs',1);loc('jobs');}
   catch(e){toast(e.message,1)}}
 function bagExportDlg(id,name){dlg(`<h1>Export a BagIt bag — “${esc(name)}”</h1>
@@ -2232,6 +2233,7 @@ function restoreDlg(id,name){dlg(`<h1>Restore ${esc(name)}</h1>
   <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">par2 → decrypt → extract</button></div>`,
   async()=>{const out=$('#d2').value.trim();if(!out)return;
     const mem=$('#d3').value.split('\\n').map(s=>s.trim()).filter(Boolean);
+    if(!(await destGate(out)))throw new Error('Nothing restored: choose what to do about '+out+' first');
     await api('POST',`/api/chunks/${id}/restore`,{source_dir:$('#d1').value.trim(),output_dir:out,members:mem.length?mem:undefined});
     toast('Restore started — see Jobs');loc('jobs')});}
 

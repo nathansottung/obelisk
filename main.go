@@ -2155,6 +2155,9 @@ func api(mux *http.ServeMux, app *App) {
 				}
 			}
 		}
+		if !destinationGate(w, app, out) {
+			return
+		}
 		startedOn(w).write(runJob(app, "restore", "Restore "+c.Name, func(p func(float64, string)) (map[string]any, error) {
 			return app.RestoreChunk(id, s(b, "source_dir"), out, members, p)
 		}))
@@ -2202,6 +2205,9 @@ func api(mux *http.ServeMux, app *App) {
 				return
 			}
 			sel.AsOf = &t
+		}
+		if !destinationGate(w, app, out) {
+			return
 		}
 		startedOn(w).write(runJob(app, "restore", fmt.Sprintf("Restore file %d", id), func(p func(float64, string)) (map[string]any, error) {
 			return app.RestoreFileVersion(id, sel, s(b, "source_dir"), out, p)
