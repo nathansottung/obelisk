@@ -894,8 +894,8 @@ pretending otherwise.
 
 ### The delete gate — confirm exactly what changes
 
-Every action that deletes, moves away or overwrites your files or records goes
-through two steps:
+The actions listed below, which delete, move away or overwrite your files or
+records, go through two steps:
 
 1. **Prepare.** Obelisk works out exactly what the action would touch and shows the
    list. Each file is listed by identity (volume and file ID), size and modification
@@ -914,6 +914,16 @@ The actions behind the gate are:
 - archive removal;
 - deleting an event, template, plan or protection profile;
 - re-writing a package's copy.
+
+Some smaller changes are not behind the gate:
+- un-quarantine (it moves a file back, and never replaces one);
+- unassigning files from an event;
+- resetting a burn queue's failed discs;
+- quarantine's check for items you removed by hand (it only updates records);
+- clearing a drive's encryption key, which has its own confirmation;
+- changing the burn command or applying settings held from a backup, which need
+  the typed word **Confirm**;
+- removing the stored access token in Settings.
 
 ### Quarantine — never delete, made usable
 
