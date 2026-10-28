@@ -23,7 +23,7 @@ func grantInheritOnly(t *testing.T, dir, sid, rights string) {
 // useAnyway checks dest, which must need a choice, and records "Use it anyway".
 func useAnyway(t *testing.T, app *App, dest string) *DestinationCheck {
 	t.Helper()
-	c := app.Store.CheckDestination(dest)
+	c := checkCreatingForTest(t, app, dest)
 	if c.Status != destStatusChoose {
 		t.Fatalf("%s: status %q (%s), want a choice", dest, c.Status, c.Reason)
 	}
@@ -84,14 +84,22 @@ func TestDestChoice_DeletedAndRecreatedAsksAgain(t *testing.T) {
 	}
 }
 
-// A destination cannot be swapped during a job: Windows refuses to move the folder
-// Obelisk holds open, and if it ever could, the next write would stop because the
-// folder at that path is no longer the one authorized.
+// A destination moved away and replaced at its path during a job stops the job:
+// the next write finds the folder at the authorized path is no longer the one
+// authorized, and nothing more is written in either folder.
+//
+// Windows normally refuses to move a folder the job holds open, which is itself a
+// protection; then the writes go on into the authorized folder, and the identity
+// check is exercised directly by pointing the held destination's recorded path at
+// another folder, exactly what a successful swap would leave. Either way the
+// detection is tested on every run. (destroot_recheck_linux_test.go swaps for real.)
 func TestDestRoot_WriteStopsWhenFolderReplaced(t *testing.T) {
 	app := dockApp(t)
-	folder, _ := sharedFolder(t)
-	useAnyway(t, app, folder)
-	d, err := app.Store.AuthorizeDestination(folder)
+	dest := filepath.Join(privateDestForTest(t), "A", "B")
+	if c := checkCreatingForTest(t, app, dest); c.Status != destStatusPass {
+		t.Fatalf("new private destination: %q (%s), want pass", c.Status, c.Reason)
+	}
+	d, err := app.Store.AuthorizeDestination(dest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,30 +107,44 @@ func TestDestRoot_WriteStopsWhenFolderReplaced(t *testing.T) {
 	if err := d.WriteFileAtomic("first.txt", []byte("1"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Rename(folder, folder+"-old"); err != nil {
-		// The held handle stops the swap; the destination stays the folder authorized.
+	var ch *DestinationChangedError
+	if err := os.Rename(dest, dest+"-old"); err != nil {
+		// Refused: the destination is still the authorized folder and writes go on.
 		if err := d.WriteFileAtomic("second.txt", []byte("2"), 0o644); err != nil {
 			t.Fatalf("write after a refused move: %v", err)
 		}
+		// What a swap would leave: the authorized path names a different folder.
+		other := filepath.Join(filepath.Dir(dest), "Other")
+		if err := os.Mkdir(other, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		d.canonical = other
+		if err := d.WriteFileAtomic("third.txt", []byte("3"), 0o644); !errors.As(err, &ch) {
+			t.Fatalf("write when the authorized path names another folder: got %v, want a DestinationChangedError", err)
+		}
+		if got := entriesOf(t, other); len(got) != 0 {
+			t.Fatalf("the other folder holds %q, want nothing", got)
+		}
+		if got := entriesOf(t, dest); len(got) != 2 {
+			t.Fatalf("the destination holds %q, want the two files written before the change", got)
+		}
 		return
 	}
-	if err := os.Mkdir(folder, 0o755); err != nil {
+	if err := os.Mkdir(dest, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	grantInheritOnly(t, folder, sidAuthenticatedUsers, "F")
-	var ch *DestinationChangedError
+	loosenDestForTest(t, dest)
 	if err := d.WriteFileAtomic("second.txt", []byte("2"), 0o644); !errors.As(err, &ch) {
 		t.Fatalf("write after the folder was replaced: got %v, want a DestinationChangedError", err)
 	}
 	if err := d.MkdirAll("sub"); !errors.As(err, &ch) {
 		t.Fatalf("mkdir after the folder was replaced: got %v, want a DestinationChangedError", err)
 	}
-	for _, dir := range []string{folder, folder + "-old"} {
-		for _, e := range entriesOf(t, dir) {
-			if e != "first.txt" {
-				t.Fatalf("%s holds %q after the refusal", dir, e)
-			}
-		}
+	if got := entriesOf(t, dest); len(got) != 0 {
+		t.Fatalf("the replacement holds %q, want nothing", got)
+	}
+	if got := entriesOf(t, dest+"-old"); len(got) != 1 || got[0] != "first.txt" {
+		t.Fatalf("the moved destination holds %q, want only the first file", got)
 	}
 }
 
@@ -187,7 +209,7 @@ func TestDestChoice_FirstFolderGrantDoesNotCoverRecreatedDestination(t *testing.
 		t.Fatal(err)
 	}
 	grantInheritOnly(t, a, sidAuthenticatedUsers, "F")
-	c := app.Store.CheckDestination(dest)
+	c := checkCreatingForTest(t, app, dest)
 	if c.Status != destStatusChoose {
 		t.Fatalf("the next run: %q with findings %+v, want a choice", c.Status, c.Findings)
 	}
@@ -198,4 +220,20 @@ func TestDestChoice_FirstFolderGrantDoesNotCoverRecreatedDestination(t *testing.
 	if got := entriesOf(t, dest); len(got) != 0 {
 		t.Fatalf("written into the new destination before a choice: %q", got)
 	}
+}
+
+// privateDestForTest is an existing destination only this user and the system can
+// change, so it needs no choice.
+func privateDestForTest(t *testing.T) string {
+	t.Helper()
+	user, _ := destUserSID()
+	p := t.TempDir()
+	setDestFixtureDACL(t, p, "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;SY)")
+	return p
+}
+
+// loosenDestForTest lets Authenticated Users take Full control of what is made in dir.
+func loosenDestForTest(t *testing.T, dir string) {
+	t.Helper()
+	grantInheritOnly(t, dir, sidAuthenticatedUsers, "F")
 }

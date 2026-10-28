@@ -104,12 +104,15 @@ replace.
   your choice first: a folder other accounts on this PC can change through
   Windows' default groups (Authenticated Users or Users, inherited), a drive's
   top folder, or an exFAT or FAT32 drive, where permissions, hard links and file
-  IDs cannot be checked. A folder that doesn't exist yet is created first, empty,
-  so Obelisk asks about the permissions it really got. Obelisk explains what it
-  found and writes nothing else there until you pick **Make this folder private**,
-  **Use it anyway** (type `Continue`; it covers only that folder, and Obelisk asks
-  again if the folder is replaced or its permissions change, and stops a job
-  that is running) or **Pick another folder**.
+  IDs cannot be checked. A folder that doesn't exist yet is not created until you
+  confirm **Create** for it; Obelisk then reads the permissions it really got and
+  asks about those. Obelisk explains what it found and writes nothing there until
+  you pick **Make this folder private**, **Use it anyway** (type `Continue`; it
+  covers only that folder, and Obelisk asks again if the folder is replaced or its
+  permissions change) or **Pick another folder**. If the folder is replaced, or its
+  permissions change, while a mirror or backup is running, the job stops at once
+  and says why; it writes nothing more, and the copies that run had not yet
+  recorded are not recorded.
   Grants to Everyone, Guests, Anonymous Logon or any other account are refused.
   FAT32 refuses files over 4 GB before copying. On Linux,
   ext4, XFS, Btrfs, exFAT and FAT are accepted and a Docker overlay folder is

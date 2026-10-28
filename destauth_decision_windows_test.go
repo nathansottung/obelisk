@@ -243,8 +243,8 @@ func fileSDDLOf(t *testing.T, path string) string {
 	return sd.String()
 }
 
-// A warned destination cannot be written to until the user has chosen. A missing
-// one is created, empty, so its real permissions can be read; nothing else is.
+// A warned destination cannot be written to until the user has chosen, and a
+// missing one is not even created until the user confirms creating it.
 func TestDestChoice_NoWriteBeforeChoice(t *testing.T) {
 	app := dockApp(t)
 	folder, _ := sharedFolder(t)
@@ -261,13 +261,27 @@ func TestDestChoice_NoWriteBeforeChoice(t *testing.T) {
 	if got := entriesOf(t, folder); len(got) != 0 {
 		t.Fatalf("a refused destination was written to: %q", got)
 	}
-	// A folder that does not exist yet is created empty, and nothing is written in it.
+	// A folder that does not exist yet is not created by checking or authorizing it:
+	// the user is asked to create it first.
 	sub := filepath.Join(folder, "new", "deeper")
-	if _, err := app.Store.AuthorizeDestination(sub); !errors.As(err, &ce) {
-		t.Fatalf("authorize a new folder inside before a choice: got %v, want a DestinationChoiceError", err)
+	if c := app.Store.CheckDestination(sub); c.Status != destStatusCreate || c.Notice == nil {
+		t.Fatalf("check a missing folder: status %q, want create", c.Status)
 	}
-	if got := entriesOf(t, folder); len(got) != 1 || got[0] != "new" {
-		t.Fatalf("before the choice, %s holds %q, want only the new folder", folder, got)
+	if _, err := app.Store.AuthorizeDestination(sub); !errors.As(err, &ce) || ce.Check.Status != destStatusCreate {
+		t.Fatalf("authorize a missing folder: got %v, want a DestinationChoiceError asking to create it", err)
+	}
+	if _, err := app.Store.CreateDestination(sub, sub, false); err == nil {
+		t.Fatal("a folder was created without the user's confirmation")
+	}
+	if _, err := app.Store.CreateDestination(sub, filepath.Join(folder, "elsewhere"), true); err == nil {
+		t.Fatal("a confirmation shown for one folder created another")
+	}
+	if got := entriesOf(t, folder); len(got) != 0 {
+		t.Fatalf("a folder was created before the user confirmed: %q", got)
+	}
+	// Once confirmed, it is created empty and its real permissions are asked about.
+	if c, err := app.Store.CreateDestination(sub, sub, true); err != nil || c.Status != destStatusChoose {
+		t.Fatalf("create after confirming: %+v %v, want a choice", c, err)
 	}
 	if got := entriesOf(t, sub); len(got) != 0 {
 		t.Fatalf("a file was written into the new folder before the choice: %q", got)
@@ -320,14 +334,18 @@ func TestDestChoice_UseAnywayNeedsTypedWord(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.Close() // one job per volume at a time: release the lease before the next
-	// A new folder inside the chosen folder is a different folder: it is created,
-	// its real permissions read, and the user asked about it.
+	// A new folder inside the chosen folder is a different folder: once the user has
+	// confirmed creating it, its real permissions are read and asked about.
 	photos := filepath.Join(folder, "Photos")
 	var ce *DestinationChoiceError
 	if _, err := app.Store.AuthorizeDestination(photos); !errors.As(err, &ce) {
 		t.Fatalf("authorize a new folder inside a chosen folder: got %v, want a DestinationChoiceError", err)
 	}
-	if _, err := app.Store.ChooseUseAnyway(photos, ce.Check.Fingerprint, destUseAnywayWord); err != nil {
+	pc := checkCreatingForTest(t, app, photos)
+	if pc.Status != destStatusChoose {
+		t.Fatalf("the new folder: %q, want its own choice", pc.Status)
+	}
+	if _, err := app.Store.ChooseUseAnyway(photos, pc.Fingerprint, destUseAnywayWord); err != nil {
 		t.Fatal(err)
 	}
 	d2, err := app.Store.AuthorizeDestination(photos)
@@ -573,7 +591,7 @@ func TestDestAuth_OfflineDriveLetterSource(t *testing.T) {
 		coll := app.Store.AddCollection("Unplugged")
 		f := app.Store.AddFolder(coll.ID, gone)
 		f.VolumeID = recorded
-		d, err := app.Store.AuthorizeDestination(filepath.Join(t.TempDir(), "mirror"))
+		d, err := app.Store.AuthorizeDestination(createdForTest(t, app, filepath.Join(t.TempDir(), "mirror")))
 		if err != nil {
 			t.Fatalf("recorded=%q: an unplugged source blocked an unrelated destination: %v", recorded, err)
 		}
@@ -672,7 +690,7 @@ func TestDestAuth_UnrecordedRootSourceDoesNotBlockEverything(t *testing.T) {
 	coll := app.Store.AddCollection("Whole drive")
 	f := app.Store.AddFolder(coll.ID, unusedDriveLetter(t))
 	f.VolumeID = ""
-	d, err := app.Store.AuthorizeDestination(filepath.Join(t.TempDir(), "mirror"))
+	d, err := app.Store.AuthorizeDestination(createdForTest(t, app, filepath.Join(t.TempDir(), "mirror")))
 	if err != nil {
 		t.Fatalf("an unplugged whole-drive source refused an unrelated destination: %v", err)
 	}

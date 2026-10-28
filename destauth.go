@@ -247,6 +247,23 @@ func (snap *sourceSnapshot) decide(destCanonical, display string) error {
 	return nil
 }
 
+// decideCreate refuses creating folders down to intended when that would make the
+// folder of a registered source that is not there now (its drive is not attached,
+// or it was never recorded). Once made, it would be at that source's path and
+// refused from then on, so it is refused before anything is created.
+func (snap *sourceSnapshot) decideCreate(intended, display string) error {
+	d := normPath(intended)
+	for _, s := range snap.srcs {
+		if !s.offline || s.abs == "" {
+			continue
+		}
+		if a := normPath(s.abs); a == d || canonicalWithin(a, d) {
+			return fmt.Errorf("refusing: creating %s would make the folder of registered source %s, which is not there now. Obelisk won't create a source's folder; choose another destination", display, s.registered)
+		}
+	}
+	return nil
+}
+
 // decideOffline applies the offline sources to a destination on the volume named
 // destVolumeID (empty when that is unknown), whose path as requested is requested
 // and as resolved is canonical.
@@ -455,9 +472,9 @@ type DestRoot struct {
 // A destination with findings (other accounts can change it, or its filesystem
 // cannot record permissions) is refused with a *DestinationChoiceError until the
 // user has made a choice that still matches the folder (see destchoice.go). The
-// choice is about the folder's real permissions: a missing destination is created
-// first (empty), and what Windows actually set on it is what the user decides
-// about. Nothing else is written until then.
+// choice is about the folder's real permissions, so a destination that does not
+// exist yet is refused the same way until the user has confirmed creating it
+// (CreateDestination); its permissions are read, and asked about, once it exists.
 //
 // Every write through the returned DestRoot re-reads the destination's identity
 // and real permissions first (see checkRoot), and stops if either changed.
@@ -466,7 +483,7 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(in.findings) > 0 && in.choice == nil {
+	if len(in.missing) > 0 || (len(in.findings) > 0 && in.choice == nil) {
 		in.anchor.Close()
 		return nil, &DestinationChoiceError{Check: s.checkFromInspection(in)}
 	}
@@ -541,11 +558,18 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 // chosen). Checking the destination again shows what changed and asks again.
 type DestinationChangedError struct {
 	Folder string
+	Cause  error // what the re-check found, when it was a refusal rather than a difference
 }
 
 func (e *DestinationChangedError) Error() string {
-	return fmt.Sprintf("refusing: %s is no longer the folder Obelisk checked, or its permissions (or those of a folder above it) changed. Nothing more is written there; check the destination again", e.Folder)
+	msg := fmt.Sprintf("the destination %s changed while Obelisk was using it: it is no longer the folder Obelisk checked, or its permissions (or those of a folder above it) changed", e.Folder)
+	if e.Cause != nil {
+		msg += " (" + e.Cause.Error() + ")"
+	}
+	return msg + ". Nothing more is written there"
 }
+
+func (e *DestinationChangedError) Unwrap() error { return e.Cause }
 
 // checkRoot re-reads the destination's identity and real permissions, and those of
 // every folder above it, and refuses if any differ from what was authorized.
@@ -553,7 +577,7 @@ func (e *DestinationChangedError) Error() string {
 func (d *DestRoot) checkRoot() error {
 	ns, err := checkDestNamespace(d.root)
 	if err != nil {
-		return err
+		return &DestinationChangedError{Folder: d.display, Cause: err}
 	}
 	if destFingerprint(ns.chain) != d.fingerprint {
 		return &DestinationChangedError{Folder: d.display}
@@ -599,17 +623,20 @@ func atOrBelow(folder, root string) bool {
 }
 
 // destInspection is everything decided about a destination before anything is
-// written into it: the destination folder itself (held open; created empty first
-// if it was missing), its findings, and the recorded choice that covers them, if any.
+// written into it, and writes nothing: the destination folder itself (held open),
+// its findings, and the recorded choice that covers them, if any. When the
+// destination does not exist yet, anchor is its deepest existing folder and only
+// the refusals are decided: the user is first asked to create it.
 type destInspection struct {
 	display     string
 	abs         string
 	snap        *sourceSnapshot
-	anchor      *os.Root // the destination folder; caller closes
+	anchor      *os.Root // the destination folder, or its deepest existing one; caller closes
 	anchorCanon string
 	anchorID    fileIdent
-	intended    string // the destination's real location (anchorCanon)
-	created     []string
+	intended    string   // the destination: anchorCanon, or where the missing folders would go
+	missing     []string // folders still to create below anchor; nothing else is decided yet
+	created     []string // folders CreateDestination just made, for the notice
 	fs          destFS
 	findings    []destFinding
 	fingerprint string
@@ -617,11 +644,12 @@ type destInspection struct {
 	stale       *DestinationChoice // a choice for this folder or path that no longer matches
 }
 
-// inspectDestination runs every check AuthorizeDestination makes before writing:
-// the source overlap decision and the platform policy on the destination and its
-// ancestors. A missing destination is created first, one empty folder at a time,
-// so the findings are the permissions Windows actually set rather than a
-// prediction of them. A refusal is returned as an error.
+// inspectDestination runs every check AuthorizeDestination makes before writing,
+// and writes nothing: the source overlap decision and the platform policy on the
+// destination and its ancestors. A missing destination is not created here, and
+// what it would inherit is not predicted for the user to accept: the check says
+// it must be created first (see CreateDestination), and its findings are read
+// from it once it exists. A refusal is returned as an error.
 func (s *Store) inspectDestination(path string) (*destInspection, error) {
 	display := strings.TrimSpace(path)
 	if display == "" {
@@ -663,19 +691,30 @@ func (s *Store) inspectDestination(path string) (*destInspection, error) {
 	if err := snap.decideOffline(rootVolumeID(anc), abs, intended, display); err != nil {
 		return fail(err)
 	}
-	var created []string
 	if len(missing) > 0 {
-		anc, ancCanon, created, err = createDestComponents(anc, ancCanon, missing, snap, display)
+		// Nothing is created here. The folder that would hold the new ones must pass,
+		// and so must what the first new folder would inherit, or creating it is
+		// pointless; what the user is asked about is read once the user has said
+		// to create it (CreateDestination) and it exists.
+		if err := snap.decideCreate(intended, display); err != nil {
+			return fail(err)
+		}
+		if _, err := checkDestNamespace(anc); err != nil {
+			return fail(err)
+		}
+		if _, err := predictDestChild(anc, filepath.Join(ancCanon, missing[0]), 1); err != nil {
+			return fail(err)
+		}
+		id, err := rootIdentity(anc)
 		if err != nil {
-			return nil, withCreatedNote(err, created)
+			return fail(err)
 		}
-		if err := snap.decideOffline(rootVolumeID(anc), abs, ancCanon, display); err != nil {
-			return fail(withCreatedNote(err, created))
-		}
+		return &destInspection{display: display, abs: abs, snap: snap, anchor: anc, anchorCanon: ancCanon, anchorID: id,
+			intended: intended, missing: missing}, nil
 	}
 	nsfs, err := checkDestNamespace(anc)
 	if err != nil {
-		return fail(withCreatedNote(err, created))
+		return fail(err)
 	}
 	findings := nsfs.findings
 	// Folders Obelisk creates inside the destination take the inheritable entries
@@ -684,7 +723,7 @@ func (s *Store) inspectDestination(path string) (*destInspection, error) {
 	// such folder is still read before anything is written into it (checkParent).
 	pred, err := predictDestChild(anc, ancCanon, 1)
 	if err != nil {
-		return fail(withCreatedNote(err, created))
+		return fail(err)
 	}
 	for _, f := range pred {
 		findings = appendFinding(findings, f)
@@ -694,7 +733,7 @@ func (s *Store) inspectDestination(path string) (*destInspection, error) {
 		return fail(err)
 	}
 	in := &destInspection{display: display, abs: abs, snap: snap, anchor: anc, anchorCanon: ancCanon, anchorID: id,
-		intended: ancCanon, created: created, fs: nsfs, findings: findings, fingerprint: destFingerprint(nsfs.chain)}
+		intended: ancCanon, fs: nsfs, findings: findings, fingerprint: destFingerprint(nsfs.chain)}
 	if len(findings) > 0 {
 		in.choice, in.stale = s.coveringChoice(in)
 	}

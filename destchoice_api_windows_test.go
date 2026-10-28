@@ -131,3 +131,41 @@ func TestDestChoiceAPI_PackageModeNotGated(t *testing.T) {
 		t.Fatalf("package mode wrote into dest_dir: %q", got)
 	}
 }
+
+// A mirror into a folder that does not exist yet is refused with "create", and the
+// check creates nothing. The folder is made only by the create call, with the
+// user's confirmation for that exact folder; its real permissions are then checked.
+func TestDestChoiceAPI_MissingFolderNeedsConfirmedCreate(t *testing.T) {
+	app, collID, _, vol := mirrorSetup(t, "Create", map[string]string{"a.txt": "alpha"})
+	folder, _ := sharedFolder(t)
+	dest := filepath.Join(folder, "New")
+	mux := http.NewServeMux()
+	api(mux, app)
+	mirror := map[string]any{"collection_id": collID, "targets": []any{map[string]any{"dest_dir": dest, "volume_id": vol.ID}}}
+
+	code, out := postJSON(t, mux, "/api/mirror", mirror)
+	chk, _ := out["destination_check"].(map[string]any)
+	if code != 409 || chk == nil || chk["status"] != destStatusCreate {
+		t.Fatalf("mirror into a missing folder: %d %v", code, out)
+	}
+	if code, out := postJSON(t, mux, "/api/destinations/check", map[string]any{"path": dest}); code != 200 || out["status"] != destStatusCreate {
+		t.Fatalf("check: %d %v", code, out)
+	}
+	folderShown := fmt.Sprint(chk["folder"])
+	if code, _ := postJSON(t, mux, "/api/destinations/create", map[string]any{"path": dest, "folder": folderShown}); code != 400 {
+		t.Fatalf("create without confirming: %d", code)
+	}
+	if code, _ := postJSON(t, mux, "/api/destinations/create", map[string]any{"path": dest, "folder": filepath.Join(folder, "Other"), "confirm": true}); code != 400 {
+		t.Fatalf("create confirmed for another folder: %d", code)
+	}
+	if got := entriesOf(t, folder); len(got) != 0 {
+		t.Fatalf("created before a confirmed create: %q", got)
+	}
+	code, out = postJSON(t, mux, "/api/destinations/create", map[string]any{"path": dest, "folder": folderShown, "confirm": true})
+	if code != 200 || out["status"] != destStatusChoose {
+		t.Fatalf("create: %d %v, want its permissions asked about", code, out)
+	}
+	if got := entriesOf(t, dest); len(got) != 0 {
+		t.Fatalf("written into the new folder: %q", got)
+	}
+}

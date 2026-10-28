@@ -52,3 +52,21 @@ func TestDestRoot_WriteStopsWhenFolderChangesLinux(t *testing.T) {
 		})
 	}
 }
+
+// privateDestForTest is an existing destination only this user can change.
+func privateDestForTest(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "dest")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// loosenDestForTest changes dir's mode, which changes its fingerprint.
+func loosenDestForTest(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.Chmod(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -157,9 +157,9 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 	// not see an alias of a source, a destination that CONTAINS a source, a nested
 	// link below a correct root, or a root substituted after the check.
 	//
-	// The authorization also creates the destination when it does not exist yet,
-	// root-relative through an authorized ancestor — so no unrestricted MkdirAll
-	// runs before the decision.
+	// A destination that does not exist yet is refused here until the user has
+	// confirmed creating it (CreateDestination), so no unrestricted MkdirAll runs
+	// and nothing is created before the decision.
 	dest, err := a.Store.AuthorizeDestination(destDir)
 	if err != nil {
 		return nil, err
@@ -268,6 +268,9 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 			}
 		})
 		if cerr != nil {
+			if stop := a.stopOnDestinationChange("mirror", cerr, res.Mirrored); stop != nil {
+				return nil, stop
+			}
 			// Same split as before the conversion: an unreadable or mid-copy-failing
 			// SOURCE is skipped; a destination that would not take, verify or publish
 			// the bytes is a failure.
@@ -289,6 +292,10 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 		res.Bytes += n
 	}
 
+	// The copies are recorded only if the destination is still the folder checked.
+	if stop := a.stopOnDestinationChange("mirror", dest.checkRoot(), res.Mirrored); stop != nil {
+		return nil, stop
+	}
 	// Record the verified file-level copies exactly like an adopted mirror, so
 	// drift and coverage treat them as real copies (Prompt 23 records).
 	if len(refs) > 0 {
@@ -297,7 +304,11 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 	}
 
 	progress(0.96, "refreshing volume inventory sidecar")
-	if sc, err := a.writeVolumeInventoryTo(dest, vol); err == nil {
+	sc, serr := a.writeVolumeInventoryTo(dest, vol)
+	if stop := a.stopOnDestinationChange("mirror", serr, -1); stop != nil {
+		return nil, stop
+	}
+	if serr == nil {
 		res.Sidecar = sc
 	}
 	res.Coverage = a.archiveCoverage([]int{collectionID})
@@ -553,4 +564,30 @@ func (a *App) writeVolumeInventoryTo(dest *DestRoot, vol *Volume) (string, error
 		return dir, err
 	}
 	return dir, nil
+}
+
+// stopOnDestinationChange ends a mirror or back-up-changes job the moment its
+// destination is found to have changed (err is a *DestinationChangedError):
+// nothing more is written there, and nothing more is finished. copied is how many
+// files this run had copied and not yet recorded; they are not recorded, because
+// they are no longer known to be in the folder that was checked. copied < 0 means
+// the copies were already recorded (the change was found writing the inventory
+// file). Any other err, or nil, returns nil and the job goes on.
+func (a *App) stopOnDestinationChange(kind string, err error, copied int) error {
+	var changed *DestinationChangedError
+	if !errors.As(err, &changed) {
+		return nil
+	}
+	var what string
+	switch {
+	case copied < 0:
+		what = "The copies were recorded before the change; the inventory file on the drive was not updated."
+	case copied == 1:
+		what = "The 1 file copied before the change is not recorded as a copy."
+	default:
+		what = fmt.Sprintf("The %d file(s) copied before the change are not recorded as copies.", copied)
+	}
+	stop := fmt.Errorf("stopped: %w. %s Check the destination again, then run the job again", changed, what)
+	a.Store.Log(kind, stop.Error())
+	return stop
 }

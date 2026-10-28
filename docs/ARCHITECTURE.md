@@ -709,16 +709,24 @@ Mirrors and mirror-mode "back up changes" write through `Store.AuthorizeDestinat
    then renamed into place relative to the authorized folder. A failed rename
    never deletes the existing file. Before every write the destination is
    re-read: if it is no longer the same folder (volume and file ID at its path)
-   or its real permissions, or those of a folder above it, changed, the write
-   stops and the next check asks again. Each parent folder is re-checked too.
+   or its real permissions, or those of a folder above it, changed, the write is
+   refused with `DestinationChangedError`, and the mirror or back-up-changes job
+   stops at once with that reason: nothing more is written and nothing more is
+   recorded. Copies made before the change are not recorded (if it is found only
+   while writing the inventory file at the end, the copies are already recorded
+   and the inventory file is not written). The next check asks again.
+   Each parent folder is re-checked too.
 3. **Platform policy.** The folder and its ancestors must be on an accepted
    filesystem and, where it keeps permissions, changeable only by this user and
-   the system. A missing destination is created first, empty, so the check reads
-   the permissions Windows actually set rather than predicting them. Three cases
-   need the user's choice before anything else is written (`destchoice.go`): a
-   folder Authenticated Users or Users can change through an inherited grant, a
-   drive root with Windows' default "create folders" grant, and an exFAT or FAT
-   drive. The choices are Make this folder private (removes those groups from
+   the system. The check is read-only. A missing destination comes back as
+   "create": nothing is made until the user confirms Create for that exact
+   folder (`CreateDestination`), and then its real permissions, not a prediction
+   of them, are what the user is asked about. Creating a folder that would be a
+   registered source's own path, or one beneath it, is refused before anything
+   is made. Three cases need the user's choice before anything is written
+   (`destchoice.go`): a folder Authenticated Users or Users can change through
+   an inherited grant, a drive root with Windows' default "create folders"
+   grant, and an exFAT or FAT drive. The choices are Make this folder private (removes those groups from
    that one folder's permissions, by handle, after showing the exact change),
    Use it anyway (typed `Continue`, recorded against the destination folder's
    own volume and file ID with a digest of its real owner and permissions and

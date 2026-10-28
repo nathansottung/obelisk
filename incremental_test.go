@@ -32,7 +32,7 @@ func TestIncremental_VolumeBaseOnlyDelta(t *testing.T) {
 	scanInto(t, app, coll.ID, src)
 
 	vol := app.Store.AddVolume(Volume{Label: "ARCH-01", Kind: "HDD"})
-	dest := filepath.Join(t.TempDir(), "mirror")
+	dest := createdForTest(t, app, filepath.Join(t.TempDir(), "mirror"))
 
 	// First run: everything lands (nothing on the volume yet).
 	r1, err := app.BackupChanges(coll.ID, nil, vol.ID, BaseVolume, ModeMirror, dest, 0, "", func(float64, string) {})
@@ -127,7 +127,7 @@ func TestIncremental_ProtectionBaseExcludesComplete(t *testing.T) {
 	scanInto(t, app, coll.ID, src)
 
 	vol := app.Store.AddVolume(Volume{Label: "ARCH-02", Kind: "HDD"})
-	dest := filepath.Join(t.TempDir(), "mirror")
+	dest := createdForTest(t, app, filepath.Join(t.TempDir(), "mirror"))
 
 	if _, err := app.BackupChanges(coll.ID, nil, vol.ID, BaseProtection, ModeMirror, dest, 0, "", func(float64, string) {}); err != nil {
 		t.Fatal(err)
@@ -172,7 +172,7 @@ func TestIncremental_FeedsHomeRecognition(t *testing.T) {
 	writeFile(t, src, "x.txt", "ex")
 	scanInto(t, app, coll.ID, src)
 	vol := app.Store.AddVolume(Volume{Label: "ARCH-09", Kind: "HDD"})
-	dest := filepath.Join(t.TempDir(), "m")
+	dest := createdForTest(t, app, filepath.Join(t.TempDir(), "m"))
 	if _, err := app.BackupChanges(coll.ID, nil, vol.ID, BaseVolume, ModeMirror, dest, 0, "", func(float64, string) {}); err != nil {
 		t.Fatal(err)
 	}

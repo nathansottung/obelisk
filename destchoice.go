@@ -26,6 +26,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -65,6 +66,9 @@ const (
 	destStatusChoose = "choose" // findings, and no matching choice: ask the user
 	destStatusChosen = "chosen" // findings covered by a recorded choice
 	destStatusRefuse = "refuse"
+	// The folder does not exist yet. Nothing is created until the user confirms
+	// Create (CreateDestination); its permissions are then read and checked.
+	destStatusCreate = "create"
 )
 
 // Destination choices offered in a notice.
@@ -72,6 +76,7 @@ const (
 	destChoiceMakePrivate = "make_private"
 	destChoiceUseAnyway   = "use_anyway"
 	destChoicePickAnother = "pick_another"
+	destChoiceCreate      = "create"
 )
 
 // DestinationNotice is the plain-words explanation shown before a choice.
@@ -123,6 +128,9 @@ func (s *Store) CheckDestination(path string) *DestinationCheck {
 func (s *Store) checkFromInspection(in *destInspection) *DestinationCheck {
 	c := &DestinationCheck{Path: in.display, Folder: in.intended, Findings: in.findings, Fingerprint: in.fingerprint}
 	switch {
+	case len(in.missing) > 0:
+		c.Status = destStatusCreate
+		c.Notice = destCreateNotice(in)
 	case len(in.findings) == 0:
 		c.Status = destStatusPass
 	case in.choice != nil:
@@ -493,4 +501,77 @@ func destContains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// CreateDestination creates a destination that does not exist yet, once the user
+// has confirmed "Create <folder>", and then checks it like any other: its real
+// permissions are read and, when they need it, the user is asked about them.
+//
+// folder must be the folder the check showed (DestinationCheck.Folder), so a
+// confirmation shown for one place cannot create another. The folders are created
+// one at a time below the existing one, each parent decided against the sources
+// and the platform policy first (createDestComponents). Nothing is written into
+// them.
+func (s *Store) CreateDestination(path, folder string, confirmed bool) (*DestinationCheck, error) {
+	in, err := s.inspectDestination(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(in.missing) == 0 {
+		defer in.anchor.Close()
+		return s.checkFromInspection(in), nil // it exists: nothing to create
+	}
+	if normPath(folder) != normPath(in.intended) {
+		in.anchor.Close()
+		return nil, fmt.Errorf("that confirmation was for %s, not %s; check the destination again", folder, in.intended)
+	}
+	if !confirmed {
+		in.anchor.Close()
+		return nil, fmt.Errorf("confirm Create %s before Obelisk makes the folder", in.intended)
+	}
+	root, _, created, err := createDestComponents(in.anchor, in.anchorCanon, in.missing, in.snap, in.display)
+	if err != nil {
+		return nil, withCreatedNote(err, created)
+	}
+	root.Close()
+	s.Log("destination", "created "+strings.Join(created, ", "))
+	after, err := s.inspectDestination(path)
+	if err != nil {
+		return nil, withCreatedNote(err, created)
+	}
+	defer after.anchor.Close()
+	if len(after.missing) > 0 {
+		return nil, fmt.Errorf("%s still does not exist after creating it; check the destination again", in.intended)
+	}
+	after.created = created
+	return s.checkFromInspection(after), nil
+}
+
+// destCreateNotice asks to create a destination that does not exist yet.
+func destCreateNotice(in *destInspection) *DestinationNotice {
+	var made []string
+	p := in.anchorCanon
+	for _, m := range in.missing {
+		p = filepath.Join(p, m)
+		made = append(made, p)
+	}
+	n := &DestinationNotice{Title: "Create " + in.intended + "?"}
+	n.Lines = append(n.Lines,
+		fmt.Sprintf("✗ What we found: %s does not exist yet.", in.intended),
+		fmt.Sprintf("✓ What happens: Obelisk creates %s, empty, then reads the permissions it gets and checks them before writing anything there. If other accounts could change it, you are asked about that next.", joinAnd(made)))
+	n.Choices = []DestinationOption{
+		{ID: destChoiceCreate, Label: "Create " + in.intended, Detail: "Make the folder, then check it."},
+		{ID: destChoicePickAnother, Label: "Pick another folder", Detail: "Nothing is created or written. Choose a folder that already exists, or another place to create one."},
+	}
+	var b strings.Builder
+	b.WriteString(n.Title + "\n\n")
+	for _, l := range n.Lines {
+		b.WriteString(l + "\n")
+	}
+	b.WriteString("\nChoose one:\n")
+	for _, c := range n.Choices {
+		b.WriteString("  ( ) " + c.Label + ": " + c.Detail + "\n")
+	}
+	n.Text = strings.TrimRight(b.String(), "\n")
+	return n
 }

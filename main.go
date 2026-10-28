@@ -345,16 +345,16 @@ func configResponse(cfg Config, keystoreStatus map[string]any) map[string]any {
 	}
 }
 
-// destinationGate answers a write request whose destination is refused (400) or
-// still needs the user's choice (409, with the check and its notice), and reports
-// whether the request may go on. The job itself enforces the same rule.
+// destinationGate answers a write request whose destination is refused (400), or
+// still needs the user to create it or to choose (409, with the check and its
+// notice), and reports whether the request may go on. The job itself enforces the same rule.
 func destinationGate(w http.ResponseWriter, app *App, dest string) bool {
 	c := app.Store.CheckDestination(dest)
 	switch c.Status {
 	case destStatusRefuse:
 		jsonErr(w, 400, fmt.Errorf("%s", c.Reason))
 		return false
-	case destStatusChoose:
+	case destStatusChoose, destStatusCreate:
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(409)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -1209,9 +1209,22 @@ func api(mux *http.ServeMux, app *App) {
 	})
 
 	// ---- destination checks and choices (see destchoice.go) ----
-	// Read-only: may Obelisk write to this folder, and what must the user decide?
+	// Read-only, and creates nothing: may Obelisk write to this folder, and what must
+	// the user decide? A folder that does not exist yet comes back as "create".
 	mux.HandleFunc("POST /api/destinations/check", func(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, app.Store.CheckDestination(s(body(r), "path")))
+	})
+	// "Create <folder>": the user confirmed creating the folder the check showed.
+	// It is created empty, then checked; the answer may still need a choice.
+	mux.HandleFunc("POST /api/destinations/create", func(w http.ResponseWriter, r *http.Request) {
+		b := body(r)
+		confirmed, _ := b["confirm"].(bool)
+		c, err := app.Store.CreateDestination(s(b, "path"), s(b, "folder"), confirmed)
+		if err != nil {
+			jsonErr(w, 400, err)
+			return
+		}
+		jsonOut(w, c)
 	})
 	// "Use it anyway": the user typed the confirmation word for the fingerprint shown.
 	mux.HandleFunc("POST /api/destinations/use-anyway", func(w http.ResponseWriter, r *http.Request) {

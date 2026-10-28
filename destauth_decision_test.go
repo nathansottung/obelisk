@@ -32,7 +32,7 @@ func identOf(t *testing.T, p string) fileIdent {
 // chooseAnyway records "Use it anyway" for a destination that needs a choice.
 func chooseAnyway(t *testing.T, app *App, dest string) {
 	t.Helper()
-	c := app.Store.CheckDestination(dest)
+	c := checkCreatingForTest(t, app, dest)
 	if c.Status != destStatusChoose {
 		t.Fatalf("%s: status %q (%s), want a choice", dest, c.Status, c.Reason)
 	}
@@ -125,19 +125,21 @@ func TestDestVolume_AuthorizeWithOfflineRecordedSource(t *testing.T) {
 	}
 	f.VolumeID = "test:not-attached"
 
-	dest := filepath.Join(t.TempDir(), "mirror")
+	dest := createdForTest(t, app, filepath.Join(t.TempDir(), "mirror"))
 	d, err := app.Store.AuthorizeDestination(dest)
 	if err != nil {
 		t.Fatalf("an offline source on another volume blocked an unrelated destination: %v", err)
 	}
 	d.Close()
 
-	// Even its own registered path is acceptable: that volume is not here.
-	d, err = app.Store.AuthorizeDestination(gone)
-	if err != nil {
-		t.Fatalf("an offline source's own path on a different volume: %v", err)
+	// Its own registered path is refused before anything is created: once made,
+	// that folder would be at the source's path, and refused from then on.
+	if c := app.Store.CheckDestination(gone); c.Status != destStatusRefuse {
+		t.Fatalf("an offline source's own path: %q, want a refusal before creating it", c.Status)
 	}
-	d.Close()
+	if _, err := os.Stat(filepath.Dir(gone)); err == nil {
+		t.Fatal("a folder was created toward an offline source's path")
+	}
 }
 
 func TestDestVolume_RecordsSourceVolume(t *testing.T) {
@@ -157,7 +159,7 @@ func TestDestVolume_RecordsSourceVolume(t *testing.T) {
 	legacy := t.TempDir()
 	lf := app.Store.AddFolder(coll.ID, legacy)
 	lf.VolumeID = ""
-	d, err := app.Store.AuthorizeDestination(filepath.Join(t.TempDir(), "out"))
+	d, err := app.Store.AuthorizeDestination(createdForTest(t, app, filepath.Join(t.TempDir(), "out")))
 	if err != nil {
 		t.Fatal(err)
 	}

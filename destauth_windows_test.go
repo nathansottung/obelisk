@@ -47,7 +47,7 @@ func TestDestAuth_MissingSourceUnderJunction(t *testing.T) {
 		t.Fatal("ancestor sentinel replaced")
 	}
 	assertFileBytes(t, filepath.Join(realParent, "sentinel"), "KEEP")
-	d, err := app.Store.AuthorizeDestination(filepath.Join(realParent, "safe-sibling"))
+	d, err := app.Store.AuthorizeDestination(createdForTest(t, app, filepath.Join(realParent, "safe-sibling")))
 	if err != nil {
 		t.Fatalf("safe sibling of absent source: %v", err)
 	}

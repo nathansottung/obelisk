@@ -380,6 +380,9 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 			}
 		})
 		if cerr != nil {
+			if stop := a.stopOnDestinationChange("backup", cerr, res.Files); stop != nil {
+				return nil, stop
+			}
 			res.Failed++
 			continue
 		}
@@ -392,11 +395,19 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 		res.Bytes += n
 	}
 
+	// The copies are recorded only if the destination is still the folder checked.
+	if stop := a.stopOnDestinationChange("backup", dest.checkRoot(), res.Files); stop != nil {
+		return nil, stop
+	}
 	if len(refs) > 0 {
 		a.mergeMirrorRefs(collectionID, vol, destDir, refs)
 	}
 	progress(0.96, "refreshing volume inventory sidecar")
-	if sc, err := a.writeVolumeInventoryTo(dest, vol); err == nil {
+	sc, serr := a.writeVolumeInventoryTo(dest, vol)
+	if stop := a.stopOnDestinationChange("backup", serr, -1); stop != nil {
+		return nil, stop
+	}
+	if serr == nil {
 		res.Sidecar = sc
 	}
 	if res.Files > 0 {

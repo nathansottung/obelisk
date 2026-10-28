@@ -536,7 +536,7 @@ func TestDestAuth_NestedSymlinkLeafRefused(t *testing.T) {
 // by sharing a helper.
 func TestDestAuth_BackupChangesLandsThroughAuthorizedRoot(t *testing.T) {
 	app, collID, src, vol := mirrorSetup(t, "Inc", map[string]string{"a.txt": "alpha\n", "b.txt": "bravo\n"})
-	dest := filepath.Join(t.TempDir(), "not-created-yet", "mirror")
+	dest := createdForTest(t, app, filepath.Join(t.TempDir(), "not-created-yet", "mirror"))
 
 	beforeIdent := identOf(t, filepath.Join(src, "a.txt"))
 	res, err := app.BackupChanges(collID, nil, vol.ID, BaseVolume, ModeMirror, dest, 0, "", noProgMirror)

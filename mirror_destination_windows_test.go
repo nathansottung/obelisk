@@ -62,7 +62,7 @@ func TestMirror_UnpluggedSourceDoesNotBlock(t *testing.T) {
 	app, collID, _, vol := mirrorSetup(t, "Here", map[string]string{"a.txt": "alpha"})
 	other := app.Store.AddCollection("Unplugged")
 	app.Store.AddFolder(other.ID, filepath.Join(unusedDriveLetter(t), "Photos"))
-	res, err := app.MirrorToVolume(collID, nil, filepath.Join(t.TempDir(), "mirror"), vol.ID, 0, "", noProgMirror)
+	res, err := app.MirrorToVolume(collID, nil, createdForTest(t, app, filepath.Join(t.TempDir(), "mirror")), vol.ID, 0, "", noProgMirror)
 	if err != nil {
 		t.Fatalf("an unplugged source blocked the mirror: %v", err)
 	}

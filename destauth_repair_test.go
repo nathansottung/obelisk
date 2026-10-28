@@ -38,7 +38,7 @@ func TestDestAuth_FilesystemRootOverlap(t *testing.T) {
 	assertFileBytes(t, filepath.Join(src, "sentinel"), "ORIGINAL")
 	// Positive sibling and shared-prefix controls.
 	for _, dest := range []string{t.TempDir(), src + "-sibling"} {
-		d, err := app.Store.AuthorizeDestination(dest)
+		d, err := app.Store.AuthorizeDestination(createdForTest(t, app, dest))
 		if err != nil {
 			t.Fatalf("safe sibling: %v", err)
 		}

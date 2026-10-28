@@ -175,7 +175,7 @@ func TestDestGuard_SharedSubfolderRefused(t *testing.T) {
 	if err := os.Rename(shared, sub); err != nil { // same volume: keeps its inherited grant
 		t.Fatal(err)
 	}
-	if c := app.Store.CheckDestination(dest); c.Status != destStatusPass {
+	if c := checkCreatingForTest(t, app, dest); c.Status != destStatusPass {
 		t.Fatalf("precondition: the destination itself is private, got %q", c.Status)
 	}
 	d, err := app.Store.AuthorizeDestination(dest)
@@ -206,7 +206,7 @@ func TestDestGuard_InheritOnlyGrantNeedsChoice(t *testing.T) {
 	user, _ := destUserSID()
 	dest := t.TempDir()
 	setDestFixtureDACL(t, dest, "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;SY)(A;OICIIO;0x1301bf;;;AU)")
-	c := app.Store.CheckDestination(dest)
+	c := checkCreatingForTest(t, app, dest)
 	if c.Status != destStatusChoose {
 		t.Fatalf("status %q, want a choice", c.Status)
 	}
@@ -230,17 +230,17 @@ func TestDestChoice_MissingFolderChoiceIsNarrow(t *testing.T) {
 	app := dockApp(t)
 	_, parent := sharedFolder(t)
 	a := filepath.Join(parent, "NewA")
-	c := app.Store.CheckDestination(a)
+	c := checkCreatingForTest(t, app, a)
 	if c.Status != destStatusChoose {
 		t.Fatalf("precondition: status %q", c.Status)
 	}
 	if _, err := app.Store.ChooseUseAnyway(a, c.Fingerprint, destUseAnywayWord); err != nil {
 		t.Fatal(err)
 	}
-	if got := app.Store.CheckDestination(a).Status; got != destStatusChosen {
+	if got := checkCreatingForTest(t, app, a).Status; got != destStatusChosen {
 		t.Fatalf("the chosen folder: %q", got)
 	}
-	if got := app.Store.CheckDestination(filepath.Join(parent, "NewB")).Status; got != destStatusChoose {
+	if got := checkCreatingForTest(t, app, filepath.Join(parent, "NewB")).Status; got != destStatusChoose {
 		t.Fatalf("another new folder under the same parent: %q, want a choice", got)
 	}
 }
@@ -252,7 +252,7 @@ func TestDestChoice_MovedCreatedFolderAskedAgain(t *testing.T) {
 	user, _ := destUserSID()
 	folder, _ := sharedFolder(t)
 	newDir := filepath.Join(folder, "New")
-	c := app.Store.CheckDestination(newDir)
+	c := checkCreatingForTest(t, app, newDir)
 	if _, err := app.Store.ChooseUseAnyway(newDir, c.Fingerprint, destUseAnywayWord); err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestDestChoice_MovedCreatedFolderAskedAgain(t *testing.T) {
 	if err := os.Rename(filepath.Join(folder, "New"), moved); err != nil {
 		t.Fatal(err)
 	}
-	if got := app.Store.CheckDestination(moved); got.Status != destStatusChoose {
+	if got := checkCreatingForTest(t, app, moved); got.Status != destStatusChoose {
 		t.Fatalf("moved created folder: %q with findings %+v, want a choice", got.Status, got.Findings)
 	}
 }
@@ -284,7 +284,7 @@ func TestDestPredict_CreatorOwnerIsTheUser(t *testing.T) {
 	user, _ := destUserSID()
 	parent := t.TempDir()
 	setDestFixtureDACL(t, parent, "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;SY)(A;OICIIO;GA;;;CO)")
-	if c := app.Store.CheckDestination(filepath.Join(parent, "New")); c.Status != destStatusPass {
+	if c := checkCreatingForTest(t, app, filepath.Join(parent, "New")); c.Status != destStatusPass {
 		t.Fatalf("new folder under a CREATOR OWNER grant: %q %s", c.Status, c.Reason)
 	}
 }
@@ -318,7 +318,7 @@ func TestDestNotice_SaysWhenGroupCanChangePermissions(t *testing.T) {
 	if err := os.Mkdir(folder, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	c := app.Store.CheckDestination(folder)
+	c := checkCreatingForTest(t, app, folder)
 	if c.Status != destStatusChoose {
 		t.Fatalf("status %q %s", c.Status, c.Reason)
 	}
@@ -327,7 +327,7 @@ func TestDestNotice_SaysWhenGroupCanChangePermissions(t *testing.T) {
 	}
 	// A plain Modify grant does not get that line.
 	plain, _ := sharedFolder(t)
-	if strings.Contains(app.Store.CheckDestination(plain).Notice.Text, "change who can use it") {
+	if strings.Contains(checkCreatingForTest(t, app, plain).Notice.Text, "change who can use it") {
 		t.Fatal("a Modify grant was described as able to change permissions")
 	}
 }
@@ -340,7 +340,7 @@ func TestDestChoice_SavedImmediatelyDuringBatch(t *testing.T) {
 	app.Store.BeginBatch()
 	defer app.Store.EndBatch()
 	app.Store.AddCollection("forces a recent write")
-	c := app.Store.CheckDestination(folder)
+	c := checkCreatingForTest(t, app, folder)
 	if _, err := app.Store.ChooseUseAnyway(folder, c.Fingerprint, destUseAnywayWord); err != nil {
 		t.Fatal(err)
 	}
@@ -395,7 +395,7 @@ func TestDestGuard_AncestorAcceptanceDoesNotCoverSubfolders(t *testing.T) {
 		t.Fatal(err)
 	}
 	setDestFixtureDACL(t, dest, "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;SY)")
-	c := app.Store.CheckDestination(dest)
+	c := checkCreatingForTest(t, app, dest)
 	if c.Status != destStatusChoose {
 		t.Fatalf("precondition: the shared folder above needs a choice, got %q", c.Status)
 	}
@@ -421,7 +421,7 @@ func TestDestGuard_AncestorAcceptanceDoesNotCoverSubfolders(t *testing.T) {
 func TestDestGuard_ModifyAcceptanceDoesNotCoverFullControl(t *testing.T) {
 	app := dockApp(t)
 	dest, _ := sharedFolder(t) // Authenticated Users: Modify, inherited
-	c := app.Store.CheckDestination(dest)
+	c := checkCreatingForTest(t, app, dest)
 	if _, err := app.Store.ChooseUseAnyway(dest, c.Fingerprint, destUseAnywayWord); err != nil {
 		t.Fatal(err)
 	}
@@ -453,7 +453,7 @@ func TestDestGuard_AnchorGrantDoesNotCoverNewDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 	dest := filepath.Join(anchor, "Dest")
-	c := app.Store.CheckDestination(dest)
+	c := checkCreatingForTest(t, app, dest)
 	if c.Status != destStatusChoose {
 		t.Fatalf("precondition: %q", c.Status)
 	}
@@ -480,7 +480,7 @@ func TestDestGuard_NestedNewDestinationUnderSharedParent(t *testing.T) {
 	p := t.TempDir()
 	setDestFixtureDACL(t, p, "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;SY)(A;OICIIO;0x1301bf;;;AU)")
 	dest := filepath.Join(p, "A", "B")
-	c := app.Store.CheckDestination(dest)
+	c := checkCreatingForTest(t, app, dest)
 	if _, err := app.Store.ChooseUseAnyway(dest, c.Fingerprint, destUseAnywayWord); err != nil {
 		t.Fatal(err)
 	}
@@ -524,7 +524,7 @@ func TestDestPredict_NoPropagateStopsAtFirstNewFolder(t *testing.T) {
 	setDestFixtureDACL(t, p, "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;SY)(A;OICIIONP;FA;;;AU)")
 	dest := filepath.Join(p, "A", "B")
 	// The grant is shown for the first new folder (A), never for the destination.
-	c := app.Store.CheckDestination(dest)
+	c := checkCreatingForTest(t, app, dest)
 	for _, f := range c.Findings {
 		if !strings.EqualFold(filepath.Base(f.Folder), "A") {
 			t.Fatalf("finding named for %s; the grant does not reach the destination", f.Folder)
@@ -556,7 +556,7 @@ func TestDestPredict_NoPropagateGrantOnFirstNewFolderIsShown(t *testing.T) {
 	setDestFixtureDACL(t, p, "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;SY)(A;OICIIONP;FA;;;AU)")
 	first := filepath.Join(p, "A")
 	dest := filepath.Join(first, "B")
-	c := app.Store.CheckDestination(dest)
+	c := checkCreatingForTest(t, app, dest)
 	if c.Status != destStatusChoose {
 		t.Fatalf("status %q, want a choice: the first new folder gets the grant", c.Status)
 	}
@@ -578,7 +578,7 @@ func TestDestPredict_NoPropagateGrantOnFirstNewFolderIsShown(t *testing.T) {
 		t.Fatal("the first new folder's grant covered a shared folder inside the destination")
 	}
 	d.Close()
-	if got := app.Store.CheckDestination(dest).Status; got != destStatusChosen {
+	if got := checkCreatingForTest(t, app, dest).Status; got != destStatusChosen {
 		t.Fatalf("a later run: %q, want the recorded choice to cover it", got)
 	}
 }

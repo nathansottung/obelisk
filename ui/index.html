@@ -1719,10 +1719,30 @@ function addMirrorTarget(){
    its notice, offers the three choices with none preselected, and records the one
    picked. Resolves true when the folder may be used now. ---- */
 async function destGate(path){
-  const c=await api('POST','/api/destinations/check',{path});
+  let c=await api('POST','/api/destinations/check',{path});
+  if(c.status==='create'){
+    // The folder does not exist yet: nothing is created until the user confirms.
+    if(!(await destCreateDlg(c)))return false;
+    c=await api('POST','/api/destinations/create',{path:c.path,folder:c.folder,confirm:true});
+  }
   if(c.status==='refuse'){toast(c.reason,1);return false}
   if(c.status!=='choose')return true;
   return destChoiceDlg(c);
+}
+function destCreateDlg(c){
+  return new Promise(resolve=>{
+    let d=$('#dcreate');if(!d){d=document.createElement('dialog');d.id='dcreate';document.body.append(d)}
+    const n=c.notice;
+    d.innerHTML=`<h1>${esc(n.title)}</h1>
+      ${n.lines.map(l=>`<div style="margin:6px 0;white-space:pre-wrap">${esc(l)}</div>`).join('')}
+      <div class="row" style="margin-top:12px"><button class="btn" id="dcrok">Create ${esc(c.folder)}</button> <button class="btn ghost" id="dcrno">Pick another folder</button></div>`;
+    let settled=false;
+    const done=v=>{if(settled)return;settled=true;d.close();resolve(v)};
+    d.onclose=()=>{if(!settled){settled=true;resolve(false)}};
+    d.querySelector('#dcrok').onclick=()=>done(true);
+    d.querySelector('#dcrno').onclick=()=>done(false);
+    d.showModal();
+  });
 }
 function destChoiceDlg(c){
   return new Promise(resolve=>{
