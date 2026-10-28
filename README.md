@@ -892,6 +892,29 @@ pretending otherwise.
 
 ---
 
+### The delete gate — confirm exactly what changes
+
+Every action that deletes, moves away or overwrites your files or records goes
+through two steps:
+
+1. **Prepare.** Obelisk works out exactly what the action would touch and shows the
+   list. Each file is listed by identity (volume and file ID), size and modification
+   time; each record by ID and a digest of its contents.
+2. **Confirm.** You type the action's word, **Delete** or **Overwrite**, within five
+   minutes, from the same browser tab.
+
+Just before it runs, Obelisk counts the targets again. If anything on the list
+changed in the meantime, it refuses and changes nothing; prepare the action again
+to see the new list. Each confirmation works once.
+
+The actions behind the gate are:
+- app-backup restore (which also copies your current keystores to the
+  `pre-restore-…` folder first, and stops if that copy fails);
+- quarantine;
+- archive removal;
+- deleting an event, template, plan or protection profile;
+- re-writing a package's copy.
+
 ### Quarantine — never delete, made usable
 
 Obelisk has no delete button and never will — but "you can't remove anything" is
