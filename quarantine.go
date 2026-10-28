@@ -12,8 +12,10 @@ package main
 // tool out of source data): quarantine exists ONLY inside MANAGED TERRITORY — the
 // destination roots Obelisk itself populated via Plans. On adopted media and on
 // source roots the action does not exist: there is nothing here the tool created,
-// so it will not move anything. managedRootFor + AssertOutsideSources are the two
-// gates every quarantine/un-quarantine passes.
+// so it will not move anything. resolveQuarantine is the gate every quarantine
+// passes: it decides by real location (never by spelling) and refuses a source,
+// anything inside one, and any folder that holds one. Moves go through a handle
+// on the managed root.
 //
 // A quarantined file at <root>/<rel> moves to <root>/_deleted/<rel> — the original
 // relative path is preserved verbatim beneath _deleted, which is exactly what makes
@@ -30,6 +32,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -128,39 +131,112 @@ func (s *Store) ManagedRoots() []managedRoot {
 	return out
 }
 
-// QuarantineTerritory resolves the managed root a path belongs to, refusing anything
-// outside managed territory. It is the single gate: it enforces the read-only-source
-// invariant (a source root can never be quarantined), rejects paths the tool did not
-// populate (adopted media, unmanaged folders — the action simply does not apply), and
-// rejects the _deleted staging area itself (you cannot quarantine the quarantine).
-func (s *Store) QuarantineTerritory(absPath string) (root string, destVolumeID int, err error) {
+// quarantineTarget is a path resolved for quarantine: the managed root it is in
+// (as recorded, and its real location), its path relative to that root, and
+// its own real location.
+type quarantineTarget struct {
+	root     string // managed root as recorded (slash form)
+	rootReal string // the managed root's real location, from an open handle
+	rel      string // slash form, relative to the root
+	real     string // the path's real location: its opened parent plus its name
+	destVol  int
+}
+
+// resolveQuarantine decides a path by where it really is, not by how it is
+// spelled. Its parent folder is opened and the platform asked where that folder
+// is, so a folder link (junction, symbolic link), a short 8.3 name or another
+// spelling of the same place gives the same answer. The path itself must be a
+// file or folder, not a link.
+//
+// It is refused if its real location is a registered source, is inside one, or
+// CONTAINS one (moving a folder moves everything in it, so a source's parent is
+// never moved either), with the same identity-based check the destination guard
+// uses. It must then be inside a managed root (compared by real location too),
+// not the root itself and not the _deleted staging area.
+func (s *Store) resolveQuarantine(absPath string) (quarantineTarget, error) {
+	var t quarantineTarget
 	if strings.TrimSpace(absPath) == "" {
-		return "", 0, fmt.Errorf("no path given")
+		return t, fmt.Errorf("no path given")
 	}
-	if e := s.AssertOutsideSources(absPath); e != nil {
-		// A registered source root — read-only by the core invariant. The action does
-		// not exist here.
-		return "", 0, fmt.Errorf("quarantine never touches source data: %s is a read-only source", absPath)
+	abs, err := filepath.Abs(absPath)
+	if err != nil {
+		return t, err
 	}
-	np := normPath(absPath)
+	parent, name := filepath.Dir(abs), filepath.Base(abs)
+	if parent == abs || name == "" || name == "." || name == string(filepath.Separator) {
+		return t, fmt.Errorf("cannot quarantine %s", absPath)
+	}
+	fi, err := os.Lstat(abs)
+	if err != nil {
+		return t, fmt.Errorf("cannot read %s: %w", absPath, err)
+	}
+	if fi.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+		return t, fmt.Errorf("%s is a link; quarantine moves files and folders, never links", absPath)
+	}
+	pr, err := os.OpenRoot(parent)
+	if err != nil {
+		return t, fmt.Errorf("cannot open the folder holding %s: %w", absPath, err)
+	}
+	pc, err := rootCanonicalPath(pr)
+	volID := rootVolumeID(pr)
+	pr.Close()
+	if err != nil {
+		return t, fmt.Errorf("cannot establish the real location of %s: %w", absPath, err)
+	}
+	t.real = filepath.Join(pc, name)
+
+	snap, err := s.sourceSnapshot()
+	if err != nil {
+		return t, err
+	}
+	if err := snap.decide(t.real, absPath); err != nil {
+		return t, fmt.Errorf("quarantine never moves source data: %w", err)
+	}
+	if err := snap.decideOffline(volID, abs, t.real, absPath); err != nil {
+		return t, fmt.Errorf("quarantine never moves source data: %w", err)
+	}
+
+	np := normPath(t.real)
 	for _, mr := range s.ManagedRoots() {
-		rp := normPath(mr.Root)
-		if rp == "" {
+		r, err := os.OpenRoot(filepath.FromSlash(mr.Root))
+		if err != nil {
+			continue // not attached: nothing in it can be the path in hand
+		}
+		rc, err := rootCanonicalPath(r)
+		r.Close()
+		if err != nil {
 			continue
 		}
+		rp := normPath(rc)
 		if np == rp {
-			return "", 0, fmt.Errorf("cannot quarantine a managed root itself: %s", absPath)
+			return t, fmt.Errorf("cannot quarantine a managed root itself: %s", absPath)
 		}
-		if strings.HasPrefix(np, rp+"/") {
-			// Inside managed territory. Refuse the _deleted staging tree.
-			del := rp + "/" + strings.ToLower(QuarantineDir)
-			if np == del || strings.HasPrefix(np, del+"/") {
-				return "", 0, fmt.Errorf("%s is already in quarantine staging", absPath)
-			}
-			return mr.Root, mr.DestVolumeID, nil
+		if !canonicalWithin(rp, np) {
+			continue
 		}
+		rel, err := filepath.Rel(rc, t.real)
+		if err != nil {
+			return t, err
+		}
+		rel = filepath.ToSlash(rel)
+		if first, _, _ := strings.Cut(rel, "/"); strings.EqualFold(first, QuarantineDir) {
+			return t, fmt.Errorf("%s is already in quarantine staging", absPath)
+		}
+		t.root, t.rootReal, t.rel, t.destVol = mr.Root, rc, rel, mr.DestVolumeID
+		return t, nil
 	}
-	return "", 0, fmt.Errorf("not managed territory: quarantine applies only to destinations Obelisk populated (adopted media and sources are never moved)")
+	return t, fmt.Errorf("not managed territory: quarantine applies only to destinations Obelisk populated (adopted media and sources are never moved)")
+}
+
+// QuarantineTerritory resolves the managed root a path belongs to, refusing anything
+// outside managed territory, any source, inside a source or holding one, and the
+// _deleted staging area itself. See resolveQuarantine.
+func (s *Store) QuarantineTerritory(absPath string) (root string, destVolumeID int, err error) {
+	t, err := s.resolveQuarantine(absPath)
+	if err != nil {
+		return "", 0, err
+	}
+	return t.root, t.destVol, nil
 }
 
 // QuarantineEligible reports whether a path can be quarantined — the predicate the UI
@@ -282,24 +358,20 @@ func (s *Store) quarantineRefsLocked(destVolumeID int, relPrefix string, isDir b
 // without moving anything. Groups affected cataloged files by Event + Role and spells
 // out any copy-count drop. Errors if the path is not eligible territory or is missing.
 func (a *App) QuarantineConsequence(absPath string) (QuarantineConsequence, error) {
-	root, destVol, err := a.Store.QuarantineTerritory(absPath)
+	t, err := a.Store.resolveQuarantine(absPath)
 	if err != nil {
 		return QuarantineConsequence{}, err
 	}
-	info, err := os.Stat(absPath)
+	root, destVol, rel := t.root, t.destVol, t.rel
+	info, err := os.Lstat(t.real)
 	if err != nil {
 		return QuarantineConsequence{}, fmt.Errorf("cannot read %s: %w", absPath, err)
 	}
-	rel, err := filepath.Rel(filepath.FromSlash(root), absPath)
-	if err != nil {
-		return QuarantineConsequence{}, err
-	}
-	rel = filepath.ToSlash(rel)
 	res := QuarantineConsequence{Path: absPath, Root: root, Rel: rel, IsDir: info.IsDir(), MinCopiesAfter: -1}
 
 	// Count what's on disk (works whether or not the catalog knows these files).
 	if info.IsDir() {
-		_ = filepath.WalkDir(absPath, func(p string, d os.DirEntry, e error) error {
+		_ = filepath.WalkDir(t.real, func(p string, d os.DirEntry, e error) error {
 			if e != nil || d.IsDir() {
 				return nil
 			}
@@ -429,25 +501,21 @@ func quarantineWarning(label string, copiesAfter int) string {
 // audit line. It is the ONLY way this tool "removes" anything — and even this only
 // moves bytes; it never deletes. reason is optional; by defaults to "user".
 func (a *App) Quarantine(absPath, by, reason string) (*QuarantineEntry, error) {
-	root, destVol, err := a.Store.QuarantineTerritory(absPath)
+	t, err := a.Store.resolveQuarantine(absPath)
 	if err != nil {
 		return nil, err
 	}
-	info, err := os.Stat(absPath)
+	root, destVol, rel := t.root, t.destVol, t.rel
+	info, err := os.Lstat(t.real)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read %s: %w", absPath, err)
 	}
-	rel, err := filepath.Rel(filepath.FromSlash(root), absPath)
-	if err != nil {
-		return nil, err
-	}
-	rel = filepath.ToSlash(rel)
 
 	// Tally bytes/files before the move so the record stands on its own.
 	var size int64
 	fileCount := 0
 	if info.IsDir() {
-		_ = filepath.WalkDir(absPath, func(p string, d os.DirEntry, e error) error {
+		_ = filepath.WalkDir(t.real, func(p string, d os.DirEntry, e error) error {
 			if e != nil || d.IsDir() {
 				return nil
 			}
@@ -461,15 +529,11 @@ func (a *App) Quarantine(absPath, by, reason string) (*QuarantineEntry, error) {
 		size, fileCount = info.Size(), 1
 	}
 
-	dest := filepath.Join(filepath.FromSlash(root), QuarantineDir, filepath.FromSlash(rel))
-	if _, e := os.Stat(dest); e == nil {
-		return nil, fmt.Errorf("a quarantined copy of %s already exists in %s", rel, QuarantineDir)
-	}
-	if e := os.MkdirAll(filepath.Dir(dest), 0o755); e != nil {
-		return nil, e
-	}
-	if e := os.Rename(absPath, dest); e != nil {
-		return nil, fmt.Errorf("staging %s failed: %w", rel, e)
+	// The move is made inside the managed root's real location, through a handle
+	// on it: both names are relative to that root, so the move cannot reach
+	// anything outside it.
+	if err := moveWithinRoot(t.rootReal, rel, path.Join(QuarantineDir, rel)); err != nil {
+		return nil, fmt.Errorf("staging %s failed: %w", rel, err)
 	}
 
 	// Pull the affected catalog copies out of protection accounting (bytes are still
@@ -505,20 +569,32 @@ func (a *App) UnQuarantine(id int) (*QuarantineEntry, error) {
 	}
 	src := e.quarantinePath()
 	dst := e.originalPath()
-	if _, err := os.Stat(src); err != nil {
+	if _, err := os.Lstat(src); err != nil {
 		return nil, fmt.Errorf("staged bytes are gone (removed by hand?): %s", src)
 	}
-	if _, err := os.Stat(dst); err == nil {
+	if _, err := os.Lstat(dst); err == nil {
 		return nil, fmt.Errorf("original path is occupied, refusing to overwrite: %s", dst)
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	r, err := os.OpenRoot(filepath.FromSlash(e.Root))
+	if err != nil {
+		return nil, fmt.Errorf("cannot open managed root %s: %w", e.Root, err)
+	}
+	rootReal, err := rootCanonicalPath(r)
+	r.Close()
+	if err != nil {
+		return nil, fmt.Errorf("cannot establish the real location of %s: %w", e.Root, err)
+	}
+	// The way back is decided like the way in: the folder it returns to must not
+	// be, be inside or hold a registered source (one may have been registered
+	// there since).
+	if err := a.Store.checkUnquarantineTarget(rootReal, e.OriginalRel, dst); err != nil {
 		return nil, err
 	}
-	if err := os.Rename(src, dst); err != nil {
+	if err := moveWithinRoot(rootReal, path.Join(QuarantineDir, e.OriginalRel), e.OriginalRel); err != nil {
 		return nil, fmt.Errorf("restoring %s failed: %w", e.OriginalRel, err)
 	}
-	// Best-effort tidy of now-empty staging directories (never touches _deleted's root).
-	pruneEmptyDirs(filepath.Join(filepath.FromSlash(e.Root), QuarantineDir), filepath.Dir(src))
+	// Best-effort tidy of now-empty staging folders (never _deleted itself).
+	pruneEmptyStaging(rootReal, path.Dir(path.Join(QuarantineDir, e.OriginalRel)))
 
 	a.Store.mu.Lock()
 	a.Store.restoreRefsLocked(e.Refs)
@@ -698,19 +774,69 @@ func reasonSuffix(reason string) string {
 	return " — " + reason
 }
 
-// pruneEmptyDirs removes directories from leaf up to (but not including) stop, while
-// they are empty. Best-effort; the first non-empty dir (or an error) stops it.
-func pruneEmptyDirs(stop, leaf string) {
-	stopN := normPath(stop)
-	for {
-		ln := normPath(leaf)
-		if ln == "" || ln == stopN || !strings.HasPrefix(ln, stopN+"/") {
+// moveWithinRoot moves from to to, both relative to the folder at rootReal, through
+// a handle on that folder. to must not exist yet; its parent folders are created.
+func moveWithinRoot(rootReal, from, to string) error {
+	r, err := os.OpenRoot(rootReal)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	from, to = filepath.FromSlash(from), filepath.FromSlash(to)
+	if _, err := r.Lstat(to); err == nil {
+		return fmt.Errorf("%s already exists; refusing to replace it", filepath.ToSlash(to))
+	}
+	if err := r.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+		return err
+	}
+	return r.Rename(from, to)
+}
+
+// checkUnquarantineTarget decides the folder an entry returns to by its real
+// location, as resolveQuarantine decides the way in.
+func (s *Store) checkUnquarantineTarget(rootReal, rel, display string) error {
+	r, err := os.OpenRoot(rootReal)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	dir := filepath.FromSlash(path.Dir(rel))
+	if err := r.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	pr, err := r.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	pc, err := rootCanonicalPath(pr)
+	pr.Close()
+	if err != nil {
+		return fmt.Errorf("cannot establish the real location of %s: %w", display, err)
+	}
+	snap, err := s.sourceSnapshot()
+	if err != nil {
+		return err
+	}
+	if err := snap.decide(filepath.Join(pc, path.Base(rel)), display); err != nil {
+		return fmt.Errorf("quarantine never moves anything into source data: %w", err)
+	}
+	return nil
+}
+
+// pruneEmptyStaging removes now-empty folders inside _deleted, from dir upward,
+// through a handle on the managed root. Remove never removes a folder that is not
+// empty, and _deleted itself is kept. Best effort.
+func pruneEmptyStaging(rootReal, dir string) {
+	r, err := os.OpenRoot(rootReal)
+	if err != nil {
+		return
+	}
+	defer r.Close()
+	for dir != "." && dir != "/" && !strings.EqualFold(dir, QuarantineDir) && strings.HasPrefix(strings.ToLower(dir), strings.ToLower(QuarantineDir)+"/") {
+		if r.Remove(filepath.FromSlash(dir)) != nil {
 			return
 		}
-		if err := os.Remove(leaf); err != nil {
-			return // not empty, or gone — stop
-		}
-		leaf = filepath.Dir(leaf)
+		dir = path.Dir(dir)
 	}
 }
 

@@ -906,6 +906,8 @@ also re-credits the copy. Crucially, quarantine exists **only inside managed ter
 — the destination roots Obelisk itself populated via Plans — enforced by the very same
 read-only guard that keeps the tool out of your source data: on adopted media and source
 roots the action simply does not appear, because there is nothing there the tool created.
+It is decided by where a path really is (a folder link or another spelling of a source is
+still the source), and a folder that holds a source is never moved either.
 The Quarantine view lists everything staged (contents, age, total bytes) under one
 standing promise: *removing these permanently is a manual act you perform in your file
 manager — this tool has no delete button and never will.* The tool **never empties
