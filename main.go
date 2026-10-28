@@ -1459,9 +1459,9 @@ func api(mux *http.ServeMux, app *App) {
 		app.Store.UpdateEvent(ev)
 		jsonOut(w, ev)
 	})
+	// Gated: prepare op "record-delete" {kind:"event", id}, then execute with "Delete".
 	mux.HandleFunc("POST /api/events/{id}/delete", func(w http.ResponseWriter, r *http.Request) {
-		app.Store.DeleteEvent(pathID(r))
-		jsonOut(w, map[string]any{"ok": true})
+		needsConfirmation(w, "record-delete")
 	})
 	// Magnet suggestions: unassigned files whose capture dates fall in this event's
 	// range, grouped for accept/reject.
@@ -1535,9 +1535,9 @@ func api(mux *http.ServeMux, app *App) {
 		app.Store.UpdateTemplate(t)
 		jsonOut(w, t)
 	})
+	// Gated: prepare op "record-delete" {kind:"template", id}, then execute with "Delete".
 	mux.HandleFunc("POST /api/templates/{id}/delete", func(w http.ResponseWriter, r *http.Request) {
-		app.Store.DeleteTemplate(pathID(r))
-		jsonOut(w, map[string]any{"ok": true})
+		needsConfirmation(w, "record-delete")
 	})
 	// Live consequence preview for an UNSAVED (being-edited) template against the real
 	// catalog: how many files it places, match no route, and collide.
@@ -1722,9 +1722,9 @@ func api(mux *http.ServeMux, app *App) {
 		app.Store.UpdatePlan(p)
 		jsonOut(w, p)
 	})
+	// Gated: prepare op "record-delete" {kind:"plan", id}, then execute with "Delete".
 	mux.HandleFunc("POST /api/plans/{id}/delete", func(w http.ResponseWriter, r *http.Request) {
-		app.Store.DeletePlan(pathID(r))
-		jsonOut(w, map[string]any{"ok": true})
+		needsConfirmation(w, "record-delete")
 	})
 	// One browsable level of the virtual destination tree (from the mapping only).
 	mux.HandleFunc("GET /api/plans/{id}/tree", func(w http.ResponseWriter, r *http.Request) {
@@ -2986,12 +2986,9 @@ func api(mux *http.ServeMux, app *App) {
 		// An edit can invalidate prior compliance anywhere the profile is assigned.
 		jsonOut(w, map[string]any{"profile": app.Store.Profile(p.ID), "recompute": app.recomputeJob()})
 	})
+	// Gated: prepare op "record-delete" {kind:"profile", id}, then execute with "Delete".
 	mux.HandleFunc("DELETE /api/profiles/{id}", func(w http.ResponseWriter, r *http.Request) {
-		if err := app.Store.DeleteProfile(r.PathValue("id")); err != nil {
-			jsonErr(w, 409, err)
-			return
-		}
-		jsonOut(w, map[string]any{"deleted": true})
+		needsConfirmation(w, "record-delete")
 	})
 
 	// Assign a profile to an Archive (path "") or a folder path within it. An

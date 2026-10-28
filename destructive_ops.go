@@ -10,6 +10,14 @@ import (
 )
 
 func init() {
+	destructiveOps["record-delete"] = &destructiveOp{
+		word: wordDelete,
+		title: func(a *App, p map[string]any) string {
+			return fmt.Sprintf("Delete the %s record %s from the catalog", paramString(p, "kind"), recordIDParam(p))
+		},
+		targets: recordDeleteTargets,
+		run:     runRecordDelete,
+	}
 	destructiveOps["archive-remove"] = &destructiveOp{
 		word: wordDelete,
 		title: func(a *App, p map[string]any) string {
@@ -122,4 +130,73 @@ func archiveRemoveTargets(a *App, p map[string]any) ([]destructiveTarget, error)
 		recordTarget(fmt.Sprintf("%d folder record(s) of archive %d", len(folders), id), folders, "forgotten"),
 		recordTarget(fmt.Sprintf("%d event record(s) of archive %d", len(events), id), events, "forgotten"),
 	}, nil
+}
+
+// recordIDParam is a record-delete's ID: a number, or a profile's string ID.
+func recordIDParam(p map[string]any) string {
+	if v, ok := p["id"].(string); ok {
+		return v
+	}
+	return fmt.Sprint(paramInt(p, "id"))
+}
+
+// recordDeleteTargets is the record a delete removes, and what else it changes:
+// for an event, the files whose membership it clears.
+func recordDeleteTargets(a *App, p map[string]any) ([]destructiveTarget, error) {
+	kind, id := paramString(p, "kind"), paramInt(p, "id")
+	switch kind {
+	case "event":
+		ev := a.Store.Event(id)
+		if ev == nil {
+			return nil, refuseDestructive(404, "event %d not found", id)
+		}
+		var members []int
+		for _, f := range a.Store.FilesOf(ev.CollectionID) {
+			if f.EventID == id {
+				members = append(members, f.ID)
+			}
+		}
+		return []destructiveTarget{
+			recordTarget(fmt.Sprintf("event %d (%s)", id, ev.Name), ev, "deleted"),
+			recordTarget(fmt.Sprintf("%d file(s) in event %d", len(members), id), members, "left in the catalog, no longer in the event"),
+		}, nil
+	case "template":
+		tm := a.Store.Template(id)
+		if tm == nil {
+			return nil, refuseDestructive(404, "template %d not found", id)
+		}
+		return []destructiveTarget{recordTarget(fmt.Sprintf("template %d (%s)", id, tm.Name), tm, "deleted")}, nil
+	case "plan":
+		pl := a.Store.Plan(id)
+		if pl == nil {
+			return nil, refuseDestructive(404, "plan %d not found", id)
+		}
+		return []destructiveTarget{recordTarget(fmt.Sprintf("plan %d (%s)", id, pl.Name), pl, "deleted; nothing on disk is affected")}, nil
+	case "profile":
+		pid := recordIDParam(p)
+		pr := a.Store.Profile(pid)
+		if pr == nil {
+			return nil, refuseDestructive(404, "profile %q not found", pid)
+		}
+		return []destructiveTarget{recordTarget(fmt.Sprintf("profile %s (%s)", pid, pr.Name), pr, "deleted")}, nil
+	}
+	return nil, refuseDestructive(400, "unknown record kind %q (event, template, plan or profile)", kind)
+}
+
+func runRecordDelete(a *App, p map[string]any) (any, error) {
+	kind, id := paramString(p, "kind"), paramInt(p, "id")
+	switch kind {
+	case "event":
+		a.Store.DeleteEvent(id)
+	case "template":
+		a.Store.DeleteTemplate(id)
+	case "plan":
+		a.Store.DeletePlan(id)
+	case "profile":
+		if err := a.Store.DeleteProfile(recordIDParam(p)); err != nil {
+			return nil, err
+		}
+	}
+	a.Store.Log("delete", fmt.Sprintf("deleted %s %s", kind, recordIDParam(p)))
+	return map[string]any{"ok": true, "deleted": true}, nil
 }

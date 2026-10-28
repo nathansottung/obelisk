@@ -123,3 +123,80 @@ func TestDestructive_ArchiveRemoval(t *testing.T) {
 		}
 	})
 }
+
+func TestDestructive_RecordDeletes(t *testing.T) {
+	type rec struct {
+		kind, route, method string
+		make                func(app *App) any // returns the id param
+		gone                func(app *App, id any) bool
+		change              func(app *App, id any)
+	}
+	cases := []rec{
+		{"event", "/api/events/%v/delete", "POST",
+			func(app *App) any {
+				c := app.Store.AddCollection("E")
+				return float64(app.Store.AddEvent(&Event{CollectionID: c.ID, Name: "Wedding"}).ID)
+			},
+			func(app *App, id any) bool { return app.Store.Event(int(id.(float64))) == nil },
+			func(app *App, id any) {
+				ev := app.Store.Event(int(id.(float64)))
+				ev.Name = "Renamed"
+				app.Store.UpdateEvent(ev)
+			}},
+		{"template", "/api/templates/%v/delete", "POST",
+			func(app *App) any {
+				return float64(app.Store.AddTemplate(&Template{Name: "T", Routes: map[string]string{RoleDeliverables: "x/{orig_name}"}}).ID)
+			},
+			func(app *App, id any) bool { return app.Store.Template(int(id.(float64))) == nil },
+			func(app *App, id any) {
+				tm := app.Store.Template(int(id.(float64)))
+				tm.Name = "Renamed"
+				app.Store.UpdateTemplate(tm)
+			}},
+		{"plan", "/api/plans/%v/delete", "POST",
+			func(app *App) any { return float64(app.Store.AddPlan(&Plan{Name: "P", DestinationRoot: "dest"}).ID) },
+			func(app *App, id any) bool { return app.Store.Plan(int(id.(float64))) == nil },
+			func(app *App, id any) {
+				pl := app.Store.Plan(int(id.(float64)))
+				pl.Name = "Renamed"
+				app.Store.UpdatePlan(pl)
+			}},
+		{"profile", "/api/profiles/%v", "DELETE",
+			func(app *App) any { return app.Store.AddProfile(Profile{Name: "Custom", RequiredCopies: 2}).ID },
+			func(app *App, id any) bool { return app.Store.Profile(id.(string)) == nil },
+			func(app *App, id any) {
+				pr := *app.Store.Profile(id.(string))
+				pr.Description = "changed"
+				if err := app.Store.UpdateProfile(pr); err != nil {
+					panic(err)
+				}
+			}},
+	}
+	for _, c := range cases {
+		t.Run(c.kind, func(t *testing.T) {
+			app := dockApp(t)
+			id := c.make(app)
+			oldRouteRefused(t, app, c.method, fmt.Sprintf(c.route, id), "{}")
+			if c.gone(app, id) {
+				t.Fatal("the old route deleted the record")
+			}
+			params := map[string]any{"kind": c.kind, "id": id}
+
+			p := prepareForTest(t, app, "record-delete", params)
+			c.change(app, id)
+			_, err := app.ExecuteDestructive(testSession, p.Token, "Delete")
+			refusedWith(t, err, 409, "changed record")
+			if c.gone(app, id) {
+				t.Fatal("deleted although the record changed after prepare")
+			}
+
+			p = prepareForTest(t, app, "record-delete", params)
+			if _, err := app.ExecuteDestructive(testSession, p.Token, "Delete"); err != nil {
+				t.Fatal(err)
+			}
+			if !c.gone(app, id) {
+				t.Fatal("the record was not deleted")
+			}
+		})
+	}
+}
