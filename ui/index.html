@@ -421,13 +421,20 @@ function confirmDestructive(op,params){
       <div style="max-height:260px;overflow:auto;border:1px solid var(--line);padding:6px">${shown.map(row).join('')}${p.targets.length>shown.length?`<div class="dim">…and ${commaN(p.targets.length-shown.length)} more</div>`:''}</div>
       <label style="margin-top:10px">Type <b>${esc(p.word)}</b> to confirm (it expires in 5 minutes)</label><input id="ddword" class="full" autocomplete="off">
       <div class="row" style="margin-top:12px"><button class="btn" id="ddok" style="background:var(--bad)">${esc(p.word)}</button> <button class="btn ghost" id="ddno">Cancel</button></div>`;
-    let settled=false;
-    const done=v=>{if(settled)return;settled=true;d.close();resolve(v)};
-    d.onclose=()=>{if(!settled){settled=true;resolve(null)}};
+    // Once confirmed, the action is running on the server: closing the dialog
+    // (Esc) or clicking again must neither report that nothing happened nor send
+    // a second execute. The outcome of the one execute decides.
+    let settled=false,running=false;
+    const done=v=>{if(settled||running)return;settled=true;d.close();resolve(v)};
+    d.oncancel=e=>{if(running&&e&&e.preventDefault)e.preventDefault()};
+    d.onclose=()=>{if(!settled&&!running){settled=true;resolve(null)}};
     d.querySelector('#ddno').onclick=()=>done(null);
-    d.querySelector('#ddok').onclick=async()=>{
+    const ok=d.querySelector('#ddok');
+    ok.onclick=async()=>{
+      if(running||settled)return;
       const word=d.querySelector('#ddword').value;
       if(word!==p.word){toast('Type '+p.word+' exactly to confirm',1);return}
+      running=true;ok.disabled=true;
       try{const r=await api('POST','/api/destructive/execute',{token:p.token,confirm:word});settled=true;d.close();resolve(r)}
       catch(e){settled=true;d.close();reject(e)}
     };
