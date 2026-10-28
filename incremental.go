@@ -399,8 +399,14 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 	if stop := a.stopOnDestinationChange("backup", dest.checkRoot(), res.Files); stop != nil {
 		return nil, stop
 	}
+	// The copies and this run's history entry are recorded together, before the
+	// inventory files are written, so a stop while writing them never leaves
+	// copies recorded without the backup that made them.
 	if len(refs) > 0 {
 		a.mergeMirrorRefs(collectionID, vol, destDir, refs)
+	}
+	if res.Files > 0 {
+		a.recordBackupSession(collectionID, vol, base, mode, res.Files, res.Bytes, folderIDs, scopePrefix, destDir, res)
 	}
 	progress(0.96, "refreshing volume inventory sidecar")
 	sc, serr := a.writeVolumeInventoryTo(dest, vol)
@@ -409,9 +415,6 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 	}
 	if serr == nil {
 		res.Sidecar = sc
-	}
-	if res.Files > 0 {
-		a.recordBackupSession(collectionID, vol, base, mode, res.Files, res.Bytes, folderIDs, scopePrefix, destDir, res)
 	}
 	a.Store.Log("incremental", fmt.Sprintf("%s → %s (%s, base=%s): %d files (%.1f GB), %d changed, %d failed",
 		coll.Name, vol.Label, destDir, base, res.Files, float64(res.Bytes)/1e9, res.Changed, res.Failed))

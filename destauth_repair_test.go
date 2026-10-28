@@ -23,11 +23,17 @@ func TestDestAuth_FilesystemRootOverlap(t *testing.T) {
 	whole := dockApp(t)
 	c := whole.Store.AddCollection("Whole volume")
 	whole.Store.AddFolder(c.ID, volumeRoot)
-	for _, dest := range []string{volumeRoot, t.TempDir(), filepath.Join(t.TempDir(), "absent")} {
-		if d, err := whole.Store.AuthorizeDestination(dest); err == nil {
+	absent := filepath.Join(t.TempDir(), "absent")
+	for _, dest := range []string{volumeRoot, t.TempDir(), absent} {
+		d, err := whole.Store.AuthorizeDestination(dest)
+		if err == nil {
 			d.Close()
-			t.Errorf("authorized %q beneath a whole-volume source", dest)
 		}
+		assertSourceRefusal(t, "authorize "+dest+" beneath a whole-volume source", err)
+		assertSourceRefusal(t, "check and create "+dest+" beneath a whole-volume source", refusedForTest(t, whole, dest))
+	}
+	if _, serr := os.Lstat(absent); !os.IsNotExist(serr) {
+		t.Errorf("a folder was created inside the whole-volume source: %v", serr)
 	}
 	if id != identOf(t, filepath.Join(src, "sentinel")) {
 		t.Fatal("source object changed")

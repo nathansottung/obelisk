@@ -713,8 +713,10 @@ Mirrors and mirror-mode "back up changes" write through `Store.AuthorizeDestinat
    refused with `DestinationChangedError`, and the mirror or back-up-changes job
    stops at once with that reason: nothing more is written and nothing more is
    recorded. Copies made before the change are not recorded (if it is found only
-   while writing the inventory file at the end, the copies are already recorded
-   and the inventory file is not written). The next check asks again.
+   while writing the two inventory files at the end, the copies, and for a
+   back-up-changes run its history entry, are already recorded together, and the
+   inventory files may be missing or only partly updated). The next check asks
+   again.
    Each parent folder is re-checked too.
 3. **Platform policy.** The folder and its ancestors must be on an accepted
    filesystem and, where it keeps permissions, changeable only by this user and

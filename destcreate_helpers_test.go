@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -46,4 +47,20 @@ func refusedForTest(t *testing.T, app *App, path string) error {
 		return nil
 	}
 	return errors.New(c.Reason)
+}
+
+// assertSourceRefusal requires err to be the refusal of a destination that is,
+// is inside, or contains a registered source. Any other error (a missing folder
+// waiting for Create, say) would let a refusal test pass without testing it.
+func assertSourceRefusal(t *testing.T, what string, err error) {
+	t.Helper()
+	var choice *DestinationChoiceError
+	switch {
+	case err == nil:
+		t.Errorf("%s: not refused", what)
+	case errors.As(err, &choice):
+		t.Errorf("%s: refused only pending a choice (%q), want refused as a source", what, choice.Check.Status)
+	case !strings.Contains(err.Error(), "source root"):
+		t.Errorf("%s: refused for another reason, want refused as a source: %v", what, err)
+	}
 }

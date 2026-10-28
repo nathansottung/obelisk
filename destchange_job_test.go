@@ -4,6 +4,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,5 +76,65 @@ func TestDestChange_StopsJobAtOnce(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A change found only while the inventory files are written, after every copy
+// was made, leaves the run's records consistent: the copies and, for a
+// back-up-changes run, its history entry are recorded together, and the job
+// still stops with the reason. The change is made before the first inventory
+// file (publication 5) and between the two (publication 6).
+func TestDestChange_StopDuringInventoryKeepsRecordsTogether(t *testing.T) {
+	for _, at := range []int{5, 6} {
+		for _, job := range []string{"mirror", "back up changes"} {
+			t.Run(fmt.Sprintf("%s/publication %d", job, at), func(t *testing.T) {
+				app, collID, _, vol := mirrorSetup(t, "Inv", map[string]string{
+					"a.txt": "alpha", "b.txt": "bravo", "sub/c.txt": "charlie", "sub/d.txt": "delta",
+				})
+				dest := privateDestForTest(t)
+				old := beforeDestPublish
+				t.Cleanup(func() { beforeDestPublish = old })
+				publishes := 0
+				beforeDestPublish = func(r *os.Root, tmp, final string) error {
+					publishes++
+					if publishes == at {
+						loosenDestForTest(t, dest)
+					}
+					return nil
+				}
+				var err error
+				if job == "mirror" {
+					_, err = app.MirrorToVolume(collID, nil, dest, vol.ID, 0, "", noProgMirror)
+				} else {
+					_, err = app.BackupChanges(collID, nil, vol.ID, BaseVolume, ModeMirror, dest, 0, "", noProgMirror)
+				}
+				var changed *DestinationChangedError
+				if !errors.As(err, &changed) {
+					t.Fatalf("got %v, want the job stopped with a DestinationChangedError", err)
+				}
+				if !strings.Contains(err.Error(), "may not be up to date") {
+					t.Fatalf("the reason does not say the inventory may be stale: %v", err)
+				}
+				if publishes != at {
+					t.Fatalf("%d publications attempted, want %d: nothing after the change", publishes, at)
+				}
+				recorded := 0
+				for _, c := range app.Store.Chunks(collID) {
+					if c.Mirror {
+						recorded += len(c.Files)
+					}
+				}
+				if recorded != 4 {
+					t.Fatalf("%d copies recorded, want all 4 made before the change", recorded)
+				}
+				sessions := app.Store.BackupSessions(collID)
+				switch {
+				case job == "mirror" && len(sessions) != 0:
+					t.Fatalf("a mirror recorded backup history: %+v", sessions)
+				case job != "mirror" && (len(sessions) != 1 || sessions[0].Files != 4):
+					t.Fatalf("history %+v, want one backup of the 4 recorded copies", sessions)
+				}
+			})
+		}
 	}
 }

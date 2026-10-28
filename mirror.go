@@ -571,8 +571,9 @@ func (a *App) writeVolumeInventoryTo(dest *DestRoot, vol *Volume) (string, error
 // nothing more is written there, and nothing more is finished. copied is how many
 // files this run had copied and not yet recorded; they are not recorded, because
 // they are no longer known to be in the folder that was checked. copied < 0 means
-// the copies were already recorded (the change was found writing the inventory
-// file). Any other err, or nil, returns nil and the job goes on.
+// the copies (and, for a backup, its history entry) were already recorded: the
+// change was found writing the inventory files, so one of the two may have been
+// written and the other not. Any other err, or nil, returns nil and the job goes on.
 func (a *App) stopOnDestinationChange(kind string, err error, copied int) error {
 	var changed *DestinationChangedError
 	if !errors.As(err, &changed) {
@@ -580,8 +581,10 @@ func (a *App) stopOnDestinationChange(kind string, err error, copied int) error 
 	}
 	var what string
 	switch {
+	case copied < 0 && kind == "backup":
+		what = "The copies and this backup were recorded before the change; the inventory files on the drive may not be up to date."
 	case copied < 0:
-		what = "The copies were recorded before the change; the inventory file on the drive was not updated."
+		what = "The copies were recorded before the change; the inventory files on the drive may not be up to date."
 	case copied == 1:
 		what = "The 1 file copied before the change is not recorded as a copy."
 	default:

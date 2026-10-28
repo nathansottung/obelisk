@@ -563,9 +563,9 @@ func TestDestAuth_BackupChangesLandsThroughAuthorizedRoot(t *testing.T) {
 func TestDestAuth_EqualAndInsideSourceStillRefused(t *testing.T) {
 	app, collID, src, vol := mirrorSetup(t, "Same", map[string]string{"x.txt": "hi\n"})
 	for _, dest := range []string{src, filepath.Join(src, "mirror"), filepath.Join(src, "deep", "mirror")} {
-		if _, err := app.MirrorToVolume(collID, nil, dest, vol.ID, 0, "", noProgMirror); err == nil {
-			t.Errorf("mirroring to %s must be refused", dest)
-		}
+		_, err := app.MirrorToVolume(collID, nil, dest, vol.ID, 0, "", noProgMirror)
+		assertSourceRefusal(t, "mirror to "+dest, err)
+		assertSourceRefusal(t, "check and create "+dest, refusedForTest(t, app, dest))
 	}
 	if got := treeOf(t, src); len(got) != 1 || got[0] != "x.txt" {
 		t.Errorf("refused runs must leave the source alone, got %v", got)
