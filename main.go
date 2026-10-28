@@ -1020,13 +1020,9 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("archive not found"))
 			return
 		}
-		b := body(r)
-		counts, err := app.RemoveArchive(id, s(b, "confirm_name"), s(b, "export_dir"))
-		if err != nil {
-			jsonErr(w, 400, err) // guard not met (wrong name / export required)
-			return
-		}
-		jsonOut(w, map[string]any{"removed": true, "counts": counts})
+		// Gated: prepare op "archive-remove" {id, confirm_name, export_dir}, then
+		// execute with "Delete".
+		needsConfirmation(w, "archive-remove")
 	})
 	register(mux, "POST /api/collections/{id}/scan", func(w http.ResponseWriter, r *http.Request) {
 		id := pathID(r)

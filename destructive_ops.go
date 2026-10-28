@@ -10,6 +10,24 @@ import (
 )
 
 func init() {
+	destructiveOps["archive-remove"] = &destructiveOp{
+		word: wordDelete,
+		title: func(a *App, p map[string]any) string {
+			name := fmt.Sprintf("archive %d", paramInt(p, "id"))
+			if c := a.Store.Collection(paramInt(p, "id")); c != nil {
+				name = c.Name
+			}
+			return fmt.Sprintf("Remove the archive %q from the catalog (files on disk and packages on media are kept)", name)
+		},
+		targets: archiveRemoveTargets,
+		run: func(a *App, p map[string]any) (any, error) {
+			counts, err := a.RemoveArchive(paramInt(p, "id"), paramString(p, "confirm_name"), paramString(p, "export_dir"))
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"removed": true, "counts": counts}, nil
+		},
+	}
 	destructiveOps["quarantine"] = &destructiveOp{
 		word: wordDelete,
 		title: func(a *App, p map[string]any) string {
@@ -79,4 +97,29 @@ func appBackupRestoreTargets(a *App, p map[string]any) ([]destructiveTarget, err
 		out = append(out, t)
 	}
 	return out, nil
+}
+
+// archiveRemoveTargets is the archive's record and every record removing it
+// forgets: its file, folder and event records. The typed archive name and, for
+// an archive with packages, the export folder are checked here as well, so a
+// confirmation is only issued for a removal that can run.
+func archiveRemoveTargets(a *App, p map[string]any) ([]destructiveTarget, error) {
+	id := paramInt(p, "id")
+	c := a.Store.Collection(id)
+	if c == nil {
+		return nil, refuseDestructive(404, "archive %d not found", id)
+	}
+	if paramString(p, "confirm_name") != c.Name {
+		return nil, refuseDestructive(400, "type the archive's exact name (%q) to confirm removal", c.Name)
+	}
+	if a.archiveGuarded(id) && paramString(p, "export_dir") == "" {
+		return nil, refuseDestructive(400, "save a fresh Structure Export first — this archive has packages, so its record is worth keeping a copy of")
+	}
+	files, folders, events := a.Store.FilesOf(id), a.Store.FoldersOf(id), a.Store.Events(id)
+	return []destructiveTarget{
+		recordTarget(fmt.Sprintf("archive %d (%s)", id, c.Name), c, "removed from the catalog"),
+		recordTarget(fmt.Sprintf("%d file record(s) of archive %d", len(files), id), files, "forgotten (the files themselves are not touched)"),
+		recordTarget(fmt.Sprintf("%d folder record(s) of archive %d", len(folders), id), folders, "forgotten"),
+		recordTarget(fmt.Sprintf("%d event record(s) of archive %d", len(events), id), events, "forgotten"),
+	}, nil
 }

@@ -1567,7 +1567,8 @@ async function removeDlg(id,name){
     <div class="doctrine">This app never deletes files. This only changes what the app remembers.</div>
     <div class="row" style="margin-top:14px"><button class="btn" id="rm_go" disabled style="background:var(--bad);border-color:var(--bad);color:#fff" onclick="go()">Remove permanently</button></div>`,
   async()=>{
-    const r=await api('DELETE','/api/collections/'+id,{confirm_name:(($('#rm_name')||{}).value||''),export_dir:_rmExportDir});
+    const r=await confirmDestructive('archive-remove',{id,confirm_name:(($('#rm_name')||{}).value||''),export_dir:_rmExportDir});
+    if(!r)throw new Error('Nothing removed');
     const cc=(r&&r.counts)||{};
     toast(`Removed — forgot ${commaN(cc.files||0)} file record(s); kept ${commaN(cc.packages||0)} package(s) on your media.`);
     vVault();

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -70,5 +71,55 @@ func TestDestructive_Quarantine(t *testing.T) {
 		_, err := app.ExecuteDestructive(testSession, p.Token, "Delete")
 		refusedWith(t, err, 409, "changed file")
 		assertFileBytes(t, filepath.Join(raw, "a.nef"), "AAAA")
+	})
+}
+
+func TestDestructive_ArchiveRemoval(t *testing.T) {
+	setup := func(t *testing.T) (*App, int) {
+		t.Helper()
+		app := dockApp(t)
+		src := t.TempDir()
+		writeTree(t, src, map[string]string{"a.txt": "A", "b.txt": "B"})
+		c := app.Store.AddCollection("Old Shoot")
+		if _, _, err := app.ScanFolder(c.ID, src, noProgMirror); err != nil {
+			t.Fatal(err)
+		}
+		return app, c.ID
+	}
+	params := func(id int) map[string]any {
+		return map[string]any{"id": float64(id), "confirm_name": "Old Shoot"}
+	}
+	t.Run("old route", func(t *testing.T) {
+		app, id := setup(t)
+		oldRouteRefused(t, app, "DELETE", fmt.Sprintf("/api/collections/%d", id), `{"confirm_name":"Old Shoot"}`)
+		if app.Store.Collection(id) == nil {
+			t.Fatal("the old route removed the archive")
+		}
+	})
+	t.Run("removes after the typed word", func(t *testing.T) {
+		app, id := setup(t)
+		p := prepareForTest(t, app, "archive-remove", params(id))
+		if _, err := app.ExecuteDestructive(testSession, p.Token, "Delete"); err != nil {
+			t.Fatal(err)
+		}
+		if app.Store.Collection(id) != nil || len(app.Store.FilesOf(id)) != 0 {
+			t.Fatal("the archive was not removed")
+		}
+	})
+	t.Run("the archive's name is still required", func(t *testing.T) {
+		app, id := setup(t)
+		_, err := app.PrepareDestructive(testSession, "archive-remove", map[string]any{"id": float64(id), "confirm_name": "old shoot"})
+		refusedWith(t, err, 400, "wrong name")
+	})
+	t.Run("a record added after prepare", func(t *testing.T) {
+		app, id := setup(t)
+		p := prepareForTest(t, app, "archive-remove", params(id))
+		folder := app.Store.FoldersOf(id)[0]
+		app.Store.UpsertFile(File{CollectionID: id, FolderID: folder.ID, RelPath: "c.txt", Hash: "cc", SizeBytes: 1})
+		_, err := app.ExecuteDestructive(testSession, p.Token, "Delete")
+		refusedWith(t, err, 409, "added record")
+		if app.Store.Collection(id) == nil {
+			t.Fatal("removed although its records changed")
+		}
 	})
 }
