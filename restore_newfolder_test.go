@@ -154,3 +154,39 @@ func TestIdentityChain_UnreadableFolderAboveRefusesQuarantine(t *testing.T) {
 	}
 	assertFileBytes(t, filepath.Join(destRoot, "raw", "a.nef"), "AAA")
 }
+
+// A registered source that cannot be opened, or a folder above it that cannot
+// be, leaves quarantine unable to tell whether the target holds it: refused.
+func TestIdentityChain_UncheckableSourceRefusesQuarantine(t *testing.T) {
+	for _, which := range []string{"the source", "a folder above the source"} {
+		t.Run(which, func(t *testing.T) {
+			app, destRoot, _ := quarantineScenario(t)
+			src := filepath.Join(destRoot, "raw", "shoot", "src")
+			writeTree(t, src, map[string]string{"orig.nef": "ORIG"})
+			app.Store.AddFolder(app.Store.AddCollection("Live").ID, src)
+			block := src
+			if which != "the source" {
+				block = filepath.Dir(src)
+			}
+			if r, err := os.OpenRoot(block); err == nil {
+				block, _ = rootCanonicalPath(r)
+				r.Close()
+			}
+			// Snapshot the sources first, so only the identity reads are blocked.
+			prev := openForIdentity
+			openForIdentity = func(p string) (*os.File, error) {
+				if normPath(p) == normPath(block) {
+					return nil, &os.PathError{Op: "open", Path: p, Err: os.ErrPermission}
+				}
+				return prev(p)
+			}
+			t.Cleanup(func() { openForIdentity = prev })
+			other := filepath.Join(destRoot, "raw", "a.nef")
+			if _, err := app.Quarantine(other, "", ""); err == nil || !strings.Contains(err.Error(), "refusing") {
+				t.Errorf("quarantine with an uncheckable source: got %v, want a refusal", err)
+			}
+			assertFileBytes(t, filepath.Join(src, "orig.nef"), "ORIG")
+			assertFileBytes(t, other, "AAA")
+		})
+	}
+}

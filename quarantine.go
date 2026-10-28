@@ -211,7 +211,9 @@ func (s *Store) resolveQuarantine(absPath string) (quarantineTarget, error) {
 		}
 		sid, err := pathIdentity(src.canonical)
 		if err != nil {
-			continue
+			// Without its identity the source cannot be matched, and the path
+			// check alone may not see another spelling of it: refuse.
+			return t, fmt.Errorf("refusing to quarantine %s: cannot establish what registered source %s is: %w", absPath, src.registered, err)
 		}
 		switch {
 		case sid == id:
