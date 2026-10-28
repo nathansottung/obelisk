@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -111,4 +112,12 @@ func discardDestStage(s *destStage) error {
 		runtime.KeepAlive(s.file)
 	}
 	return errors.Join(err, s.file.Close())
+}
+
+// setFileMtime sets f's modification time through its handle.
+func setFileMtime(f *os.File, t time.Time) error {
+	ft := windows.NsecToFiletime(t.UnixNano())
+	err := windows.SetFileTime(windows.Handle(f.Fd()), nil, nil, &ft)
+	runtime.KeepAlive(f)
+	return err
 }

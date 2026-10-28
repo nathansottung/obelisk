@@ -25,6 +25,7 @@ import (
 	"path"
 	"runtime"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -163,4 +164,12 @@ func removeOwnContainer(s *destStage) {
 	}
 	_ = unix.Unlinkat(int(p.Fd()), s.container, unix.AT_REMOVEDIR)
 	runtime.KeepAlive(p)
+}
+
+// setFileMtime sets f's modification time through its descriptor.
+func setFileMtime(f *os.File, t time.Time) error {
+	tv := []unix.Timeval{unix.NsecToTimeval(time.Now().UnixNano()), unix.NsecToTimeval(t.UnixNano())}
+	err := unix.Futimes(int(f.Fd()), tv)
+	runtime.KeepAlive(f)
+	return err
 }

@@ -768,7 +768,11 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 		// Copy-then-verify into a new file only. The source is re-checked against
 		// its snapshot hash as it streams, and an existing file at the planned
 		// path is never replaced.
-		_, n, err := copyVerifyNewToRoot(dest, src, rel, sf.Hash, th, func(int64) {})
+		var meta *fileMeta
+		if fi, serr := os.Stat(src); serr == nil {
+			meta = &fileMeta{mode: fi.Mode().Perm()}
+		}
+		_, n, err := copyVerifyNewToRoot(dest, src, rel, sf.Hash, meta, th, func(int64) {})
 		switch {
 		case errors.Is(err, errSourceDiffers):
 			res.DriveDiffers++

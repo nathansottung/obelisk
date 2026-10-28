@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // restoreWork is a restore's private work folder inside the authorized output.
@@ -147,7 +148,11 @@ func publishRestored(dest *DestRoot, w restoreWork) (int, []string, error) {
 	n := 0
 	for _, rel := range files {
 		p := filepath.Join(root, filepath.FromSlash(rel))
-		if _, _, err := copyVerifyNewToRoot(dest, p, rel, "", nil, nil); err != nil {
+		var meta *fileMeta
+		if fi, err := os.Lstat(p); err == nil {
+			meta = &fileMeta{mode: fi.Mode().Perm(), mtime: fi.ModTime()}
+		}
+		if _, _, err := copyVerifyNewToRoot(dest, p, rel, "", meta, nil, nil); err != nil {
 			if errors.Is(err, fs.ErrExist) {
 				return n, warnings, fmt.Errorf("restore stopped: %s appeared in the output folder while restoring and was not replaced (%d file(s) were restored before it)", rel, n)
 			}
@@ -156,7 +161,30 @@ func publishRestored(dest *DestRoot, w restoreWork) (int, []string, error) {
 		_ = os.Remove(p) // free the space as we go; the work folder is removed at the end
 		n++
 	}
+	// Folders last, deepest first, so adding their contents does not change the
+	// times they are given.
+	for i := len(dirs) - 1; i >= 0; i-- {
+		rel := dirs[i]
+		if fi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel))); err == nil {
+			if err := dest.setFolderMeta(rel, fi.Mode().Perm(), fi.ModTime()); err != nil {
+				warnings = append(warnings, fmt.Sprintf("the time or mode of folder %s was not restored: %v", rel, err))
+			}
+		}
+	}
 	return n, warnings, nil
+}
+
+// setFolderMeta gives a folder in the output its mode and modification time,
+// through the output folder's handle.
+func (d *DestRoot) setFolderMeta(rel string, mode fs.FileMode, mtime time.Time) error {
+	v, err := destRel(rel)
+	if err != nil {
+		return err
+	}
+	if err := d.root.Chmod(v, mode); err != nil {
+		return err
+	}
+	return d.root.Chtimes(v, mtime, mtime)
 }
 
 // destGuardAvailable reports whether the destination guard can authorize a
