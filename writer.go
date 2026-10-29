@@ -573,7 +573,7 @@ func (a *App) VerifyChunk(id int, destDir string) (map[string]any, error) {
 	// never marks the package FAILED while another copy or the staged payload is
 	// intact. A read that matches no recorded copy (the staging folder, say)
 	// credits nothing.
-	credited := a.Store.CreditCopyCheck(c, CopyAt{Path: filepath.Dir(enc), Serial: driveSerialAt(base)}, ok, VerifyB)
+	credited := a.Store.CreditCopyCheck(c, CopyAt{Path: filepath.Dir(enc), Serial: driveSerialAt(base), Partition: partitionIDAt(base)}, ok, VerifyB)
 	if ok && credited > 0 {
 		c.VerifiedAt = &now
 	}
@@ -653,7 +653,7 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 			}
 		}
 	}
-	serial := driveSerialAt(destDir) // which drive is being read, when it can be found
+	serial, part := driveSerialAt(destDir), partitionIDAt(destDir) // which drive and partition are being read, when they can be found
 	if len(cands) == 0 && len(mirrorTargets) == 0 {
 		return nil, fmt.Errorf("no cataloged packages or mirrors found on %s (looked for NAME/<payload>, NAME.tar[.gpg], or a mirror rooted here)", destDir)
 	}
@@ -676,7 +676,7 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 		// Copy-level result, on the copy recorded where this payload was read and
 		// only there; package status derives from all copies (a bad medium on this
 		// campaign does not fail a package with other verified copies).
-		credited := a.Store.CreditCopyCheck(cd.c, CopyAt{Path: filepath.Dir(cd.path), Serial: serial}, ok, VerifyB)
+		credited := a.Store.CreditCopyCheck(cd.c, CopyAt{Path: filepath.Dir(cd.path), Serial: serial, Partition: part}, ok, VerifyB)
 		if ok {
 			passed++
 		}
@@ -703,7 +703,7 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 		if !ok {
 			note += " · first bad: " + firstBad
 		}
-		credited := a.Store.CreditCopyCheck(c, CopyAt{Path: destDir, Serial: serial}, ok, level)
+		credited := a.Store.CreditCopyCheck(c, CopyAt{Path: destDir, Serial: serial, Partition: part}, ok, level)
 		if credited == 0 {
 			note += " · the drive could not be told apart from another with a copy here, so no copy was credited"
 		}
@@ -956,6 +956,16 @@ func copyFile(src, dst string) error {
 var driveSerialAt = func(path string) string {
 	if id, err := resolveDeviceIdentity(path); err == nil {
 		return id.Serial
+	}
+	return ""
+}
+
+// partitionIDAt is the partition ID of the volume holding path (see
+// Volume.PartitionID), or "" when it cannot be found. A variable so tests need
+// not probe disks.
+var partitionIDAt = func(path string) string {
+	if id, err := resolvePartitionID(path); err == nil {
+		return id
 	}
 	return ""
 }

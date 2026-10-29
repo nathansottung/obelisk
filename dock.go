@@ -121,13 +121,14 @@ func (a *App) DockCandidates(sessionID int) ([]DockCandidate, error) {
 			continue // present at session start — not a freshly-docked drive
 		}
 		c := DockCandidate{Path: m.Path, Label: m.Label, SizeBytes: m.SizeBytes}
+		part := ""
 		if id, err := resolveDeviceIdentity(m.Path); err == nil {
-			c.Serial, c.Model = id.Serial, id.Model
+			c.Serial, c.Model, part = id.Serial, id.Model, id.Partition
 			if c.SizeBytes == 0 {
 				c.SizeBytes = id.SizeBytes
 			}
 		}
-		if v := a.Store.VolumeBySerial(c.Serial); v != nil {
+		if v := a.Store.VolumeByIdentity(c.Serial, part); v != nil {
 			c.VolumeID = v.ID
 			c.AlreadyProcessed = a.volumeHasMirror(v.ID, ds.ArchiveIDs)
 			c.ProcessedInSession = inSession[v.ID]
@@ -193,15 +194,24 @@ func (a *App) IngestDrive(sessionID int, mountPath, serial, label, mode, level s
 			serial = id.Serial
 		}
 	}
-	// Match or register the Volume — idempotent by serial across sessions.
+	// Match or register the Volume — idempotent by serial and partition across
+	// sessions. Every partition of a disk shares its serial, so each partition
+	// is its own volume.
+	part := partitionIDAt(mountPath)
 	var vol *Volume
-	if serial != "" {
-		vol = a.Store.VolumeBySerial(serial)
+	if serial != "" || part != "" {
+		vol = a.Store.VolumeByIdentity(serial, part)
+	}
+	if vol == nil && part == "" && a.Store.VolumesWithSerial(serial) > 1 {
+		return nil, fmt.Errorf("drive %s holds more than one recorded partition and the partition at %s could not be read, so it cannot be told which one this is", serial, mountPath)
 	}
 	reinserted := vol != nil
 	if vol == nil {
 		vol = a.Store.AddVolume(Volume{Label: nonEmpty(label, mountLabel(mountPath)), Kind: "HDD",
-			Serial: serial, Notes: "ingested via dock"})
+			Serial: serial, PartitionID: part, Notes: "ingested via dock"})
+	} else if vol.PartitionID == "" && part != "" {
+		vol.PartitionID = part // recorded before partitions were kept
+		a.Store.UpdateVolume(vol)
 	}
 	// Capture / refresh the live physical identity (best-effort, non-fatal). Only
 	// when the serial wasn't supplied — a supplied serial means identity is

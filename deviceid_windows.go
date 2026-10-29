@@ -18,6 +18,22 @@ import (
 // partition, removable not ready, PowerShell absent) returns an error the
 // caller treats as non-fatal.
 func resolveDeviceIdentity(path string) (DeviceIdentity, error) {
+	// The volume GUID tells apart the partitions of one disk. It is read
+	// directly, so a volume whose disk cannot be resolved still has it.
+	part, _ := resolvePartitionID(path)
+	id, err := resolveDiskIdentity(path)
+	if err != nil {
+		if part != "" {
+			return DeviceIdentity{Partition: part}, nil
+		}
+		return DeviceIdentity{}, err
+	}
+	id.Partition = part
+	return id, nil
+}
+
+// resolveDiskIdentity is the disk behind a lettered path, from Get-Disk.
+func resolveDiskIdentity(path string) (DeviceIdentity, error) {
 	letter, err := driveLetter(path)
 	if err != nil {
 		return DeviceIdentity{}, err

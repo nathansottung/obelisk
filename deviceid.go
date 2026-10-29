@@ -9,7 +9,10 @@ package main
 // and parses its structured output. The platform-specific resolver lives in
 // deviceid_windows.go / deviceid_unix.go behind the shared resolveDeviceIdentity.
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // DeviceIdentity is what we could learn about the physical device behind a path.
 // Any field may be empty when the OS/bridge does not report it.
@@ -19,24 +22,34 @@ type DeviceIdentity struct {
 	SizeBytes int64  `json:"size_bytes,omitempty"`
 	Bus       string `json:"bus,omitempty"`  // e.g. "USB", "SATA", "NVMe" — informs the caveat note
 	Note      string `json:"note,omitempty"` // caveat, e.g. serial may be the bridge's
+	// Partition tells apart the partitions of one disk (see Volume.PartitionID).
+	Partition string `json:"partition,omitempty"`
 }
 
 // resolved reports whether we learned anything worth recording.
 func (d DeviceIdentity) resolved() bool {
-	return d.Serial != "" || d.Model != "" || d.SizeBytes > 0
+	return d.Serial != "" || d.Model != "" || d.SizeBytes > 0 || d.Partition != ""
 }
 
 // resolveVolumeIdentity fills a volume's Serial/Model/DeviceSize/DeviceNote from
 // the device behind path, best-effort. It never overwrites a good serial with a
 // blank one (a later resolve from a dock that masks the serial must not erase a
 // real serial captured earlier). Returns the identity it found and whether the
-// volume was updated. Caller persists via Store.UpdateVolume.
+// volume was updated. Caller persists via Store.UpdateVolume. A volume with a
+// partition recorded is never updated from another partition; one with none
+// recorded takes the partition read.
 func (a *App) resolveVolumeIdentity(v *Volume, path string) (DeviceIdentity, bool) {
 	id, err := resolveDeviceIdentity(path)
 	if err != nil || !id.resolved() {
 		return id, false
 	}
+	if v.PartitionID != "" && id.Partition != "" && !strings.EqualFold(v.PartitionID, id.Partition) {
+		return id, false
+	}
 	changed := false
+	if id.Partition != "" && v.PartitionID == "" {
+		v.PartitionID, changed = id.Partition, true
+	}
 	if id.Serial != "" && id.Serial != v.Serial {
 		v.Serial, changed = id.Serial, true
 	}

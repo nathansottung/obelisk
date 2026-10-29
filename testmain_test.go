@@ -22,7 +22,9 @@ func TestMain(m *testing.M) {
 		return normPath(filepath.Dir(abs)), nil
 	}
 	// No test probes a real disk for its serial when crediting a verify; the
-	// serial rule is tested directly (TestCreditCopyCheck_Serial).
+	// serial rule is tested directly (TestCreditCopyCheck_Serial), and so is the
+	// partition rule (partition_identity_test.go).
 	driveSerialAt = func(string) string { return "" }
+	partitionIDAt = func(string) string { return "" }
 	os.Exit(m.Run())
 }

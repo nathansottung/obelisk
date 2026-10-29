@@ -49,9 +49,9 @@ func smartNodeLinux(abs string) (string, error) {
 	}
 	best := -1
 	name := ""
-	for _, disk := range doc.BlockDevices {
-		if l := deepestMountMatch(disk, abs); l > best {
-			best, name = l, disk.Name
+	for i := range doc.BlockDevices {
+		if l, _ := deepestMountMatch(&doc.BlockDevices[i], abs); l > best {
+			best, name = l, doc.BlockDevices[i].Name
 		}
 	}
 	if best < 0 || name == "" {

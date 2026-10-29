@@ -32,13 +32,13 @@ func TestMirrorVerify_OverrideLeavesFolderRecords(t *testing.T) {
 }
 
 // A copy whose drive is now mounted at a different path is credited when the
-// drive read is known by its serial to be the copy's drive, and the copy's path
-// is updated to where it was read.
+// partition read is known by its disk serial and partition ID to be the copy's,
+// and the copy's path is updated to where it was read.
 func TestVerify_MovedDriveCreditedBySerial(t *testing.T) {
 	app, _ := newTestApp(t, nativeTools(t))
 	c := builtTestChunk(t, app, "MOVED-1")
 	medium := t.TempDir()
-	vol := app.Store.AddVolume(Volume{Label: "USB-M", Kind: "HDD", Serial: "SER-MOVED"})
+	vol := app.Store.AddVolume(Volume{Label: "USB-M", Kind: "HDD", Serial: "SER-MOVED", PartitionID: "PART-MOVED"})
 	if _, err := app.WriteChunk(c.ID, medium, 0, 0, 0, vol.ID, noProg); err != nil {
 		t.Fatal(err)
 	}
@@ -46,9 +46,10 @@ func TestVerify_MovedDriveCreditedBySerial(t *testing.T) {
 	if err := os.Rename(medium, moved); err != nil {
 		t.Fatal(err)
 	}
-	orig := driveSerialAt
+	orig, origP := driveSerialAt, partitionIDAt
 	driveSerialAt = func(string) string { return "SER-MOVED" }
-	defer func() { driveSerialAt = orig }()
+	partitionIDAt = func(string) string { return "PART-MOVED" }
+	defer func() { driveSerialAt, partitionIDAt = orig, origP }()
 	res, err := app.VerifyChunk(c.ID, moved)
 	if err != nil {
 		t.Fatal(err)
@@ -113,19 +114,23 @@ func TestBurn_RefusesAFailedPackage(t *testing.T) {
 }
 
 // A disk serial is shared by every partition of the disk, so a check read at
-// another folder of that disk is not credited to the copy by its serial alone.
+// another folder of that disk is not credited to the copy by its serial alone,
+// and at the package's own folder only on the copy's partition.
 func TestCreditCopyCheck_SerialNeedsThePackageFolder(t *testing.T) {
 	st, err := OpenStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := st.AddVolume(Volume{Label: "DISK", Serial: "SER-P"})
+	v := st.AddVolume(Volume{Label: "DISK", Serial: "SER-P", PartitionID: "PART-P"})
 	c := st.AddChunk(Chunk{Name: "PKG"})
 	st.RecordCopy(c, v.ID, "E:/PKG", false)
-	if n := st.CreditCopyCheck(c, CopyAt{Path: "F:/OTHER", Serial: "SER-P"}, true, "B"); n != 0 {
+	if n := st.CreditCopyCheck(c, CopyAt{Path: "F:/OTHER", Serial: "SER-P", Partition: "PART-P"}, true, "B"); n != 0 {
 		t.Errorf("credited %d from another folder of the same disk, want 0", n)
 	}
-	if n := st.CreditCopyCheck(c, CopyAt{Path: "F:/PKG", Serial: "SER-P"}, true, "B"); n != 1 {
+	if n := st.CreditCopyCheck(c, CopyAt{Path: "F:/PKG", Serial: "SER-P"}, true, "B"); n != 0 {
+		t.Errorf("credited %d at the package's folder with the partition unknown, want 0", n)
+	}
+	if n := st.CreditCopyCheck(c, CopyAt{Path: "F:/PKG", Serial: "SER-P", Partition: "PART-P"}, true, "B"); n != 1 {
 		t.Errorf("credited %d at the package's own folder on the moved disk, want 1", n)
 	}
 }

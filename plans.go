@@ -723,13 +723,14 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 	}
 
 	serial = strings.TrimSpace(serial)
+	part := partitionIDAt(mountPath)
 	var vol *Volume
-	if serial != "" {
-		vol = a.Store.VolumeBySerial(serial)
+	if serial != "" || part != "" {
+		vol = a.Store.VolumeByIdentity(serial, part)
 	}
 	if vol == nil {
-		if id, err := resolveDeviceIdentity(mountPath); err == nil && id.Serial != "" {
-			vol = a.Store.VolumeBySerial(id.Serial)
+		if id, err := resolveDeviceIdentity(mountPath); err == nil && (id.Serial != "" || id.Partition != "") {
+			vol = a.Store.VolumeByIdentity(id.Serial, id.Partition)
 		}
 	}
 	if vol == nil {
