@@ -57,6 +57,7 @@ var simpleValue = regexp.MustCompile(`^[A-Za-z0-9_.:,+-]*$`).MatchString
 
 // xorrisoCommands are the xorriso commands allowed, each with checks for its
 // values (as many as it takes). xorriso accepts one or two leading dashes.
+// -return_with and -abort_on are left out: they can make a failed burn exit 0.
 var xorrisoCommands = map[string][]burnValue{
 	"dev": {isBurnDevice}, "outdev": {isBurnDevice}, "indev": {isBurnDevice},
 	"volid": {anyValue}, "volset_id": {anyValue}, "publisher": {anyValue},
@@ -74,9 +75,7 @@ var xorrisoCommands = map[string][]burnValue{
 	"speed":            {simpleValue},
 	"stream_recording": {simpleValue},
 	"padding":          {simpleValue},
-	"abort_on":         {simpleValue},
 	"report_about":     {simpleValue},
-	"return_with":      {simpleValue, simpleValue},
 	"charset":          {simpleValue},
 	"local_charset":    {simpleValue},
 	"out_charset":      {simpleValue},

@@ -248,3 +248,18 @@ func TestBurnCommand_MustBurnThePackage(t *testing.T) {
 		}
 	}
 }
+
+// xorriso's -return_with sets the exit value for a given problem severity and
+// -abort_on keeps it going past errors, so together they can make a failed
+// burn exit 0. Neither is allowed.
+func TestBurnCommand_RefusesExitValueMasking(t *testing.T) {
+	for _, bad := range []string{
+		"xorriso -outdev /dev/sr0 -return_with FAILURE 0 -map {SRC} / -commit",
+		"xorriso -outdev /dev/sr0 -abort_on NEVER -map {SRC} / -commit",
+		"xorriso -as cdrecord dev=/dev/sr0 {SRC} -- -return_with SORRY 0",
+	} {
+		if _, err := parseBurnCommand(bad); err == nil {
+			t.Errorf("parseBurnCommand(%q) accepted an option that can hide a failed burn", bad)
+		}
+	}
+}
