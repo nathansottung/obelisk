@@ -892,6 +892,11 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 		return nil, fmt.Errorf("gpg decrypt failed: %s", tail(gpgErr.String(), 400))
 	}
 	if terr != nil {
+		// gpg may have failed on its own before it was stopped (a damaged
+		// payload fails its integrity check partway): keep what it said.
+		if g := strings.TrimSpace(gpgErr.String()); killed && g != "" {
+			return nil, fmt.Errorf("tar extract failed: %v (gpg: %s)", terr, tail(g, 400))
+		}
 		return nil, fmt.Errorf("tar extract failed: %v", terr)
 	}
 	res, err := a.finishRestore(c, tgt, outputDir, repaired, restoreWarnings, progress)

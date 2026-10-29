@@ -115,5 +115,8 @@ func mbrDriveLayout(vol windows.Handle) ([]byte, error) {
 	if binary.LittleEndian.Uint32(layout[0:4]) != partitionStyleMBR {
 		return nil, fmt.Errorf("the disk is not MBR")
 	}
+	if n < 48 {
+		return nil, fmt.Errorf("the disk layout came back short (%d bytes)", n)
+	}
 	return layout[:n], nil
 }

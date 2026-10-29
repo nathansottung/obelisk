@@ -188,8 +188,8 @@ func diskutilPartitionID(vol, whole map[string]string) string {
 // when the partition is not found.
 //
 // Layout: PartitionStyle u32 @0, PartitionCount u32 @4, then entries of 144
-// bytes from @48. Each entry: StartingOffset i64 @8, and for MBR the partition
-// type byte @32. Entries 0-3 are the primary slots; after them come groups of
+// bytes from @48. Each entry: StartingOffset i64 @8, PartitionLength i64 @16,
+// and for MBR the partition type byte @32. Entries 0-3 are the primary slots; after them come groups of
 // four per extended boot record, holding a logical partition and a link.
 func mbrLinuxNumber(layout []byte, offset int64) uint32 {
 	const head, size = 48, 144
@@ -200,8 +200,11 @@ func mbrLinuxNumber(layout []byte, offset int64) uint32 {
 	logical := uint32(4)
 	for i := 0; i < count && head+(i+1)*size <= len(layout); i++ {
 		e := layout[head+i*size : head+(i+1)*size]
+		// Linux numbers an entry when it has a size and is not an extended
+		// container; the type byte alone does not decide it.
 		typ := e[32]
-		used := typ != 0 && typ != 0x05 && typ != 0x0f && typ != 0x85
+		length := binary.LittleEndian.Uint64(e[16:24])
+		used := length != 0 && typ != 0x05 && typ != 0x0f && typ != 0x85
 		if i >= 4 && used {
 			logical++
 		}

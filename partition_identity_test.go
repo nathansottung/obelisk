@@ -312,6 +312,9 @@ func TestMbrLinuxNumber(t *testing.T) {
 		binary.LittleEndian.PutUint32(b[4:8], uint32(len(es)))
 		for i, e := range es {
 			binary.LittleEndian.PutUint64(b[head+i*size+8:], uint64(e.off))
+			if e.off != 0 { // an entry with a start has a size
+				binary.LittleEndian.PutUint64(b[head+i*size+16:], 1<<20)
+			}
 			b[head+i*size+32] = e.typ
 		}
 		return b
@@ -321,9 +324,22 @@ func TestMbrLinuxNumber(t *testing.T) {
 	l := layout(ent{0, 0}, ent{1 << 20, 0x07}, ent{100 << 20, 0x05}, ent{0, 0},
 		ent{101 << 20, 0x07}, ent{200 << 20, 0x05}, ent{0, 0}, ent{0, 0},
 		ent{201 << 20, 0x0c}, ent{0, 0}, ent{0, 0}, ent{0, 0})
-	for off, want := range map[int64]uint32{1 << 20: 2, 101 << 20: 5, 201 << 20: 6, 999: 0} {
+	// The extended container and link entries are not partitions.
+	for off, want := range map[int64]uint32{1 << 20: 2, 101 << 20: 5, 201 << 20: 6, 999: 0, 100 << 20: 0, 200 << 20: 0} {
 		if got := mbrLinuxNumber(l, off); got != want {
 			t.Errorf("partition at %d: number %d, want %d", off, got, want)
 		}
+	}
+	// An EBR entry with a type but no size is not numbered by Linux, so the
+	// logical after it is still 5.
+	z := layout(ent{1 << 20, 0x07}, ent{100 << 20, 0x05}, ent{0, 0}, ent{0, 0},
+		ent{150 << 20, 0x07}, ent{0, 0}, ent{0, 0}, ent{0, 0},
+		ent{201 << 20, 0x07}, ent{0, 0}, ent{0, 0}, ent{0, 0})
+	binary.LittleEndian.PutUint64(z[head+4*size+16:], 0) // typed, zero length
+	if got := mbrLinuxNumber(z, 201<<20); got != 5 {
+		t.Errorf("logical after a zero-length entry: number %d, want 5", got)
+	}
+	if got := mbrLinuxNumber(l[:40], 1<<20); got != 0 {
+		t.Errorf("a short layout gave %d, want 0", got)
 	}
 }
