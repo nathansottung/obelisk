@@ -411,21 +411,21 @@ func (a *App) AdoptFolder(mountPath string, collectionID, volumeID int, progress
 	if serr != nil {
 		return nil, fmt.Errorf("cannot read folder %s: %s", mountPath, scanReason(serr))
 	}
-	if len(snapFiles) == 0 && unreadable == 0 && len(gaps.unreadableFolders) == 0 {
+	// A folder with no file that could be read is not adopted: there is nothing to
+	// show what the drive holds, so nothing about its copy changes.
+	if len(snapFiles) == 0 {
+		if unreadable > 0 || len(gaps.unreadableFolders) > 0 {
+			return nil, fmt.Errorf("no file under %s could be read (%d folder(s) and %d file(s) could not be); nothing was adopted", mountPath, len(gaps.unreadableFolders), len(gaps.unreadableFiles))
+		}
 		return nil, fmt.Errorf("no files found under %s", mountPath)
 	}
-	// The scan is recorded (and its snapshot, unless the drive already has one of
-	// its whole tree) before the archive changes, so a scan that cannot be
-	// recorded changes nothing.
+	// The scan of the folder is recorded in the drive's scan history before the
+	// archive changes, so a scan that cannot be recorded changes nothing. It does
+	// not set the drive's snapshot: that describes the whole drive, from its root.
 	snap := a.buildSnapshot(&DockSession{}, vol, nil, snapFiles, unreadable, gaps)
 	snap.Root = mountPath
 	if _, err := a.recordScan(snap, cfg.ScanHistoryRetained); err != nil {
 		return nil, err
-	}
-	if prev := a.Store.VolumeSnapshot(vol.ID); prev == nil || prev.Root == mountPath {
-		if err := a.Store.PutVolumeSnapshot(snap); err != nil {
-			return nil, fmt.Errorf("saving the folder's snapshot: %w", err)
-		}
 	}
 	hashed := map[string]unionFile{}
 	for _, sf := range snapFiles {
@@ -457,7 +457,20 @@ func (a *App) AdoptFolder(mountPath string, collectionID, volumeID int, progress
 		refs = append(refs, ChunkFileRef{FileID: fid, RelPath: it.RelPath, SizeBytes: it.Size, Hash: it.Hash})
 	}
 	progress(0.92, "recording copies")
-	a.upsertMirrorChunk(collectionID, vol, mountPath, refs, "mirror-adopt")
+	// What a partial scan could not read is unknown, not gone: files an earlier
+	// adopt recorded here, in places this scan did not read, are kept apart as
+	// unknown (not counted as copies), as the dock does.
+	var unknown []ChunkFileRef
+	if prior := a.mirrorChunkOn(collectionID, vol.ID); prior != nil && snap.Scan == ScanPartial {
+		for _, r := range append(append([]ChunkFileRef(nil), prior.Files...), prior.UnknownFiles...) {
+			if !seen[r.FileID] && !snap.Known(r.RelPath) && !containsRef(unknown, r.FileID) {
+				unknown = append(unknown, r)
+			}
+		}
+	}
+	c := a.upsertMirrorChunk(collectionID, vol, mountPath, refs, "mirror-adopt")
+	c.UnknownFiles = unknown
+	a.Store.UpdateChunk(c)
 
 	// Collision pass: same-logical-file/different-bytes across the union. Class-(a)
 	// second-shooter frames auto-pass (noted); true conflicts (b/c) open a review item.

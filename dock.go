@@ -407,7 +407,8 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 	// previous scan saw that content only in places this scan did read, which shows
 	// it is no longer there. Only the archive's current version is kept.
 	knownAbsent := func(string) bool { return false }
-	if prev := a.Store.VolumeSnapshot(vol.ID); prev != nil {
+	// Only a snapshot of the whole drive says where things were on it.
+	if prev := a.Store.VolumeSnapshot(vol.ID); prev != nil && prev.Root == "" {
 		seenAt := map[string]bool{} // hash -> every place the previous scan saw it is known now
 		for _, f := range prev.Files {
 			if f.Hash == "" {
