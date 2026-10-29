@@ -2704,6 +2704,8 @@ func api(mux *http.ServeMux, app *App) {
 			"smart": snap.Smart, "report": app.driveReport(snap),
 		})
 	})
+	// Comparing scans and the cross-drive lists (compare_routes.go).
+	registerCompareRoutes(mux, app)
 	// The drive's scan history, newest first: one record per scan (complete or
 	// partial); the file lists stay in the scans folder.
 	mux.HandleFunc("GET /api/volumes/{id}/scans", func(w http.ResponseWriter, r *http.Request) {

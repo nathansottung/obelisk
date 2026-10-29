@@ -1083,6 +1083,11 @@ type catalog struct {
 	// record's file list is stored compressed in the scans folder, not here. See
 	// ScanRecord and scanhistory.go.
 	Scans []*ScanRecord `json:"volume_scans,omitempty"`
+	// Reference: the drive or archive other scans are compared against by default;
+	// CompareRuns: the saved comparisons, newest last, capped. Each run's per-file
+	// results are in the compares folder. See compare.go.
+	Reference   *ReferenceMark `json:"reference,omitempty"`
+	CompareRuns []*CompareRun  `json:"compare_runs,omitempty"`
 	// Events (named happenings files belong to) and Templates (role→destination
 	// routing documents). Additive in schema v4. See Event / Template.
 	Events    []*Event    `json:"events,omitempty"`
