@@ -73,8 +73,11 @@ func handRestoreSteps(t *testing.T, txt string) []string {
 }
 
 // runHandStep runs one RESTORE.txt command in dir through the platform shell,
-// with the stock tools first on PATH.
-func runHandStep(t *testing.T, dir, cmd, pass string, toolDirs []string) {
+// with the stock tools first on PATH. It returns how many members the Windows
+// tar refused because their names do not fit the system's ANSI code page:
+// bsdtar 3.8 converts each name to that code page and skips, loudly, any it
+// cannot write. That is the only failure accepted; any other fails the test.
+func runHandStep(t *testing.T, dir, cmd, pass string, toolDirs []string) (codePageSkips int) {
 	t.Helper()
 	line := cmd
 	var stdin string
@@ -95,9 +98,28 @@ func runHandStep(t *testing.T, dir, cmd, pass string, toolDirs []string) {
 	c.Stdin = strings.NewReader(stdin)
 	var out bytes.Buffer
 	c.Stdout, c.Stderr = &out, &out
-	if err := c.Run(); err != nil {
-		t.Fatalf("RESTORE.txt step %q failed: %v\n%s", cmd, err, out.String())
+	err := c.Run()
+	if err == nil {
+		return 0
 	}
+	if runtime.GOOS == "windows" && strings.HasPrefix(cmd, "tar ") {
+		other := false
+		for _, l := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+			switch l = strings.TrimSpace(l); {
+			case strings.Contains(l, "Archive entry has empty or unreadable filename"):
+				codePageSkips++
+			case strings.Contains(l, "Error exit delayed from previous errors"):
+			default:
+				other = true
+			}
+		}
+		if codePageSkips > 0 && !other {
+			t.Logf("RESTORE.txt step %q: the Windows tar refused %d name(s) outside the ANSI code page", cmd, codePageSkips)
+			return codePageSkips
+		}
+	}
+	t.Fatalf("RESTORE.txt step %q failed: %v\n%s", cmd, err, out.String())
+	return 0
 }
 
 // shellQuote quotes p for sh. On Windows the test folders hold no spaces, and
@@ -176,21 +198,47 @@ func handSource(t *testing.T, big int) (string, []ChunkFileRef) {
 }
 
 // assertHandRestored compares every source file with the one restored by hand.
-func assertHandRestored(t *testing.T, src, out string, refs []ChunkFileRef) {
+// Every name that fits the Windows ANSI code page (every name, elsewhere) must
+// be restored exactly. A name that does not fit may be missing only when the
+// tar refused that many names, and nothing may be restored under a name that
+// is not a source file's.
+func assertHandRestored(t *testing.T, src, out string, refs []ChunkFileRef, codePageSkips int) {
 	t.Helper()
+	want := map[string]bool{}
 	for _, r := range refs {
-		want, err := os.ReadFile(filepath.Join(src, filepath.FromSlash(r.RelPath)))
+		want[r.RelPath] = true
+	}
+	_ = filepath.WalkDir(out, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, _ := filepath.Rel(out, p)
+		if rel = filepath.ToSlash(rel); strings.Contains(rel, "/") && !want[rel] {
+			t.Errorf("the hand restore wrote %q, which is no source file", rel)
+		}
+		return nil
+	})
+	missing := 0
+	for _, r := range refs {
+		wantB, err := os.ReadFile(filepath.Join(src, filepath.FromSlash(r.RelPath)))
 		if err != nil {
 			t.Fatal(err)
 		}
 		got, err := os.ReadFile(filepath.Join(out, filepath.FromSlash(r.RelPath)))
 		if err != nil {
+			if !fitsANSICodePage(r.RelPath) && codePageSkips > 0 {
+				missing++
+				continue
+			}
 			t.Errorf("the hand restore did not produce %q: %v", r.RelPath, err)
 			continue
 		}
-		if !bytes.Equal(got, want) {
+		if !bytes.Equal(got, wantB) {
 			t.Errorf("the hand-restored %q differs from the source", r.RelPath)
 		}
+	}
+	if missing != codePageSkips {
+		t.Errorf("%d names outside the code page are missing, but the tar refused %d", missing, codePageSkips)
 	}
 }
 
@@ -227,10 +275,11 @@ func TestHandRestore_FromRESTORE_txt(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			skips := 0
 			for _, step := range handRestoreSteps(t, string(txt)) {
-				runHandStep(t, out, step, pass, toolDirs(tools))
+				skips += runHandStep(t, out, step, pass, toolDirs(tools))
 			}
-			assertHandRestored(t, src, out, refs)
+			assertHandRestored(t, src, out, refs, skips)
 		})
 	}
 }
@@ -292,8 +341,9 @@ func TestHandRestore_SpannedFromRESTORE_txt(t *testing.T) {
 			t.Errorf("spanned RESTORE.txt step 0 does not mention %q:\n%s", want, step0)
 		}
 	}
+	skips := 0
 	for _, step := range handRestoreSteps(t, txt) {
-		runHandStep(t, out, step, "", toolDirs(tools))
+		skips += runHandStep(t, out, step, "", toolDirs(tools))
 	}
-	assertHandRestored(t, src, out, refs)
+	assertHandRestored(t, src, out, refs, skips)
 }

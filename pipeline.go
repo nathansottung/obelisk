@@ -1477,6 +1477,7 @@ func writeRestoreTxt(dir string, c *Chunk, opticalEcc bool) error {
 	var t string
 	if c.Spanned {
 		t = spannedRestoreTxt(c)
+		t = appendWindowsTarNote(t, c)
 		t = appendPrivacyNote(t, c)
 		t = appendOpticalNote(t, c, opticalEcc)
 		return os.WriteFile(filepath.Join(dir, "RESTORE.txt"), []byte(t), 0o644)
@@ -1530,9 +1531,24 @@ No compression anywhere — extracted bytes are the originals.
 ==========================================================
 `, c.Name, c.HashAlg, c.EncHash, pl)
 	}
+	t = appendWindowsTarNote(t, c)
 	t = appendPrivacyNote(t, c)
 	t = appendOpticalNote(t, c, opticalEcc)
 	return os.WriteFile(filepath.Join(dir, "RESTORE.txt"), []byte(t), 0o644)
+}
+
+// appendWindowsTarNote says what the tar built into Windows does with a name
+// its code page cannot hold: it refuses that file, says so, and restores the
+// rest. The tar holds every name as UTF-8, so another tar restores it.
+func appendWindowsTarNote(t string, c *Chunk) string {
+	return t + fmt.Sprintf(`
+WINDOWS — the tar built into Windows writes each file name in the system's
+code page. A name that code page cannot hold (Japanese on a Western system,
+for example) is refused with "unreadable filename", and the other files are
+restored. The package keeps every name as UTF-8: to restore those files too,
+extract %[1]s.tar with a tar that keeps Unicode names, such as 7-Zip
+(7z x %[1]s.tar).
+`, c.Name)
 }
 
 // appendOpticalNote adds the optional dvdisaster-ECC paragraph for optical
