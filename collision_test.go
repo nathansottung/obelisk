@@ -175,3 +175,47 @@ func TestBackupChanges_CollisionWithEarlierRun(t *testing.T) {
 		t.Errorf("coverage %d of 2, want only the first file counted", cov.CoveredFiles)
 	}
 }
+
+// Back up changes overwrites a file at its path only when what is there is this
+// file's own earlier copy. When folder labels shift between runs (a run with two
+// folders labels their paths, a run with one does not), the file at a path can
+// be another file's copy; it is left alone and listed.
+func TestBackupChanges_LabelShiftNeverOverwrites(t *testing.T) {
+	app := dockApp(t)
+	coll := app.Store.AddCollection("Photos")
+	a, b := t.TempDir(), t.TempDir()
+	writeTree(t, a, map[string]string{"x.jpg": "A1"})
+	writeTree(t, b, map[string]string{"x.jpg": "B1"})
+	for _, d := range []string{a, b} {
+		if _, _, err := app.ScanFolder(coll.ID, d, noProg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dest := t.TempDir()
+	vol := app.Store.AddVolume(Volume{Label: "BK-2", Kind: "HDD"})
+	run := func() *BackupChangesResult {
+		t.Helper()
+		res, err := app.BackupChanges(coll.ID, nil, vol.ID, BaseVolume, ModeMirror, dest, 0, "", noProgMirror)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	run() // both folders: A/x.jpg and B/x.jpg (labelled)
+	writeTree(t, a, map[string]string{"x.jpg": "A2"})
+	if _, _, err := app.ScanFolder(coll.ID, a, noProg); err != nil {
+		t.Fatal(err)
+	}
+	run() // only A's file: x.jpg (no label)
+	writeTree(t, b, map[string]string{"x.jpg": "B2"})
+	if _, _, err := app.ScanFolder(coll.ID, b, noProg); err != nil {
+		t.Fatal(err)
+	}
+	res := run() // only B's file: x.jpg, which now holds A2
+	if b, _ := os.ReadFile(filepath.Join(dest, "x.jpg")); string(b) == "B2" {
+		t.Error("B's file overwrote the copy of A's file at x.jpg")
+	}
+	if len(res.Collisions) != 1 {
+		t.Errorf("collisions %v, want x.jpg listed", res.Collisions)
+	}
+}

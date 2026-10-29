@@ -369,15 +369,16 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 	}
 	// Two files that would land at one path: neither is copied or credited.
 	shared := collidingPaths(mrels)
-	// Nor is a file whose path the destination already holds, unless it is this
-	// same file from an earlier run: an earlier run's copy of another file (or
-	// anything else there) is never written over. The destination's own name
+	// Nor is a file whose path the destination already holds, unless what is
+	// there is this same file's earlier copy (its recorded hash): an earlier
+	// run's copy of another file (folder labels can shift between runs) or
+	// anything else there is never written over. The destination's own name
 	// lookup decides, so a name that differs only in case collides where the
 	// filesystem says it does.
-	earlier := map[int]string{} // fileID -> its path in the volume's record
+	earlier := map[int]ChunkFileRef{} // fileID -> its ref in the volume's record
 	if prior := a.mirrorChunkOn(collectionID, vol.ID); prior != nil {
 		for _, r := range prior.Files {
-			earlier[r.FileID] = r.RelPath
+			earlier[r.FileID] = r
 		}
 	}
 	for i, f := range files {
@@ -389,7 +390,13 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 			continue
 		}
 		if _, err := dest.Stat(mrel); err == nil {
-			if prev, ok := earlier[f.ID]; !ok || prev != f.RelPath {
+			prev, ok := earlier[f.ID]
+			own := ok && prev.RelPath == f.RelPath && prev.Hash != ""
+			if own {
+				h, herr := dest.HashRel(mrel)
+				own = herr == nil && h == prev.Hash
+			}
+			if !own {
 				res.Collisions = append(res.Collisions, mrel)
 				continue
 			}
