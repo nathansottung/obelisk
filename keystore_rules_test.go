@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -75,3 +76,34 @@ func TestRestoreAppBackup_DoesNotCollapseKeystores(t *testing.T) {
 		t.Error("the restore did not say where the restored keystores are")
 	}
 }
+
+// A keystore on a device that is not plugged in cannot be placed on a device.
+// That is no reason to refuse the set: saving settings still works, and the
+// keystore status says the keystore is unreachable rather than naming the
+// device rule.
+func TestKeystores_UnpluggedKeystoreDoesNotBlockSaves(t *testing.T) {
+	prev := keystoreDeviceOf
+	keystoreDeviceOf = func(p string) (string, error) {
+		if strings.Contains(p, "unplugged") {
+			return "", errUnpluggedForTest
+		}
+		return prev(p)
+	}
+	t.Cleanup(func() { keystoreDeviceOf = prev })
+	app := dockApp(t)
+	a := filepath.Join(t.TempDir(), "keys.json")
+	u := filepath.Join(t.TempDir(), "unplugged", "keys.json")
+	paths := []any{a, u}
+	if _, err := app.SaveConfig(map[string]any{"keystore_paths": paths}); err != nil {
+		t.Fatalf("keystore paths with one unplugged: %v", err)
+	}
+	if _, err := app.SaveConfig(map[string]any{"keystore_paths": paths, "par2_extra_args": "-t2"}); err != nil {
+		t.Fatalf("a settings save with one keystore unplugged: %v", err)
+	}
+	st := app.keystoreStatus([]string{a, u}, false)
+	if reason, _ := st["reason"].(string); strings.Contains(reason, "device") || st["ok"] == true {
+		t.Fatalf("status of a set with an unplugged keystore: %v", st)
+	}
+}
+
+var errUnpluggedForTest = errors.New("no existing parent folder")

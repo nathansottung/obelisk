@@ -18,8 +18,9 @@ import (
 // whose keystores are all on one temp drive, can treat folders as devices.
 var keystoreDeviceOf = realKeystoreDevice
 
-// realKeystoreDevice is the device of the nearest existing folder holding path,
-// read from a handle on it.
+// realKeystoreDevice is the device of the nearest existing folder holding path:
+// the physical disk under its volume where that can be read (so two partitions
+// of one disk are one device), otherwise the volume, read from a handle on it.
 func realKeystoreDevice(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -28,6 +29,9 @@ func realKeystoreDevice(path string) (string, error) {
 	dir, _, err := deepestExistingDir(abs)
 	if err != nil {
 		return "", err
+	}
+	if disk, ok := physicalDiskOf(dir); ok {
+		return disk, nil
 	}
 	f, err := os.Open(dir)
 	if err != nil {
@@ -70,7 +74,10 @@ func checkKeystorePaths(paths []string) error {
 		}
 		dev, err := keystoreDeviceOf(abs)
 		if err != nil {
-			return fmt.Errorf("keystore_paths: cannot tell which device %q is on: %w", p, err)
+			// Not plugged in, or not reachable: its device cannot be told, so the
+			// device rule cannot be checked for it. Reachability is reported by
+			// the keystore status, not refused here.
+			continue
 		}
 		if prev, ok := seenDev[dev]; ok {
 			return fmt.Errorf("keystore_paths: %q and %q are on the same device; keep each keystore on a different device, so losing one loses no key", prev, p)
