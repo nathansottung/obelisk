@@ -142,6 +142,11 @@ func TestMirrorVerify_OverrideRefusesAnotherPartition(t *testing.T) {
 	if _, err := app.AdoptFolder(drive, arch.ID, vol.ID, nil); err != nil {
 		t.Fatal(err)
 	}
+	// Adopting reads the real disk under the test folder; put back the identity
+	// this test is about.
+	vol = app.Store.Volume(vol.ID)
+	vol.Serial, vol.PartitionID = "SER-1", "PART-1"
+	app.Store.UpdateVolume(vol)
 	origS, origP := driveSerialAt, partitionIDAt
 	driveSerialAt = func(string) string { return "SER-1" }
 	partitionIDAt = func(string) string { return "PART-2" }
