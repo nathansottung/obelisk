@@ -5,6 +5,7 @@ package main
 // raw-tape (/dev/nst0) backend later; everything above it is agnostic.
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -780,10 +781,6 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	if err != nil {
 		return nil, err
 	}
-	tarBin, err := a.tool("tar")
-	if err != nil {
-		return nil, err
-	}
 	var gpgBin string
 	if c.Encrypted {
 		if gpgBin, err = a.tool("gpg"); err != nil {
@@ -824,14 +821,17 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	}
 	if !c.Encrypted {
 		// Unencrypted: the payload is a plain tar; extract it directly, no gpg.
+		// Obelisk reads the tar itself (tarpkg.go): member names are matched
+		// exactly as stored, whatever their characters, and never read as options.
 		progress(0.25, "extract")
-		// "--" ends option parsing: members are archive member names chosen by the
-		// caller, and a member beginning with "-" would otherwise be read as a tar
-		// option rather than as the file to restore.
-		targs := []string{"-xf", enc, "-C", tgt.into, "--"}
-		targs = append(targs, members...)
-		if err := run(tarBin, "", targs...); err != nil {
-			return nil, fmt.Errorf("tar extract failed: %v", err)
+		pf, err := os.Open(enc)
+		if err != nil {
+			return nil, err
+		}
+		xerr := extractTar(bufio.NewReaderSize(pf, 1<<20), tgt.into, members)
+		pf.Close()
+		if xerr != nil {
+			return nil, fmt.Errorf("tar extract failed: %v", xerr)
 		}
 		res, err := a.finishRestore(c, tgt, outputDir, repaired, restoreWarnings, progress)
 		succeeded = err == nil
@@ -850,28 +850,22 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	if err != nil {
 		return nil, err
 	}
-	targs := []string{"-xf", "-", "-C", tgt.into, "--"} // "--": member names are never options
-	targs = append(targs, members...)
-	tarc := helperCommand(tarBin, targs...)
-	tarc.Stdin = pipe
-	var tarErr strings.Builder
-	tarc.Stderr = &tarErr
 	var gpgErr strings.Builder
 	gpg.Stderr = &gpgErr
-
 	if err := gpg.Start(); err != nil {
 		return nil, err
 	}
-	if err := tarc.Start(); err != nil {
-		return nil, err
+	terr := extractTar(bufio.NewReaderSize(pipe, 1<<20), tgt.into, members)
+	if terr != nil {
+		_ = gpg.Process.Kill() // stop decrypting what will not be unpacked
 	}
-	terr := tarc.Wait()
+	_, _ = io.Copy(io.Discard, pipe)
 	gerr := gpg.Wait()
-	if gerr != nil {
+	if gerr != nil && terr == nil {
 		return nil, fmt.Errorf("gpg decrypt failed: %s", tail(gpgErr.String(), 400))
 	}
 	if terr != nil {
-		return nil, fmt.Errorf("tar extract failed: %s", tail(tarErr.String(), 400))
+		return nil, fmt.Errorf("tar extract failed: %v", terr)
 	}
 	res, err := a.finishRestore(c, tgt, outputDir, repaired, restoreWarnings, progress)
 	succeeded = err == nil

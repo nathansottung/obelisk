@@ -9,7 +9,10 @@ package main
 // switches it off — so at that tier a wrongly named package could be staged, written
 // and read back with every one of those checks passing.
 //
-// Until the native writer lands, such a build is refused. These tests prove the refusal
+// The native writer (tarpkg.go) has since replaced the external tar in builds, so in
+// production the containment no longer applies; it is kept, and tested through the
+// hook, in case an external-tar path ever returns. Until the native writer landed,
+// such a build was refused. These tests prove the refusal
 // is driven by the EFFECTIVE archive configuration, that it happens before tar runs, a
 // key is generated or the package becomes eligible as staged, and that it does not
 // disturb Contents/Full builds.
@@ -18,8 +21,8 @@ package main
 // fixtures. They set buildUsesWindowsExternalTarHook so the containment can be
 // exercised on any platform; production leaves it nil and the real GOOS decides.
 //
-// This is containment, NOT a Unicode compatibility fix. tar_unicode_names_test.go
-// still fails on this path with verification enabled, and is meant to.
+// This was containment, NOT a Unicode compatibility fix; the native writer is the fix,
+// and tar_unicode_names_test.go now passes on Windows.
 
 import (
 	"os"
@@ -351,30 +354,20 @@ func TestContainment_VerifierStillRejectsMismatchedArchive(t *testing.T) {
 }
 
 // TestContainment_ProductionPredicateFollowsGOOS pins the shipped default: with no test
-// hook installed, the predicate is the real platform. A binary has no other value.
+// hook installed, no build runs an external tar (tarpkg.go writes every package), so
+// the containment applies nowhere and no tier is refused. The guard itself still
+// refuses "none" whenever the predicate holds (the hooked tests above).
 func TestContainment_ProductionPredicateFollowsGOOS(t *testing.T) {
 	if buildUsesWindowsExternalTarHook != nil {
 		t.Fatal("a test leaked buildUsesWindowsExternalTarHook; production must see nil")
 	}
-	if got, want := buildUsesWindowsExternalTar(), runtime.GOOS == "windows"; got != want {
-		t.Errorf("unhooked predicate = %v, want %v for GOOS %q", got, want, runtime.GOOS)
+	if buildUsesWindowsExternalTar() {
+		t.Errorf("unhooked predicate = true on GOOS %q; builds no longer run an external tar", runtime.GOOS)
 	}
-	// And the guard itself: none is refused on Windows, allowed elsewhere; verifying
-	// tiers are allowed everywhere.
-	none := Integrity{BuildVerify: BuildVerifyNone}.normalize()
-	if err := assertWindowsTarBuildVerifiable(none); (err != nil) != (runtime.GOOS == "windows") {
-		t.Errorf("none tier on GOOS %q: err = %v", runtime.GOOS, err)
-	}
-	for _, tier := range []string{BuildVerifyContents, BuildVerifyFull} {
+	for _, tier := range []string{BuildVerifyNone, BuildVerifyContents, BuildVerifyFull, "fast"} {
 		iv := Integrity{BuildVerify: tier}.normalize()
 		if err := assertWindowsTarBuildVerifiable(iv); err != nil {
-			t.Errorf("%s tier must never be refused: %v", tier, err)
+			t.Errorf("%s tier refused with no external tar in the build: %v", tier, err)
 		}
-	}
-	// Legacy "fast" normalises to none and must be refused on the same terms — the
-	// guard reads the normalised tier, not the raw string it was configured with.
-	legacy := Integrity{BuildVerify: "fast"}.normalize()
-	if err := assertWindowsTarBuildVerifiable(legacy); (err != nil) != (runtime.GOOS == "windows") {
-		t.Errorf("legacy \"fast\" on GOOS %q: err = %v", runtime.GOOS, err)
 	}
 }

@@ -834,10 +834,9 @@ func buildUsesWindowsExternalTar() bool {
 	if buildUsesWindowsExternalTarHook != nil {
 		return buildUsesWindowsExternalTarHook()
 	}
-	// Every package today is constructed by the configured external tar; there is no
-	// native writer yet. When one lands (OBX-006 §8 option 1), this is the predicate
-	// that stops applying to the paths it replaces.
-	return runtime.GOOS == "windows"
+	// Packages are written by Obelisk's own tar writer (tarpkg.go), on every
+	// platform, so no build runs the external tar this containment was for.
+	return false
 }
 
 // windowsTarUnverifiedBuildRefusal is the operator-facing reason a Windows build at
@@ -1000,11 +999,8 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	if err := assertWindowsTarBuildVerifiable(iv); err != nil {
 		return err
 	}
-	tarBin, err := a.tool("tar")
-	if err != nil {
-		return err
-	}
 	var gpgBin string
+	var err error
 	if c.Encrypted {
 		if gpgBin, err = a.tool("gpg"); err != nil {
 			return err
@@ -1060,20 +1056,6 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 		return err
 	}
 
-	// NUL-delimited, not newline: a newline is a legal character in a POSIX filename,
-	// so a newline-delimited list splits such a name into two paths that do not exist
-	// and the file silently never enters the archive. GNU tar also reads a leading "-"
-	// in a plain list as an OPTION. With --null (below) every name is taken verbatim,
-	// exactly as the catalog recorded it. Staging-only: this list never ships on media.
-	list := filepath.Join(work, "filelist.txt")
-	var sb strings.Builder
-	for _, cf := range c.Files {
-		sb.WriteString(cf.RelPath + "\x00")
-	}
-	if err := os.WriteFile(list, []byte(sb.String()), 0o644); err != nil {
-		return fail(err)
-	}
-
 	tarPath := filepath.Join(work, c.Name+".tar")
 	payloadPath := filepath.Join(work, payloadName(c)) // <name>.tar.gpg (ciphertext) when encrypted, <name>.tar (the tar itself) when not
 
@@ -1119,15 +1101,11 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 
 	progress(0.05, "tar…")
 	t := time.Now()
-	// SOURCE READ-ONLY: `tar -c … -C <SrcRoot> -T list` only READS the source
-	// files; it writes exclusively to tarPath in the (validated) staging dir. tar
-	// -c never modifies the files it archives. First member: the manifest (from
-	// staging); then APPEND the source tree so the manifest leads the archive.
-	if err := run(tarBin, "", "--format=posix", "-cf", tarPath, "-C", work, bagPayloadManifestName); err != nil {
-		return fail(err)
-	}
-	if err := run(tarBin, "", "--format=posix", "-rf", tarPath, "-C", c.SrcRoot, "--null", "-T", list); err != nil {
-		return fail(err)
+	// SOURCE READ-ONLY: the source files are only read; the tar is written only to
+	// tarPath in the (validated) staging dir. The manifest leads the archive, then
+	// each catalogued file under its catalogued name (see tarpkg.go).
+	if err := writePackageTar(tarPath, manifestPath, c.SrcRoot, c.Files); err != nil {
+		return fail(fmt.Errorf("writing the package tar: %w", err))
 	}
 	finish("tar", t, 0.28)
 	if buildAfterTarHook != nil { // test-only fault injection between tar and hash

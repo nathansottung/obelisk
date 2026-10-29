@@ -138,9 +138,10 @@ func TestBuildRestore_HostileFilenamesRoundTrip(t *testing.T) {
 	}
 }
 
-// The build's -T list is NUL-delimited, and every hostile name must appear in it whole.
-// A newline-delimited list would show the same bytes but split at the newline, which is
-// exactly the failure this guards — so assert the delimiter, not just the content.
+// Every hostile name is one whole member of the package. The build once fed an
+// external tar a name list, where a newline split a name in two; Obelisk now
+// writes the tar itself, so no list exists, and the members themselves are
+// checked: each name once, whole, with its own bytes.
 func TestBuildFilelist_IsNulDelimited(t *testing.T) {
 	tools := nativeTools(t)
 	app, staging := newTestApp(t, tools)
@@ -156,22 +157,8 @@ func TestBuildFilelist_IsNulDelimited(t *testing.T) {
 	if err := app.BuildChunk(c.ID, noProg); err != nil {
 		t.Fatalf("BuildChunk: %v", err)
 	}
-
-	raw, err := os.ReadFile(filepath.Join(staging, c.Name, "filelist.txt"))
-	if err != nil {
-		t.Fatalf("reading the staged filelist: %v", err)
+	if _, err := os.Stat(filepath.Join(staging, c.Name, "filelist.txt")); err == nil {
+		t.Error("the build left a name list in staging; the tar is written without one")
 	}
-	entries := strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00")
-	if len(entries) != len(names) {
-		t.Fatalf("filelist holds %d NUL-delimited entries, want %d — a name was split", len(entries), len(names))
-	}
-	byName := map[string]bool{}
-	for _, e := range entries {
-		byName[e] = true
-	}
-	for _, n := range names {
-		if !byName[n] {
-			t.Errorf("filelist is missing %q whole", n)
-		}
-	}
+	assertExactPayload(t, stagedTar(staging, c), refs)
 }
