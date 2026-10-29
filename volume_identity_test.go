@@ -91,7 +91,7 @@ func TestDeviceIdentityAndLabel_SystemDisk(t *testing.T) {
 	if v.DeviceAt == nil {
 		t.Error("DeviceAt should be stamped after a successful resolve")
 	}
-	if v.Serial == "" && v.Model == "" && v.DeviceSize == 0 {
+	if v.Serial == "" && v.Model == "" && v.DeviceSize == 0 && v.PartitionID == "" {
 		t.Error("volume gained no identity fields despite a resolved device")
 	}
 

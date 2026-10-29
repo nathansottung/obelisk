@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -184,10 +183,10 @@ func TestKeystoreValidation_ExactSecretsAndLocalDuplicates(t *testing.T) {
 // The Windows containment gate deliberately stops before helper lookup or any
 // key generation. Reaching it proves the encrypted-build first-use precheck
 // remains available without pretending to test encryption with missing helpers.
+// No production build runs an external tar any more, so the gate is switched on
+// through its test hook, which also lets this run on every platform.
 func TestKeystoreValidation_FirstBuildInitializationPrecheck(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("Windows containment precheck control")
-	}
+	onWindowsTarPath(t, true)
 	f := newKV(t, nil, nil)
 	for _, p := range f.paths {
 		if e := os.Remove(p); e != nil {
