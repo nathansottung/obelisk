@@ -172,19 +172,14 @@ func (a *App) SaveConfig(in map[string]any) (Config, error) {
 		return Config{}, err
 	}
 	// A change of burn_command needs the typed confirmation, which is not saved.
-	confirmBurn, _ := in["burn_command_confirm"].(string)
-	delete(in, "burn_command_confirm")
-	if v, ok := in["burn_command"]; ok {
-		next, _ := v.(string)
-		if strings.TrimSpace(next) != strings.TrimSpace(cfg.BurnCommand) {
-			if confirmBurn != burnCommandConfirmWord {
-				return Config{}, fmt.Errorf("changing burn_command runs a different program when discs are burned: type %q to confirm the change", burnCommandConfirmWord)
+	// Field names match case-insensitively, so the word is read under any case.
+	confirmBurn := ""
+	for k, v := range in {
+		if strings.EqualFold(k, "burn_command_confirm") {
+			if s, ok := v.(string); ok {
+				confirmBurn = s
 			}
-			if strings.TrimSpace(next) != "" {
-				if _, err := parseBurnCommand(next); err != nil {
-					return Config{}, err
-				}
-			}
+			delete(in, k)
 		}
 	}
 	b, err := json.Marshal(in)
@@ -194,26 +189,44 @@ func (a *App) SaveConfig(in map[string]any) (Config, error) {
 	if _, _, err := decodeConfig(b); err != nil {
 		return Config{}, err
 	}
+	// The checks compare the settings as decoded with the ones in force, so a
+	// key sent under another letter case gets the same checks as its own name.
+	prev := cfg
+	prev.Tools = map[string]string{}
+	for k, v := range cfg.Tools {
+		prev.Tools[k] = v
+	}
+	prev.KeystorePaths = append([]string(nil), cfg.KeystorePaths...)
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return Config{}, fmt.Errorf("configuration update has an invalid field type")
 	}
 	if cfg.Tools == nil {
 		cfg.Tools = map[string]string{}
 	}
+	if next := strings.TrimSpace(cfg.BurnCommand); next != strings.TrimSpace(prev.BurnCommand) {
+		if confirmBurn != burnCommandConfirmWord {
+			return Config{}, fmt.Errorf("changing burn_command runs a different program when discs are burned: type %q to confirm the change", burnCommandConfirmWord)
+		}
+		if next != "" {
+			if _, err := parseBurnCommand(next); err != nil {
+				return Config{}, err
+			}
+		}
+	}
 	if err := checkPar2ExtraArgs(cfg.Par2ExtraArgs); err != nil {
 		return Config{}, err
 	}
-	if _, ok := in["keystore_paths"]; ok {
+	if !reflect.DeepEqual(cfg.KeystorePaths, prev.KeystorePaths) {
 		if err := checkKeystorePaths(cfg.KeystorePaths); err != nil {
 			return Config{}, err
 		}
 	}
-	if tools, ok := in["tools"].(map[string]any); ok {
-		for name, v := range tools {
-			p, _ := v.(string)
-			if err := checkToolPath(name, p, true); err != nil {
-				return Config{}, err
-			}
+	for name, p := range cfg.Tools {
+		if old, ok := prev.Tools[name]; ok && old == p {
+			continue
+		}
+		if err := checkToolPath(name, p, true); err != nil {
+			return Config{}, err
 		}
 	}
 	if a.Store == nil {
