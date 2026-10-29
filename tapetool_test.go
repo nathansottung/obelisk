@@ -22,7 +22,8 @@ func TestTapeTool_IsChecked(t *testing.T) {
 			t.Errorf("tape_tool %q was saved", bad)
 		}
 	}
-	if _, _, ok := app.resolveTapeTool(Config{TapeTool: bat}); ok {
+	// A real tape tool on PATH may still be found; the batch file never is.
+	if _, bin, ok := app.resolveTapeTool(Config{TapeTool: bat}); ok && bin == bat {
 		t.Errorf("a configured %s was accepted as the tape tool", bat)
 	}
 	good := filepath.Join(dir, "itdt.exe")
