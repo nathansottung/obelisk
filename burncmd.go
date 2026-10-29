@@ -60,7 +60,7 @@ func parseBurnCommand(cmd string) ([]string, error) {
 	if _, ok := burnPrograms[prog]; !ok {
 		return nil, fmt.Errorf("burn_command must run a disc burner (one of xorriso, xorrecord, growisofs, cdrecord, wodim, cdrskin or ImgBurn), not %q", args[0])
 	}
-	if err := checkBurnArgs(args); err != nil {
+	if err := checkBurnArgs(args, true); err != nil {
 		return nil, err
 	}
 	return args, nil
@@ -81,7 +81,7 @@ func burnArgv(cmd, src, label string) ([]string, error) {
 		args[i] = strings.ReplaceAll(a, "{LABEL}", label)
 	}
 	// A filled-in folder or label is checked too.
-	if err := checkBurnArgs(args); err != nil {
+	if err := checkBurnArgs(args, false); err != nil {
 		return nil, err
 	}
 	return args, nil

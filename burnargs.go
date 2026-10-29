@@ -116,14 +116,9 @@ var growisofsValued = map[string]burnValue{
 // nothing yet succeeds) and the others are refused.
 var growisofsEquals = map[string]burnValue{"-speed": simpleValue, "-use-the-force-luke": oneOf("tty", "dao", "notray")}
 
-// growisofsTarget is "-Z device" or "-Z device=image": the device must be a
-// drive; an image is read.
-func growisofsTarget(v string) bool {
-	if i := strings.IndexByte(v, '='); i >= 0 {
-		v = v[:i]
-	}
-	return isBurnDevice(v)
-}
+// growisofsTarget is the drive after -Z or -M. The "-Z device=image" form,
+// which burns an image instead of the package folder, is refused.
+func growisofsTarget(v string) bool { return isBurnDevice(v) }
 
 // imgburnSwitches are the ImgBurn switches allowed, with a check for the value
 // a switch takes (nil for none). The command must leave nothing to ImgBurn's
@@ -149,32 +144,49 @@ var imgburnSwitches = map[string]burnValue{
 	"WAITFORMEDIA": nil, "NOSAVESETTINGS": nil,
 }
 
+// burnPlan records, while a command is checked, whether it burns the package:
+// {SRC} where the burner reads what it writes (and, for xorriso, a commit
+// after it).
+type burnPlan struct {
+	mappedSrc bool // xorriso: a -map of {SRC} is waiting for a commit
+	burned    bool
+}
+
+// burnsSrc reports whether a value names the package folder.
+func burnsSrc(v string) bool { return strings.Contains(v, "{SRC}") }
+
 // checkBurnArgs checks a burn command's arguments (args[0] is the program)
-// against its burner's allowed options. It runs on the command as written and
-// again with {SRC} and {LABEL} filled in, so a filled-in value cannot become
-// an option.
-func checkBurnArgs(args []string) error {
+// against its burner's allowed options. It runs on the command as written
+// (template) and again with {SRC} and {LABEL} filled in, so a filled-in value
+// cannot become an option. The command as written must also burn {SRC}: a
+// command that only blanks, fixates, burns something else or stops early
+// exits as a success with the package not on the disc.
+func checkBurnArgs(args []string, template bool) error {
 	prog := strings.TrimSuffix(strings.ToLower(burnProgramName(args[0])), ".exe")
 	var err error
+	p := &burnPlan{}
 	switch burnPrograms[prog] {
 	case burnStyleXorriso:
-		err = checkXorrisoArgs(args[1:])
+		err = checkXorrisoArgs(args[1:], p)
 	case burnStyleXorrecord:
-		rest, e := checkCdrecordArgs(args[1:], true)
+		rest, e := checkCdrecordArgs(args[1:], true, p)
 		if err = e; err == nil {
-			err = checkXorrisoArgs(rest)
+			err = checkXorrisoArgs(rest, p)
 		}
 	case burnStyleCdrecord:
-		_, err = checkCdrecordArgs(args[1:], false)
+		_, err = checkCdrecordArgs(args[1:], false, p)
 	case burnStyleGrowisofs:
-		err = checkGrowisofsArgs(args[1:])
+		err = checkGrowisofsArgs(args[1:], p)
 	case burnStyleImgBurn:
-		err = checkImgBurnArgs(args[1:])
+		err = checkImgBurnArgs(args[1:], p)
 	default:
 		err = fmt.Errorf("%q is not a known burner", args[0])
 	}
 	if err != nil {
 		return fmt.Errorf("burn_command: %w (only the burner's options for burning a disc are allowed)", err)
+	}
+	if template && !p.burned {
+		return fmt.Errorf("burn_command must burn {SRC}: give it where the burner reads what it writes (xorriso -map {SRC} / then -commit, the cdrecord or growisofs source, ImgBurn /SRC)")
 	}
 	return nil
 }
@@ -187,29 +199,51 @@ func burnProgramName(p string) string {
 	return p
 }
 
-func checkXorrisoArgs(args []string) error {
+func checkXorrisoArgs(args []string, p *burnPlan) error {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if !strings.HasPrefix(a, "-") {
 			return fmt.Errorf("%q is not an xorriso command", a)
 		}
 		name := strings.ReplaceAll(strings.ToLower(strings.TrimLeft(a, "-")), "-", "_")
+		if name == "eject" { // an optional in, out or all
+			if i+1 < len(args) && oneOf("in", "out", "all")(args[i+1]) {
+				i++
+			}
+			continue
+		}
+		if name == "end" {
+			// -end stops xorriso: nothing may follow it.
+			if i != len(args)-1 {
+				return fmt.Errorf("xorriso -end must be last: it stops before the commands after it")
+			}
+			continue
+		}
+		// Once the package is burned only ejecting and ending may follow; a
+		// later -blank, say, would erase it.
+		if p.burned {
+			return fmt.Errorf("xorriso %s is not allowed after the package is burned", a)
+		}
 		if name == "as" {
 			if i+1 >= len(args) || !oneOf("cdrecord", "wodim", "cdrskin", "xorrecord")(args[i+1]) {
 				return fmt.Errorf("xorriso -as may only emulate cdrecord")
 			}
-			rest, err := checkCdrecordArgs(args[i+2:], true)
+			rest, err := checkCdrecordArgs(args[i+2:], true, p)
 			if err != nil {
 				return err
 			}
 			args, i = rest, -1
 			continue
 		}
-		if name == "eject" { // an optional in, out or all
-			if i+1 < len(args) && oneOf("in", "out", "all")(args[i+1]) {
-				i++
+		switch name {
+		case "map":
+			if i+1 < len(args) && burnsSrc(args[i+1]) {
+				p.mappedSrc = true
 			}
-			continue
+		case "commit", "commit_eject":
+			if p.mappedSrc {
+				p.burned = true
+			}
 		}
 		vals, ok := xorrisoCommands[name]
 		if !ok {
@@ -232,7 +266,7 @@ var cdrecordKeyName = regexp.MustCompile(`^[A-Za-z_]+$`).MatchString
 
 // checkCdrecordArgs checks cdrecord-style arguments. With dashDash, "--" ends
 // them (xorriso emulation) and the rest are returned for xorriso.
-func checkCdrecordArgs(args []string, dashDash bool) ([]string, error) {
+func checkCdrecordArgs(args []string, dashDash bool, p *burnPlan) ([]string, error) {
 	for i, a := range args {
 		if dashDash && a == "--" {
 			return args[i+1:], nil
@@ -254,15 +288,22 @@ func checkCdrecordArgs(args []string, dashDash bool) ([]string, error) {
 			continue
 		}
 		// A track to burn: read, never written.
+		if burnsSrc(a) {
+			p.burned = true
+		}
 	}
 	return nil, nil
 }
 
-func checkGrowisofsArgs(args []string) error {
+func checkGrowisofsArgs(args []string, p *burnPlan) error {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if !strings.HasPrefix(a, "-") {
-			continue // a folder or file to burn: read, never written
+			// A folder to burn: read, never written.
+			if burnsSrc(a) {
+				p.burned = true
+			}
+			continue
 		}
 		if k, v, ok := strings.Cut(a, "="); ok {
 			check, known := growisofsEquals[k]
@@ -286,7 +327,7 @@ func checkGrowisofsArgs(args []string) error {
 	return nil
 }
 
-func checkImgBurnArgs(args []string) error {
+func checkImgBurnArgs(args []string, p *burnPlan) error {
 	seen := map[string]string{}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -310,6 +351,9 @@ func checkImgBurnArgs(args []string) error {
 			return fmt.Errorf("ImgBurn %s needs a value it accepts", a)
 		}
 		seen[name] = strings.ToUpper(args[i])
+		if name == "SRC" && burnsSrc(args[i]) {
+			p.burned = true
+		}
 	}
 	for _, need := range []string{"MODE", "BUILDOUTPUTMODE", "BUILDINPUTMODE", "SRC", "DEST"} {
 		if _, ok := seen[need]; !ok {

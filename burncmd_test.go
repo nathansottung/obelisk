@@ -210,3 +210,41 @@ func TestBurnCommand_RefusesGrowisofsTestWrite(t *testing.T) {
 		t.Errorf("-use-the-force-luke=tty: %v", err)
 	}
 }
+
+// A burn command must burn the package: {SRC} where the burner reads what it
+// writes, and for xorriso a -commit after it. A command that only blanks,
+// fixates, burns something else or stops early exits as a success with the
+// package not on the disc.
+func TestBurnCommand_MustBurnThePackage(t *testing.T) {
+	for _, bad := range []string{
+		"xorriso -end",
+		"xorriso -dev /dev/sr0 -blank fast",
+		"xorriso -outdev /dev/sr0 -blank as_needed -commit",
+		"xorriso -outdev /dev/sr0 -end -map {SRC} / -commit",
+		"xorriso -outdev /dev/sr0 -map {SRC} /",
+		"xorriso -outdev /dev/sr0 -map {SRC} / -commit -blank all",
+		"xorriso -outdev /dev/sr0 -volid {SRC} -commit",
+		"wodim dev=/dev/sr0 -fix",
+		"cdrecord dev=/dev/sr0 blank=fast",
+		"xorriso -as cdrecord dev=/dev/sr0 -v",
+		"growisofs -Z /dev/sr0=/dev/zero",
+		"growisofs -Z /dev/sr0=/dev/zero {SRC}",
+		"growisofs -Z /dev/sr0 -V {SRC}",
+		"imgburn /MODE BUILD /BUILDOUTPUTMODE DEVICE /BUILDINPUTMODE STANDARD /SRC C:/other /DEST E: /START",
+	} {
+		if _, err := parseBurnCommand(bad); err == nil {
+			t.Errorf("parseBurnCommand(%q) accepted a command that does not burn the package", bad)
+		}
+	}
+	for _, ok := range []string{
+		defaultBurnCommand,
+		"xorriso -outdev /dev/sr0 -map {SRC} / -commit_eject all",
+		"xorriso -outdev /dev/sr0 -map {SRC} / -commit -end",
+		"xorriso -as cdrecord -v dev=/dev/sr0 -eject {SRC}",
+		"wodim dev=/dev/sr0 -v -dao {SRC}",
+	} {
+		if _, err := parseBurnCommand(ok); err != nil {
+			t.Errorf("parseBurnCommand(%q): %v", ok, err)
+		}
+	}
+}
