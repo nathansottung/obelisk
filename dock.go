@@ -490,11 +490,24 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 				}
 			}
 		}
-		if len(refs) == 0 && len(unknown) == 0 {
-			if p := a.mirrorChunkOn(aid, vol.ID); p != nil && len(p.UnknownFiles) > 0 {
-				p.UnknownFiles = nil
+		if len(refs) == 0 {
+			// None of this archive's files were found. What the drive's record held
+			// is gone, or unknown where this scan could not read; the copy is not
+			// verified again by a scan that found nothing.
+			if p := a.mirrorChunkOn(aid, vol.ID); p != nil && (len(p.Files) > 0 || len(p.UnknownFiles) > 0) {
+				gone := 0
+				for _, r := range p.Files {
+					if !containsRef(unknown, r.FileID) {
+						gone++
+					}
+				}
+				p.Files, p.FileCount, p.EncBytes, p.DataBytes = nil, 0, 0, 0
+				p.UnknownFiles = unknown
 				a.Store.UpdateChunk(p)
+				a.Store.AppendVerifyEvent(p, VerifyEvent{At: time.Now().UTC(), OK: false, Path: mountPath, Advisory: true,
+					Note: fmt.Sprintf("this scan found none of the archive's files here: %d no longer on the drive, %d unknown (in places it could not read)", gone, len(unknown))})
 			}
+			unknownFiles += len(unknown)
 			continue
 		}
 		sort.Slice(refs, func(i, j int) bool { return refs[i].RelPath < refs[j].RelPath })
@@ -708,6 +721,16 @@ func (a *App) upsertMirrorChunk(archiveID int, vol *Volume, mountPath string, re
 	a.Store.RecordCopy(c, vol.ID, mountPath, true)
 	a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: true, Path: mountPath, Note: note})
 	return c
+}
+
+// containsRef reports whether refs holds the file fileID.
+func containsRef(refs []ChunkFileRef, fileID int) bool {
+	for _, r := range refs {
+		if r.FileID == fileID {
+			return true
+		}
+	}
+	return false
 }
 
 // mirrorChunkOn is the archive's mirror package with a current copy on the

@@ -3,8 +3,10 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -121,5 +123,64 @@ func TestSnapshotKnown_IgnoresCaseOnWindows(t *testing.T) {
 	snap := &VolumeSnapshot{UnreadableFolders: []ScanGap{{RelPath: "Locked"}}}
 	if got := snap.Known("locked/b.txt"); got != (runtime.GOOS != "windows") {
 		t.Errorf("Known(locked/b.txt) = %v on %s", got, runtime.GOOS)
+	}
+}
+
+// When a rescan finds none of an archive's files on the drive, the files it
+// had recorded there are no longer counted: gone if the scan read where they
+// were, unknown if it could not. Either way the drive's copy gets no fresh
+// verification from that scan.
+func TestDockScan_NoFreshMatchesDropsTheOldRecord(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		drive   map[string]string // first scan
+		remove  string            // deleted before the rescan
+		unknown []string          // expected unknown after the rescan
+	}{
+		{"nothing left", map[string]string{"b.txt": "bravo\n", "locked/x.txt": "other\n"}, "b.txt", nil},
+		{"only unknown left", map[string]string{"b.txt": "bravo\n", "locked/c.txt": "charlie\n"}, "b.txt", []string{"c.txt"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := dockApp(t)
+			src := t.TempDir()
+			writeTree(t, src, map[string]string{"b.txt": "bravo\n", "c.txt": "charlie\n"})
+			coll := app.Store.AddCollection("Photos")
+			if _, _, err := app.ScanFolder(coll.ID, src, noProg); err != nil {
+				t.Fatal(err)
+			}
+			drive := t.TempDir()
+			writeTree(t, drive, tc.drive)
+			ds, err := app.StartDockSession([]int{coll.ID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := app.IngestDrive(ds.ID, drive, "SER-Z", "DZ", "", "", false, noProg); err != nil {
+				t.Fatal(err)
+			}
+			vol := app.Store.VolumeBySerial("SER-Z")
+			if len(mirrorRefsOn(app, coll.ID, vol.ID)) == 0 {
+				t.Fatal("first scan matched nothing")
+			}
+			if err := os.Remove(filepath.Join(drive, tc.remove)); err != nil {
+				t.Fatal(err)
+			}
+			makeUnlistable(t, filepath.Join(drive, "locked"))
+			events := len(app.mirrorChunkOn(coll.ID, vol.ID).VerifyEvents)
+			if _, err := app.IngestDrive(ds.ID, drive, "SER-Z", "DZ", "", "", false, noProg); err != nil {
+				t.Fatal(err)
+			}
+			c := app.mirrorChunkOn(coll.ID, vol.ID)
+			if got, unk := mirrorRefsOn(app, coll.ID, vol.ID), unknownRefsOn(app, coll.ID, vol.ID); len(got) != 0 || strings.Join(unk, ",") != strings.Join(tc.unknown, ",") {
+				t.Errorf("mirror %v, unknown %v; want nothing counted and unknown %v", got, unk, tc.unknown)
+			}
+			if cov := app.archiveCoverage([]int{coll.ID}); cov.CoveredFiles != 0 || cov.Unknown != len(tc.unknown) {
+				t.Errorf("coverage %d covered, %d unknown; want 0 and %d", cov.CoveredFiles, cov.Unknown, len(tc.unknown))
+			}
+			for _, ev := range c.VerifyEvents[events:] {
+				if ev.OK && !ev.Advisory {
+					t.Errorf("the rescan re-verified a copy with no files found: %+v", ev)
+				}
+			}
+		})
 	}
 }
