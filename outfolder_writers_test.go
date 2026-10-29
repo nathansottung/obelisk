@@ -279,3 +279,25 @@ func TestBuild_StagingDecidedByRealLocation(t *testing.T) {
 	assertSourceRefusal(t, "staging into a link to a source", app.BuildChunk(c.ID, noProg))
 	untouched()
 }
+
+// Saving settings checks every folder they write into by where it really is:
+// a staging or auto-export folder, or a keystore, reached through a folder link
+// to a source is refused. A keystore beside a source (in a folder that also
+// holds one) is not inside it and is allowed.
+func TestSaveConfig_WriteFoldersDecidedByRealLocation(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	src, link, untouched := sourceBehindLink(t, app)
+	for key, val := range map[string]any{
+		"staging_dir":     filepath.Join(link, "staging"),
+		"auto_export_dir": link,
+		"keystore_paths":  []string{filepath.Join(link, "keystore.json"), filepath.Join(t.TempDir(), "k2.json")},
+	} {
+		_, err := app.SaveConfig(map[string]any{key: val})
+		assertSourceRefusal(t, "saving "+key+" through a link to a source", err)
+	}
+	untouched()
+	beside := filepath.Join(filepath.Dir(src), "keystore.json")
+	if _, err := app.SaveConfig(map[string]any{"keystore_paths": []string{beside, filepath.Join(t.TempDir(), "k2.json")}}); err != nil {
+		t.Errorf("a keystore beside a source was refused: %v", err)
+	}
+}

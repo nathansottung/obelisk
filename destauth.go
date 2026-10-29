@@ -400,6 +400,39 @@ func (s *Store) CheckOutsideSources(path string) error {
 	return snap.decideCreate(abs, path)
 }
 
+// CheckFileOutsideSources is CheckOutsideSources for a file written by path (a
+// keystore): it refuses a file that is a registered source or is inside one,
+// deciding on the real location of the file's folder. A folder that holds a
+// source may also hold the file, so that direction is not refused.
+func (s *Store) CheckFileOutsideSources(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("no file given")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	dir := canonicalOfMissing(filepath.Dir(abs))
+	if dir == "" {
+		return fmt.Errorf("refusing: could not establish the real location of %s", path)
+	}
+	canon := filepath.Join(dir, filepath.Base(abs))
+	snap, err := s.sourceSnapshot()
+	if err != nil {
+		return err
+	}
+	d := normPath(canon)
+	for _, src := range snap.srcs {
+		if src.offline {
+			continue
+		}
+		if r := normPath(src.canonical); r == "" || r == d || canonicalWithin(r, d) {
+			return overlapError(d, r, path, canon, src.registered)
+		}
+	}
+	return snap.decideCreate(abs, path)
+}
+
 // overlapError reports whether destination d and source r (both normPath keys)
 // are the same folder or one contains the other.
 func overlapError(d, r, display, destName, registered string) error {
