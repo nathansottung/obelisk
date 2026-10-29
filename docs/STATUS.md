@@ -17,3 +17,4 @@ tracked in the defect register, [development/OB_STATUS.md](development/OB_STATUS
 | Slice C: guard the remaining writers | Safety | Merged | [#12](https://github.com/nathansottung/obelisk/pull/12) | 2026-10-29 |
 | Cross-drive, part 1: record what each drive scan could not read, and keep a history of scans | Coverage | Merged | [#13](https://github.com/nathansottung/obelisk/pull/13) | 2026-10-29 |
 | Cross-drive, part 2: compare drives against a reference (reports only), shared file classifier, scan history in app backups | Coverage | Merged | [#14](https://github.com/nathansottung/obelisk/pull/14) | 2026-10-29 |
+| Truthful "verified": credit only the copy read, clean builds and required sidecars, whole-set span checks, no shared paths, failed saves fail the job, honest job stamps | Safety | In review | [#15](https://github.com/nathansottung/obelisk/pull/15) | 2026-10-29 |
