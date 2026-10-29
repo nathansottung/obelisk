@@ -131,3 +131,21 @@ func TestSpanWrite_DestinationDecidedByRealLocation(t *testing.T) {
 	}
 	assertFileBytes(t, victim, "SOMEONE ELSE'S")
 }
+
+// An escrow bundle stages each of its files and names it once it reads back,
+// so a file already in the bundle folder (a hard link to another file) is
+// replaced as a name and the other file keeps its bytes.
+func TestEscrowBundle_NeverWritesThroughExistingFiles(t *testing.T) {
+	a := escrowApp(t)
+	seedEscrowCache(t, a, struct{ binaries, toolchain, readers bool }{binaries: true})
+	dir := t.TempDir()
+	readme := plantAtStageName(t, filepath.Join(dir, escrowBundleDir, "ESCROW_README.md"))
+	plan := a.planEscrow(EscrowBinariesOnly, false, Census{}, mustConfig(t, a))
+	if _, err := a.WriteEscrowBundle(dir, plan, nil); err != nil {
+		t.Fatal(err)
+	}
+	assertFileBytes(t, readme, "SOMEONE ELSE'S")
+	if b, err := os.ReadFile(filepath.Join(dir, escrowBundleDir, "ESCROW_README.md")); err != nil || len(b) == 0 || string(b) == "SOMEONE ELSE'S" {
+		t.Errorf("bundle README not written: %q %v", b, err)
+	}
+}
