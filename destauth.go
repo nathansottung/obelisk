@@ -383,9 +383,9 @@ func (s *Store) CheckOutsideSources(path string) error {
 	if err != nil {
 		return err
 	}
-	canon := canonicalOfMissing(abs)
-	if canon == "" {
-		return fmt.Errorf("refusing: could not establish the real location of %s", path)
+	canon, vol, err := sourceCheckLocation(abs, path)
+	if err != nil {
+		return err
 	}
 	snap, err := s.sourceSnapshot()
 	if err != nil {
@@ -394,14 +394,29 @@ func (s *Store) CheckOutsideSources(path string) error {
 	if err := snap.decide(canon, path); err != nil {
 		return err
 	}
-	vol := ""
-	if ancestor, _, err := deepestExistingDir(abs); err == nil {
-		vol = pathVolumeID(ancestor)
-	}
 	if err := snap.decideOffline(vol, abs, canon, path); err != nil {
 		return err
 	}
 	return snap.decideCreate(abs, path)
+}
+
+// sourceCheckLocation is where abs really is, for a source check: its deepest
+// existing folder read back from a handle with the missing names below it, and
+// that folder's volume. When no folder of abs exists at all (its drive is not
+// attached, or a share is offline) there is nothing to resolve: abs itself is
+// returned with no volume, so it is compared by path, which is all that can
+// matter. An attached source cannot hold a folder on a drive that is not there,
+// and sources whose drive is away are compared by their registered paths.
+func sourceCheckLocation(abs, display string) (canon, vol string, err error) {
+	ancestor, _, derr := deepestExistingDir(abs)
+	if errors.Is(derr, errNoExistingParent) {
+		return abs, "", nil
+	}
+	canon = canonicalOfMissing(abs)
+	if derr != nil || canon == "" {
+		return "", "", fmt.Errorf("refusing: could not establish the real location of %s", display)
+	}
+	return canon, pathVolumeID(ancestor), nil
 }
 
 // CheckFileOutsideSources is CheckOutsideSources for a file written by path (a
@@ -416,9 +431,9 @@ func (s *Store) CheckFileOutsideSources(path string) error {
 	if err != nil {
 		return err
 	}
-	dir := canonicalOfMissing(filepath.Dir(abs))
-	if dir == "" {
-		return fmt.Errorf("refusing: could not establish the real location of %s", path)
+	dir, vol, err := sourceCheckLocation(filepath.Dir(abs), path)
+	if err != nil {
+		return err
 	}
 	canon := filepath.Join(dir, filepath.Base(abs))
 	snap, err := s.sourceSnapshot()
@@ -434,6 +449,7 @@ func (s *Store) CheckFileOutsideSources(path string) error {
 			return overlapError(d, r, path, canon, src.registered)
 		}
 	}
+	_ = vol
 	return snap.decideCreate(abs, path)
 }
 
