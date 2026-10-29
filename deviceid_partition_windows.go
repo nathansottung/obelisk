@@ -3,17 +3,69 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
-// resolvePartitionID is the volume GUID of the volume holding path, as
-// "{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}". It works for a volume mounted at a
-// drive letter or in a folder. Read-only, no PowerShell.
+const (
+	ioctlDiskGetPartitionInfoEx = 0x00070048
+	ioctlDiskGetDriveLayoutEx   = 0x00070050
+	ioctlStorageGetDeviceNumber = 0x002D1080
+	partitionStyleMBR           = 0
+	partitionStyleGPT           = 1
+	partitionInfoExSize         = 144
+	partitionInfoNumberOffset   = 24
+	partitionInfoGPTIDOffset    = 48
+	driveLayoutMBRSigOffset     = 8
+)
+
+// resolvePartitionID is the on-disk ID of the partition holding path (see
+// deviceid_parse.go): its GPT partition GUID, or its MBR disk signature and
+// partition number. It is read from the disk, so the same partition has the
+// same ID on any computer, unlike the volume GUID Windows assigns per machine.
+// Works for a volume at a drive letter or mounted in a folder. Read-only, no
+// PowerShell.
 func resolvePartitionID(path string) (string, error) {
+	vol, err := volumeDevicePath(path)
+	if err != nil {
+		return "", err
+	}
+	h, err := openForQuery(vol)
+	if err != nil {
+		return "", fmt.Errorf("opening the volume of %s: %w", path, err)
+	}
+	defer windows.CloseHandle(h)
+	var info [partitionInfoExSize]byte
+	var n uint32
+	if err := windows.DeviceIoControl(h, ioctlDiskGetPartitionInfoEx, nil, 0, &info[0], uint32(len(info)), &n, nil); err != nil {
+		return "", fmt.Errorf("reading the partition of %s: %w", path, err)
+	}
+	switch binary.LittleEndian.Uint32(info[0:4]) {
+	case partitionStyleGPT:
+		g := (*windows.GUID)(unsafe.Pointer(&info[partitionInfoGPTIDOffset]))
+		if id := gptPartitionID(g.String()); id != "" {
+			return id, nil
+		}
+	case partitionStyleMBR:
+		num := binary.LittleEndian.Uint32(info[partitionInfoNumberOffset : partitionInfoNumberOffset+4])
+		sig, err := mbrDiskSignature(h)
+		if err != nil {
+			return "", fmt.Errorf("reading the disk signature of %s: %w", path, err)
+		}
+		if id := mbrPartitionID(sig, num); id != "" {
+			return id, nil
+		}
+	}
+	return "", fmt.Errorf("no on-disk partition ID for %s", path)
+}
+
+// volumeDevicePath is the \\?\Volume{GUID} device of the volume holding path.
+func volumeDevicePath(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		abs = path
@@ -28,12 +80,39 @@ func resolvePartitionID(path string) (string, error) {
 	}
 	name := make([]uint16, 64)
 	if err := windows.GetVolumeNameForVolumeMountPoint(&mount[0], &name[0], uint32(len(name))); err != nil {
-		return "", fmt.Errorf("reading the volume GUID of %s: %w", windows.UTF16ToString(mount), err)
+		return "", fmt.Errorf("finding the volume device of %s: %w", windows.UTF16ToString(mount), err)
 	}
-	vn := windows.UTF16ToString(name) // \?\Volume{GUID}\
-	i, j := strings.IndexByte(vn, '{'), strings.IndexByte(vn, '}')
-	if i < 0 || j < i {
-		return "", fmt.Errorf("unexpected volume name %q", vn)
+	return strings.TrimSuffix(windows.UTF16ToString(name), `\`), nil
+}
+
+// openForQuery opens a volume or disk device for queries only: no read or
+// write access is asked for.
+func openForQuery(dev string) (windows.Handle, error) {
+	p, err := windows.UTF16PtrFromString(dev)
+	if err != nil {
+		return 0, err
 	}
-	return strings.ToLower(vn[i : j+1]), nil
+	return windows.CreateFile(p, 0, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, 0, 0)
+}
+
+// mbrDiskSignature is the MBR signature of the disk a volume is on.
+func mbrDiskSignature(vol windows.Handle) (uint32, error) {
+	var num [12]byte // STORAGE_DEVICE_NUMBER: type, device number, partition number
+	var n uint32
+	if err := windows.DeviceIoControl(vol, ioctlStorageGetDeviceNumber, nil, 0, &num[0], uint32(len(num)), &n, nil); err != nil {
+		return 0, err
+	}
+	disk, err := openForQuery(fmt.Sprintf(`\\.\PhysicalDrive%d`, binary.LittleEndian.Uint32(num[4:8])))
+	if err != nil {
+		return 0, err
+	}
+	defer windows.CloseHandle(disk)
+	layout := make([]byte, 48+128*partitionInfoExSize)
+	if err := windows.DeviceIoControl(disk, ioctlDiskGetDriveLayoutEx, nil, 0, &layout[0], uint32(len(layout)), &n, nil); err != nil {
+		return 0, err
+	}
+	if binary.LittleEndian.Uint32(layout[0:4]) != partitionStyleMBR {
+		return 0, fmt.Errorf("the disk is not MBR")
+	}
+	return binary.LittleEndian.Uint32(layout[driveLayoutMBRSigOffset : driveLayoutMBRSigOffset+4]), nil
 }

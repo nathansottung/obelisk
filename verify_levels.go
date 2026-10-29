@@ -198,7 +198,7 @@ func (a *App) VerifyMirrorVolume(volumeID int, mount, level string, progress fun
 		if liveSerial != "" && vol.Serial != "" && !strings.EqualFold(liveSerial, vol.Serial) {
 			return nil, fmt.Errorf("the drive at %s is not %s (serial %s, recorded %s)", m, vol.Label, liveSerial, vol.Serial)
 		}
-		if livePart != "" && vol.PartitionID != "" && !strings.EqualFold(livePart, vol.PartitionID) {
+		if same, known := partitionCompare(livePart, vol.PartitionID); known && !same {
 			return nil, fmt.Errorf("the partition at %s is not %s (partition %s, recorded %s)", m, vol.Label, livePart, vol.PartitionID)
 		}
 	}

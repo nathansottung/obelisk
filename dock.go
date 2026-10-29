@@ -209,8 +209,8 @@ func (a *App) IngestDrive(sessionID int, mountPath, serial, label, mode, level s
 	if vol == nil {
 		vol = a.Store.AddVolume(Volume{Label: nonEmpty(label, mountLabel(mountPath)), Kind: "HDD",
 			Serial: serial, PartitionID: part, Notes: "ingested via dock"})
-	} else if vol.PartitionID == "" && part != "" {
-		vol.PartitionID = part // recorded before partitions were kept
+	} else if vol.PartitionID == "" && part != "" && a.volumeCopiesAt(vol, mountPath) {
+		vol.PartitionID = part // recorded before partitions were kept, and its copies are here
 		a.Store.UpdateVolume(vol)
 	}
 	// Capture / refresh the live physical identity (best-effort, non-fatal). Only

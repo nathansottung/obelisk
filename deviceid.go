@@ -10,6 +10,7 @@ package main
 // deviceid_windows.go / deviceid_unix.go behind the shared resolveDeviceIdentity.
 
 import (
+	"os"
 	"strings"
 	"time"
 )
@@ -36,18 +37,18 @@ func (d DeviceIdentity) resolved() bool {
 // blank one (a later resolve from a dock that masks the serial must not erase a
 // real serial captured earlier). Returns the identity it found and whether the
 // volume was updated. Caller persists via Store.UpdateVolume. A volume with a
-// partition recorded is never updated from another partition; one with none
-// recorded takes the partition read.
+// partition recorded is never updated from another partition. One with none
+// recorded takes the partition read only when all its copies are on it.
 func (a *App) resolveVolumeIdentity(v *Volume, path string) (DeviceIdentity, bool) {
 	id, err := resolveDeviceIdentity(path)
 	if err != nil || !id.resolved() {
 		return id, false
 	}
-	if v.PartitionID != "" && id.Partition != "" && !strings.EqualFold(v.PartitionID, id.Partition) {
+	if same, known := partitionCompare(v.PartitionID, id.Partition); known && !same {
 		return id, false
 	}
 	changed := false
-	if id.Partition != "" && v.PartitionID == "" {
+	if id.Partition != "" && v.PartitionID == "" && a.volumeCopiesAt(v, path) {
 		v.PartitionID, changed = id.Partition, true
 	}
 	if id.Serial != "" && id.Serial != v.Serial {
@@ -67,6 +68,31 @@ func (a *App) resolveVolumeIdentity(v *Volume, path string) (DeviceIdentity, boo
 		v.DeviceAt = &now
 	}
 	return id, changed
+}
+
+// volumeCopiesAt reports whether every current copy recorded on v is found
+// under mount: the evidence needed before a volume recorded without a
+// partition takes the partition at mount. A volume recorded before partitions
+// were kept may hold copies from several partitions of its disk; binding it to
+// one would leave the others' copies with a partition they are not on. A volume
+// with no current copies has nothing to contradict it.
+func (a *App) volumeCopiesAt(v *Volume, mount string) bool {
+	root := normPath(mount)
+	for _, c := range a.Store.Chunks(0) {
+		for _, cp := range c.Copies {
+			if cp.VolumeID != v.ID || cp.Superseded {
+				continue
+			}
+			p := normPath(cp.Path)
+			if p != root && !strings.HasPrefix(p, strings.TrimRight(root, "/")+"/") {
+				return false
+			}
+			if _, err := os.Stat(cp.Path); err != nil {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // busCaveat returns the storage-industry caveat for a bus type: USB/1394 bridges

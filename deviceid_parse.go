@@ -6,6 +6,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -71,7 +72,7 @@ func parseLsblk(out []byte, abs string) (DeviceIdentity, error) {
 		Bus:       strings.ToUpper(strings.TrimSpace(pick.Tran)),
 	}
 	if mounted != nil {
-		id.Partition = strings.TrimSpace(mounted.PartUUID)
+		id.Partition = linuxPartitionID(mounted.PartUUID)
 	}
 	id.Note = busCaveat(id.Bus)
 	return id, nil
@@ -103,8 +104,77 @@ func mountMatches(mp, abs string) bool {
 	return strings.HasPrefix(abs, strings.TrimRight(mp, "/")+"/")
 }
 
-// diskutilPartitionID is the partition ID in `diskutil info` output for a
-// mounted volume: its Volume UUID.
-func diskutilPartitionID(info map[string]string) string {
-	return strings.TrimSpace(info["Volume UUID"])
+// ---- partition IDs ------------------------------------------------------
+//
+// A partition ID is the one stored on the disk, written the same way on every
+// OS, so a drive read on another computer or OS is still the same partition:
+//
+//	gpt:<partition GUID, lower case>       a GPT partition's unique GUID
+//	mbr:<disk signature>-<partition number> an MBR partition (Linux's PARTUUID form)
+//
+// Anything else is unknown (""). IDs of different kinds say nothing about each
+// other, so they compare as unknown, never as different partitions.
+
+var (
+	guidForm = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	mbrForm  = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{2}$`)
+)
+
+// gptPartitionID is the ID of a GPT partition with this unique GUID, braces
+// and case as any OS prints it.
+func gptPartitionID(guid string) string {
+	g := strings.ToLower(strings.Trim(strings.TrimSpace(guid), "{}"))
+	if !guidForm.MatchString(g) || g == "00000000-0000-0000-0000-000000000000" {
+		return ""
+	}
+	return "gpt:" + g
+}
+
+// mbrPartitionID is the ID of partition number num on an MBR disk with this
+// signature.
+func mbrPartitionID(sig, num uint32) string {
+	if sig == 0 || num == 0 || num > 0xff {
+		return ""
+	}
+	return fmt.Sprintf("mbr:%08x-%02x", sig, num)
+}
+
+// linuxPartitionID is the ID for a Linux PARTUUID: a GPT GUID, or an MBR
+// "signature-number".
+func linuxPartitionID(partuuid string) string {
+	p := strings.ToLower(strings.TrimSpace(partuuid))
+	switch {
+	case guidForm.MatchString(p):
+		return gptPartitionID(p)
+	case mbrForm.MatchString(p) && p[:8] != "00000000":
+		return "mbr:" + p
+	}
+	return ""
+}
+
+// partitionCompare compares two partition IDs: known is false when either is
+// unknown or they are of different kinds; same is meaningful only when known.
+func partitionCompare(a, b string) (same, known bool) {
+	a, b = strings.ToLower(strings.TrimSpace(a)), strings.ToLower(strings.TrimSpace(b))
+	if a == "" || b == "" || partitionKind(a) != partitionKind(b) {
+		return false, false
+	}
+	return a == b, true
+}
+
+func partitionKind(id string) string {
+	if i := strings.IndexByte(id, ':'); i >= 0 {
+		return id[:i]
+	}
+	return ""
+}
+
+// diskutilPartitionID is the partition ID in `diskutil info` output: for a
+// volume on a GPT disk, its GPT partition GUID ("Disk / Partition UUID");
+// unknown on any other disk, where macOS makes the value up.
+func diskutilPartitionID(vol, whole map[string]string) string {
+	if !strings.Contains(whole["Content (IOContent)"], "GUID_partition_scheme") {
+		return ""
+	}
+	return gptPartitionID(vol["Disk / Partition UUID"])
 }

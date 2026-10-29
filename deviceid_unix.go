@@ -30,7 +30,7 @@ func resolveDeviceIdentity(path string) (DeviceIdentity, error) {
 }
 
 // resolvePartitionID is the ID of the partition holding path: the partition
-// UUID on Linux, the volume UUID on macOS.
+// UUID on Linux, the GPT partition GUID on macOS (see deviceid_parse.go).
 func resolvePartitionID(path string) (string, error) {
 	abs := absEval(path)
 	var id DeviceIdentity
@@ -39,10 +39,7 @@ func resolvePartitionID(path string) (string, error) {
 	case "linux":
 		id, err = resolveLinux(abs)
 	case "darwin":
-		var info map[string]string
-		if info, err = diskutilInfo(abs); err == nil {
-			id.Partition = diskutilPartitionID(info)
-		}
+		id, err = resolveDarwin(abs)
 	default:
 		return "", fmt.Errorf("partition identity not supported on %s", runtime.GOOS)
 	}
@@ -87,14 +84,17 @@ func resolveDarwin(abs string) (DeviceIdentity, error) {
 	if err != nil {
 		return DeviceIdentity{}, err
 	}
-	id := DeviceIdentity{Partition: diskutilPartitionID(info)}
+	vol := info
+	id := DeviceIdentity{}
 	// "Part of Whole: disk2" points at the physical disk, which carries the
-	// media name (model) and full capacity; the volume node often does not.
+	// media name (model), full capacity and partition scheme; the volume node
+	// often does not.
 	if whole := info["Part of Whole"]; whole != "" {
 		if wi, e := diskutilInfo(whole); e == nil {
 			info = wi
 		}
 	}
+	id.Partition = diskutilPartitionID(vol, info)
 	if m := firstNonEmpty(info["Device / Media Name"], info["Media Name"]); m != "" {
 		id.Model = m
 	}

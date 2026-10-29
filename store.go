@@ -2692,8 +2692,9 @@ func (s *Store) VolumesWithSerial(serial string) int {
 //   - the volume with this serial and partition ID;
 //   - with no serial (a dock that masks it), the one volume with this
 //     partition ID;
-//   - else the one volume with this serial and no partition recorded (one
-//     recorded before partitions were kept), which the caller then records;
+//   - else the one volume with this serial whose partition is not known to
+//     differ (none recorded, from before partitions were kept, or an ID of
+//     another kind);
 //   - with the partition unknown, the one volume with this serial.
 //
 // Anything else, including two volumes that could fit, matches none.
@@ -2706,8 +2707,9 @@ func (s *Store) VolumeByIdentity(serial, partition string) *Volume {
 	defer s.mu.Unlock()
 	var sameSerial, samePart, unpartitioned []*Volume
 	for _, v := range s.c.Volumes {
-		vs, vp := strings.TrimSpace(v.Serial), strings.TrimSpace(v.PartitionID)
-		if partition != "" && vp != "" && strings.EqualFold(vp, partition) {
+		vs := strings.TrimSpace(v.Serial)
+		same, known := partitionCompare(v.PartitionID, partition)
+		if known && same {
 			if serial == "" || vs == "" || strings.EqualFold(vs, serial) {
 				samePart = append(samePart, v)
 			}
@@ -2715,7 +2717,7 @@ func (s *Store) VolumeByIdentity(serial, partition string) *Volume {
 		}
 		if serial != "" && strings.EqualFold(vs, serial) {
 			sameSerial = append(sameSerial, v)
-			if vp == "" {
+			if !known {
 				unpartitioned = append(unpartitioned, v)
 			}
 		}
@@ -3432,10 +3434,10 @@ func (s *Store) CreditCopyCheck(c *Chunk, at CopyAt, ok bool, level string) int 
 		serialOf[v.ID], partOf[v.ID] = v.Serial, v.PartitionID
 	}
 	// Credits never cross partitions: a copy on a volume whose recorded
-	// partition is not the one read is never credited.
+	// partition is known to differ from the one read is never credited.
 	otherPartition := func(volID int) bool {
-		vp := partOf[volID]
-		return at.Partition != "" && vp != "" && !strings.EqualFold(vp, at.Partition)
+		same, known := partitionCompare(partOf[volID], at.Partition)
+		return known && !same
 	}
 	var fit []int
 	vols := map[int]bool{}
@@ -3471,8 +3473,8 @@ func (s *Store) CreditCopyCheck(c *Chunk, at CopyAt, ok bool, level string) int 
 			if cp.Superseded || (at.VolumeID > 0 && cp.VolumeID != at.VolumeID) {
 				continue
 			}
-			vs, vp := serialOf[cp.VolumeID], partOf[cp.VolumeID]
-			if vs != "" && strings.EqualFold(vs, at.Serial) && vp != "" && strings.EqualFold(vp, at.Partition) {
+			vs := serialOf[cp.VolumeID]
+			if same, known := partitionCompare(partOf[cp.VolumeID], at.Partition); vs != "" && strings.EqualFold(vs, at.Serial) && known && same {
 				fit = append(fit, i)
 				vols[cp.VolumeID] = true
 			}
