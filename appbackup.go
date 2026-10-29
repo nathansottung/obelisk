@@ -139,6 +139,15 @@ func (a *App) gatherMembers(includeKeys bool) ([]rawMember, error) {
 		members = append(members, rawMember{"formats.json", b})
 	}
 
+	// scans/<name> — each recorded drive scan's file list (scanhistory.go), so the
+	// scan history moves with the catalog. A list missing from the scans folder is
+	// left out; its record then has no file list on the restored side.
+	for _, name := range a.Store.scanFileListNames() {
+		if b, err := os.ReadFile(filepath.Join(a.scansDir(), name)); err == nil {
+			members = append(members, rawMember{"scans/" + name, b})
+		}
+	}
+
 	if includeKeys {
 		seen := map[string]bool{}
 		for _, ksPath := range cfg.KeystorePaths {
@@ -295,6 +304,9 @@ func validAppBackupMemberName(name string) bool {
 	switch name {
 	case "MANIFEST.json", "catalog.json", "config.json", "jobs.json", "formats.json":
 		return true
+	}
+	if leaf, ok := strings.CutPrefix(name, "scans/"); ok {
+		return validScanFileName(leaf)
 	}
 	if !strings.HasPrefix(name, "keystores/") {
 		return false
@@ -497,6 +509,13 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 		}
 	}
 
+	// Each scan file list must be the one a scan record in the backup's catalog
+	// names, with its recorded SHA-256; anything else stops the restore here,
+	// before anything changes.
+	if err := checkBackupScanFiles(man, members); err != nil {
+		return RestoreResult{}, err
+	}
+
 	// (4) Back up the current records first, so the restore is itself reversible.
 	stamp := time.Now().UTC().Format("20060102-150405")
 	preDir := filepath.Join(a.DataDir, "pre-restore-"+stamp)
@@ -539,6 +558,10 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 		case strings.HasPrefix(m.Name, "keystores/"):
 			dest := filepath.Join(a.DataDir, "keystores", filepath.Base(m.Name))
 			if err := writeFile(dest, b, 0o600); err != nil { // key material: owner only
+				return RestoreResult{}, fmt.Errorf("restore %s: %w", m.Name, err)
+			}
+		case strings.HasPrefix(m.Name, "scans/"):
+			if err := writeFile(filepath.Join(a.scansDir(), strings.TrimPrefix(m.Name, "scans/")), b, 0o600); err != nil {
 				return RestoreResult{}, fmt.Errorf("restore %s: %w", m.Name, err)
 			}
 		default: // catalog.json, jobs.json, formats.json
@@ -710,6 +733,51 @@ func (a *App) copyPreRestore(cfg Config, preDir string) error {
 		dst := filepath.Join(preDir, "keystores", fmt.Sprintf("configured-%d-%s", i+1, filepath.Base(p)))
 		if err := copyOne(p, dst, 0o600); err != nil {
 			return err
+		}
+	}
+	// The drive scan file lists, which a restore can add to (scanhistory.go).
+	scans, err := os.ReadDir(a.scansDir())
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("read %s: %w", a.scansDir(), err)
+	}
+	for _, e := range scans {
+		if !e.Type().IsRegular() || !validScanFileName(e.Name()) {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Join(preDir, "scans"), 0o700); err != nil {
+			return fmt.Errorf("prepare %s: %w", filepath.Join(preDir, "scans"), err)
+		}
+		if err := copyOne(filepath.Join(a.scansDir(), e.Name()), filepath.Join(preDir, "scans", e.Name()), 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkBackupScanFiles refuses a backup whose scans/ members are not exactly the
+// file lists its own catalog's scan records name, with their recorded SHA-256.
+func checkBackupScanFiles(man appBackupManifest, members map[string][]byte) error {
+	want := map[string]string{} // file list -> recorded SHA-256
+	if catBytes, ok := members["catalog.json"]; ok {
+		var c catalog
+		if err := decodeCatalogJSON(catBytes, &c); err != nil {
+			return fmt.Errorf("the backup's catalog is damaged: %w", err)
+		}
+		for _, r := range c.Scans {
+			want[r.FileList] = r.FileListSHA256
+		}
+	}
+	for _, m := range man.Members {
+		name, ok := strings.CutPrefix(m.Name, "scans/")
+		if !ok {
+			continue
+		}
+		sum, recorded := want[name]
+		switch {
+		case !recorded:
+			return fmt.Errorf("the backup's scan file %s belongs to no scan in its catalog; nothing was restored", name)
+		case sha256Hex(members[m.Name]) != sum:
+			return fmt.Errorf("the backup's scan file %s does not match its scan record (changed or damaged); nothing was restored", name)
 		}
 	}
 	return nil

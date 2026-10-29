@@ -154,6 +154,19 @@ func (a *App) sweepScanFiles(dir string) {
 	}
 }
 
+// scanFileListNames lists the file-list names of every scan record.
+func (s *Store) scanFileListNames() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.c.Scans))
+	for _, r := range s.c.Scans {
+		if validScanFileName(r.FileList) {
+			out = append(out, r.FileList)
+		}
+	}
+	return out
+}
+
 // LoadScanFiles reads a scan's file list, checking it against its recorded
 // SHA-256.
 func (a *App) LoadScanFiles(rec *ScanRecord) (*ScanFileList, error) {
