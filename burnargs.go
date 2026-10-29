@@ -110,7 +110,11 @@ var growisofsValued = map[string]burnValue{
 	"-P": anyValue, "-p": anyValue, "-publisher": anyValue, "-volset": anyValue,
 	"-sysid": anyValue, "-iso-level": simpleValue, "-input-charset": simpleValue,
 }
-var growisofsEquals = map[string]burnValue{"-speed": simpleValue, "-use-the-force-luke": simpleValue}
+
+// growisofsEquals are the -option=value forms allowed. -use-the-force-luke
+// takes only sub-options that still burn: "dummy" (a test write that burns
+// nothing yet succeeds) and the others are refused.
+var growisofsEquals = map[string]burnValue{"-speed": simpleValue, "-use-the-force-luke": oneOf("tty", "dao", "notray")}
 
 // growisofsTarget is "-Z device" or "-Z device=image": the device must be a
 // drive; an image is read.

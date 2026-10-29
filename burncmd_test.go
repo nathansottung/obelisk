@@ -194,3 +194,19 @@ func TestBurnCommand_AllowsOnlyKnownOptions(t *testing.T) {
 		t.Error("a folder filled in as an option was accepted")
 	}
 }
+
+// growisofs's -use-the-force-luke=dummy is a test write: it burns nothing yet
+// exits as a success, so the queue would record a blank disc.
+func TestBurnCommand_RefusesGrowisofsTestWrite(t *testing.T) {
+	for _, bad := range []string{
+		"growisofs -Z /dev/sr0 -use-the-force-luke=dummy -R -J {SRC}",
+		"growisofs -Z /dev/sr0 -use-the-force-luke=tty,dummy -R -J {SRC}",
+	} {
+		if _, err := parseBurnCommand(bad); err == nil {
+			t.Errorf("parseBurnCommand(%q) accepted a test write", bad)
+		}
+	}
+	if _, err := parseBurnCommand("growisofs -Z /dev/sr0 -use-the-force-luke=tty -R -J {SRC}"); err != nil {
+		t.Errorf("-use-the-force-luke=tty: %v", err)
+	}
+}
