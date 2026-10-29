@@ -257,3 +257,25 @@ func TestDockIngest_SourceDecidedByRealLocation(t *testing.T) {
 		t.Errorf("a refused drive registered a volume (%d, was %d)", n, vols)
 	}
 }
+
+// A build re-checks its staging folder by where it really is: a staging folder
+// that is a link to a source (set without the settings check) is refused before
+// anything is staged.
+func TestBuild_StagingDecidedByRealLocation(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	src, refs := makeSource(t)
+	c := app.Store.AddChunk(Chunk{
+		Name: "STAGE-GUARD", Status: "PLANNED", MediaKind: "CUSTOM",
+		TargetBytes: 1 << 30, DataBytes: 4096, FileCount: len(refs),
+		SrcRoot: src, HashAlg: "SHA256", Par2: 5,
+		Files: append([]ChunkFileRef{}, refs...),
+	})
+	_, link, untouched := sourceBehindLink(t, app)
+	cfg := mustConfig(t, app)
+	cfg.StagingDir = link
+	if err := writeConfigForTest(app, cfg); err != nil {
+		t.Fatal(err)
+	}
+	assertSourceRefusal(t, "staging into a link to a source", app.BuildChunk(c.ID, noProg))
+	untouched()
+}
