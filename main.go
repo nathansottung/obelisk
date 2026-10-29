@@ -2744,6 +2744,9 @@ func api(mux *http.ServeMux, app *App) {
 			return
 		}
 		b := body(r)
+		if mp := s(b, "mount_path"); strings.TrimSpace(mp) != "" && !outFolderGate(w, app, mp) {
+			return
+		}
 		res, err := app.FinalizeVolume(v, s(b, "mount_path"), s(b, "by"), bl(b, "force"), s(b, "force_reason"))
 		if err != nil {
 			jsonErr(w, 400, err)

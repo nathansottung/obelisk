@@ -149,3 +149,24 @@ func TestEscrowBundle_NeverWritesThroughExistingFiles(t *testing.T) {
 		t.Errorf("bundle README not written: %q %v", b, err)
 	}
 }
+
+// Sealing a volume writes its sidecar into the mounted medium decided by where
+// it really is: a folder link to a source is refused before anything is sealed
+// or written. A sidecar file already on the medium (a hard link to another file)
+// is replaced as a name and the other file keeps its bytes.
+func TestFinalize_SidecarDecidedByRealLocation(t *testing.T) {
+	app, vol, _, mount := finalizeApp(t)
+	_, link, untouched := sourceBehindLink(t, app)
+	_, err := app.FinalizeVolume(vol, link, "NS", false, "")
+	assertSourceRefusal(t, "seal sidecar into a link to a source", err)
+	untouched()
+	if vol.Sealed {
+		t.Error("a refused seal sealed the volume")
+	}
+
+	victim := plantAtStageName(t, filepath.Join(mount, sealSidecarDir, "INVENTORY.md"))
+	if _, err := app.FinalizeVolume(vol, mount, "NS", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	assertFileBytes(t, victim, "SOMEONE ELSE'S")
+}

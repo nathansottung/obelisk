@@ -13,8 +13,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -166,7 +164,8 @@ func (a *App) FinalizeVolume(v *Volume, mountPath, by string, force bool, forceR
 	if strings.TrimSpace(mountPath) == "" {
 		return nil, fmt.Errorf("mount_path required (where the volume is mounted — the seal sidecar is written there)")
 	}
-	if err := a.Store.AssertOutsideSources(mountPath); err != nil {
+	// Decided by real location before anything is assessed or sealed.
+	if err := a.outFolderReady(mountPath); err != nil {
 		return nil, err
 	}
 	if v.Sealed {
@@ -247,15 +246,19 @@ func (a *App) UnsealVolume(v *Volume, by, reason string) error {
 
 // writeFinalizeSidecar makes the medium self-documenting: FINALIZATION.json (the
 // seal record + checks), catalog_snapshot.json (machine-readable contents), and
-// INVENTORY.md (the human trail). Guarded against writing into a source.
+// INVENTORY.md (the human trail). Written through the destination guard: the
+// medium is decided by where it really is, and each file is staged and named
+// once it reads back.
 func (a *App) writeFinalizeSidecar(mountPath string, v *Volume, as finalizeAssessment, fin Finalization, cfg Config) (string, error) {
-	if err := a.Store.AssertOutsideSources(mountPath); err != nil {
+	out, err := a.openOutFolder(mountPath)
+	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(mountPath, sealSidecarDir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	defer out.Close()
+	if err := out.MkdirAll(sealSidecarDir); err != nil {
 		return "", err
 	}
+	dir := out.Join(sealSidecarDir)
 	now := time.Now().UTC()
 	chunks, _, _ := a.volumeChunks(v)
 
@@ -290,19 +293,19 @@ func (a *App) writeFinalizeSidecar(mountPath string, v *Volume, as finalizeAsses
 	// Escrow Bundle onto the medium itself, per policy — budgeted HONESTLY against
 	// the medium's free space so a nearly-full DVD-R is skipped gracefully with a
 	// note rather than failing the seal.
-	escrowNote := a.writeSidecarEscrow(dir, census, as.FreeBytes, cfg)
+	escrowNote := a.writeSidecarEscrow(out, sealSidecarDir, census, as.FreeBytes, cfg)
 
 	frec := map[string]any{"obelisk_finalization": 1, "generated_utc": now.Format(time.RFC3339),
 		"volume": v, "finalization": fin, "checks": as.Checks}
 	if b, err := json.MarshalIndent(frec, "", "  "); err == nil {
-		if err := os.WriteFile(filepath.Join(dir, "FINALIZATION.json"), b, 0o644); err != nil {
+		if err := out.WriteFile(sealSidecarDir+"/FINALIZATION.json", b, 0o644); err != nil {
 			return dir, err
 		}
 	}
 	snap := map[string]any{"obelisk_seal_snapshot": 1, "generated_utc": now.Format(time.RFC3339),
 		"volume": v, "package_count": len(pkgs), "packages": pkgs, "formats": census}
 	sb, _ := json.MarshalIndent(snap, "", "  ")
-	if err := os.WriteFile(filepath.Join(dir, "catalog_snapshot.json"), sb, 0o644); err != nil {
+	if err := out.WriteFile(sealSidecarDir+"/catalog_snapshot.json", sb, 0o644); err != nil {
 		return dir, err
 	}
 
@@ -345,7 +348,7 @@ func (a *App) writeFinalizeSidecar(mountPath string, v *Volume, as finalizeAsses
 	b.WriteString(fmt.Sprintf("**Formats:** %.0f%% of these bytes are in OPEN or DOCUMENTED formats.\n\n", census.SafePct))
 	b.WriteString("```\n" + readersReference(census) + "```\n")
 	b.WriteString("\n---\n\n## Escrow bundle\n\n" + escrowNote + "\n")
-	if err := os.WriteFile(filepath.Join(dir, "INVENTORY.md"), []byte(b.String()), 0o644); err != nil {
+	if err := out.WriteFile(sealSidecarDir+"/INVENTORY.md", []byte(b.String()), 0o644); err != nil {
 		return dir, err
 	}
 	return dir, nil
@@ -359,7 +362,7 @@ const escrowMediaSafetyBytes = 16 * 1000 * 1000 // 16 MB
 // escrow_on_media, budgeting against the medium's free space. It returns a
 // human note for INVENTORY.md and NEVER fails the seal: on any error or a
 // space shortfall it records the skip instead of writing.
-func (a *App) writeSidecarEscrow(sidecarDir string, census Census, freeBytes int64, cfg Config) string {
+func (a *App) writeSidecarEscrow(out *outFolder, base string, census Census, freeBytes int64, cfg Config) string {
 	mode := normEscrowMode(cfg.EscrowOnMedia)
 	if mode == EscrowOff {
 		return "Not written (`escrow_on_media` = off). The full Escrow Bundle lives in the Recovery Kit."
@@ -377,7 +380,7 @@ func (a *App) writeSidecarEscrow(sidecarDir string, census Census, freeBytes int
 		return fmt.Sprintf("Skipped on this space-constrained medium: the `%s` bundle needs ~%s but only %s is free. This is expected on small media (e.g. DVD-R) — the full Escrow Bundle lives in the Recovery Kit.", mode, humanBytes(est), humanBytes(freeBytes))
 	}
 
-	sum, err := a.WriteEscrowBundle(sidecarDir, plan, nil)
+	sum, err := a.writeEscrowBundleTo(out, base, plan, nil)
 	if err != nil {
 		return "Skipped (error): " + err.Error() + " — the full Escrow Bundle lives in the Recovery Kit."
 	}

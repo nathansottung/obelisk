@@ -2718,7 +2718,8 @@ async function doFinalize(id,force){
   const mp=$('#fz_mount').value.trim();if(!mp){toast('Mounted path required',1);return}
   const body={mount_path:mp,by:$('#fz_by').value.trim()};
   if(force){body.force=true;body.force_reason=$('#fz_reason').value.trim()}
-  try{const r=await api('POST',`/api/volumes/${id}/finalize`,body);
+  try{if(!(await destGate(mp)))return;
+    const r=await api('POST',`/api/volumes/${id}/finalize`,body);
     if(r.blocked){toast('Preconditions not met — see the checks',1);return}
     const d=$('#dlg');if(d)d.close();
     toast(force?'Volume force-sealed (audit-logged) — opening label':'Volume sealed ✓ — opening label');
