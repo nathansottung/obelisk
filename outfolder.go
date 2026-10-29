@@ -278,6 +278,10 @@ func (o *outFolder) Commit(tmp, rel string, perm fs.FileMode, sum string) error 
 		_ = o.root.Remove(tmp)
 		return err
 	}
+	if err := beforeDestPublish(o.root, tmp, v); err != nil {
+		_ = o.root.Remove(tmp)
+		return fmt.Errorf("publish %s: %w", rel, err)
+	}
 	if err := o.root.Rename(tmp, v); err != nil {
 		_ = o.root.Remove(tmp)
 		return fmt.Errorf("publish %s: %w", rel, err)

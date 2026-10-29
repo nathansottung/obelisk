@@ -3,6 +3,8 @@
 package main
 
 import (
+	"io/fs"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -51,5 +53,31 @@ func TestOutFolder_WithoutGuard(t *testing.T) {
 	assertFileBytes(t, filepath.Join(dir, "c.bin"), "COPIED")
 	if got := treeOf(t, dir); !equalStrings(got, []string{"c.bin", "sub", "sub/f.txt"}) {
 		t.Errorf("staging files left behind: %v", got)
+	}
+}
+
+// Without the guard, a failed publish also keeps the previous file and leaves
+// no staging file (the same publish fault seam is honoured).
+func TestOutFolder_WithoutGuardFailedPublishKeepsPrevious(t *testing.T) {
+	orig := destGuardAvailable
+	destGuardAvailable = false
+	t.Cleanup(func() { destGuardAvailable = orig })
+	app := dockApp(t)
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "f.txt"), "OLD")
+	o, err := app.openOutFolder(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.Close()
+	origHook := beforeDestPublish
+	beforeDestPublish = func(*os.Root, string, string) error { return fs.ErrPermission }
+	t.Cleanup(func() { beforeDestPublish = origHook })
+	if err := o.WriteFile("f.txt", []byte("NEW"), 0o644); err == nil {
+		t.Fatal("a failed publish was reported as written")
+	}
+	assertFileBytes(t, filepath.Join(dir, "f.txt"), "OLD")
+	if got := treeOf(t, dir); !equalStrings(got, []string{"f.txt"}) {
+		t.Errorf("staging file left behind: %v", got)
 	}
 }
