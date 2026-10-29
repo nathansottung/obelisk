@@ -214,8 +214,11 @@ func TestExportAppBackup_FailedPublishPreservesPreviousBundle(t *testing.T) {
 		t.Fatal("the seeded bundle is empty; the fixture proves nothing")
 	}
 
-	// The next run cannot publish.
-	withRenameFailure(t, fs.ErrPermission)
+	// The next run cannot publish. The bundle is published through the
+	// destination guard, so the failure is injected at its publish step.
+	orig := beforeDestPublish
+	beforeDestPublish = func(*os.Root, string, string) error { return fs.ErrPermission }
+	t.Cleanup(func() { beforeDestPublish = orig })
 
 	if _, err := app.exportAppBackupTo(tarPath, false); err == nil {
 		t.Fatal("the export must report the failed publication rather than claiming success")
@@ -229,8 +232,8 @@ func TestExportAppBackup_FailedPublishPreservesPreviousBundle(t *testing.T) {
 		t.Fatal("the previous bundle must be byte-identical after a failed export")
 	}
 	// And the caller still tidies up its own staging file.
-	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(tarPath), "."+filepath.Base(tarPath)+".*.tmp")); len(left) > 0 {
-		t.Errorf("the export's temporary should not be left behind after a reported failure: %v", left)
+	if got := treeOf(t, dir); !equalStrings(got, []string{filepath.Base(tarPath), filepath.Base(tarPath) + ".sha256"}) {
+		t.Errorf("the export's temporary should not be left behind after a reported failure: %v", got)
 	}
 }
 

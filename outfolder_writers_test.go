@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // sourceBehindLink registers a source holding one file and returns the source,
@@ -202,6 +203,38 @@ func TestRecoveryKit_OutputDecidedByRealLocation(t *testing.T) {
 	out := t.TempDir()
 	victim := plantAtStageName(t, filepath.Join(out, "obelisk-recovery-kit", "README_RECOVERY.md"))
 	if _, err := app.BuildRecoveryKit(out, noProg); err != nil {
+		t.Fatal(err)
+	}
+	assertFileBytes(t, victim, "SOMEONE ELSE'S")
+}
+
+// An app-backup export, manual or automatic, decides its folder by where it
+// really is, and a bundle file already there (a hard link to another file) is
+// replaced as a name.
+func TestAppBackupExport_FolderDecidedByRealLocation(t *testing.T) {
+	app, _ := compatApp(t)
+	_, link, untouched := sourceBehindLink(t, app)
+	_, err := app.ExportAppBackup(link, false)
+	assertSourceRefusal(t, "app backup into a link to a source", err)
+	cfg := mustConfig(t, app)
+	cfg.AutoExportDir, cfg.AutoExportCadence = link, "daily"
+	if err := writeConfigForTest(app, cfg); err != nil {
+		t.Fatal(err)
+	}
+	assertSourceRefusal(t, "automatic app backup into a link to a source", app.maybeAutoExport(time.Now()))
+	untouched()
+
+	dir := t.TempDir()
+	res, err := app.ExportAppBackup(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	victim := plantAtStageName(t, filepath.Join(t.TempDir(), "x"))
+	_ = os.Remove(res.SidecarPath)
+	if err := os.Link(victim, res.SidecarPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.exportAppBackupTo(res.TarPath, false); err != nil {
 		t.Fatal(err)
 	}
 	assertFileBytes(t, victim, "SOMEONE ELSE'S")

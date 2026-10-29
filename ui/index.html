@@ -4023,6 +4023,7 @@ function appBackupDlg(){
     const dest=(($('#abdest')||{}).value||'').trim();if(!dest){toast('Destination folder required',1);throw new Error('dest')}
     const keys=!!($('#abkeys')&&$('#abkeys').checked);
     if(keys&&!confirm('Include your encryption keystores (secrets) in this backup? Anyone with the file could decrypt your archives. Only continue for a backup you will keep private.'))throw new Error('cancelled');
+    if(!(await destGate(dest)))return;
     await api('POST','/api/appbackup/export',{dest_dir:dest,include_keys:keys});
     toast('Backup started — see Jobs for the file it writes',1);loc('jobs');
   });

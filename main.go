@@ -827,6 +827,9 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("dest_dir (a destination folder) required"))
 			return
 		}
+		if !outFolderGate(w, app, dest) {
+			return
+		}
 		includeKeys := bl(b, "include_keys")
 		startedOn(w).write(runJob(app, "appbackup", "Back up app records → "+dest, func(p func(float64, string)) (map[string]any, error) {
 			p(0.1, "gathering records")
