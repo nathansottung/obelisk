@@ -70,6 +70,17 @@ func registerCompareRoutes(mux *http.ServeMux, app *App) {
 		}
 		jsonOut(w, map[string]any{"run": run})
 	})
+	// Files only on drive ?volume_id= and files on two or more drives, from each
+	// drive's latest complete scan.
+	mux.HandleFunc("GET /api/xdrive/lists", func(w http.ResponseWriter, r *http.Request) {
+		vid, _ := strconv.Atoi(r.URL.Query().Get("volume_id"))
+		l, err := app.CrossDriveLists(vid)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
+		jsonOut(w, l)
+	})
 	mux.HandleFunc("GET /api/compare/runs", func(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, map[string]any{"runs": app.Store.CompareRuns()})
 	})
