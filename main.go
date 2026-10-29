@@ -589,14 +589,22 @@ func runJob(app *App, kind, label string, fn func(progress func(float64, string)
 			}
 			app.Store.SetJobTelemetry(j.ID, rate, eta, done, total, filesDone, filesTotal)
 		}
+		gen := app.Store.SaveGen()
 		res, err := fn(prog)
 		app.Store.SetJobTelemetry(j.ID, 0, 0, 0, 0, 0, 0)
 		// Work that succeeded is recorded only once its catalog changes are on disk:
 		// a save that failed inside the work (some Store methods do not return
 		// the error) or one put off by another job's batch is written now, and a
-		// failure here fails the job.
-		if err == nil {
-			if ferr := app.Store.FlushPending(); ferr != nil {
+		// failure here fails the job. Only the job's own changes count: an earlier
+		// failure it did not add to does not fail it. On a read-only catalog (an
+		// older app reading a newer one) nothing can be recorded, and the job says so.
+		if err == nil && app.Store.ChangedSince(gen) {
+			if ro, why := app.Store.ReadOnly(); ro {
+				if res == nil {
+					res = map[string]any{}
+				}
+				res["catalog_not_recorded"] = "the catalog is read-only (" + why + "), so this job's changes to it were not recorded"
+			} else if ferr := app.Store.FlushPending(); ferr != nil {
 				err = fmt.Errorf("the work finished but the catalog could not be saved, so it is NOT recorded: %w", ferr)
 			}
 		}

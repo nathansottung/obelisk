@@ -1177,6 +1177,9 @@ type Store struct {
 	dirty         bool
 	lastSave      time.Time
 	batchInterval time.Duration
+	// saveGen counts saves asked for, so a job can tell whether it changed the
+	// catalog (see SaveGen and ChangedSince).
+	saveGen uint64
 	// failSave is a test-only fault-injection seam: nil in production. When set, it is
 	// consulted at the top of writeCatalog so a test can simulate a disk-write failure
 	// and prove persistence errors propagate instead of being silently dropped.
@@ -1473,6 +1476,7 @@ func (s *Store) save() error {
 	// clears this), so a failed or put-off save is still known about at the end
 	// of a job (see FlushPending).
 	s.dirty = true
+	s.saveGen++
 	if s.batchDepth > 0 {
 		iv := s.batchInterval
 		if iv <= 0 {
@@ -1597,6 +1601,21 @@ func (s *Store) BeginBatch() {
 // s.mu, so it is always internally consistent, and every batched job is an
 // idempotent re-run (see BeginBatch), so persisting its progress early can only save
 // work on a replay. The cost is one extra full-catalog write per overlapping job.
+// SaveGen is the count of saves asked for so far.
+func (s *Store) SaveGen() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveGen
+}
+
+// ChangedSince reports whether a save was asked for after gen and the catalog
+// still holds a change that is not on disk.
+func (s *Store) ChangedSince(gen uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveGen > gen && s.dirty
+}
+
 // FlushPending writes the catalog now if it holds a change that is not on disk
 // yet: a save that failed (and whose error a caller did not see) or one put off
 // while a batch was open. It returns the write's error. A job calls it before it
@@ -3369,6 +3388,25 @@ func (s *Store) CreditCopyCheck(c *Chunk, at CopyAt, ok bool, level string) int 
 		}
 		fit = append(fit, i)
 		vols[cp.VolumeID] = true
+	}
+	// A drive now mounted somewhere else: no copy is recorded at the folder read,
+	// but the drive read is known by its serial to be exactly one volume with a
+	// current copy. That copy is credited, and its path updated to where it was
+	// read.
+	if len(fit) == 0 && at.Path != "" && at.Serial != "" {
+		for i := range c.Copies {
+			cp := c.Copies[i]
+			if cp.Superseded || (at.VolumeID > 0 && cp.VolumeID != at.VolumeID) {
+				continue
+			}
+			if vs := serialOf[cp.VolumeID]; vs != "" && strings.EqualFold(vs, at.Serial) {
+				fit = append(fit, i)
+				vols[cp.VolumeID] = true
+			}
+		}
+		if len(fit) == 1 && len(vols) == 1 {
+			c.Copies[fit[0]].Path = at.Path
+		}
 	}
 	if len(fit) == 0 || len(vols) > 1 {
 		return 0

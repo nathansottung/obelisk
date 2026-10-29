@@ -198,6 +198,11 @@ func (a *App) VerifyMirrorVolume(volumeID int, mount, level string, progress fun
 		if !c.Mirror {
 			continue
 		}
+		// A record of one adopted folder is read at its folder, never at an
+		// overriding mount (that is the drive's, or another folder's).
+		if strings.TrimSpace(mount) != "" && c.MirrorRoot != "" {
+			continue
+		}
 		for _, cp := range c.Copies {
 			if cp.VolumeID == volumeID && !cp.Superseded {
 				base := strings.TrimSpace(mount)
