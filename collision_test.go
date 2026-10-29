@@ -141,3 +141,37 @@ func TestDock_CopiesNeedAFullHashMatch(t *testing.T) {
 		t.Errorf("an old version was counted as a copy of the current file: %v", got)
 	}
 }
+
+// Back up changes never writes over a file an earlier run (or anything else) put
+// at the same path: a new file that would land there is left uncopied and
+// uncredited, listed as a collision, and the earlier copy stays as it was.
+func TestBackupChanges_CollisionWithEarlierRun(t *testing.T) {
+	app := dockApp(t)
+	coll := app.Store.AddCollection("Photos")
+	a := t.TempDir()
+	writeTree(t, a, map[string]string{"x.jpg": "FIRST"})
+	if _, _, err := app.ScanFolder(coll.ID, a, noProg); err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	vol := app.Store.AddVolume(Volume{Label: "BK-1", Kind: "HDD"})
+	if _, err := app.BackupChanges(coll.ID, nil, vol.ID, BaseVolume, ModeMirror, dest, 0, "", noProgMirror); err != nil {
+		t.Fatal(err)
+	}
+	b := t.TempDir()
+	writeTree(t, b, map[string]string{"x.jpg": "SECOND"})
+	if _, _, err := app.ScanFolder(coll.ID, b, noProg); err != nil {
+		t.Fatal(err)
+	}
+	res, err := app.BackupChanges(coll.ID, nil, vol.ID, BaseVolume, ModeMirror, dest, 0, "", noProgMirror)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Collisions) != 1 {
+		t.Errorf("collisions %v, want the second x.jpg", res.Collisions)
+	}
+	assertFileBytes(t, filepath.Join(dest, "x.jpg"), "FIRST")
+	if cov := app.archiveCoverage([]int{coll.ID}); cov.CoveredFiles != 1 {
+		t.Errorf("coverage %d of 2, want only the first file counted", cov.CoveredFiles)
+	}
+}

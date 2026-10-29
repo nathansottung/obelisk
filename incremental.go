@@ -369,6 +369,17 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 	}
 	// Two files that would land at one path: neither is copied or credited.
 	shared := collidingPaths(mrels)
+	// Nor is a file whose path the destination already holds, unless it is this
+	// same file from an earlier run: an earlier run's copy of another file (or
+	// anything else there) is never written over. The destination's own name
+	// lookup decides, so a name that differs only in case collides where the
+	// filesystem says it does.
+	earlier := map[int]string{} // fileID -> its path in the volume's record
+	if prior := a.mirrorChunkOn(collectionID, vol.ID); prior != nil {
+		for _, r := range prior.Files {
+			earlier[r.FileID] = r.RelPath
+		}
+	}
 	for i, f := range files {
 		srcRoot := folderPath[f.FolderID]
 		srcPath := filepath.Join(srcRoot, filepath.FromSlash(f.RelPath))
@@ -376,6 +387,12 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 		if shared[i] {
 			res.Collisions = append(res.Collisions, mrel)
 			continue
+		}
+		if _, err := dest.Stat(mrel); err == nil {
+			if prev, ok := earlier[f.ID]; !ok || prev != f.RelPath {
+				res.Collisions = append(res.Collisions, mrel)
+				continue
+			}
 		}
 		if i%25 == 0 || len(files) < 50 {
 			report(fmt.Sprintf("backing up %d/%d — %s", i+1, len(files), f.RelPath))
