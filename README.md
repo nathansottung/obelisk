@@ -52,6 +52,10 @@ the technical/maintainer reference.
 > Archivematica, the commercial media-archive tools, and complements like
 > dvdisaster and rclone) lives in **[docs/COMPARISON.md](docs/COMPARISON.md)**.
 
+> **Where it's going:** the [roadmap](docs/ROADMAP.md) lists what's planned and how
+> each item counts as done; [status](docs/STATUS.md) tracks each item's PR or issue.
+> Known defects are in the [defect register](docs/development/OB_STATUS.md).
+
 ### No NAS? Start here
 
 Obelisk doesn't need a server or a single "source of truth" folder. If your
