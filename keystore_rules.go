@@ -8,6 +8,7 @@ package main
 // not give that, so such a set is refused.
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,6 +26,10 @@ func realKeystoreDevice(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return "", err
+	}
+	// A keystore that exists is a file: it is on its folder's device.
+	if fi, err := os.Stat(abs); err == nil && !fi.IsDir() {
+		abs = filepath.Dir(abs)
 	}
 	dir, _, err := deepestExistingDir(abs)
 	if err != nil {
@@ -73,11 +78,14 @@ func checkKeystorePaths(paths []string) error {
 			}
 		}
 		dev, err := keystoreDeviceOf(abs)
-		if err != nil {
-			// Not plugged in, or not reachable: its device cannot be told, so the
-			// device rule cannot be checked for it. Reachability is reported by
-			// the keystore status, not refused here.
+		if errors.Is(err, errNoExistingParent) {
+			// Nothing on its path exists (its drive is not plugged in): its device
+			// cannot be told, so the device rule cannot be checked for it.
+			// Reachability is reported by the keystore status, not refused here.
 			continue
+		}
+		if err != nil {
+			return fmt.Errorf("keystore_paths: cannot tell which device %q is on: %w", p, err)
 		}
 		if prev, ok := seenDev[dev]; ok {
 			return fmt.Errorf("keystore_paths: %q and %q are on the same device; keep each keystore on a different device, so losing one loses no key", prev, p)

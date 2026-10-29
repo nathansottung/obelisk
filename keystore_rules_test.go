@@ -3,7 +3,7 @@
 package main
 
 import (
-	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -106,4 +106,49 @@ func TestKeystores_UnpluggedKeystoreDoesNotBlockSaves(t *testing.T) {
 	}
 }
 
-var errUnpluggedForTest = errors.New("no existing parent folder")
+var errUnpluggedForTest = fmt.Errorf("%w for the test keystore", errNoExistingParent)
+
+// The device rule applies to keystore files that exist, not only to new ones:
+// two existing keystores on one device are refused when saved, reported in
+// the keystore status, and not adopted by a repeated restore.
+func TestKeystores_ExistingFilesOnOneDeviceAreRefused(t *testing.T) {
+	withRealKeystoreDevices(t)
+	app, dataDir := compatApp(t)
+	a := filepath.Join(t.TempDir(), "k1.json")
+	b := filepath.Join(t.TempDir(), "k2.json") // another folder, same device (C:)
+	writeKeysForTest(t, a, "K1")
+	writeKeysForTest(t, b, "K1")
+	if err := checkKeystorePaths([]string{a, b}); err == nil || !strings.Contains(err.Error(), "same device") {
+		t.Errorf("two existing keystores on one device: got %v, want the device rule", err)
+	}
+	if _, err := app.SaveConfig(map[string]any{"keystore_paths": []any{a, b}}); err == nil {
+		t.Error("saved two existing keystores on one device")
+	}
+	if st := app.keystoreStatus([]string{a, b}, false); st["ok"] == true || !strings.Contains(st["reason"].(string), "same device") {
+		t.Errorf("status of two existing keystores on one device: %v", st)
+	}
+
+	cfg := mustConfig(t, app)
+	cfg.KeystorePaths = []string{a, b}
+	if err := writeConfigForTest(app, cfg); err != nil {
+		t.Fatal(err)
+	}
+	tarPath := filepath.Join(t.TempDir(), "obelisk-appbackup.tar")
+	if _, err := app.exportAppBackupTo(tarPath, true); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 2; i++ { // the second restore finds the restored files already there
+		if _, err := app.RestoreAppBackup(tarPath); err != nil {
+			t.Fatal(err)
+		}
+		inData := 0
+		for _, p := range mustConfig(t, app).KeystorePaths {
+			if strings.HasPrefix(filepath.Clean(p), filepath.Join(dataDir, "keystores")) {
+				inData++
+			}
+		}
+		if inData > 1 {
+			t.Fatalf("restore %d pointed %d keystores at the one data folder", i, inData)
+		}
+	}
+}
