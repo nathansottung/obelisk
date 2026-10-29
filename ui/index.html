@@ -3959,6 +3959,10 @@ async function saveCfg(){
     if(w!=='Confirm'){toast('Burn command not changed: type Confirm to change it',1);return}
     body.burn_command_confirm=w;}}
   put('burn_ecc_device',gt('beccd'));put('burn_ecc_carry',gc('becccarry'));put('optical_ecc',gc('oecc'));
+  // The automatic app backup runs unattended, so anything to decide about a new
+  // folder for it (create it, or a choice about who can change it) is asked now.
+  const aedEl=$('#aed');
+  if(body.auto_export_dir&&aedEl&&aedEl.value.trim()!==aedEl.defaultValue.trim()&&!(await destGate(body.auto_export_dir))){toast('Settings not saved: choose what to do about '+body.auto_export_dir+' first',1);return}
   try{await api('PUT','/api/config',body);toast('Settings saved');lamp();vSettings();}catch(e){toast(e.message,1)}
 }
 

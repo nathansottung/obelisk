@@ -639,13 +639,31 @@ func (a *App) maybeAutoExport(now time.Time) error {
 	if !on {
 		return nil
 	}
+	// Already written this period: nothing to do, and the folder is not opened,
+	// so the run neither waits on another write to that drive nor asks anything.
+	if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+		return nil
+	}
+	err := a.autoExportInto(dir, name)
+	if err != nil {
+		// Into the event log once per period and reason, so it shows in the app.
+		if key := name + " " + err.Error(); key != a.autoExportFailed {
+			a.autoExportFailed = key
+			a.Store.Log("appbackup", fmt.Sprintf("automatic app backup into %s failed: %v", dir, err))
+		}
+	}
+	return err
+}
+
+// autoExportInto writes this period's automatic app backup as name in dir.
+func (a *App) autoExportInto(dir, name string) error {
 	out, err := a.openOutFolder(dir)
 	if err != nil {
 		return err
 	}
 	defer out.Close()
 	if _, err := out.Stat(name); err == nil {
-		return nil // already written this period
+		return nil // written a moment ago
 	}
 	_, err = a.exportAppBackupInto(out, name, false)
 	return err

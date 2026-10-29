@@ -136,9 +136,12 @@ type App struct {
 	// Both the Settings view and the periodic status lamp call Preflight, so a
 	// slow probe used to hang the UI; a short single-flight cache + per-tool
 	// timeout keep it snappy. See Preflight / toolVersionLine.
-	pfMu  sync.Mutex
-	pfAt  time.Time
-	pfVal map[string]any
+	// autoExportFailed is the last automatic app-backup failure written to the
+	// event log (period file and reason), so an hourly retry logs it once.
+	autoExportFailed string
+	pfMu             sync.Mutex
+	pfAt             time.Time
+	pfVal            map[string]any
 	// Per-instance test seams; nil in production. Configure only before use.
 	keystoreReadFile         func(string) ([]byte, error)
 	keystoreMutationObserver func(string)

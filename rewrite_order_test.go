@@ -5,6 +5,7 @@ package main
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 // A re-write that cannot run changes nothing: the copy it would replace stays
@@ -53,4 +54,37 @@ func TestRewriteCopy_RefusedLeavesTheCopyCurrent(t *testing.T) {
 	assertSourceRefusal(t, "re-write into a link to a source", err)
 	untouched()
 	current("folder refused")
+}
+
+// Once this period's automatic app backup exists, the hourly run does nothing:
+// it does not open the folder, so it neither waits on another write to that
+// drive nor fails because the folder now needs a choice.
+func TestAutoExport_DoneForThePeriodTouchesNothing(t *testing.T) {
+	app, _ := compatApp(t)
+	dir := t.TempDir()
+	cfg := mustConfig(t, app)
+	cfg.AutoExportDir, cfg.AutoExportCadence = dir, "daily"
+	if err := writeConfigForTest(app, cfg); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if err := app.maybeAutoExport(now); err != nil {
+		t.Fatal(err)
+	}
+	// Another write holds the drive.
+	busy, err := app.openOutFolder(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Close()
+	done := make(chan error, 1)
+	go func() { done <- app.maybeAutoExport(now) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("a run with this period's backup present: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("a run with this period's backup present waited on the drive")
+	}
 }
