@@ -88,7 +88,7 @@ var xorrisoCommands = map[string][]burnValue{
 // cdrecordFlags and cdrecordKeys are the cdrecord-style options allowed.
 var cdrecordFlags = map[string]bool{
 	"-v": true, "-vv": true, "-vvv": true, "-dao": true, "-sao": true, "-tao": true,
-	"-eject": true, "-multi": true, "-dummy": true, "-pad": true, "-nopad": true,
+	"-eject": true, "-multi": true, "-pad": true, "-nopad": true,
 	"-data": true, "-isosize": true, "-immed": true, "-waiti": true, "-force": true,
 	"-overburn": true, "-nofix": true, "-fix": true, "-useinfo": true,
 }
@@ -101,7 +101,7 @@ var cdrecordKeys = map[string]burnValue{
 // growisofsFlags and growisofsValued are the growisofs options allowed.
 var growisofsFlags = map[string]bool{
 	"-R": true, "-r": true, "-J": true, "-joliet-long": true, "-udf": true, "-l": true,
-	"-D": true, "-f": true, "-dvd-compat": true, "-overburn": true, "-dry-run": true,
+	"-D": true, "-f": true, "-dvd-compat": true, "-overburn": true,
 	"-quiet": true, "-v": true, "-allow-limited-size": true, "-dvd-video": true,
 	"-use-the-force-luke": true,
 }
@@ -123,18 +123,22 @@ func growisofsTarget(v string) bool {
 
 // imgburnSwitches are the ImgBurn switches allowed, with a check for the value
 // a switch takes (nil for none). The command must leave nothing to ImgBurn's
-// saved settings that could send the output to a file: exactly one /MODE, no
-// switch twice, and a build needs /BUILDOUTPUTMODE DEVICE (never IMAGEFILE)
-// from a folder, not a saved .ibb project with its own settings. DEST is a
-// drive letter, and no value may start with "/".
+// saved settings that could send the output to a file or burn nothing: it
+// builds a folder (/MODE BUILD) to a disc (/BUILDOUTPUTMODE DEVICE, never
+// IMAGEFILE) in the standard layout, with /SRC (not a saved .ibb project with
+// its own settings) and /DEST (a drive letter) given, each switch once, no
+// value starting with "/", and no test mode (which burns nothing yet reports
+// success).
 var imgburnSwitches = map[string]burnValue{
-	"MODE": oneOf("BUILD", "WRITE"), "BUILDOUTPUTMODE": oneOf("DEVICE"),
+	"MODE": oneOf("BUILD"), "BUILDOUTPUTMODE": oneOf("DEVICE"),
 	"BUILDINPUTMODE": oneOf("STANDARD"),
-	"SRC":            func(v string) bool { return !strings.HasSuffix(strings.ToLower(v), ".ibb") },
-	"DEST":           regexp.MustCompile(`^[A-Za-z]:\\?$`).MatchString,
-	"VOLUMELABEL":    anyValue, "FILESYSTEM": anyValue, "UDFREVISION": simpleValue,
+	"SRC": func(v string) bool {
+		return !strings.HasSuffix(strings.TrimRight(strings.ToLower(v), ". "), ".ibb")
+	},
+	"DEST":        regexp.MustCompile(`^[A-Za-z]:\\?$`).MatchString,
+	"VOLUMELABEL": anyValue, "FILESYSTEM": anyValue, "UDFREVISION": simpleValue,
 	"SPEED": simpleValue, "VERIFY": oneOf("YES", "NO"), "EJECT": oneOf("YES", "NO"),
-	"ROOTFOLDER": oneOf("YES", "NO"), "TESTMODE": oneOf("YES", "NO"),
+	"ROOTFOLDER": oneOf("YES", "NO"), "TESTMODE": oneOf("NO"),
 	"RECURSESUBDIRECTORIES": oneOf("YES", "NO"), "INCLUDEHIDDENFILES": oneOf("YES", "NO"),
 	"INCLUDESYSTEMFILES": oneOf("YES", "NO"),
 	"START":              nil, "CLOSE": nil, "CLOSESUCCESS": nil, "NOIMAGEDETAILS": nil,
@@ -303,12 +307,10 @@ func checkImgBurnArgs(args []string) error {
 		}
 		seen[name] = strings.ToUpper(args[i])
 	}
-	mode, ok := seen["MODE"]
-	if !ok {
-		return fmt.Errorf("ImgBurn needs /MODE BUILD or /MODE WRITE")
-	}
-	if mode == "BUILD" && seen["BUILDOUTPUTMODE"] != "DEVICE" {
-		return fmt.Errorf("ImgBurn /MODE BUILD needs /BUILDOUTPUTMODE DEVICE, so it writes to a disc and not to an image file")
+	for _, need := range []string{"MODE", "BUILDOUTPUTMODE", "BUILDINPUTMODE", "SRC", "DEST"} {
+		if _, ok := seen[need]; !ok {
+			return fmt.Errorf("ImgBurn needs /MODE BUILD /BUILDOUTPUTMODE DEVICE /BUILDINPUTMODE STANDARD with /SRC and /DEST (missing /%s), so nothing is left to its saved settings", need)
+		}
 	}
 	return nil
 }

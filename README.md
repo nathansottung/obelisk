@@ -1326,7 +1326,7 @@ disc" shells out to your command template:
 
 ```
 # Windows — ImgBurn
-"C:\Program Files (x86)\ImgBurn\ImgBurn.exe" /MODE BUILD /BUILDOUTPUTMODE DEVICE /DEST E: /SRC "{SRC}" /VOLUMELABEL "{LABEL}" /START /CLOSESUCCESS /NOIMAGEDETAILS
+"C:\Program Files (x86)\ImgBurn\ImgBurn.exe" /MODE BUILD /BUILDOUTPUTMODE DEVICE /BUILDINPUTMODE STANDARD /DEST E: /SRC "{SRC}" /VOLUMELABEL "{LABEL}" /START /CLOSESUCCESS /NOIMAGEDETAILS
 
 # Linux — growisofs (UDF, label from {LABEL})
 growisofs -Z /dev/sr0 -R -J -udf -V "{LABEL}" "{SRC}"

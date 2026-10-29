@@ -155,6 +155,15 @@ func TestBurnCommand_AllowsOnlyKnownOptions(t *testing.T) {
 		"imgburn /MODE BUILD /BUILDMODE DISC /SRC {SRC} /DEST E: /START",
 		"imgburn /MODE BUILD /SRC {SRC} /DEST E: /START",
 		"imgburn /SRC {SRC} /DEST E: /START",
+		"imgburn /MODE BUILD /BUILDOUTPUTMODE DEVICE /BUILDINPUTMODE STANDARD /SRC {SRC} /DEST E: /TESTMODE YES /START",
+		"imgburn /MODE BUILD /BUILDOUTPUTMODE DEVICE /BUILDINPUTMODE STANDARD /SRC {SRC} /START",
+		"imgburn /MODE BUILD /BUILDOUTPUTMODE DEVICE /BUILDINPUTMODE STANDARD /DEST E: /START",
+		"imgburn /MODE BUILD /BUILDOUTPUTMODE DEVICE /SRC {SRC} /DEST E: /START",
+		"imgburn /MODE WRITE /SRC {SRC} /DEST E: /START",
+		"imgburn /MODE BUILD /BUILDOUTPUTMODE DEVICE /BUILDINPUTMODE STANDARD /SRC C:/x/p.ibb. /DEST E: /START",
+		"imgburn /MODE BUILD /BUILDOUTPUTMODE DEVICE /BUILDINPUTMODE STANDARD /SRC C:/x/p.ibb|{SRC} /DEST E: /START",
+		"wodim dev=/dev/sr0 -dummy {SRC}",
+		"growisofs -Z /dev/sr0 -dry-run {SRC}",
 		"imgburn /MODE BUILD /MODE WRITE /SRC {SRC} /DEST E: /START",
 		"imgburn /MODE BUILD /BUILDOUTPUTMODE DEVICE /BUILDOUTPUTMODE DEVICE /SRC {SRC} /DEST E: /START",
 		"imgburn /MODE BUILD /BUILDMODE DEVICE /SRC {SRC} /DEST E: /START",
@@ -174,7 +183,7 @@ func TestBurnCommand_AllowsOnlyKnownOptions(t *testing.T) {
 		"xorrecord -v dev=/dev/sr0 -dao blank=as_needed {SRC}",
 		"wodim dev=/dev/sr0 speed=4 -v -dao {SRC}",
 		`growisofs -Z /dev/sr0 -R -J -udf -V "{LABEL}" "{SRC}"`,
-		`"C:\Program Files (x86)\ImgBurn\ImgBurn.exe" /MODE BUILD /BUILDOUTPUTMODE DEVICE /DEST E: /SRC "{SRC}" /VOLUMELABEL "{LABEL}" /START /CLOSESUCCESS /NOIMAGEDETAILS`,
+		`"C:\Program Files (x86)\ImgBurn\ImgBurn.exe" /MODE BUILD /BUILDOUTPUTMODE DEVICE /BUILDINPUTMODE STANDARD /DEST E: /SRC "{SRC}" /VOLUMELABEL "{LABEL}" /START /CLOSESUCCESS /NOIMAGEDETAILS`,
 	} {
 		if _, err := parseBurnCommand(ok); err != nil {
 			t.Errorf("parseBurnCommand(%q): %v", ok, err)
