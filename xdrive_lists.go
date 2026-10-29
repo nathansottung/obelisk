@@ -70,7 +70,7 @@ func (a *App) CrossDriveLists(volumeID int) (*CrossDriveLists, error) {
 		label := a.volumeLabel(vid)
 		rec := a.Store.latestCompleteScan(vid)
 		if rec == nil {
-			out.LeftOut = append(out.LeftOut, CrossDriveLeftOut{VolumeID: vid, Label: label, Reason: "no complete scan"})
+			out.LeftOut = append(out.LeftOut, CrossDriveLeftOut{VolumeID: vid, Label: label, Reason: "no complete scan of the whole drive"})
 			continue
 		}
 		list, err := a.LoadScanFiles(rec)

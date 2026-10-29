@@ -214,3 +214,32 @@ func TestCompareScreenWiredInUI(t *testing.T) {
 		}
 	}
 }
+
+// A folder adopt's scan is of one folder: it is never a drive's "latest complete
+// scan" for comparisons and the lists, and it is not compared with a scan of a
+// whole drive.
+func TestCompare_FolderScansStayApart(t *testing.T) {
+	app := dockApp(t)
+	drive := t.TempDir()
+	writeTree(t, drive, map[string]string{"Photos/a.jpg": "jpeg\n", "Docs/b.txt": "bravo\n"})
+	full := scanDrive(t, app, drive, "FD")
+	vol := app.Store.VolumeBySerial("FD")
+	arch := app.Store.AddCollectionKind("Loose", ArchiveSourceless)
+	if _, err := app.AdoptFolder(filepath.Join(drive, "Photos"), arch.ID, vol.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	folder := app.Store.ScanRecords(vol.ID)[0]
+	if folder.Root == "" {
+		t.Fatal("setup: the newest scan is not the folder's")
+	}
+	if got := app.Store.latestCompleteScan(vol.ID); got == nil || got.ID != full.ID {
+		t.Errorf("latest complete scan %+v, want the whole-drive scan", got)
+	}
+	l, err := app.CrossDriveLists(vol.ID)
+	if err != nil || len(l.Scans) != 1 || l.Scans[0].ScanID != full.ID {
+		t.Errorf("lists used %+v (%v), want the whole-drive scan", l, err)
+	}
+	if _, err := app.CompareScans(CompareRef{ScanID: full.ID}, folder.ID); err == nil || !strings.Contains(err.Error(), "folder") {
+		t.Errorf("a folder scan compared with a whole-drive scan: %v, want a refusal", err)
+	}
+}

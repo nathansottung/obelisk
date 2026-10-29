@@ -47,10 +47,12 @@ type CompareRun struct {
 	RefArchiveID  int            `json:"ref_archive_id,omitempty"`
 	RefLabel      string         `json:"ref_label"`
 	RefComplete   bool           `json:"ref_complete"`
+	RefRoot       string         `json:"ref_root,omitempty"` // the folder a reference scan covers; empty for a whole drive
 	OtherScanID   int            `json:"other_scan_id"`
 	OtherVolumeID int            `json:"other_volume_id"`
 	OtherLabel    string         `json:"other_label"`
 	OtherComplete bool           `json:"other_complete"`
+	OtherRoot     string         `json:"other_root,omitempty"`
 	Counts        map[string]int `json:"counts"`
 	Total         int            `json:"total"`
 	ResultFile    string         `json:"result_file"`
@@ -88,10 +90,11 @@ func scanSide(list *ScanFileList) ClassSide {
 	return side
 }
 
-// latestCompleteScan is the drive's newest complete scan, or nil.
+// latestCompleteScan is the drive's newest complete scan of the whole drive, or
+// nil. A folder adopt's scan (Root set) covers one folder, not the drive.
 func (s *Store) latestCompleteScan(volumeID int) *ScanRecord {
 	for _, r := range s.ScanRecords(volumeID) {
-		if r.Scan == ScanComplete {
+		if r.Scan == ScanComplete && r.Root == "" {
 			return r
 		}
 	}
@@ -109,6 +112,22 @@ func (s *Store) scanByID(id int) *ScanRecord {
 		}
 	}
 	return nil
+}
+
+// scanCovers says what a scan covers, for messages.
+func scanCovers(r *ScanRecord) string {
+	if r.Root != "" {
+		return "the folder " + r.Root
+	}
+	return "the whole drive"
+}
+
+// scanLabel names a scan's drive, and its folder when it covers one.
+func scanLabel(a *App, r *ScanRecord) string {
+	if r.Root != "" {
+		return a.volumeLabel(r.VolumeID) + " (folder " + r.Root + ")"
+	}
+	return a.volumeLabel(r.VolumeID)
 }
 
 func (a *App) volumeLabel(id int) string {
@@ -136,7 +155,7 @@ func (a *App) CompareScans(ref CompareRef, otherScanID int) (*CompareRun, error)
 		}
 	}
 	run := &CompareRun{At: time.Now().UTC(), OtherScanID: otherRec.ID, OtherVolumeID: otherRec.VolumeID,
-		OtherLabel: a.volumeLabel(otherRec.VolumeID), OtherComplete: otherRec.Scan == ScanComplete}
+		OtherLabel: scanLabel(a, otherRec), OtherComplete: otherRec.Scan == ScanComplete, OtherRoot: otherRec.Root}
 	var refSide ClassSide
 	switch {
 	case ref.ArchiveID > 0:
@@ -155,14 +174,19 @@ func (a *App) CompareScans(ref CompareRef, otherScanID int) (*CompareRun, error)
 				return nil, fmt.Errorf("scan %d not found", ref.ScanID)
 			}
 		} else if rec = a.Store.latestCompleteScan(ref.VolumeID); rec == nil {
-			return nil, fmt.Errorf("%s has no complete scan to compare against", a.volumeLabel(ref.VolumeID))
+			return nil, fmt.Errorf("%s has no complete scan of the whole drive to compare against", a.volumeLabel(ref.VolumeID))
+		}
+		// Paths in a folder's scan start at that folder, and in a drive's scan at
+		// the drive's root: the two are not comparable path by path.
+		if rec.Root != otherRec.Root {
+			return nil, fmt.Errorf("scan %d is of %s and scan %d of %s; compare scans of the same folder, or of whole drives", rec.ID, scanCovers(rec), otherRec.ID, scanCovers(otherRec))
 		}
 		list, err := a.LoadScanFiles(rec)
 		if err != nil {
 			return nil, err
 		}
 		refSide = scanSide(list)
-		run.RefScanID, run.RefVolumeID, run.RefLabel, run.RefComplete = rec.ID, rec.VolumeID, a.volumeLabel(rec.VolumeID), rec.Scan == ScanComplete
+		run.RefScanID, run.RefVolumeID, run.RefLabel, run.RefComplete, run.RefRoot = rec.ID, rec.VolumeID, scanLabel(a, rec), rec.Scan == ScanComplete, rec.Root
 	}
 	otherList, err := a.LoadScanFiles(otherRec)
 	if err != nil {
