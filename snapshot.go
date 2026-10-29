@@ -19,7 +19,6 @@ package main
 import (
 	"fmt"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 )
@@ -99,14 +98,11 @@ type DriveReport struct {
 // completeness was recorded say nothing about unread folders, so everything they
 // do not list counts as known absent, as it always did.
 func (snap *VolumeSnapshot) Known(rel string) bool {
-	// On Windows a folder's letter case can change between scans; it is the
-	// same folder.
-	fold := func(p string) string {
-		if runtime.GOOS == "windows" {
-			return strings.ToLower(p)
-		}
-		return p
-	}
+	// The same path rules as the comparisons (classify.go): letter case is
+	// ignored where the platform ignores it, and names are compared in one
+	// Unicode form.
+	rules := HostPathRules()
+	fold := rules.key
 	rel = fold(strings.Trim(filepath.ToSlash(rel), "/"))
 	under := func(gaps []ScanGap) bool {
 		for _, g := range gaps {

@@ -99,3 +99,19 @@ func TestHostPathRules(t *testing.T) {
 		t.Errorf("FoldCase = %v, want %v on this platform", r.FoldCase, want)
 	}
 }
+
+// A file whose content was never hashed cannot be said to be the same or
+// changed: it is unknown.
+func TestClassify_MissingHashIsUnknown(t *testing.T) {
+	r := Classify(ClassSide{Files: []ClassFile{cf("a", ""), cf("b", "1")}}, ClassSide{Files: []ClassFile{cf("a", "9"), cf("b", "")}}, exact)
+	wantStates(t, r.Results, "unknown:a>a", "unknown:b>b")
+}
+
+// What a scan could not read is matched by the same path rules as the files: an
+// unread folder recorded in one Unicode form covers paths written in the other.
+func TestSnapshotKnown_UsesThePathRules(t *testing.T) {
+	snap := &VolumeSnapshot{UnreadableFolders: []ScanGap{{RelPath: "Café"}}}
+	if snap.Known("Café/a.txt") {
+		t.Error("a path under an unread folder, in the other Unicode form, counts as read")
+	}
+}

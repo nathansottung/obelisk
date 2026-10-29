@@ -120,7 +120,10 @@ func Classify(ref, other ClassSide, rules PathRules) Classification {
 		refPaired[i], otherPaired[j] = true, true
 		rf, of := ref.Files[i], other.Files[j]
 		st := ClassSame
-		if rf.Hash != of.Hash {
+		switch {
+		case rf.Hash == "" || of.Hash == "":
+			st = ClassUnknown // content never hashed on one side: nothing to compare
+		case rf.Hash != of.Hash:
 			st = ClassChanged
 		}
 		add(ClassResult{State: st, RefPath: rf.Path, Path: of.Path, RefHash: rf.Hash, Hash: of.Hash, Size: of.Size})
