@@ -10,6 +10,8 @@ package main
 // tape proves it holds its verified bytes.
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -250,6 +252,16 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 	}
 	label := fmt.Sprintf("label this tape %s-tape-%d-of-%d", c.Name, seg.Index, N)
 	if done == N {
+		// The set is one copy only if the segments as written join into the
+		// package: each must be its range of a staged payload that still hashes
+		// to the package's hash. Otherwise no copy is recorded and the package is
+		// rebuilt.
+		if err := spanSetMatches(c, payload); err != nil {
+			c.Status, c.Error = "FAILED", storedErrorText(err.Error())
+			a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: false, Path: destChunk, Note: "span set check: " + err.Error()})
+			a.Store.UpdateChunk(c)
+			return nil, fmt.Errorf("all %d segments of %s were written, but the set does not check: %w; nothing was recorded as a copy, rebuild the package and write the set again", N, c.Name, err)
+		}
 		c.Status, c.Error = "VERIFIED", ""
 		c.WrittenDest, c.WrittenAt, c.VerifiedAt = destDir, &now, &now
 		ok := true
@@ -279,6 +291,40 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 
 // copyPar2Set copies the package's par2 set into its folder on the medium. Each
 // file is named only once it reads back as the staged original (CopyIn).
+// spanSetMatches checks a spanned package's whole set in one read of the staged
+// payload: it must hash to the package's hash, and each data segment's recorded
+// hash (of the bytes written to its tape) must be the hash of its range.
+func spanSetMatches(c *Chunk, payload string) error {
+	f, err := os.Open(payload)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	whole := sha256.New()
+	for _, sg := range c.Segments {
+		if sg.Par2 {
+			continue
+		}
+		h := sha256.New()
+		if _, err := io.CopyN(io.MultiWriter(whole, h), f, sg.Bytes); err != nil {
+			return fmt.Errorf("reading segment %d's range of the staged payload: %w", sg.Index, err)
+		}
+		if got := hex.EncodeToString(h.Sum(nil)); got != sg.Hash {
+			return fmt.Errorf("segment %d as written is not its range of the package", sg.Index)
+		}
+	}
+	// Nothing may be left over: bytes on no tape are not part of the copy.
+	if n, err := io.Copy(whole, f); err != nil {
+		return err
+	} else if n > 0 {
+		return fmt.Errorf("the segments leave %d byte(s) of the package on no tape", n)
+	}
+	if got := hex.EncodeToString(whole.Sum(nil)); got != c.EncHash {
+		return fmt.Errorf("the staged payload no longer hashes to the package's hash")
+	}
+	return nil
+}
+
 func copyPar2Set(stagedDir string, out *outFolder, c *Chunk) error {
 	files := par2SetFiles(stagedDir, c)
 	if len(files) == 0 {
