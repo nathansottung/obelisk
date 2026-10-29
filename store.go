@@ -1462,8 +1462,11 @@ func (s *Store) backupBeforeMigrate(raw []byte, from int) {
 // per write, O(n·writes) total). EndBatch forces the final write. Callers hold
 // s.mu. Crash-safety is preserved: see BeginBatch.
 func (s *Store) save() error {
+	// The catalog has an unsaved change until a write succeeds (writeCatalog
+	// clears this), so a failed or put-off save is still known about at the end
+	// of a job (see FlushPending).
+	s.dirty = true
 	if s.batchDepth > 0 {
-		s.dirty = true
 		iv := s.batchInterval
 		if iv <= 0 {
 			iv = 3 * time.Second
@@ -1587,6 +1590,19 @@ func (s *Store) BeginBatch() {
 // s.mu, so it is always internally consistent, and every batched job is an
 // idempotent re-run (see BeginBatch), so persisting its progress early can only save
 // work on a replay. The cost is one extra full-catalog write per overlapping job.
+// FlushPending writes the catalog now if it holds a change that is not on disk
+// yet: a save that failed (and whose error a caller did not see) or one put off
+// while a batch was open. It returns the write's error. A job calls it before it
+// may report success.
+func (s *Store) FlushPending() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.dirty {
+		return nil
+	}
+	return s.writeCatalog()
+}
+
 func (s *Store) EndBatch() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
