@@ -254,6 +254,9 @@ func rewriteCopyTargets(a *App, p map[string]any) ([]destructiveTarget, error) {
 	if cp == nil {
 		return nil, refuseDestructive(404, "no current copy of %s on volume %d to re-write", c.Name, vol)
 	}
+	if err := a.outFolderReady(filepath.Dir(cp.Path)); err != nil {
+		return nil, refuseDestructive(409, "%s", err.Error())
+	}
 	out := []destructiveTarget{recordTarget(fmt.Sprintf("copy of %s on volume %d", c.Name, vol), cp, "marked superseded, and a new copy is written")}
 	files, err := treeTargets(cp.Path, "replaced by the re-written copy")
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {

@@ -7,6 +7,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -318,21 +319,25 @@ func (a *App) WriteChunk(id int, destDir string, bufferGB float64, blockMB int, 
 	if c.StagedDir == "" || (c.Status != "STAGED" && c.Status != "WRITTEN" && c.Status != "VERIFIED" && c.Status != "FAILED") {
 		return nil, fmt.Errorf("package %s is %s; build it first", c.Name, c.Status)
 	}
-	if err := a.Store.AssertOutsideSources(destDir); err != nil {
-		return nil, err
-	}
 	enc := payloadPathIn(c.StagedDir, c)
 	if enc == "" {
 		return nil, fmt.Errorf("staged payload missing under %s", c.StagedDir)
 	}
+	// The destination is decided by where it really is, and every file is written
+	// beneath the folder that was decided about (see outfolder.go).
+	out, err := a.openOutFolder(destDir)
+	if err != nil {
+		return nil, err
+	}
+	defer out.Close()
 	// Preserve whatever name the payload was staged under (current <name>.tar /
 	// <name>.tar.gpg, or the legacy .tar.gpg for a plaintext package built before
 	// the rename) so the on-medium payload stays consistent with its sidecars.
 	payloadBase := filepath.Base(enc)
-	dest := filepath.Join(destDir, c.Name)
-	if err := os.MkdirAll(dest, 0o755); err != nil {
+	if err := out.MkdirAll(c.Name); err != nil {
 		return nil, err
 	}
+	dest := out.Join(c.Name)
 	var need int64
 	entries, _ := os.ReadDir(c.StagedDir)
 	for _, e := range entries {
@@ -373,8 +378,13 @@ func (a *App) WriteChunk(id int, destDir string, bufferGB float64, blockMB int, 
 	}
 
 	progress(0.02, "writing payload")
-	destPayload := filepath.Join(dest, payloadBase)
-	streamHash, stats, err := ringCopy(enc, destPayload, 0, 0, blockMB, bufferGB, throttleMbps,
+	payloadRel := c.Name + "/" + payloadBase
+	destPayload := out.Join(payloadRel)
+	tmp, f, err := out.Create(payloadRel)
+	if err != nil {
+		return mediumFail(err)
+	}
+	streamHash, stats, err := ringCopyTo(enc, f, 0, 0, blockMB, bufferGB, throttleMbps,
 		func(done, total int64) {
 			frac := 0.0
 			if total > 0 {
@@ -388,14 +398,32 @@ func (a *App) WriteChunk(id int, destDir string, bufferGB float64, blockMB int, 
 	// the I/O error it is — checked BEFORE the hash comparison, so a read failure is
 	// never masked as a stream-hash mismatch.
 	if err != nil {
+		out.Discard(tmp)
 		return mediumFail(err)
 	}
 	if streamHash != c.EncHash {
+		out.Discard(tmp)
 		return stagedFail(fmt.Errorf("stream hash mismatch while writing (staged payload corrupted — rebuild)"))
 	}
 
-	progress(0.70, "writing sidecars")
+	// Read-back verify: the payload gets its name only once it reads back off the
+	// medium as the staged bytes. A copy that reads back differently is not
+	// published and is recorded as failed.
+	progress(0.70, "read-back verify")
+	ok := true
+	rb := streamHash
+	if err := out.Commit(tmp, payloadRel, 0o644, streamHash); err != nil {
+		if !errors.Is(err, errStageMismatch) {
+			return mediumFail(err)
+		}
+		ok, rb = false, "(differs from the staged payload)"
+	}
+
+	progress(0.78, "writing sidecars")
 	for _, e := range entries {
+		if !ok {
+			break
+		}
 		n := e.Name()
 		// Skip the payload (streamed above) and the staging-only intermediate tar
 		// and filelist; copy every real sidecar (par2 set, manifest, RESTORE.txt).
@@ -405,17 +433,11 @@ func (a *App) WriteChunk(id int, destDir string, bufferGB float64, blockMB int, 
 		if c.PrivateManifest && n == c.Name+".manifest.json" {
 			continue // private: the ENCRYPTED manifest.json.gpg ships instead
 		}
-		if err := copyFile(filepath.Join(c.StagedDir, n), filepath.Join(dest, n)); err != nil {
+		if _, err := out.CopyIn(filepath.Join(c.StagedDir, n), c.Name+"/"+n, 0o644); err != nil {
 			return mediumFail(err)
 		}
 	}
 
-	progress(0.78, "read-back verify")
-	rb, err := hashFileHex(destPayload)
-	if err != nil {
-		return mediumFail(err)
-	}
-	ok := rb == c.EncHash
 	now := time.Now().UTC()
 	c.WrittenDest, c.WrittenAt = dest, &now
 	if ok {
@@ -469,6 +491,11 @@ func (a *App) RewriteCopy(id, volumeID int, bufferGB float64, blockMB int, throt
 	}
 	if dest == "" {
 		return nil, fmt.Errorf("no current copy of %s on volume %d to re-write", c.Name, volumeID)
+	}
+	// Decide the folder before the old copy is marked superseded, so a refused
+	// re-write changes nothing.
+	if err := a.outFolderReady(filepath.Dir(dest)); err != nil {
+		return nil, err
 	}
 	a.Store.SupersedeCopy(c, volumeID)
 	// WriteChunk rebuilds dest as destDir/<name>, so pass the copy folder's parent.

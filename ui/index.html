@@ -2280,6 +2280,7 @@ async function writeDlg(id,name,payload){
   async()=>{const d=$('#d1').value.trim();if(!d)return;
     const body={dest_dir:d,buffer_gb:parseFloat($('#d2').value)||0,block_mb:parseInt($('#d4').value)||0,throttle_mbps:parseFloat($('#d5').value)||0};
     Object.assign(body,volChoice());
+    if(!(await destGate(d)))throw new Error('Nothing written: choose what to do about '+d+' first');
     await api('POST',`/api/chunks/${id}/write`,body);
     toast('Write started — see Jobs');loc('jobs')});}
 let destT;function checkDest(id){clearTimeout(destT);destT=setTimeout(async()=>{
@@ -2394,7 +2395,11 @@ function copiesLine(c,volmap){const cur=currentCopies(c);const sup=(c.copies||[]
   if(sup.length)h+=`<div class="dim" style="font-size:10.5px;opacity:.65">superseded: ${sup.map(cp=>{const v=volmap[cp.volume_id]||{};return esc(v.label||'vol#'+cp.volume_id)+' '+copyMark(cp.verify_ok)}).join(' · ')}</div>`;
   return h}
 async function doRewriteCopy(id,vol,label){
-  try{if(!(await confirmDestructive('rewrite-copy',{id:Number(id),volume_id:Number(vol)})))return;
+  try{const c=await api('GET','/api/chunks/'+id);
+    const cp=(c.copies||[]).find(x=>x.volume_id===Number(vol)&&!x.superseded);
+    const dir=cp&&cp.path?cp.path.replace(/[\\/][^\\/]*[\\/]?$/,''):'';
+    if(dir&&!(await destGate(dir)))return;
+    if(!(await confirmDestructive('rewrite-copy',{id:Number(id),volume_id:Number(vol)})))return;
     toast('Re-write started — see Jobs. When it verifies, the copy is protected again.');loc('jobs')}catch(e){toast(e.message,1)}}
 
 function volPicker(vols){

@@ -73,6 +73,10 @@ func (d *DestRoot) stagingFor(rel string) (string, *os.File, error) {
 	return stage.rel, stage.file, nil
 }
 
+// errStageMismatch is a staged file that does not read back as the bytes meant
+// for it. Nothing is published.
+var errStageMismatch = errors.New("staging content mismatch: refusing unverified publication")
+
 // Deterministic fault/substitution seam at the pre-publication boundary. It does
 // not perform the publication itself.
 var beforeDestPublish = func(r *os.Root, oldname, newname string) error { return nil }
@@ -172,7 +176,7 @@ func (d *DestRoot) VerifyStage(rel, expected string) error {
 		return err
 	}
 	if got != expected {
-		return fmt.Errorf("staging content mismatch: refusing unverified publication")
+		return errStageMismatch
 	}
 	return nil
 }

@@ -366,6 +366,16 @@ func destinationGate(w http.ResponseWriter, app *App, dest string) bool {
 	return true
 }
 
+// outFolderGate is destinationGate for a writer's output folder (see
+// openOutFolder). Where the destination guard is not available the job checks the
+// folder by real location itself, so there is nothing to ask here.
+func outFolderGate(w http.ResponseWriter, app *App, dest string) bool {
+	if !destGuardAvailable {
+		return true
+	}
+	return destinationGate(w, app, dest)
+}
+
 // restoreGate is destinationGate for a restore's output folder. Where the
 // destination guard is not available, a restore may only go into a new folder,
 // so that is checked instead (the job checks it again and creates the folder).
@@ -2059,6 +2069,9 @@ func api(mux *http.ServeMux, app *App) {
 		vol := resolveVolume(app, b)
 		if err := sealGuard(app, vol); err != nil {
 			jsonErr(w, 409, err)
+			return
+		}
+		if !outFolderGate(w, app, dest) {
 			return
 		}
 		startedOn(w).write(runJob(app, "write", "Write "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {
