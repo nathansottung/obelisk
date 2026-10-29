@@ -1071,6 +1071,10 @@ type catalog struct {
 	// (one per volume, keyed by VolumeID). It is what lets Volumes/Treemap describe
 	// an unplugged drive. See VolumeSnapshot.
 	Snapshots []*VolumeSnapshot `json:"volume_snapshots,omitempty"`
+	// Scans: one record per drive scan, newest last, capped per drive. Each
+	// record's file list is stored compressed in the scans folder, not here. See
+	// ScanRecord and scanhistory.go.
+	Scans []*ScanRecord `json:"volume_scans,omitempty"`
 	// Events (named happenings files belong to) and Templates (role→destination
 	// routing documents). Additive in schema v4. See Event / Template.
 	Events    []*Event    `json:"events,omitempty"`
@@ -2761,20 +2765,62 @@ func (s *Store) AppendSmartSnapshot(v *Volume, snap SmartSnapshot) {
 // ---- drive snapshots ---------------------------------------------------
 
 // PutVolumeSnapshot stores (or replaces) the offline inventory for a volume. One
-// snapshot per volume, keyed by VolumeID — a re-ingest overwrites in place.
-// Persists (coalesced under an active batch).
-func (s *Store) PutVolumeSnapshot(snap *VolumeSnapshot) {
+// snapshot per volume, keyed by VolumeID — a re-ingest overwrites in place; earlier
+// scans are kept as ScanRecords. Persists (coalesced under an active batch) and
+// returns the save's error.
+func (s *Store) PutVolumeSnapshot(snap *VolumeSnapshot) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, ex := range s.c.Snapshots {
 		if ex.VolumeID == snap.VolumeID {
 			s.c.Snapshots[i] = snap
-			_ = s.save()
-			return
+			return s.save()
 		}
 	}
 	s.c.Snapshots = append(s.c.Snapshots, snap)
-	_ = s.save()
+	return s.save()
+}
+
+// AddScanRecord records a drive scan, giving it its ID, and drops the oldest
+// records of that drive beyond keep. It returns the dropped records (whose file
+// lists the caller removes) and the save's error.
+func (s *Store) AddScanRecord(rec *ScanRecord, keep int) ([]*ScanRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec.ID = s.next("scan")
+	s.c.Scans = append(s.c.Scans, rec)
+	n := 0
+	for _, r := range s.c.Scans {
+		if r.VolumeID == rec.VolumeID {
+			n++
+		}
+	}
+	var dropped []*ScanRecord
+	kept := make([]*ScanRecord, 0, len(s.c.Scans))
+	for _, r := range s.c.Scans { // oldest first
+		if r.VolumeID == rec.VolumeID && n > keep {
+			dropped = append(dropped, r)
+			n--
+			continue
+		}
+		kept = append(kept, r)
+	}
+	s.c.Scans = kept
+	return dropped, s.save()
+}
+
+// ScanRecords returns copies of a drive's scan records, newest first.
+func (s *Store) ScanRecords(volumeID int) []*ScanRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []*ScanRecord
+	for i := len(s.c.Scans) - 1; i >= 0; i-- {
+		if r := s.c.Scans[i]; r.VolumeID == volumeID {
+			c := *r
+			out = append(out, &c)
+		}
+	}
+	return out
 }
 
 // VolumeSnapshot returns the offline inventory for a volume, or nil if the drive

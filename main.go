@@ -2704,6 +2704,20 @@ func api(mux *http.ServeMux, app *App) {
 			"smart": snap.Smart, "report": app.driveReport(snap),
 		})
 	})
+	// The drive's scan history, newest first: one record per scan (complete or
+	// partial); the file lists stay in the scans folder.
+	mux.HandleFunc("GET /api/volumes/{id}/scans", func(w http.ResponseWriter, r *http.Request) {
+		v := app.Store.Volume(pathID(r))
+		if v == nil {
+			jsonErr(w, 404, fmt.Errorf("volume not found"))
+			return
+		}
+		recs := app.Store.ScanRecords(v.ID)
+		if recs == nil {
+			recs = []*ScanRecord{}
+		}
+		jsonOut(w, map[string]any{"scans": recs})
+	})
 	// One zoom level of a volume's snapshot treemap (offline — no disk access),
 	// colored by file role. path="" is the drive root; echo a child's path to zoom.
 	mux.HandleFunc("GET /api/volumes/{id}/treemap", func(w http.ResponseWriter, r *http.Request) {

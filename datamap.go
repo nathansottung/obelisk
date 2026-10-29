@@ -73,6 +73,13 @@ func (a *App) DataMap() (DataMap, error) {
 	}
 	dm.Writes = append(dm.Writes, ks)
 
+	dm.Writes = append(dm.Writes, DataLocation{
+		Name: "Drive scan history",
+		What: "The file list of each scan of a docked drive (paths, sizes, hashes), compressed, so earlier scans can be compared. Nothing here is your file content.",
+		Path: a.scansDir(),
+		Note: "The newest 10 scans of each drive are kept (scan_history_retained in the settings file). App backups do not include them.",
+	})
+
 	staging := DataLocation{
 		Name: "Staging",
 		What: "Temporary workspace while building packages; emptied as packages complete. It can't live inside a folder you back up.",

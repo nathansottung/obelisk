@@ -432,6 +432,11 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 	unreadable := len(paths) - int(hashed)
 
 	snap := a.buildSnapshot(ds, vol, health, snapFiles, unreadable, gaps)
+	// The scan's own record and file list are saved before anything else changes,
+	// so a scan that cannot be recorded fails the ingest and changes nothing.
+	if _, err := a.recordScan(snap, cfg.ScanHistoryRetained); err != nil {
+		return nil, err
+	}
 
 	// What this scan could not read is unknown, not gone: content an earlier scan
 	// of this drive saw only in those places stays on the drive's record.
@@ -486,7 +491,9 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 	// to the drive: adopted media are read-only, so the inventory lives in the
 	// catalog alone (see this function's doc + docs/ARCHITECTURE.md).
 	progress(0.92, "recording drive snapshot")
-	a.Store.PutVolumeSnapshot(snap)
+	if err := a.Store.PutVolumeSnapshot(snap); err != nil {
+		return nil, fmt.Errorf("saving the drive snapshot: %w", err)
+	}
 
 	if mode == "reverify" {
 		if d.Note != "" {

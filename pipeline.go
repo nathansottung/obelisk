@@ -52,21 +52,22 @@ type Config struct {
 	BurnEccDevice         string   `json:"burn_ecc_device"` // optical device dvdisaster reads to compute the .ecc (e.g. /dev/sr0, H:); blank = derived from the burn command, else the layer is skipped
 	BurnEccCarry          bool     `json:"burn_ecc_carry"`  // true = copy each disc's .ecc into the NEXT pending disc's staged folder (it rides on the next disc); false = keep it in staging
 	VerifyDueMonths       int      `json:"verify_due_months"`
-	RequiredCopies        int      `json:"required_copies"`                // redundancy goal; fewer verified copies = under-protected
-	FinalizeVerifyDays    int      `json:"finalize_verify_days"`           // finalize: every copy on the volume must have verified within this many days
-	BufferPct             float64  `json:"buffer_pct"`                     // finalize: min % of the drive left free to seal — full drives die young
-	SmartBlockFinalize    bool     `json:"smart_block_finalize"`           // finalize: block when SMART data exists and is failing/advisory
-	BuildVerify           string   `json:"build_verify"`                   // integrity tier: "full" (contents + round-trip), "contents", or "none" (unproven, amber)
-	RoutineVerifyLevel    string   `json:"routine_verify_level"`           // default routine re-verify level: "B" (full) or "C" (sample)
-	BarcodeScheme         string   `json:"barcode_scheme"`                 // prefix for auto-assigned volume barcodes, e.g. "NSP" -> NSP-0001
-	TapeTool              string   `json:"tape_tool"`                      // path to a tape-diagnostics CLI (itdt/tapeinfo/sg_logs/hp_ltt); blank = auto-probe PATH
-	TapeDevice            string   `json:"tape_device"`                    // tape drive device path, e.g. \\.\Tape0, /dev/nst0, /dev/sg1; blank = per-OS default
-	AuthToken             string   `json:"auth_token"`                     // bearer token required on every /api call when the server binds a non-localhost address (containers); env MNEMO_AUTH_TOKEN overrides
-	DriftInformational    []string `json:"drift_informational_extensions"` // muted in reconcile, excluded from alarm totals
-	VersionsRetained      int      `json:"versions_retained"`              // per-file retained content-version cap; 0 = unlimited (default). Capping forgets only the catalog pointer to old bytes, never the media.
-	EscrowOnMedia         string   `json:"escrow_on_media"`                // escrow bundle written onto each finalized volume: "full" | "binaries-only" | "off" (default binaries-only, for space)
-	EscrowIncludeReaders  bool     `json:"escrow_include_readers"`         // include source tarballs of the format readers the census references (e.g. LibRaw)
-	EscrowCacheDir        string   `json:"escrow_cache_dir"`               // where fetched release binaries + toolchain source are cached; blank = <data>/escrow-cache
+	RequiredCopies        int      `json:"required_copies"`                 // redundancy goal; fewer verified copies = under-protected
+	FinalizeVerifyDays    int      `json:"finalize_verify_days"`            // finalize: every copy on the volume must have verified within this many days
+	BufferPct             float64  `json:"buffer_pct"`                      // finalize: min % of the drive left free to seal — full drives die young
+	SmartBlockFinalize    bool     `json:"smart_block_finalize"`            // finalize: block when SMART data exists and is failing/advisory
+	BuildVerify           string   `json:"build_verify"`                    // integrity tier: "full" (contents + round-trip), "contents", or "none" (unproven, amber)
+	RoutineVerifyLevel    string   `json:"routine_verify_level"`            // default routine re-verify level: "B" (full) or "C" (sample)
+	BarcodeScheme         string   `json:"barcode_scheme"`                  // prefix for auto-assigned volume barcodes, e.g. "NSP" -> NSP-0001
+	TapeTool              string   `json:"tape_tool"`                       // path to a tape-diagnostics CLI (itdt/tapeinfo/sg_logs/hp_ltt); blank = auto-probe PATH
+	TapeDevice            string   `json:"tape_device"`                     // tape drive device path, e.g. \\.\Tape0, /dev/nst0, /dev/sg1; blank = per-OS default
+	AuthToken             string   `json:"auth_token"`                      // bearer token required on every /api call when the server binds a non-localhost address (containers); env MNEMO_AUTH_TOKEN overrides
+	DriftInformational    []string `json:"drift_informational_extensions"`  // muted in reconcile, excluded from alarm totals
+	ScanHistoryRetained   int      `json:"scan_history_retained,omitempty"` // drive scans kept per drive (records and file lists); 0 = the default, 10
+	VersionsRetained      int      `json:"versions_retained"`               // per-file retained content-version cap; 0 = unlimited (default). Capping forgets only the catalog pointer to old bytes, never the media.
+	EscrowOnMedia         string   `json:"escrow_on_media"`                 // escrow bundle written onto each finalized volume: "full" | "binaries-only" | "off" (default binaries-only, for space)
+	EscrowIncludeReaders  bool     `json:"escrow_include_readers"`          // include source tarballs of the format readers the census references (e.g. LibRaw)
+	EscrowCacheDir        string   `json:"escrow_cache_dir"`                // where fetched release binaries + toolchain source are cached; blank = <data>/escrow-cache
 	// UIMode is a PURELY PRESENTATIONAL preference — "how much do you want to see?":
 	// "guided" (default; core journey only, advanced tools behind a reveal, a one-line
 	// purpose on every screen), "standard" (full nav, advanced settings behind an
