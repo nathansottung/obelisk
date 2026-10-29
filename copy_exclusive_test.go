@@ -61,3 +61,18 @@ func TestPathCopies_NeverWriteThroughAnExistingFile(t *testing.T) {
 		}
 	})
 }
+
+// The mirror's path copy stages too: a file already at the target is replaced
+// as a name only.
+func TestMirrorCopyFile_NeverWritesThroughAnExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.bin")
+	mustWrite(t, src, "NEW")
+	dst := filepath.Join(dir, "dst.bin")
+	victim := plantAtStageName(t, dst)
+	if _, _, err := mirrorCopyFile(src, dst, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	assertFileBytes(t, victim, "SOMEONE ELSE'S")
+	assertFileBytes(t, dst, "NEW")
+}

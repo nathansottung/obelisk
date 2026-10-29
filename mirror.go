@@ -65,21 +65,32 @@ var errCopySource = errors.New("source read failed")
 // (so the returned hash proves what left the source), pacing the writer, and
 // fsyncing before return so a subsequent read-back sees the medium, not cache.
 //
-// The source is opened before dst is created: os.Create truncates an existing dst,
-// including through a hard link, so a source that cannot be read must not cost the
-// destination anything.
+// The source is opened before anything is created, so a source that cannot be
+// read costs the destination nothing. The bytes go into a new staging file beside
+// dst, created exclusively, which is renamed to dst once flushed: a file already
+// at dst (or a hard link to another file) is replaced as a name, never written
+// through.
 func mirrorCopyFile(src, dst string, th *throttler, onBytes func(int64)) (string, int64, error) {
 	in, err := os.Open(src)
 	if err != nil {
 		return "", 0, fmt.Errorf("%w: %w", errCopySource, err)
 	}
 	defer in.Close()
-	out, err := os.Create(dst)
+	out, err := createStage(dst, 0o644)
 	if err != nil {
 		return "", 0, err
 	}
+	tmp := out.Name()
 	hash, n, err := mirrorCopyStream(in, out, th, onBytes)
-	return hash, n, errors.Join(err, out.Close())
+	err = errors.Join(err, out.Close())
+	if err == nil {
+		err = renameReplacing(tmp, dst)
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
+		return "", n, err
+	}
+	return hash, n, nil
 }
 
 // mirrorCopyStream streams an open source into an open destination, hashing the
