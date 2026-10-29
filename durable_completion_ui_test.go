@@ -108,14 +108,29 @@ const unrec ={...clean,id:2,label:'Scan unrecorded',unrecorded:true,persist_erro
 const healed={...clean,id:3,label:'Scan healed',persist_error:'jobs.json unwritable (injected)'};
 
 // ---- 1. the status helpers -------------------------------------------------
-ck(jobStamp(clean)==='VERIFIED','positive control: a clean recorded completion must keep the VERIFIED stamp');
+ck(jobStamp(clean)==='COMPLETED','a clean completion that verified nothing gets the plain COMPLETED stamp, not VERIFIED');
 ck(jobStamp(unrec)!=='VERIFIED','an unrecorded completion must NOT render the VERIFIED success stamp');
 ck(jobStamp(unrec)==='UNRECORDED','an unrecorded completion needs its own stamp class');
 ck(jobStampText(unrec)==='NOT RECORDED','the stamp must not read a bare COMPLETED for an unrecorded job');
 ck(jobStampText(clean)==='COMPLETED','positive control: a clean job still reads COMPLETED');
-ck(jobStamp(healed)==='VERIFIED','a job a later save recorded is a clean success again - history is not a current warning');
+ck(jobStamp(healed)==='COMPLETED','a job a later save recorded is a clean success again - history is not a current warning');
 ck(jobStampText(healed)==='COMPLETED','a recorded job must not keep saying NOT RECORDED');
 ck(jobRecordingNote(clean)==='','positive control: a clean job carries no recording note');
+// Only a job that verified something, and passed, shows VERIFIED; a failed check
+// shows that, whatever the job's status word.
+const wrOK ={...clean,id:4,kind:'write',result:{verify_ok:true}};
+const wrBad={...clean,id:5,kind:'write',result:{verify_ok:false}};
+const camp ={...clean,id:6,kind:'verify',result:{checked:3,ok:2}};
+const mir  ={...clean,id:7,kind:'verify',result:{all_ok:false}};
+const campOK={...clean,id:8,kind:'verify',result:{checked:3,ok:3}};
+ck(jobStamp(wrOK)==='VERIFIED'&&jobStampText(wrOK)==='VERIFIED','a write whose read-back matched shows VERIFIED');
+ck(jobStamp(wrBad)==='CHECKFAIL'&&jobStampText(wrBad)==='CHECK FAILED','a write whose read-back failed shows CHECK FAILED');
+ck(jobStamp(camp)==='CHECKFAIL','a verify that passed 2 of 3 shows CHECK FAILED');
+ck(jobStamp(mir)==='CHECKFAIL','a mirror verify that did not all pass shows CHECK FAILED');
+ck(jobStamp(campOK)==='VERIFIED','a verify that passed every check shows VERIFIED');
+ck(jobStamp({...wrOK,unrecorded:true})==='UNRECORDED','an unrecorded job stays UNRECORDED even if it verified');
+// An advisory check (level A or C) never counts as the last verification.
+ck(latestOKTime({verify_events:[{ok:true,at:'2026-10-01T00:00:00Z',advisory:true}]})===null,'an advisory OK check must not reset the verify-due clock');
 ck(jobRecordingNote(unrec).includes(JOB_UNRECORDED_MSG),'the unrecorded warning must be shown in plain words');
 ck(jobRecordingNote(unrec).includes('jobs.json unwritable'),'the cause must be shown with the warning');
 ck(jobRecordingNote(healed)!=='','an earlier failure must stay available as diagnostic history');
@@ -135,7 +150,7 @@ ck(jobRecordingNote(healed).includes('Recorded.'),'the history note must say the
   __routes={'GET /api/jobs':[clean],'GET /api/config':{config:{}}};
   await vJobs();
   h=__el('#view').innerHTML;
-  ck(/stamp VERIFIED/.test(h),'positive control: a clean completion must still render VERIFIED');
+  ck(/stamp COMPLETED/.test(h),'positive control: a clean completion renders the plain COMPLETED stamp');
   ck(!h.includes(JOB_UNRECORDED_MSG),'positive control: a clean completion must carry no warning');
 
   // ---- 3. the real job-detail view ----------------------------------------
@@ -149,7 +164,7 @@ ck(jobRecordingNote(healed).includes('Recorded.'),'the history note must say the
   __routes={'GET /api/jobs/3':healed,'GET /api/config':{config:{}}};
   await vJobDetail(3);
   h=__el('#view').innerHTML;
-  ck(/stamp VERIFIED/.test(h),'a recorded job must read as a clean success again');
+  ck(/stamp COMPLETED/.test(h),'a recorded job must read as a clean success again');
   ck(!h.includes(JOB_UNRECORDED_MSG),'a recorded job must stop claiming its record is absent');
   ck(h.includes('An earlier attempt to record this job failed'),'the earlier failure must remain as history');
 
@@ -275,7 +290,7 @@ ck(!/contents? (were |was )?verified|verified against|checked the (files|bytes|c
 ck(/not verified history/i.test(cNote),'the completed-but-unrecorded note must keep saying this completion is not verified history');
 
 // ---- D. recorded now, earlier failure is history only ----------------------
-ck(jobStamp(healed)==='VERIFIED','a job a later save recorded is a clean success again');
+ck(jobStamp(healed)==='COMPLETED','a job a later save recorded is a clean success again');
 ck(jobStampText(healed)==='COMPLETED','a recorded job must not be labelled NOT RECORDED');
 ck(!jobRecordingNote(healed).includes(JOB_UNRECORDED_MSG),'history is not a current warning');
 ck(jobRecordingNote(healed).includes('Recorded.'),'the history note must say the record is present now');
@@ -328,7 +343,7 @@ ck(!claimsSuccess(jobRecordingNote(interruptedUnrecSynthetic)),'SYNTHETIC: an in
   await vJobs();
   h=__el('#view').innerHTML;
   ck(!h.includes('NOT RECORDED'),'a currently-recorded job must not be labelled NOT RECORDED by its history');
-  ck(/stamp VERIFIED/.test(h),'a currently-recorded job reads as a clean success');
+  ck(/stamp COMPLETED/.test(h),'a currently-recorded job reads as a clean success');
   ck(h.includes('An earlier attempt to record this job failed'),'the earlier failure stays available as history');
 
   // ---- E, composed: terminal presentation and polling ----------------------
