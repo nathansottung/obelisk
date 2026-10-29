@@ -235,17 +235,21 @@ func (a *App) exportBagForChunks(bagBaseName string, chunks []*Chunk, outputDir 
 	if strings.TrimSpace(outputDir) == "" {
 		return nil, fmt.Errorf("output_dir required")
 	}
-	if err := a.Store.AssertOutsideSources(outputDir); err != nil {
+	// Decided by real location; every file is written beneath the folder decided
+	// about, staged and named once it reads back (see outfolder.go).
+	out, err := a.openOutFolder(outputDir)
+	if err != nil {
 		return nil, err
 	}
+	defer out.Close()
 	if progress == nil {
 		progress = func(float64, string) {}
 	}
-	bagRoot := filepath.Join(outputDir, fsSafe(bagBaseName)+"-bag")
-	dataDir := filepath.Join(bagRoot, "data")
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+	bagRel := fsSafe(bagBaseName) + "-bag"
+	if err := out.MkdirAll(bagRel + "/data"); err != nil {
 		return nil, err
 	}
+	bagRoot := out.Join(bagRel)
 
 	var manifestLines []string
 	var skipped []string
@@ -253,11 +257,7 @@ func (a *App) exportBagForChunks(bagBaseName string, chunks []*Chunk, outputDir 
 	payloadCount := 0
 
 	addFile := func(rel string, data []byte) error {
-		dst := filepath.Join(dataDir, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(dst, data, 0o644); err != nil {
+		if err := out.WriteFile(bagRel+"/data/"+rel, data, 0o644); err != nil {
 			return err
 		}
 		manifestLines = append(manifestLines, fmt.Sprintf("%s  data/%s", sha256Hex(data), bagEncodePath(rel)))
@@ -322,12 +322,12 @@ func (a *App) exportBagForChunks(bagBaseName string, chunks []*Chunk, outputDir 
 	sort.Strings(names)
 	var tm strings.Builder
 	for _, n := range names {
-		if err := os.WriteFile(filepath.Join(bagRoot, n), []byte(tagFiles[n]), 0o644); err != nil {
+		if err := out.WriteFile(bagRel+"/"+n, []byte(tagFiles[n]), 0o644); err != nil {
 			return nil, err
 		}
 		fmt.Fprintf(&tm, "%s  %s\n", sha256Hex([]byte(tagFiles[n])), bagEncodePath(n))
 	}
-	if err := os.WriteFile(filepath.Join(bagRoot, "tagmanifest-sha256.txt"), []byte(tm.String()), 0o644); err != nil {
+	if err := out.WriteFile(bagRel+"/tagmanifest-sha256.txt", []byte(tm.String()), 0o644); err != nil {
 		return nil, err
 	}
 

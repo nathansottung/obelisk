@@ -3,13 +3,12 @@ package main
 // removal.go — permanent archive removal (the guarded, catalog-only "forget"). Retire
 // is reversible and lives in the store (SetCollectionRetired); Remove is the one-way
 // door, so its guards live here in the App layer where they can be tested directly and
-// are enforced server-side, not just in the dialog. NOTHING here touches files on
-// disk — it only changes what the app remembers.
+// are enforced server-side, not just in the dialog. Apart from the optional
+// Structure Export it writes first, NOTHING here touches files on disk — it only
+// changes what the app remembers.
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -23,8 +22,8 @@ type RemoveCounts struct {
 }
 
 // writeStructureExportTo writes a fresh Structure Export (json + csv + markdown, all
-// content-free — hashes and paths only) for an archive into dir, creating dir if
-// needed. Returns the written paths. Reuses the same builder/renderers the Recovery
+// content-free — hashes and paths only) for an archive into dir, an output folder
+// decided by where it really is (see outfolder.go). Returns the written paths. Reuses the same builder/renderers the Recovery
 // Kit uses (StructureExport + StructureCSV/StructureMarkdown/exportJSON).
 func (a *App) writeStructureExportTo(collectionID int, dir string) ([]string, error) {
 	dir = strings.TrimSpace(dir)
@@ -35,9 +34,11 @@ func (a *App) writeStructureExportTo(collectionID int, dir string) ([]string, er
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("cannot write to %s: %w", dir, err)
+	out, err := a.openOutFolder(dir)
+	if err != nil {
+		return nil, err
 	}
+	defer out.Close()
 	base := "STRUCTURE-" + safeName(exp.Archive) + "-" + time.Now().UTC().Format("20060102-150405")
 	writes := []struct {
 		name string
@@ -49,11 +50,10 @@ func (a *App) writeStructureExportTo(collectionID int, dir string) ([]string, er
 	}
 	var paths []string
 	for _, wr := range writes {
-		p := filepath.Join(dir, wr.name)
-		if err := os.WriteFile(p, wr.data, 0o644); err != nil {
+		if err := out.WriteFile(wr.name, wr.data, 0o644); err != nil {
 			return paths, fmt.Errorf("writing %s: %w", wr.name, err)
 		}
-		paths = append(paths, p)
+		paths = append(paths, out.Join(wr.name))
 	}
 	a.Store.Log("structure-export", fmt.Sprintf("%s: saved %d-file structure export to %s", exp.Archive, len(exp.Files), dir))
 	return paths, nil

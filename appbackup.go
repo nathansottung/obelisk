@@ -22,6 +22,8 @@ package main
 
 import (
 	"archive/tar"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -158,10 +160,22 @@ func (a *App) gatherMembers(includeKeys bool) ([]rawMember, error) {
 	return members, nil
 }
 
-// exportAppBackupTo writes the bundle to exactly tarPath (+ .sha256 sidecar). Core
-// used by both the manual export (dated filename) and the auto-export ticker
-// (per-period filename). The write is atomic (temp + rename).
+// exportAppBackupTo writes the bundle to exactly tarPath (+ .sha256 sidecar),
+// through an output folder opened on tarPath's folder (see exportAppBackupInto).
 func (a *App) exportAppBackupTo(tarPath string, includeKeys bool) (ExportResult, error) {
+	out, err := a.openOutFolder(filepath.Dir(tarPath))
+	if err != nil {
+		return ExportResult{}, err
+	}
+	defer out.Close()
+	return a.exportAppBackupInto(out, filepath.Base(tarPath), includeKeys)
+}
+
+// exportAppBackupInto writes the bundle as name (+ name.sha256) in out. Core used
+// by both the manual export (dated filename) and the auto-export ticker
+// (per-period filename). The bundle is staged in a new file and named only once
+// it reads back as written.
+func (a *App) exportAppBackupInto(out *outFolder, name string, includeKeys bool) (ExportResult, error) {
 	members, err := a.gatherMembers(includeKeys)
 	if err != nil {
 		return ExportResult{}, err
@@ -194,19 +208,16 @@ func (a *App) exportAppBackupTo(tarPath string, includeKeys bool) (ExportResult,
 		return ExportResult{}, err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(tarPath), 0o755); err != nil {
-		return ExportResult{}, err
-	}
 	perm := os.FileMode(0o644)
 	if includeKeys {
 		perm = 0o600 // carries keystores: owner-only
 	}
-	f, err := createStage(tarPath, perm)
+	tmp, f, err := out.Create(name)
 	if err != nil {
 		return ExportResult{}, err
 	}
-	tmp := f.Name()
-	tw := tar.NewWriter(f)
+	h := sha256.New()
+	tw := tar.NewWriter(io.MultiWriter(f, h))
 	now := time.Now().UTC()
 	// MANIFEST.json first, then every gathered member.
 	write := func(name string, data []byte) error {
@@ -228,35 +239,27 @@ func (a *App) exportAppBackupTo(tarPath string, includeKeys bool) (ExportResult,
 	} else {
 		_ = tw.Close()
 	}
-	if cerr := f.Close(); writeErr == nil {
-		writeErr = cerr
-	}
 	if writeErr != nil {
-		_ = os.Remove(tmp)
+		out.Discard(tmp)
 		return ExportResult{}, writeErr
 	}
-	if err := atomicRename(tmp, tarPath); err != nil {
-		_ = os.Remove(tmp)
+	sum := hex.EncodeToString(h.Sum(nil))
+	if err := out.Commit(tmp, name, perm, sum); err != nil {
 		return ExportResult{}, err
 	}
 
 	// Whole-tar sidecar: <tar>.sha256, "  <sha>  <basename>\n" (sha256sum format).
-	sum, err := hashFileHex(tarPath)
-	if err != nil {
-		return ExportResult{}, err
-	}
-	sidecar := tarPath + ".sha256"
-	if err := os.WriteFile(sidecar, []byte(fmt.Sprintf("%s  %s\n", sum, filepath.Base(tarPath))), 0o644); err != nil {
+	sidecar := name + ".sha256"
+	if err := out.WriteFile(sidecar, []byte(fmt.Sprintf("%s  %s\n", sum, name)), 0o644); err != nil {
 		return ExportResult{}, err
 	}
 
-	fi, _ := os.Stat(tarPath)
 	var size int64
-	if fi != nil {
+	if fi, err := out.Stat(name); err == nil {
 		size = fi.Size()
 	}
 	return ExportResult{
-		TarPath: tarPath, SidecarPath: sidecar, Bytes: size,
+		TarPath: out.Join(name), SidecarPath: out.Join(sidecar), Bytes: size,
 		MemberCount: len(members) + 1, IncludesKeys: includeKeys, SchemaVersion: schemaVer,
 	}, nil
 }
@@ -271,11 +274,14 @@ func (a *App) ExportAppBackup(destDir string, includeKeys bool) (ExportResult, e
 	if strings.TrimSpace(destDir) == "" {
 		return ExportResult{}, fmt.Errorf("a destination folder is required")
 	}
-	// Same source-safety invariant as staging/keystores: never write into source data.
-	if err := a.Store.AssertOutsideSources(destDir); err != nil {
+	// Never into source data: the folder is decided by real location and the
+	// bundle written beneath it.
+	out, err := a.openOutFolder(destDir)
+	if err != nil {
 		return ExportResult{}, err
 	}
-	return a.exportAppBackupTo(filepath.Join(destDir, appBackupBaseName(time.Now())), includeKeys)
+	defer out.Close()
+	return a.exportAppBackupInto(out, appBackupBaseName(time.Now()), includeKeys)
 }
 
 // ---- restore -------------------------------------------------------------
@@ -633,14 +639,33 @@ func (a *App) maybeAutoExport(now time.Time) error {
 	if !on {
 		return nil
 	}
-	target := filepath.Join(dir, name)
-	if _, err := os.Stat(target); err == nil {
-		return nil // already written this period
+	// Already written this period: nothing to do, and the folder is not opened,
+	// so the run neither waits on another write to that drive nor asks anything.
+	if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+		return nil
 	}
-	if err := a.Store.AssertOutsideSources(dir); err != nil {
+	err := a.autoExportInto(dir, name)
+	if err != nil {
+		// Into the event log once per period and reason, so it shows in the app.
+		if key := name + " " + err.Error(); key != a.autoExportFailed {
+			a.autoExportFailed = key
+			a.Store.Log("appbackup", fmt.Sprintf("automatic app backup into %s failed: %v", dir, err))
+		}
+	}
+	return err
+}
+
+// autoExportInto writes this period's automatic app backup as name in dir.
+func (a *App) autoExportInto(dir, name string) error {
+	out, err := a.openOutFolder(dir)
+	if err != nil {
 		return err
 	}
-	_, err := a.exportAppBackupTo(target, false)
+	defer out.Close()
+	if _, err := out.Stat(name); err == nil {
+		return nil // written a moment ago
+	}
+	_, err = a.exportAppBackupInto(out, name, false)
 	return err
 }
 

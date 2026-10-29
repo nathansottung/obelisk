@@ -1604,7 +1604,8 @@ function rmToggle(name,guarded){const b=$('#rm_go');if(!b)return;const typed=(((
 async function rmPickExport(id,name){
   pickFolder('',async p=>{
     if(!p)return;
-    try{await api('POST','/api/collections/'+id+'/structure-export-save',{dir:p});
+    try{if(!(await destGate(p)))return;
+      await api('POST','/api/collections/'+id+'/structure-export-save',{dir:p});
       _rmExportDir=p;const el=$('#rm_exp');if(el)el.value=p;
       toast('Structure Export saved ✓');rmToggle(name,true);
     }catch(e){toast(e.message,1);}
@@ -2138,6 +2139,7 @@ function bagExportDlg(id,name){dlg(`<h1>Export a BagIt bag — “${esc(name)}�
   <input id="d1" class="full" placeholder="D:\\exports or /mnt/handoff">${browseBtn('d1')}
   <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Export bag</button></div>`,
   async()=>{const p=$('#d1').value.trim();if(!p)return;
+    if(!(await destGate(p)))throw new Error('Nothing exported: choose what to do about '+p+' first');
     await api('POST',`/api/collections/${id}/bagit-export`,{output_dir:p});toast('BagIt export started — see Jobs');loc('jobs')});}
 function scanDlg(id,name){dlg(`<h1>Scan into “${esc(name)}”</h1>
   <label>Folder to catalog (walked recursively; every file SHA-256 hashed)</label>
@@ -2234,6 +2236,7 @@ function bagPackageDlg(id,name){dlg(`<h1>Export “${esc(name)}” as a BagIt ba
   <input id="d1" class="full" placeholder="D:\\exports or /mnt/handoff">${browseBtn('d1')}
   <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Export bag</button></div>`,
   async()=>{const p=$('#d1').value.trim();if(!p)return;
+    if(!(await destGate(p)))throw new Error('Nothing exported: choose what to do about '+p+' first');
     await api('POST',`/api/chunks/${id}/bagit-export`,{output_dir:p});toast('BagIt export started — see Jobs');loc('jobs')});}
 async function spanWriteDlg(id,name){
   const [c,vols]=await Promise.all([api('GET','/api/chunks/'+id),api('GET','/api/volumes')]);
@@ -2250,6 +2253,7 @@ async function spanWriteDlg(id,name){
     <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Write + verify this segment</button></div>`,
   async()=>{const d=$('#d1').value.trim();if(!d)return;
     const body={dest_dir:d,throttle_mbps:parseFloat($('#d5').value)||0};Object.assign(body,volChoice());
+    if(!(await destGate(d)))throw new Error('Nothing written: choose what to do about '+d+' first');
     await api('POST',`/api/chunks/${id}/span-write`,body);
     toast('Segment write started — see Jobs. When it verifies, eject & label the tape, mount the next, then click again.',1);loc('jobs')})}
 async function doBuild(id){
@@ -2280,6 +2284,7 @@ async function writeDlg(id,name,payload){
   async()=>{const d=$('#d1').value.trim();if(!d)return;
     const body={dest_dir:d,buffer_gb:parseFloat($('#d2').value)||0,block_mb:parseInt($('#d4').value)||0,throttle_mbps:parseFloat($('#d5').value)||0};
     Object.assign(body,volChoice());
+    if(!(await destGate(d)))throw new Error('Nothing written: choose what to do about '+d+' first');
     await api('POST',`/api/chunks/${id}/write`,body);
     toast('Write started — see Jobs');loc('jobs')});}
 let destT;function checkDest(id){clearTimeout(destT);destT=setTimeout(async()=>{
@@ -2394,7 +2399,11 @@ function copiesLine(c,volmap){const cur=currentCopies(c);const sup=(c.copies||[]
   if(sup.length)h+=`<div class="dim" style="font-size:10.5px;opacity:.65">superseded: ${sup.map(cp=>{const v=volmap[cp.volume_id]||{};return esc(v.label||'vol#'+cp.volume_id)+' '+copyMark(cp.verify_ok)}).join(' · ')}</div>`;
   return h}
 async function doRewriteCopy(id,vol,label){
-  try{if(!(await confirmDestructive('rewrite-copy',{id:Number(id),volume_id:Number(vol)})))return;
+  try{const c=await api('GET','/api/chunks/'+id);
+    const cp=(c.copies||[]).find(x=>x.volume_id===Number(vol)&&!x.superseded);
+    const dir=cp&&cp.path?cp.path.replace(/[\\/][^\\/]*[\\/]?$/,''):'';
+    if(dir&&!(await destGate(dir)))return;
+    if(!(await confirmDestructive('rewrite-copy',{id:Number(id),volume_id:Number(vol)})))return;
     toast('Re-write started — see Jobs. When it verifies, the copy is protected again.');loc('jobs')}catch(e){toast(e.message,1)}}
 
 function volPicker(vols){
@@ -2712,7 +2721,8 @@ async function doFinalize(id,force){
   const mp=$('#fz_mount').value.trim();if(!mp){toast('Mounted path required',1);return}
   const body={mount_path:mp,by:$('#fz_by').value.trim()};
   if(force){body.force=true;body.force_reason=$('#fz_reason').value.trim()}
-  try{const r=await api('POST',`/api/volumes/${id}/finalize`,body);
+  try{if(!(await destGate(mp)))return;
+    const r=await api('POST',`/api/volumes/${id}/finalize`,body);
     if(r.blocked){toast('Preconditions not met — see the checks',1);return}
     const d=$('#dlg');if(d)d.close();
     toast(force?'Volume force-sealed (audit-logged) — opening label':'Volume sealed ✓ — opening label');
@@ -2879,6 +2889,7 @@ function recoveryKitDlg(){dlg(`<h1>Export Recovery Kit</h1>
   <input id="d1" class="full" placeholder="E:\\safe or /mnt/vault/recovery">${browseBtn('d1')}
   <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Generate</button></div>`,
   async()=>{const d=$('#d1').value.trim();if(!d)return;
+    if(!(await destGate(d)))throw new Error('No kit written: choose what to do about '+d+' first');
     const r=await api('POST','/api/recoverykit',{output_dir:d});
     toast('Recovery Kit generating — see Jobs. '+(r.warning||''),1);loc('jobs');
     // Show-the-artifact rule: when the job finishes, surface the kit itself.
@@ -3948,7 +3959,11 @@ async function saveCfg(){
     if(w!=='Confirm'){toast('Burn command not changed: type Confirm to change it',1);return}
     body.burn_command_confirm=w;}}
   put('burn_ecc_device',gt('beccd'));put('burn_ecc_carry',gc('becccarry'));put('optical_ecc',gc('oecc'));
-  try{await api('PUT','/api/config',body);toast('Settings saved');lamp();vSettings();}catch(e){toast(e.message,1)}
+  // The automatic app backup runs unattended, so anything to decide about a new
+  // folder for it (create it, or a choice about who can change it) is asked now.
+  const aedEl=$('#aed');
+  try{if(body.auto_export_dir&&aedEl&&aedEl.value.trim()!==aedEl.defaultValue.trim()&&!(await destGate(body.auto_export_dir))){toast('Settings not saved: choose what to do about '+body.auto_export_dir+' first',1);return}
+    await api('PUT','/api/config',body);toast('Settings saved');lamp();vSettings();}catch(e){toast(e.message,1)}
 }
 
 /* ---- folder picker: a read-only server-side browser on every path field ----
@@ -4013,6 +4028,7 @@ function appBackupDlg(){
     const dest=(($('#abdest')||{}).value||'').trim();if(!dest){toast('Destination folder required',1);throw new Error('dest')}
     const keys=!!($('#abkeys')&&$('#abkeys').checked);
     if(keys&&!confirm('Include your encryption keystores (secrets) in this backup? Anyone with the file could decrypt your archives. Only continue for a backup you will keep private.'))throw new Error('cancelled');
+    if(!(await destGate(dest)))throw new Error('No backup written: choose what to do about '+dest+' first');
     await api('POST','/api/appbackup/export',{dest_dir:dest,include_keys:keys});
     toast('Backup started — see Jobs for the file it writes',1);loc('jobs');
   });

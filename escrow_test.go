@@ -209,7 +209,7 @@ func TestSidecarEscrowBudgetsHonestly(t *testing.T) {
 
 	// Not enough free space → skipped gracefully, nothing written, honest note.
 	tight := t.TempDir()
-	note := a.writeSidecarEscrow(tight, Census{}, est/2, cfg)
+	note := sidecarEscrowInto(t, a, tight, Census{}, est/2, cfg)
 	if !strings.Contains(strings.ToLower(note), "skip") {
 		t.Errorf("tight medium should be skipped, note: %q", note)
 	}
@@ -219,7 +219,7 @@ func TestSidecarEscrowBudgetsHonestly(t *testing.T) {
 
 	// Plenty of room → written, note says so, files exist.
 	roomy := t.TempDir()
-	note = a.writeSidecarEscrow(roomy, Census{}, est+10*1000*1000*1000, cfg)
+	note = sidecarEscrowInto(t, a, roomy, Census{}, est+10*1000*1000*1000, cfg)
 	if !strings.Contains(note, "Wrote") {
 		t.Errorf("roomy medium should write the bundle, note: %q", note)
 	}
@@ -227,7 +227,7 @@ func TestSidecarEscrowBudgetsHonestly(t *testing.T) {
 
 	// Unknown free space (0) → skipped, not risked.
 	unk := t.TempDir()
-	note = a.writeSidecarEscrow(unk, Census{}, 0, cfg)
+	note = sidecarEscrowInto(t, a, unk, Census{}, 0, cfg)
 	if !strings.Contains(strings.ToLower(note), "skip") {
 		t.Errorf("unknown free space should be skipped, note: %q", note)
 	}
@@ -235,7 +235,7 @@ func TestSidecarEscrowBudgetsHonestly(t *testing.T) {
 	// Policy off → clear note, no write.
 	offCfg := cfg
 	offCfg.EscrowOnMedia = EscrowOff
-	note = a.writeSidecarEscrow(t.TempDir(), Census{}, est*100, offCfg)
+	note = sidecarEscrowInto(t, a, t.TempDir(), Census{}, est*100, offCfg)
 	if !strings.Contains(strings.ToLower(note), "off") {
 		t.Errorf("off policy note should mention off, got %q", note)
 	}
@@ -310,4 +310,15 @@ func verifySums(t *testing.T, root string) {
 	if lines == 0 {
 		t.Error("SHA-256SUMS is empty")
 	}
+}
+
+// sidecarEscrowInto runs writeSidecarEscrow with dir as the sidecar folder.
+func sidecarEscrowInto(t *testing.T, a *App, dir string, census Census, freeBytes int64, cfg Config) string {
+	t.Helper()
+	out, err := a.openOutFolder(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+	return a.writeSidecarEscrow(out, "", census, freeBytes, cfg)
 }

@@ -31,9 +31,13 @@ package main
 // to ONE SPECIFIC DIRECTORY OBJECT. It does not prove that object is the volume,
 // session or removable medium the operator chose.
 //
-// SCOPE. Only MirrorToVolume and mirror-mode BackupChanges (with their shared leaf
-// copy and inventory sidecar) use this boundary so far. Every other writer still
-// uses AssertOutsideSources.
+// SCOPE. Mirrors, mirror-mode BackupChanges, plan execution and restores use this
+// boundary directly; package and span writes, seal sidecars, BagIt and structure
+// exports, the recovery kit, escrow bundles and app-backup exports use it through
+// an output folder (outfolder.go). Folders written by path or by external tools
+// (staging, the escrow cache, keystores, the auto-export folder) and docked drives
+// are held to its source check (CheckOutsideSources, CheckFileOutsideSources). No
+// writer uses AssertOutsideSources.
 
 import (
 	"crypto/rand"
@@ -379,9 +383,9 @@ func (s *Store) CheckOutsideSources(path string) error {
 	if err != nil {
 		return err
 	}
-	canon := canonicalOfMissing(abs)
-	if canon == "" {
-		return fmt.Errorf("refusing: could not establish the real location of %s", path)
+	canon, vol, err := sourceCheckLocation(abs, path)
+	if err != nil {
+		return err
 	}
 	snap, err := s.sourceSnapshot()
 	if err != nil {
@@ -390,10 +394,62 @@ func (s *Store) CheckOutsideSources(path string) error {
 	if err := snap.decide(canon, path); err != nil {
 		return err
 	}
-	vol := ""
-	if ancestor, _, err := deepestExistingDir(abs); err == nil {
-		vol = pathVolumeID(ancestor)
+	if err := snap.decideOffline(vol, abs, canon, path); err != nil {
+		return err
 	}
+	return snap.decideCreate(abs, path)
+}
+
+// sourceCheckLocation is where abs really is, for a source check: its deepest
+// existing folder read back from a handle with the missing names below it, and
+// that folder's volume. When no folder of abs exists at all (its drive is not
+// attached, or a share is offline) there is nothing to resolve: abs itself is
+// returned with no volume, so it is compared by path, which is all that can
+// matter. An attached source cannot hold a folder on a drive that is not there,
+// and sources whose drive is away are compared by their registered paths.
+func sourceCheckLocation(abs, display string) (canon, vol string, err error) {
+	ancestor, _, derr := deepestExistingDir(abs)
+	if errors.Is(derr, errNoExistingParent) {
+		return abs, "", nil
+	}
+	canon = canonicalOfMissing(abs)
+	if derr != nil || canon == "" {
+		return "", "", fmt.Errorf("refusing: could not establish the real location of %s", display)
+	}
+	return canon, pathVolumeID(ancestor), nil
+}
+
+// CheckFileOutsideSources is CheckOutsideSources for a file written by path (a
+// keystore): it refuses a file that is a registered source or is inside one,
+// deciding on the real location of the file's folder. A folder that holds a
+// source may also hold the file, so that direction is not refused.
+func (s *Store) CheckFileOutsideSources(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("no file given")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	dir, vol, err := sourceCheckLocation(filepath.Dir(abs), path)
+	if err != nil {
+		return err
+	}
+	canon := filepath.Join(dir, filepath.Base(abs))
+	snap, err := s.sourceSnapshot()
+	if err != nil {
+		return err
+	}
+	d := normPath(canon)
+	for _, src := range snap.srcs {
+		if src.offline {
+			continue
+		}
+		if r := normPath(src.canonical); r == "" || r == d || canonicalWithin(r, d) {
+			return overlapError(d, r, path, canon, src.registered)
+		}
+	}
+	// Sources whose drive is away, or attached somewhere else, as for a folder.
 	if err := snap.decideOffline(vol, abs, canon, path); err != nil {
 		return err
 	}

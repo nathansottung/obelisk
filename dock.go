@@ -12,9 +12,9 @@ package main
 //   results → "DONE — safe to eject. Insert the next drive."
 //
 // It is strictly READ-ONLY toward sources: the archive folders on the NAS are
-// only ever hashed for comparison. The only writes are to the catalog and, via
-// the AssertOutsideSources guard, the docked drive's own sidecar — never a
-// source path. A drive is identified by its physical serial, so re-inserting one
+// only ever hashed for comparison, and a docked drive that is (by where it
+// really is) a source, inside one or holding one is refused (CheckOutsideSources).
+// The only writes are to the catalog. A drive is identified by its physical serial, so re-inserting one
 // already processed is recognized and offered as a re-verify, not a re-adopt.
 
 import (
@@ -162,6 +162,11 @@ func (a *App) IngestDrive(sessionID int, mountPath, serial, label, mode, level s
 	if fi, err := os.Stat(mountPath); err != nil || !fi.IsDir() {
 		return nil, fmt.Errorf("cannot read docked drive %s", mountPath)
 	}
+	// A registered source is never a docked drive, by where it really is: checked
+	// before any volume is registered.
+	if err := a.Store.CheckOutsideSources(mountPath); err != nil {
+		return nil, err
+	}
 	// Batch catalog writes across the ingest (idempotent: matched by content hash).
 	a.Store.BeginBatch()
 	defer endBatchInto(a.Store, &err)
@@ -286,7 +291,7 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 	// Source-safety: refuse to treat a registered source folder as a docked drive.
 	// (We no longer write to the drive at all, but adopting a NAS source AS a drive
 	// would double-count it and is never intended — read-only or not.)
-	if err := a.Store.AssertOutsideSources(mountPath); err != nil {
+	if err := a.Store.CheckOutsideSources(mountPath); err != nil {
 		return nil, err
 	}
 	reg := a.formatRegistry() // extension → sustainability tier + workflow role

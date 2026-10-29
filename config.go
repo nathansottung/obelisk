@@ -264,24 +264,26 @@ func (a *App) SaveConfig(in map[string]any) (Config, error) {
 
 // checkConfigPaths is the save-time check of the folders a configuration writes
 // into: the staging folder, keystores, the auto-export folder and the escrow
-// cache must each be outside every source registered in store. SaveConfig and
-// app-backup restore both apply it.
+// cache must each be outside every source registered in store, decided by where
+// they really are (the destination guard's source check). A keystore is a file,
+// so it may sit in a folder that also holds a source. SaveConfig and app-backup
+// restore both apply it.
 func checkConfigPaths(cfg Config, store *Store) error {
-	if err := store.AssertOutsideSources(cfg.StagingDir); err != nil {
-		return err
+	if strings.TrimSpace(cfg.StagingDir) != "" {
+		if err := store.CheckOutsideSources(cfg.StagingDir); err != nil {
+			return fmt.Errorf("staging_dir: %w", err)
+		}
 	}
 	for _, p := range cfg.KeystorePaths {
-		if err := store.AssertOutsideSources(p); err != nil {
-			return err
+		if err := store.CheckFileOutsideSources(p); err != nil {
+			return fmt.Errorf("keystore_paths: %w", err)
 		}
 	}
-	if cfg.AutoExportDir != "" {
-		if err := store.AssertOutsideSources(cfg.AutoExportDir); err != nil {
-			return err
+	if strings.TrimSpace(cfg.AutoExportDir) != "" {
+		if err := store.CheckOutsideSources(cfg.AutoExportDir); err != nil {
+			return fmt.Errorf("auto_export_dir: %w", err)
 		}
 	}
-	// The escrow cache is written by fetches, so it is held to the destination
-	// guard's source check (by real location).
 	if strings.TrimSpace(cfg.EscrowCacheDir) != "" {
 		if err := store.CheckOutsideSources(cfg.EscrowCacheDir); err != nil {
 			return fmt.Errorf("escrow_cache_dir: %w", err)

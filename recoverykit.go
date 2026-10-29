@@ -12,8 +12,6 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -39,14 +37,19 @@ func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string))
 		return nil, fmt.Errorf("output_dir required")
 	}
 	// The kit (with its secret QR cards) is WRITTEN here — never into source data.
-	if err := a.Store.AssertOutsideSources(outputDir); err != nil {
+	// The folder is decided by real location and every file is written beneath
+	// it, staged and named once it reads back (see outfolder.go).
+	out, err := a.openOutFolder(outputDir)
+	if err != nil {
 		return nil, err
 	}
-	kit := filepath.Join(outputDir, "obelisk-recovery-kit")
-	keysDir := filepath.Join(kit, "keys")
-	if err := os.MkdirAll(keysDir, 0o755); err != nil {
+	defer out.Close()
+	const kitRel = "obelisk-recovery-kit"
+	const keysRel = kitRel + "/keys"
+	if err := out.MkdirAll(keysRel); err != nil {
 		return nil, err
 	}
+	kit := out.Join(kitRel)
 
 	chunks := a.Store.Chunks(0)
 	keys := a.Store.KeyMetas()
@@ -58,24 +61,24 @@ func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string))
 
 	progress(0.15, "inventory")
 	inventory := mediaInventoryMD(chunks, volm) + a.retainedVersionsMD()
-	if err := os.WriteFile(filepath.Join(kit, "MEDIA_INVENTORY.md"), []byte(inventory), 0o644); err != nil {
+	if err := out.WriteFile(kitRel+"/"+"MEDIA_INVENTORY.md", []byte(inventory), 0o644); err != nil {
 		return nil, err
 	}
 
 	progress(0.35, "readme")
-	if err := os.WriteFile(filepath.Join(kit, "README_RECOVERY.md"), []byte(recoveryReadmeMD(len(chunks), len(keys))), 0o644); err != nil {
+	if err := out.WriteFile(kitRel+"/"+"README_RECOVERY.md", []byte(recoveryReadmeMD(len(chunks), len(keys))), 0o644); err != nil {
 		return nil, err
 	}
 
 	progress(0.55, "runbook")
-	if err := os.WriteFile(filepath.Join(kit, "RESTORE_RUNBOOK.md"), restoreRunbook, 0o644); err != nil {
+	if err := out.WriteFile(kitRel+"/"+"RESTORE_RUNBOOK.md", restoreRunbook, 0o644); err != nil {
 		return nil, err
 	}
 
 	// Format sustainability: what formats these archives hold and how to read
 	// them — so "which tools open a .NEF in 2050?" travels with the kit.
 	progress(0.62, "format census")
-	if err := os.WriteFile(filepath.Join(kit, "FORMATS.md"), []byte(formatCensusMD(a.FormatCensus(0))), 0o644); err != nil {
+	if err := out.WriteFile(kitRel+"/"+"FORMATS.md", []byte(formatCensusMD(a.FormatCensus(0))), 0o644); err != nil {
 		return nil, err
 	}
 
@@ -93,19 +96,19 @@ func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string))
 		// trust an incomplete kit. So a failed structure-companion write FAILS the kit
 		// job (logged too, for the event trail), rather than producing a partial kit.
 		fn := "STRUCTURE-" + safeName(c.Name) + ".md"
-		if err := os.WriteFile(filepath.Join(kit, fn), []byte(StructureMarkdown(exp)), 0o644); err != nil {
+		if err := out.WriteFile(kitRel+"/"+fn, []byte(StructureMarkdown(exp)), 0o644); err != nil {
 			a.Store.Log("recoverykit", "structure companion write failed: "+err.Error())
 			return nil, fmt.Errorf("writing recovery kit member %s: %w", fn, err)
 		}
 		structDocs = append(structDocs, fn)
 		// The machine-readable twins ride along too (re-importable on a fresh machine).
 		jn := "STRUCTURE-" + safeName(c.Name) + ".json"
-		if err := os.WriteFile(filepath.Join(kit, jn), exportJSON(exp), 0o644); err != nil {
+		if err := out.WriteFile(kitRel+"/"+jn, exportJSON(exp), 0o644); err != nil {
 			a.Store.Log("recoverykit", "structure companion write failed: "+err.Error())
 			return nil, fmt.Errorf("writing recovery kit member %s: %w", jn, err)
 		}
 		cn := "STRUCTURE-" + safeName(c.Name) + ".csv"
-		if err := os.WriteFile(filepath.Join(kit, cn), StructureCSV(exp), 0o644); err != nil {
+		if err := out.WriteFile(kitRel+"/"+cn, StructureCSV(exp), 0o644); err != nil {
 			a.Store.Log("recoverykit", "structure companion write failed: "+err.Error())
 			return nil, fmt.Errorf("writing recovery kit member %s: %w", cn, err)
 		}
@@ -117,7 +120,7 @@ func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string))
 	// means a smaller bundle plus a recorded note.
 	progress(0.66, "escrow bundle")
 	escrowPlan := a.planEscrow(EscrowFull, cfg.EscrowIncludeReaders, a.FormatCensus(0), cfg)
-	escrowSummary, escErr := a.WriteEscrowBundle(kit, escrowPlan, func(f float64, m string) { progress(0.66+0.02*f, m) })
+	escrowSummary, escErr := a.writeEscrowBundleTo(out, kitRel, escrowPlan, func(f float64, m string) { progress(0.66+0.02*f, m) })
 	if escErr != nil {
 		warnings = append(warnings, "escrow bundle: "+escErr.Error())
 	} else if escrowPlan.MissingCount > 0 {
@@ -139,7 +142,7 @@ func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string))
 			"KEYS.html key page (QR + typable grid, one key per printed page), and your\n"+
 			"keystore files. QR and typed forms carry the SAME secret.\n",
 			k.Ref, k.Fingerprint, k.Note, k.Ref)
-		if err := writeSecretFile(filepath.Join(keysDir, k.Ref+".txt"), []byte(card)); err != nil {
+		if err := out.WriteFile(keysRel+"/"+k.Ref+".txt", []byte(card), 0o600); err != nil {
 			return nil, err
 		}
 		pass, err := a.Passphrase(k.Ref)
@@ -152,12 +155,12 @@ func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string))
 			warnings = append(warnings, fmt.Sprintf("key %s: QR encode failed (%v)", k.Ref, err))
 			continue
 		}
-		if err := writeSecretFile(filepath.Join(keysDir, k.Ref+".png"), png); err != nil {
+		if err := out.WriteFile(keysRel+"/"+k.Ref+".png", png, 0o600); err != nil {
 			return nil, err
 		}
 		// Typable key sheet — same secret as the QR, no scanner required.
-		if err := writeSecretFile(filepath.Join(keysDir, k.Ref+".sheet.txt"),
-			[]byte(keySheet(k.Ref, k.Note, k.Fingerprint, pass))); err != nil {
+		if err := out.WriteFile(keysRel+"/"+k.Ref+".sheet.txt",
+			[]byte(keySheet(k.Ref, k.Note, k.Fingerprint, pass)), 0o600); err != nil {
 			return nil, err
 		}
 		// Printable page — QR and the typable grid together, one key per page.
@@ -168,8 +171,8 @@ func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string))
 	}
 	// One printable document, one key per page: open in a browser and print.
 	if len(keyPages) > 0 {
-		if err := writeSecretFile(filepath.Join(keysDir, "KEYS.html"),
-			[]byte(keyPagesDocument(strings.Join(keyPages, "\n")))); err != nil {
+		if err := out.WriteFile(keysRel+"/KEYS.html",
+			[]byte(keyPagesDocument(strings.Join(keyPages, "\n"))), 0o600); err != nil {
 			return nil, err
 		}
 	}

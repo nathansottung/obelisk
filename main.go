@@ -366,6 +366,16 @@ func destinationGate(w http.ResponseWriter, app *App, dest string) bool {
 	return true
 }
 
+// outFolderGate is destinationGate for a writer's output folder (see
+// openOutFolder). Where the destination guard is not available the job checks the
+// folder by real location itself, so there is nothing to ask here.
+func outFolderGate(w http.ResponseWriter, app *App, dest string) bool {
+	if !destGuardAvailable {
+		return true
+	}
+	return destinationGate(w, app, dest)
+}
+
 // restoreGate is destinationGate for a restore's output folder. Where the
 // destination guard is not available, a restore may only go into a new folder,
 // so that is checked instead (the job checks it again and creates the folder).
@@ -817,6 +827,9 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("dest_dir (a destination folder) required"))
 			return
 		}
+		if !outFolderGate(w, app, dest) {
+			return
+		}
 		includeKeys := bl(b, "include_keys")
 		startedOn(w).write(runJob(app, "appbackup", "Back up app records → "+dest, func(p func(float64, string)) (map[string]any, error) {
 			p(0.1, "gathering records")
@@ -1008,7 +1021,11 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("archive not found"))
 			return
 		}
-		paths, err := app.writeStructureExportTo(id, s(body(r), "dir"))
+		dir := s(body(r), "dir")
+		if strings.TrimSpace(dir) != "" && !outFolderGate(w, app, dir) {
+			return
+		}
+		paths, err := app.writeStructureExportTo(id, dir)
 		if err != nil {
 			jsonErr(w, 400, err)
 			return
@@ -1962,6 +1979,9 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("output_dir required"))
 			return
 		}
+		if !outFolderGate(w, app, out) {
+			return
+		}
 		startedOn(w).write(runJob(app, "bagit-export", "BagIt export → "+out, func(p func(float64, string)) (map[string]any, error) {
 			return app.ExportBag(id, out, p)
 		}))
@@ -1976,6 +1996,9 @@ func api(mux *http.ServeMux, app *App) {
 		out := s(body(r), "output_dir")
 		if out == "" {
 			jsonErr(w, 400, fmt.Errorf("output_dir required"))
+			return
+		}
+		if !outFolderGate(w, app, out) {
 			return
 		}
 		startedOn(w).write(runJob(app, "bagit-export", "BagIt export → "+out, func(p func(float64, string)) (map[string]any, error) {
@@ -2061,6 +2084,9 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 409, err)
 			return
 		}
+		if !outFolderGate(w, app, dest) {
+			return
+		}
 		startedOn(w).write(runJob(app, "write", "Write "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {
 			return app.WriteChunk(id, dest, f(b, "buffer_gb"), int(f(b, "block_mb")), f(b, "throttle_mbps"), vol, p)
 		}))
@@ -2086,6 +2112,9 @@ func api(mux *http.ServeMux, app *App) {
 		vol := resolveVolume(app, b)
 		if err := sealGuard(app, vol); err != nil {
 			jsonErr(w, 409, err)
+			return
+		}
+		if !outFolderGate(w, app, dest) {
 			return
 		}
 		startedOn(w).write(runJob(app, "write", "Span-write next segment of "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {
@@ -2301,6 +2330,9 @@ func api(mux *http.ServeMux, app *App) {
 		out := s(body(r), "output_dir")
 		if out == "" {
 			jsonErr(w, 400, fmt.Errorf("output_dir required"))
+			return
+		}
+		if !outFolderGate(w, app, out) {
 			return
 		}
 		resp, jerr := runJob(app, "recoverykit", "Recovery Kit → "+out, func(p func(float64, string)) (map[string]any, error) {
@@ -2728,6 +2760,9 @@ func api(mux *http.ServeMux, app *App) {
 			return
 		}
 		b := body(r)
+		if mp := s(b, "mount_path"); strings.TrimSpace(mp) != "" && !outFolderGate(w, app, mp) {
+			return
+		}
 		res, err := app.FinalizeVolume(v, s(b, "mount_path"), s(b, "by"), bl(b, "force"), s(b, "force_reason"))
 		if err != nil {
 			jsonErr(w, 400, err)

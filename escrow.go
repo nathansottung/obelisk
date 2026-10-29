@@ -42,6 +42,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -340,12 +341,23 @@ func (a *App) WriteEscrowBundle(destDir string, plan EscrowPlan, progress func(f
 	if plan.Skipped || plan.Mode == EscrowOff {
 		return map[string]any{"skipped": true, "reason": "escrow_on_media=off"}, nil
 	}
-	// Decided by real location: never a source, inside one or holding one.
-	if err := a.Store.CheckOutsideSources(destDir); err != nil {
+	// Decided by real location and written beneath the folder decided about.
+	out, err := a.openOutFolder(destDir)
+	if err != nil {
 		return nil, err
 	}
-	root := filepath.Join(destDir, escrowBundleDir)
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	defer out.Close()
+	return a.writeEscrowBundleTo(out, "", plan, progress)
+}
+
+// writeEscrowBundleTo is WriteEscrowBundle into base/escrow-bundle inside out,
+// an output folder the caller already holds (the seal sidecar, the recovery kit).
+func (a *App) writeEscrowBundleTo(out *outFolder, base string, plan EscrowPlan, progress func(float64, string)) (map[string]any, error) {
+	if plan.Skipped || plan.Mode == EscrowOff {
+		return map[string]any{"skipped": true, "reason": "escrow_on_media=off"}, nil
+	}
+	root := path.Join(base, escrowBundleDir)
+	if err := out.MkdirAll(root); err != nil {
 		return nil, err
 	}
 	if progress == nil {
@@ -360,12 +372,7 @@ func (a *App) WriteEscrowBundle(destDir string, plan EscrowPlan, progress func(f
 		if !c.Present {
 			continue
 		}
-		sub := filepath.Join(root, c.Subdir)
-		if err := os.MkdirAll(sub, 0o755); err != nil {
-			return nil, err
-		}
-		dst := filepath.Join(sub, c.File)
-		sum, err := a.placeEscrowFile(c, dst)
+		sum, err := a.placeEscrowFile(c, out, path.Join(root, filepath.ToSlash(c.Subdir), c.File))
 		if err != nil {
 			return nil, fmt.Errorf("writing %s: %w", c.File, err)
 		}
@@ -394,48 +401,33 @@ func (a *App) WriteEscrowBundle(destDir string, plan EscrowPlan, progress func(f
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		if err := os.WriteFile(filepath.Join(root, name), docs[name], 0o644); err != nil {
+		if err := out.WriteFile(path.Join(root, name), docs[name], 0o644); err != nil {
 			return nil, err
 		}
 		h := sha256.Sum256(docs[name])
 		fmt.Fprintf(sums, "%s  %s\n", hex.EncodeToString(h[:]), name)
 	}
-	if err := os.WriteFile(filepath.Join(root, "SHA-256SUMS"), []byte(sums.String()), 0o644); err != nil {
+	if err := out.WriteFile(path.Join(root, "SHA-256SUMS"), []byte(sums.String()), 0o644); err != nil {
 		return nil, err
 	}
 	progress(1.0, "escrow: done")
 
 	return map[string]any{
-		"dir": root, "mode": plan.Mode, "bytes": writtenBytes,
+		"dir": out.Join(root), "mode": plan.Mode, "bytes": writtenBytes,
 		"components": len(written), "missing": plan.MissingNames, "missing_count": plan.MissingCount,
 	}, nil
 }
 
-// placeEscrowFile copies a component's bytes (from memory or cache) to dst and
-// returns its SHA-256 for the checksum file.
-func (a *App) placeEscrowFile(c escrowComponent, dst string) (string, error) {
-	h := sha256.New()
+// placeEscrowFile copies a component's bytes (from memory or cache) to rel in
+// out and returns its SHA-256 for the checksum file.
+func (a *App) placeEscrowFile(c escrowComponent, out *outFolder, rel string) (string, error) {
 	if c.data != nil {
-		if err := os.WriteFile(dst, c.data, 0o644); err != nil {
+		if err := out.WriteFile(rel, c.data, 0o644); err != nil {
 			return "", err
 		}
-		h.Write(c.data)
-		return hex.EncodeToString(h.Sum(nil)), nil
+		return sha256Hex(c.data), nil
 	}
-	in, err := os.Open(c.cachePath)
-	if err != nil {
-		return "", err
-	}
-	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return "", err
-	}
-	defer out.Close()
-	if _, err := io.Copy(io.MultiWriter(out, h), in); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return out.CopyIn(c.cachePath, rel, 0o644)
 }
 
 // ---- fetch (the download-and-cache path) ---------------------------------

@@ -115,7 +115,7 @@ func TestDataMap_VerifyPointersAreReal(t *testing.T) {
 		"TestIntegration_SourceSafetyRefusals":               "integration_test.go",
 		"TestMirror_RefusesSourceDest":                       "mirror_test.go",
 		"TestQuarantine_AbsentOnAdoptedAndRefusedForSources": "quarantine_test.go",
-		"AssertOutsideSources":                               "store.go",
+		"AuthorizeDestination":                               "destauth.go",
 	}
 	joined := strings.Join(dm.VerifyTests, "\n")
 	for sym, file := range refs {

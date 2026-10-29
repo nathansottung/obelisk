@@ -147,6 +147,11 @@ func archiveRemoveTargets(a *App, p map[string]any) ([]destructiveTarget, error)
 	if a.archiveGuarded(id) && paramString(p, "export_dir") == "" {
 		return nil, refuseDestructive(400, "save a fresh Structure Export first — this archive has packages, so its record is worth keeping a copy of")
 	}
+	if dir := paramString(p, "export_dir"); dir != "" {
+		if err := a.outFolderReady(dir); err != nil {
+			return nil, refuseDestructive(409, "%s", err.Error())
+		}
+	}
 	files, folders, events := a.Store.FilesOf(id), a.Store.FoldersOf(id), a.Store.Events(id)
 	return []destructiveTarget{
 		recordTarget(fmt.Sprintf("archive %d (%s)", id, c.Name), c, "removed from the catalog"),
@@ -253,6 +258,9 @@ func rewriteCopyTargets(a *App, p map[string]any) ([]destructiveTarget, error) {
 	}
 	if cp == nil {
 		return nil, refuseDestructive(404, "no current copy of %s on volume %d to re-write", c.Name, vol)
+	}
+	if err := a.outFolderReady(filepath.Dir(cp.Path)); err != nil {
+		return nil, refuseDestructive(409, "%s", err.Error())
 	}
 	out := []destructiveTarget{recordTarget(fmt.Sprintf("copy of %s on volume %d", c.Name, vol), cp, "marked superseded, and a new copy is written")}
 	files, err := treeTargets(cp.Path, "replaced by the re-written copy")

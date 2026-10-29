@@ -10,6 +10,7 @@ package main
 // tape proves it holds its verified bytes.
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -134,9 +135,6 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 	if strings.TrimSpace(destDir) == "" {
 		return nil, fmt.Errorf("dest_dir (the mounted tape/drive) required")
 	}
-	if err := a.Store.AssertOutsideSources(destDir); err != nil {
-		return nil, err
-	}
 	segIdx := -1
 	for i := range c.Segments {
 		if c.Segments[i].Status == "PENDING" || c.Segments[i].Status == "FAILED" {
@@ -157,10 +155,17 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 	if payload == "" {
 		return nil, fmt.Errorf("staged payload for %s missing under %s", c.Name, c.StagedDir)
 	}
-	destChunk := filepath.Join(destDir, c.Name)
-	if err := os.MkdirAll(destChunk, 0o755); err != nil {
+	// The medium is decided by where it really is, and every file is written
+	// beneath the folder that was decided about (see outfolder.go).
+	out, err := a.openOutFolder(destDir)
+	if err != nil {
 		return nil, err
 	}
+	defer out.Close()
+	if err := out.MkdirAll(c.Name); err != nil {
+		return nil, err
+	}
+	destChunk := out.Join(c.Name)
 	set := func(status string) { seg.Status, seg.Dest = status, destDir; a.Store.UpdateChunk(c) }
 	fail := func(err error) (map[string]any, error) {
 		seg.Status, seg.Dest = "FAILED", destDir
@@ -173,7 +178,7 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 	if seg.Par2 {
 		// Dedicated par2 tape.
 		progress(0.1, fmt.Sprintf("writing par2 set (tape %d/%d)", seg.Index, N))
-		if err := copyPar2Set(c.StagedDir, destChunk, c); err != nil {
+		if err := copyPar2Set(c.StagedDir, out, c); err != nil {
 			return fail(err)
 		}
 	} else {
@@ -184,9 +189,13 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 				offset += c.Segments[i].Bytes
 			}
 		}
-		segFile := filepath.Join(destChunk, fmt.Sprintf("%s.seg%03d", c.Name, seg.Index))
+		segRel := fmt.Sprintf("%s/%s.seg%03d", c.Name, c.Name, seg.Index)
 		progress(0.05, fmt.Sprintf("writing segment %d/%d (%d bytes)", seg.Index, N, seg.Bytes))
-		streamHash, stats, err := ringCopy(payload, segFile, offset, seg.Bytes, blockMB, bufferGB, throttleMbps,
+		tmp, f, err := out.Create(segRel)
+		if err != nil {
+			return fail(err)
+		}
+		streamHash, stats, err := ringCopyTo(payload, f, offset, seg.Bytes, blockMB, bufferGB, throttleMbps,
 			func(done, total int64) {
 				frac := 0.0
 				if total > 0 {
@@ -200,29 +209,30 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 		// reported as the I/O error it is — checked BEFORE the read-back hash
 		// comparison below, so a read failure never manifests as a hash mismatch.
 		if err != nil {
+			out.Discard(tmp)
+			return fail(err)
+		}
+		// The segment gets its name only once it reads back as the bytes streamed.
+		progress(0.7, fmt.Sprintf("read-back verify segment %d/%d", seg.Index, N))
+		if err := out.Commit(tmp, segRel, 0o644, streamHash); err != nil {
+			if errors.Is(err, errStageMismatch) {
+				err = fmt.Errorf("segment %d read-back mismatch: %w", seg.Index, err)
+			}
 			return fail(err)
 		}
 		seg.Hash = streamHash
 		set("WRITTEN")
-		progress(0.7, fmt.Sprintf("read-back verify segment %d/%d", seg.Index, N))
-		rb, err := hashFileHex(segFile)
-		if err != nil {
-			return fail(err)
-		}
-		if rb != streamHash {
-			return fail(fmt.Errorf("segment %d read-back mismatch (medium=%s)", seg.Index, rb))
-		}
 		// par2 rides the last data tape when it wasn't given its own.
 		if seg.Index == dataSegmentCount(c.Segments) && !c.Segments[N-1].Par2 {
 			progress(0.85, "writing par2 set alongside last segment")
-			if err := copyPar2Set(c.StagedDir, destChunk, c); err != nil {
+			if err := copyPar2Set(c.StagedDir, out, c); err != nil {
 				return fail(err)
 			}
 		}
 	}
 
 	// manifest + RESTORE.txt on EVERY tape (copied verbatim from the staged build).
-	if err := copySidecars(c.StagedDir, destChunk, c); err != nil {
+	if err := copySidecars(c.StagedDir, out, c); err != nil {
 		return fail(err)
 	}
 
@@ -267,33 +277,25 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 	return map[string]any{"chunk": c.Name, "segment": seg.Index, "of": N, "done": done, "complete": done == N, "message": msg}, nil
 }
 
-func copyPar2Set(stagedDir, destChunk string, c *Chunk) error {
+// copyPar2Set copies the package's par2 set into its folder on the medium. Each
+// file is named only once it reads back as the staged original (CopyIn).
+func copyPar2Set(stagedDir string, out *outFolder, c *Chunk) error {
 	files := par2SetFiles(stagedDir, c)
 	if len(files) == 0 {
 		return fmt.Errorf("no par2 files found in staged dir for %s", c.Name)
 	}
 	for _, src := range files {
-		dst := filepath.Join(destChunk, filepath.Base(src))
-		if err := copyFile(src, dst); err != nil {
+		if _, err := out.CopyIn(src, c.Name+"/"+filepath.Base(src), 0o644); err != nil {
+			if errors.Is(err, errStageMismatch) {
+				return fmt.Errorf("par2 file %s read-back mismatch", filepath.Base(src))
+			}
 			return err
-		}
-		// read-back verify each par2 file against the staged original
-		sh, err := hashFileHex(src)
-		if err != nil {
-			return err
-		}
-		dh, err := hashFileHex(dst)
-		if err != nil {
-			return err
-		}
-		if sh != dh {
-			return fmt.Errorf("par2 file %s read-back mismatch", filepath.Base(src))
 		}
 	}
 	return nil
 }
 
-func copySidecars(stagedDir, destChunk string, c *Chunk) error {
+func copySidecars(stagedDir string, out *outFolder, c *Chunk) error {
 	manifest := c.Name + ".manifest.json"
 	if c.PrivateManifest {
 		manifest = c.Name + ".manifest.json.gpg" // private: encrypted listing only
@@ -303,7 +305,7 @@ func copySidecars(stagedDir, destChunk string, c *Chunk) error {
 		if _, err := os.Stat(src); err != nil {
 			continue
 		}
-		if err := copyFile(src, filepath.Join(destChunk, base)); err != nil {
+		if _, err := out.CopyIn(src, c.Name+"/"+base, 0o644); err != nil {
 			return err
 		}
 	}
@@ -344,23 +346,36 @@ func rejoinSegments(sourceDir, outputDir string, c *Chunk, progress func(float64
 		}
 	}
 	joined := filepath.Join(outputDir, base)
-	out, err := os.Create(joined)
+	// Joined into a new staging file, created exclusively, and renamed into place:
+	// a file already at the joined name is never written through.
+	out, err := createStage(joined, 0o644)
 	if err != nil {
 		return "", nil, err
 	}
-	defer out.Close()
+	tmp := out.Name()
+	failJoin := func(err error) (string, []string, error) {
+		out.Close()
+		_ = os.Remove(tmp)
+		return "", nil, err
+	}
 	buf := make([]byte, 8<<20)
 	for i, sp := range segs {
 		progress(float64(i)/float64(len(segs))*0.2, fmt.Sprintf("rejoin %d/%d", i+1, len(segs)))
 		in, err := os.Open(sp)
 		if err != nil {
-			return "", nil, err
+			return failJoin(err)
 		}
 		if _, err := io.CopyBuffer(out, in, buf); err != nil {
 			in.Close()
-			return "", nil, err
+			return failJoin(err)
 		}
 		in.Close()
+	}
+	if err := finalizeWrite(out, joined); err != nil {
+		return failJoin(err)
+	}
+	if err := renameReplacing(tmp, joined); err != nil {
+		return failJoin(err)
 	}
 	// Bring the par2 set next to the joined payload for verify/repair. A failure here
 	// is NOT swallowed: the payload rejoined fine, but without its par2 set the

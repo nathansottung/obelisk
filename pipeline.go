@@ -136,9 +136,12 @@ type App struct {
 	// Both the Settings view and the periodic status lamp call Preflight, so a
 	// slow probe used to hang the UI; a short single-flight cache + per-tool
 	// timeout keep it snappy. See Preflight / toolVersionLine.
-	pfMu  sync.Mutex
-	pfAt  time.Time
-	pfVal map[string]any
+	// autoExportFailed is the last automatic app-backup failure written to the
+	// event log (period file and reason), so an hourly retry logs it once.
+	autoExportFailed string
+	pfMu             sync.Mutex
+	pfAt             time.Time
+	pfVal            map[string]any
 	// Per-instance test seams; nil in production. Configure only before use.
 	keystoreReadFile         func(string) ([]byte, error)
 	keystoreMutationObserver func(string)
@@ -1014,8 +1017,9 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 		return fmt.Errorf("staging_dir is not configured (Settings)")
 	}
 	// Re-check at build time (config could have been hand-edited): the staging dir
-	// is written into and must never sit inside source data.
-	if err := a.Store.AssertOutsideSources(cfg.StagingDir); err != nil {
+	// is written into, by path and by the build tools, so it is held to the
+	// destination guard's source check, by where it really is.
+	if err := a.Store.CheckOutsideSources(cfg.StagingDir); err != nil {
 		return err
 	}
 	work := filepath.Join(cfg.StagingDir, c.Name)

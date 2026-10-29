@@ -7,6 +7,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -43,7 +44,36 @@ type RingStats struct {
 // (source) and written (destination) byte counts, the buffer fill percentage, and the
 // live stall count — feeding the Performance strip's ring gauge. It must be cheap and
 // non-blocking; pass nil when no live telemetry is wanted.
+//
+// dst is written as a new staging file beside it, created exclusively, and renamed
+// to dst only once it is flushed, so a file already at dst (or a hard link to
+// another file) is replaced as a name and never written through.
 func ringCopy(src, dst string, offset, length int64, blockMB int, bufferGB, throttleMbps float64, progress func(done, total int64), live func(read, written int64, fillPct, stalls int)) (string, RingStats, error) {
+	out, err := createStage(dst, 0o644)
+	if err != nil {
+		return "", RingStats{}, err
+	}
+	tmp := out.Name()
+	hash, stats, err := ringCopyTo(src, out, offset, length, blockMB, bufferGB, throttleMbps, progress, live)
+	if err == nil {
+		// The payload is not written until the medium says it is (see finalizeWrite).
+		err = finalizeWrite(out, dst)
+	}
+	if err == nil {
+		err = renameReplacing(tmp, dst)
+	}
+	if err != nil {
+		out.Close()
+		_ = os.Remove(tmp)
+		return "", stats, err
+	}
+	return hash, stats, nil
+}
+
+// ringCopyTo is ringCopy into out, an open file the caller owns: it writes the
+// stream and returns its hash, and leaves flushing, closing and naming the file to
+// the caller.
+func ringCopyTo(src string, out *os.File, offset, length int64, blockMB int, bufferGB, throttleMbps float64, progress func(done, total int64), live func(read, written int64, fillPct, stalls int)) (string, RingStats, error) {
 	block := blockMB << 20
 	depth := int(bufferGB * float64(1<<30) / float64(block))
 	if depth < 2 {
@@ -67,12 +97,6 @@ func ringCopy(src, dst string, offset, length int64, blockMB int, bufferGB, thro
 			total = st.Size() - offset
 		}
 	}
-	out, err := os.Create(dst)
-	if err != nil {
-		return "", stats, err
-	}
-	defer out.Close() // safety net for the error paths; the success path closes explicitly below
-
 	ch := make(chan []byte, depth)
 	errCh := make(chan error, 1)
 	h := sha256.New()
@@ -167,14 +191,6 @@ func ringCopy(src, dst string, offset, length int64, blockMB int, bufferGB, thro
 	case err := <-errCh:
 		return "", stats, err
 	default:
-	}
-	// The payload is not written until the medium says it is. Closing on a deferred
-	// call would swallow the error from the final flush — a full disk, or a write
-	// error on the tape/drive that only surfaces at close — and we would return a
-	// stream hash computed over the bytes we MEANT to write, describing a file that
-	// is short on the medium. Fail here instead, with no hash.
-	if err := finalizeWrite(out, dst); err != nil {
-		return "", stats, err
 	}
 	secs := time.Since(start).Seconds()
 	stats.Bytes, stats.Seconds = written, round2(secs)
@@ -280,6 +296,26 @@ func (a *App) refreshChunkStatus(c *Chunk) {
 }
 
 func (a *App) WriteChunk(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string)) (map[string]any, error) {
+	return a.writeChunk(nil, id, destDir, bufferGB, blockMB, throttleMbps, volumeID, progress)
+}
+
+// chunkWritable is the check that a package can be written from staging now.
+func chunkWritable(c *Chunk) error {
+	if c.Spanned {
+		return fmt.Errorf("package %s is spanned; use span-write (one tape at a time)", c.Name)
+	}
+	if c.StagedDir == "" || (c.Status != "STAGED" && c.Status != "WRITTEN" && c.Status != "VERIFIED" && c.Status != "FAILED") {
+		return fmt.Errorf("package %s is %s; build it first", c.Name, c.Status)
+	}
+	if payloadPathIn(c.StagedDir, c) == "" {
+		return fmt.Errorf("staged payload missing under %s", c.StagedDir)
+	}
+	return nil
+}
+
+// writeChunk is WriteChunk into out when the caller already holds the output
+// folder for destDir (a re-write), or into destDir opened here when out is nil.
+func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string)) (map[string]any, error) {
 	cfg, cfgErr := a.LoadConfig()
 	if cfgErr != nil {
 		return nil, cfgErr
@@ -297,27 +333,27 @@ func (a *App) WriteChunk(id int, destDir string, bufferGB float64, blockMB int, 
 	if c == nil {
 		return nil, fmt.Errorf("package %d not found", id)
 	}
-	if c.Spanned {
-		return nil, fmt.Errorf("package %s is spanned; use span-write (one tape at a time)", c.Name)
-	}
-	if c.StagedDir == "" || (c.Status != "STAGED" && c.Status != "WRITTEN" && c.Status != "VERIFIED" && c.Status != "FAILED") {
-		return nil, fmt.Errorf("package %s is %s; build it first", c.Name, c.Status)
-	}
-	if err := a.Store.AssertOutsideSources(destDir); err != nil {
+	if err := chunkWritable(c); err != nil {
 		return nil, err
 	}
 	enc := payloadPathIn(c.StagedDir, c)
-	if enc == "" {
-		return nil, fmt.Errorf("staged payload missing under %s", c.StagedDir)
+	// The destination is decided by where it really is, and every file is written
+	// beneath the folder that was decided about (see outfolder.go).
+	if out == nil {
+		var err error
+		if out, err = a.openOutFolder(destDir); err != nil {
+			return nil, err
+		}
+		defer out.Close()
 	}
 	// Preserve whatever name the payload was staged under (current <name>.tar /
 	// <name>.tar.gpg, or the legacy .tar.gpg for a plaintext package built before
 	// the rename) so the on-medium payload stays consistent with its sidecars.
 	payloadBase := filepath.Base(enc)
-	dest := filepath.Join(destDir, c.Name)
-	if err := os.MkdirAll(dest, 0o755); err != nil {
+	if err := out.MkdirAll(c.Name); err != nil {
 		return nil, err
 	}
+	dest := out.Join(c.Name)
 	var need int64
 	entries, _ := os.ReadDir(c.StagedDir)
 	for _, e := range entries {
@@ -358,8 +394,13 @@ func (a *App) WriteChunk(id int, destDir string, bufferGB float64, blockMB int, 
 	}
 
 	progress(0.02, "writing payload")
-	destPayload := filepath.Join(dest, payloadBase)
-	streamHash, stats, err := ringCopy(enc, destPayload, 0, 0, blockMB, bufferGB, throttleMbps,
+	payloadRel := c.Name + "/" + payloadBase
+	destPayload := out.Join(payloadRel)
+	tmp, f, err := out.Create(payloadRel)
+	if err != nil {
+		return mediumFail(err)
+	}
+	streamHash, stats, err := ringCopyTo(enc, f, 0, 0, blockMB, bufferGB, throttleMbps,
 		func(done, total int64) {
 			frac := 0.0
 			if total > 0 {
@@ -373,14 +414,32 @@ func (a *App) WriteChunk(id int, destDir string, bufferGB float64, blockMB int, 
 	// the I/O error it is — checked BEFORE the hash comparison, so a read failure is
 	// never masked as a stream-hash mismatch.
 	if err != nil {
+		out.Discard(tmp)
 		return mediumFail(err)
 	}
 	if streamHash != c.EncHash {
+		out.Discard(tmp)
 		return stagedFail(fmt.Errorf("stream hash mismatch while writing (staged payload corrupted — rebuild)"))
 	}
 
-	progress(0.70, "writing sidecars")
+	// Read-back verify: the payload gets its name only once it reads back off the
+	// medium as the staged bytes. A copy that reads back differently is not
+	// published and is recorded as failed.
+	progress(0.70, "read-back verify")
+	ok := true
+	rb := streamHash
+	if err := out.Commit(tmp, payloadRel, 0o644, streamHash); err != nil {
+		if !errors.Is(err, errStageMismatch) {
+			return mediumFail(err)
+		}
+		ok, rb = false, "(differs from the staged payload)"
+	}
+
+	progress(0.78, "writing sidecars")
 	for _, e := range entries {
+		if !ok {
+			break
+		}
 		n := e.Name()
 		// Skip the payload (streamed above) and the staging-only intermediate tar
 		// and filelist; copy every real sidecar (par2 set, manifest, RESTORE.txt).
@@ -390,17 +449,11 @@ func (a *App) WriteChunk(id int, destDir string, bufferGB float64, blockMB int, 
 		if c.PrivateManifest && n == c.Name+".manifest.json" {
 			continue // private: the ENCRYPTED manifest.json.gpg ships instead
 		}
-		if err := copyFile(filepath.Join(c.StagedDir, n), filepath.Join(dest, n)); err != nil {
+		if _, err := out.CopyIn(filepath.Join(c.StagedDir, n), c.Name+"/"+n, 0o644); err != nil {
 			return mediumFail(err)
 		}
 	}
 
-	progress(0.78, "read-back verify")
-	rb, err := hashFileHex(destPayload)
-	if err != nil {
-		return mediumFail(err)
-	}
-	ok := rb == c.EncHash
 	now := time.Now().UTC()
 	c.WrittenDest, c.WrittenAt = dest, &now
 	if ok {
@@ -455,9 +508,20 @@ func (a *App) RewriteCopy(id, volumeID int, bufferGB float64, blockMB int, throt
 	if dest == "" {
 		return nil, fmt.Errorf("no current copy of %s on volume %d to re-write", c.Name, volumeID)
 	}
+	// Check the package and open the folder (deciding it and taking its lease)
+	// before the old copy is marked superseded, so a re-write that cannot run
+	// changes nothing. WriteChunk rebuilds dest as destDir/<name>, so the copy
+	// folder's parent is opened.
+	if err := chunkWritable(c); err != nil {
+		return nil, err
+	}
+	out, err := a.openOutFolder(filepath.Dir(dest))
+	if err != nil {
+		return nil, err
+	}
+	defer out.Close()
 	a.Store.SupersedeCopy(c, volumeID)
-	// WriteChunk rebuilds dest as destDir/<name>, so pass the copy folder's parent.
-	return a.WriteChunk(id, filepath.Dir(dest), bufferGB, blockMB, throttleMbps, volumeID, progress)
+	return a.writeChunk(out, id, filepath.Dir(dest), bufferGB, blockMB, throttleMbps, volumeID, progress)
 }
 
 func (a *App) VerifyChunk(id int, destDir string) (map[string]any, error) {
@@ -807,22 +871,33 @@ func tail(s string, n int) string {
 	return cleanToolText(s, n)
 }
 
+// copyFile copies src to dst through a new staging file beside dst, created
+// exclusively and renamed to dst once flushed, so a file already at dst is
+// replaced as a name and never written through.
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	out, err := os.Create(dst)
+	out, err := createStage(dst, 0o644)
 	if err != nil {
 		return err
 	}
-	defer out.Close() // safety net for the error paths; the success path closes explicitly below
-	if _, err := io.Copy(out, in); err != nil {
-		return err
+	tmp := out.Name()
+	_, err = io.Copy(out, in)
+	if err == nil {
+		// Same rule as the payload stream: a sidecar (par2 block, manifest,
+		// RESTORE.txt) whose final flush fails is a sidecar that is not on the
+		// medium, and the caller must hear about it rather than read a nil error.
+		err = finalizeWrite(out, dst)
 	}
-	// Same rule as the payload stream: a sidecar (par2 block, manifest, RESTORE.txt)
-	// whose final flush fails is a sidecar that is not on the medium, and the caller
-	// must hear about it rather than read a nil error.
-	return finalizeWrite(out, dst)
+	if err == nil {
+		err = renameReplacing(tmp, dst)
+	}
+	if err != nil {
+		out.Close()
+		_ = os.Remove(tmp)
+	}
+	return err
 }

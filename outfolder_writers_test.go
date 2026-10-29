@@ -1,0 +1,350 @@
+//go:build !guionly
+
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// sourceBehindLink registers a source holding one file and returns the source,
+// a folder link to it, and a check that the source still holds only that file.
+func sourceBehindLink(t *testing.T, app *App) (src, link string, untouched func()) {
+	t.Helper()
+	src = filepath.Join(t.TempDir(), "photos")
+	writeTree(t, src, map[string]string{"orig.nef": "ORIG"})
+	app.Store.AddFolder(app.Store.AddCollection("Live").ID, src)
+	link = filepath.Join(t.TempDir(), "alias")
+	mustDirLink(t, link, src)
+	return src, link, func() {
+		t.Helper()
+		if got := treeOf(t, src); !equalStrings(got, []string{"orig.nef"}) {
+			t.Errorf("the source was written into: %v", got)
+		}
+	}
+}
+
+// builtTestChunk builds a small plain package and returns it.
+func builtTestChunk(t *testing.T, app *App, name string) *Chunk {
+	t.Helper()
+	src, refs := makeSource(t)
+	c := app.Store.AddChunk(Chunk{
+		Name: name, Status: "PLANNED", MediaKind: "CUSTOM",
+		TargetBytes: 1 << 30, DataBytes: 4096, FileCount: len(refs),
+		SrcRoot: src, HashAlg: "SHA256", Par2: 5,
+		Files: append([]ChunkFileRef{}, refs...),
+	})
+	if err := app.BuildChunk(c.ID, noProg); err != nil {
+		t.Fatalf("BuildChunk: %v", err)
+	}
+	return app.Store.Chunk(c.ID)
+}
+
+// A package write, and a re-write of a recorded copy, decide the destination by
+// where it really is: a folder link to a source is refused and nothing is
+// written into the source.
+func TestWriteChunk_DestinationDecidedByRealLocation(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	c := builtTestChunk(t, app, "WRITE-GUARD")
+	_, link, untouched := sourceBehindLink(t, app)
+
+	_, err := app.WriteChunk(c.ID, link, 0, 0, 0, 0, noProg)
+	assertSourceRefusal(t, "write into a link to a source", err)
+	untouched()
+
+	t.Run("rewrite", func(t *testing.T) {
+		medium := t.TempDir()
+		vol := app.Store.AddVolume(Volume{Label: "HDD-01", Kind: "HDD"})
+		if _, err := app.WriteChunk(c.ID, medium, 0, 0, 0, vol.ID, noProg); err != nil {
+			t.Fatal(err)
+		}
+		// The medium's folder is now a link to the source.
+		if err := os.RemoveAll(medium); err != nil {
+			t.Fatal(err)
+		}
+		_, link2, untouched2 := sourceBehindLink(t, app)
+		mustDirLink(t, medium, link2)
+		_, err := app.RewriteCopy(c.ID, vol.ID, 0, 0, 0, noProg)
+		assertSourceRefusal(t, "re-write into a link to a source", err)
+		untouched2()
+	})
+}
+
+// A package write gives each file its name only after it reads back as the
+// staged bytes, so a file already at that name (here a hard link to another
+// file) is replaced as a name and the other file keeps its bytes.
+func TestWriteChunk_NeverWritesThroughExistingFiles(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	c := builtTestChunk(t, app, "WRITE-LINKS")
+	medium := t.TempDir()
+	payload := plantAtStageName(t, filepath.Join(medium, c.Name, payloadName(c)))
+	sidecar := filepath.Join(t.TempDir(), "other.txt")
+	mustWrite(t, sidecar, "OTHER")
+	if err := os.Link(sidecar, filepath.Join(medium, c.Name, "RESTORE.txt")); err != nil {
+		t.Fatal(err)
+	}
+	res, err := app.WriteChunk(c.ID, medium, 0, 0, 0, 0, noProg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := res["verify_ok"].(bool); !ok {
+		t.Fatalf("write did not verify: %v", res)
+	}
+	assertFileBytes(t, payload, "SOMEONE ELSE'S")
+	assertFileBytes(t, sidecar, "OTHER")
+}
+
+// A span write decides the mounted medium by where it really is: a folder link
+// to a source is refused, nothing is written into the source, and the segment
+// stays pending.
+func TestSpanWrite_DestinationDecidedByRealLocation(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	src := t.TempDir()
+	big := strings.Repeat("spanning-payload-", 2500)
+	mustWrite(t, filepath.Join(src, "big.dat"), big)
+	c := app.Store.AddChunk(Chunk{
+		Name: "SPAN-GUARD", Status: "PLANNED", MediaKind: "CUSTOM",
+		TargetBytes: 12000, DataBytes: int64(len(big)), FileCount: 1,
+		SrcRoot: src, HashAlg: "SHA256", Par2: 5, Spanned: true,
+		Segments: planSegments(int64(len(big))+4096, 12000),
+		Files:    []ChunkFileRef{{RelPath: "big.dat", SizeBytes: int64(len(big))}},
+	})
+	if err := app.BuildChunk(c.ID, noProg); err != nil {
+		t.Fatalf("BuildChunk: %v", err)
+	}
+	_, link, untouched := sourceBehindLink(t, app)
+	_, err := app.SpanWriteNext(c.ID, link, 0, 0, 0, 0, noProg)
+	assertSourceRefusal(t, "span write into a link to a source", err)
+	untouched()
+	if st := app.Store.Chunk(c.ID).Segments[0].Status; st != "PENDING" {
+		t.Errorf("refused segment is %s, want PENDING", st)
+	}
+
+	// A segment file already on the medium (a hard link to another file) is
+	// replaced as a name; the other file keeps its bytes.
+	medium := t.TempDir()
+	victim := plantAtStageName(t, filepath.Join(medium, c.Name, c.Name+".seg001"))
+	if _, err := app.SpanWriteNext(c.ID, medium, 0, 0, 0, 0, noProg); err != nil {
+		t.Fatal(err)
+	}
+	assertFileBytes(t, victim, "SOMEONE ELSE'S")
+}
+
+// An escrow bundle stages each of its files and names it once it reads back,
+// so a file already in the bundle folder (a hard link to another file) is
+// replaced as a name and the other file keeps its bytes.
+func TestEscrowBundle_NeverWritesThroughExistingFiles(t *testing.T) {
+	a := escrowApp(t)
+	seedEscrowCache(t, a, struct{ binaries, toolchain, readers bool }{binaries: true})
+	dir := t.TempDir()
+	readme := plantAtStageName(t, filepath.Join(dir, escrowBundleDir, "ESCROW_README.md"))
+	plan := a.planEscrow(EscrowBinariesOnly, false, Census{}, mustConfig(t, a))
+	if _, err := a.WriteEscrowBundle(dir, plan, nil); err != nil {
+		t.Fatal(err)
+	}
+	assertFileBytes(t, readme, "SOMEONE ELSE'S")
+	if b, err := os.ReadFile(filepath.Join(dir, escrowBundleDir, "ESCROW_README.md")); err != nil || len(b) == 0 || string(b) == "SOMEONE ELSE'S" {
+		t.Errorf("bundle README not written: %q %v", b, err)
+	}
+}
+
+// Sealing a volume writes its sidecar into the mounted medium decided by where
+// it really is: a folder link to a source is refused before anything is sealed
+// or written. A sidecar file already on the medium (a hard link to another file)
+// is replaced as a name and the other file keeps its bytes.
+func TestFinalize_SidecarDecidedByRealLocation(t *testing.T) {
+	app, vol, _, mount := finalizeApp(t)
+	_, link, untouched := sourceBehindLink(t, app)
+	_, err := app.FinalizeVolume(vol, link, "NS", false, "")
+	assertSourceRefusal(t, "seal sidecar into a link to a source", err)
+	untouched()
+	if vol.Sealed {
+		t.Error("a refused seal sealed the volume")
+	}
+
+	victim := plantAtStageName(t, filepath.Join(mount, sealSidecarDir, "INVENTORY.md"))
+	if _, err := app.FinalizeVolume(vol, mount, "NS", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	assertFileBytes(t, victim, "SOMEONE ELSE'S")
+}
+
+// A BagIt export decides its output folder by where it really is, and a bag
+// file already there (a hard link to another file) is replaced as a name.
+func TestBagExport_OutputDecidedByRealLocation(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	c := builtTestChunk(t, app, "BAG-GUARD")
+	_, link, untouched := sourceBehindLink(t, app)
+	_, err := app.ExportPackageBag(c.ID, link, noProg)
+	assertSourceRefusal(t, "bag export into a link to a source", err)
+	untouched()
+
+	out := t.TempDir()
+	victim := plantAtStageName(t, filepath.Join(out, "BAG-GUARD-bag", "bagit.txt"))
+	if _, err := app.ExportPackageBag(c.ID, out, noProg); err != nil {
+		t.Fatal(err)
+	}
+	assertFileBytes(t, victim, "SOMEONE ELSE'S")
+}
+
+// The recovery kit (which holds key cards) is written into an output folder
+// decided by where it really is, and a kit file already there (a hard link to
+// another file) is replaced as a name.
+func TestRecoveryKit_OutputDecidedByRealLocation(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	_, link, untouched := sourceBehindLink(t, app)
+	_, err := app.BuildRecoveryKit(link, noProg)
+	assertSourceRefusal(t, "recovery kit into a link to a source", err)
+	untouched()
+
+	out := t.TempDir()
+	victim := plantAtStageName(t, filepath.Join(out, "obelisk-recovery-kit", "README_RECOVERY.md"))
+	if _, err := app.BuildRecoveryKit(out, noProg); err != nil {
+		t.Fatal(err)
+	}
+	assertFileBytes(t, victim, "SOMEONE ELSE'S")
+}
+
+// An app-backup export, manual or automatic, decides its folder by where it
+// really is, and a bundle file already there (a hard link to another file) is
+// replaced as a name.
+func TestAppBackupExport_FolderDecidedByRealLocation(t *testing.T) {
+	app, _ := compatApp(t)
+	_, link, untouched := sourceBehindLink(t, app)
+	_, err := app.ExportAppBackup(link, false)
+	assertSourceRefusal(t, "app backup into a link to a source", err)
+	cfg := mustConfig(t, app)
+	cfg.AutoExportDir, cfg.AutoExportCadence = link, "daily"
+	if err := writeConfigForTest(app, cfg); err != nil {
+		t.Fatal(err)
+	}
+	assertSourceRefusal(t, "automatic app backup into a link to a source", app.maybeAutoExport(time.Now()))
+	untouched()
+
+	dir := t.TempDir()
+	res, err := app.ExportAppBackup(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	victim := plantAtStageName(t, filepath.Join(t.TempDir(), "x"))
+	_ = os.Remove(res.SidecarPath)
+	if err := os.Link(victim, res.SidecarPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.exportAppBackupTo(res.TarPath, false); err != nil {
+		t.Fatal(err)
+	}
+	assertFileBytes(t, victim, "SOMEONE ELSE'S")
+}
+
+// A docked drive is never a source: a folder link to a source is refused by
+// where it really is, before any volume is registered or anything is adopted.
+func TestDockIngest_SourceDecidedByRealLocation(t *testing.T) {
+	app := dockApp(t)
+	_, link, untouched := sourceBehindLink(t, app)
+	ds, err := app.StartDockSession([]int{app.Store.Collections()[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vols := len(app.Store.Volumes())
+	_, err = app.IngestDrive(ds.ID, link, "SERIAL-L", "LINK", "", "", false, noProg)
+	assertSourceRefusal(t, "docking a link to a source", err)
+	untouched()
+	if n := len(app.Store.Volumes()); n != vols {
+		t.Errorf("a refused drive registered a volume (%d, was %d)", n, vols)
+	}
+}
+
+// A build re-checks its staging folder by where it really is: a staging folder
+// that is a link to a source (set without the settings check) is refused before
+// anything is staged.
+func TestBuild_StagingDecidedByRealLocation(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	src, refs := makeSource(t)
+	c := app.Store.AddChunk(Chunk{
+		Name: "STAGE-GUARD", Status: "PLANNED", MediaKind: "CUSTOM",
+		TargetBytes: 1 << 30, DataBytes: 4096, FileCount: len(refs),
+		SrcRoot: src, HashAlg: "SHA256", Par2: 5,
+		Files: append([]ChunkFileRef{}, refs...),
+	})
+	_, link, untouched := sourceBehindLink(t, app)
+	cfg := mustConfig(t, app)
+	cfg.StagingDir = link
+	if err := writeConfigForTest(app, cfg); err != nil {
+		t.Fatal(err)
+	}
+	assertSourceRefusal(t, "staging into a link to a source", app.BuildChunk(c.ID, noProg))
+	untouched()
+}
+
+// Saving settings checks every folder they write into by where it really is:
+// a staging or auto-export folder, or a keystore, reached through a folder link
+// to a source is refused. A keystore beside a source (in a folder that also
+// holds one) is not inside it and is allowed.
+func TestSaveConfig_WriteFoldersDecidedByRealLocation(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	src, link, untouched := sourceBehindLink(t, app)
+	for key, val := range map[string]any{
+		"staging_dir":     filepath.Join(link, "staging"),
+		"auto_export_dir": link,
+		"keystore_paths":  []string{filepath.Join(link, "keystore.json"), filepath.Join(t.TempDir(), "k2.json")},
+	} {
+		_, err := app.SaveConfig(map[string]any{key: val})
+		assertSourceRefusal(t, "saving "+key+" through a link to a source", err)
+	}
+	untouched()
+	beside := filepath.Join(filepath.Dir(src), "keystore.json")
+	if _, err := app.SaveConfig(map[string]any{"keystore_paths": []string{beside, filepath.Join(t.TempDir(), "k2.json")}}); err != nil {
+		t.Errorf("a keystore beside a source was refused: %v", err)
+	}
+}
+
+// A structure export (on its own, or before an archive is removed) is written
+// into a folder decided by where it really is: a folder link to a source is
+// refused and nothing is written into the source.
+func TestStructureExport_FolderDecidedByRealLocation(t *testing.T) {
+	app := dockApp(t)
+	src, link, untouched := sourceBehindLink(t, app)
+	coll := app.Store.Collections()[0]
+	if _, _, err := app.ScanFolder(coll.ID, src, noProg); err != nil {
+		t.Fatal(err)
+	}
+	_, err := app.writeStructureExportTo(coll.ID, link)
+	assertSourceRefusal(t, "structure export into a link to a source", err)
+	untouched()
+	paths, err := app.writeStructureExportTo(coll.ID, t.TempDir())
+	if err != nil || len(paths) != 3 {
+		t.Fatalf("structure export: %v %v", paths, err)
+	}
+}
+
+// No writer uses the spelling-only source check any more: every call site in
+// the program code is gone (only its definition remains, for tests that show
+// what it misses).
+func TestNoWriterUsesSpellingOnlySourceCheck(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(b), "\n") {
+			code := strings.TrimSpace(line)
+			if strings.HasPrefix(code, "//") || strings.HasPrefix(code, "func (s *Store) AssertOutsideSources(") {
+				continue
+			}
+			if strings.Contains(code, "AssertOutsideSources(") {
+				t.Errorf("%s:%d calls the spelling-only source check: %s", f, i+1, code)
+			}
+		}
+	}
+}
