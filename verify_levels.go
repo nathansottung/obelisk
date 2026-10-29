@@ -243,7 +243,9 @@ func (a *App) VerifyMirrorVolume(volumeID int, mount, level string, progress fun
 		}
 		a.Store.AppendVerifyEvent(t.c, VerifyEvent{At: now, OK: ok, Path: t.base, Note: note, Level: level, Advisory: !levelSatisfiesComplete(level)})
 		a.Store.CreditCopyCheck(t.c, CopyAt{VolumeID: volumeID, Serial: liveSerial}, ok, level)
-		if level == VerifyB {
+		// A full check, or any failed one, can change the package's state: a
+		// copy found damaged loses its credit at once.
+		if level == VerifyB || !ok {
 			if ok {
 				t.c.VerifiedAt = &now
 			}
@@ -253,8 +255,8 @@ func (a *App) VerifyMirrorVolume(volumeID int, mount, level string, progress fun
 		results = append(results, map[string]any{"chunk": t.c.Name, "ok": ok, "level": level,
 			"checked": checked, "bad": bad, "advisory": !levelSatisfiesComplete(level)})
 	}
-	// Only a level-B pass can change protection state; refresh the dashboard tally.
-	if level == VerifyB {
+	// A full check or a failed one can change protection; refresh the dashboard tally.
+	if level == VerifyB || !okAll {
 		a.Store.RecomputeProtection(nil)
 	}
 	if progress != nil {

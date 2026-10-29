@@ -672,7 +672,14 @@ func (a *App) dockReverifyAtLevel(ds *DockSession, mountPath string, vol *Volume
 			}
 			a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: ok, Path: mountPath, Note: note, Level: level, Advisory: true})
 			a.Store.CreditCopyCheck(c, CopyAt{Path: mountPath, VolumeID: vol.ID}, ok, level)
+			if !ok { // a copy found damaged loses its credit at once
+				a.refreshChunkStatus(c)
+				a.Store.UpdateChunk(c)
+			}
 		}
+	}
+	if bad > 0 {
+		a.Store.RecomputeProtection(nil)
 	}
 	note := fmt.Sprintf("re-verified at level %s (advisory — only full/B satisfies protection)", level)
 	if bad > 0 {

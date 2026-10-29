@@ -3362,7 +3362,8 @@ type CopyAt struct {
 // volume when one is given, and not on a drive whose recorded serial differs
 // from the one read. When copies on more than one volume still fit, the check
 // cannot say which drive it read, and none is credited. Level B also sets the
-// copy's verified state. It returns how many copies were credited.
+// copy's verified state, and a failed check at any level clears it. It returns
+// how many copies were credited.
 func (s *Store) CreditCopyCheck(c *Chunk, at CopyAt, ok bool, level string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -3417,8 +3418,13 @@ func (s *Store) CreditCopyCheck(c *Chunk, at CopyAt, ok bool, level string) int 
 	for _, i := range fit {
 		v, lvl := ok, level
 		c.Copies[i].LastCheckAt, c.Copies[i].LastCheckLevel, c.Copies[i].LastCheckOK = &now, lvl, &v
-		if level == "B" {
+		switch {
+		case level == "B":
 			c.Copies[i].LastVerifiedAt, c.Copies[i].VerifyOK = &now, &v
+		case !ok:
+			// A copy found damaged loses its credit at once, whatever level of
+			// check found it. Only a full check can give the credit back.
+			c.Copies[i].VerifyOK = &v
 		}
 	}
 	_ = s.save()
