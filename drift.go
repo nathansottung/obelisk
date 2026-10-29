@@ -313,3 +313,12 @@ func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress
 	progress(1.0, fmt.Sprintf("%d changes · %d informational", rep.Changes(), infoTotal))
 	return rep, nil
 }
+
+// driftLabel names a drift report by its changes and its unknown files.
+func driftLabel(d *DriftReport) string {
+	l := fmt.Sprintf("Drift report — %d change(s)", d.Changes())
+	if n := d.Unknown(); n > 0 {
+		l += fmt.Sprintf(", %d unknown (could not be read)", n)
+	}
+	return l
+}

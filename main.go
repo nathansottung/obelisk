@@ -1149,7 +1149,7 @@ func api(mux *http.ServeMux, app *App) {
 				if scope == "" {
 					// Whole-archive run persists the badge-linked report — deep-link to it.
 					res["artifacts"] = []Artifact{{
-						Kind: "drift", Label: fmt.Sprintf("Drift report — %d change(s)", d.Changes()),
+						Kind: "drift", Label: driftLabel(d),
 						Count: d.Changes(), ShowView: "drift", ShowID: id,
 					}}
 				} else {

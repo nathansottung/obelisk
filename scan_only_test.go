@@ -102,6 +102,11 @@ func TestDock_AfterFolderAdoptUnreadIsUnknown(t *testing.T) {
 	if _, err := app.AdoptFolder(filepath.Join(drive, "Photos"), arch.ID, vol.ID, nil); err != nil {
 		t.Fatal(err)
 	}
+	// Folder adopt may read the disk's real serial; the dock below must find this
+	// volume by the one it is given.
+	vol = app.Store.Volume(vol.ID)
+	vol.Serial = "SER-D"
+	app.Store.UpdateVolume(vol)
 	makeUnlistable(t, filepath.Join(drive, "Photos"))
 	ds, err := app.StartDockSession([]int{arch.ID})
 	if err != nil {

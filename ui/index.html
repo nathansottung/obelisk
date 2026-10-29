@@ -3026,7 +3026,7 @@ function perfStripHTML(s){
 function jobArtifact(j){if(j.status!=='COMPLETED'||!j.result)return '';const r=j.result;
   if(j.kind==='recoverykit'&&r.output_dir)return ` <button class="btn ghost" style="font-size:11px;padding:1px 8px" onclick='showKitResult(${JSON.stringify(r)})'>Show kit</button>`;
   if(j.kind==='mirror'&&r.sidecar!=null)return ` <span class="dim" style="font-size:10.5px">${r.mirrored||0} files${r.failed?' · '+r.failed+' failed':''}${r.sidecar?' · sidecar written':''}</span>`;
-  if(j.kind==='reconcile'&&r.collection_id)return ` <button class="btn ghost" style="font-size:11px;padding:1px 8px" onclick="vDrift(${r.collection_id},'')">View drift (${r.changes||0})</button>`;
+  if(j.kind==='reconcile'&&r.collection_id)return ` <button class="btn ghost" style="font-size:11px;padding:1px 8px" onclick="vDrift(${r.collection_id},'')">View drift (${r.changes||0}${r.unknown?' · '+r.unknown+' unknown':''})</button>`;
   if(j.kind==='scan'&&r.files!=null)return ` <span class="dim" style="font-size:10.5px">${r.files} file(s) cataloged</span>`;
   return ''}
 // Honesty on the Jobs row: plainly name what a job WRITES and where — by kind, so
@@ -4082,6 +4082,7 @@ function appRestoreSummary(r){
     <div class="panel"><div style="font-size:14px">Recovered <b>${r.archives}</b> archive(s), <b>${(r.files||0).toLocaleString()}</b> file(s), <b>${r.volumes}</b> volume(s), <b>${r.packages}</b> package(s), and <b>${r.jobs}</b> job(s). Verification history (<b>${r.verify_events}</b> recorded check(s)) came across intact.</div>
     ${r.included_keys&&r.keystore_note?`<div class="err" style="margin-top:6px">Encryption keystores were included, but not put into use: ${esc(r.keystore_note)}</div>`:r.included_keys?'<div class="dim" style="margin-top:6px">Encryption keystores were included and restored.</div>':'<div class="dim" style="margin-top:6px">Encryption keys were not in this backup — copy your keystore files onto this machine and point <b>Settings → keystores</b> at them.</div>'}
     <div class="dim" style="margin-top:8px">Your previous records were saved to <span class="mono">${esc(r.pre_restore_dir||'')}</span>.</div>
+    ${(r.scan_files_skipped||[]).length?`<div class="err" style="margin-top:6px">${r.scan_files_skipped.length} drive scan file list(s) in the backup did not match their scan records and were not restored; those scans have no file list now.</div>`:''}
     ${r.read_only?`<div class="err" style="margin-top:8px">${esc(r.read_only_why||'')}</div>`:''}
     ${r.held_settings?`<div class="err" style="margin-top:8px">The backup's program settings were <b>not</b> applied, because they choose what runs on this computer: burn command <span class="mono">${esc(r.held_settings.burn_command||'(none)')}</span>, par2 extra arguments <span class="mono">${esc(r.held_settings.par2_extra_args||'(none)')}</span>, tool paths <span class="mono">${esc(Object.entries(r.held_settings.tools||{}).map(([k,v])=>k+'='+v).join(', ')||'(none)')}</span>, tape tool <span class="mono">${esc(r.held_settings.tape_tool||'(none)')}</span>. Your current ones are kept.
       <div class="row" style="margin-top:6px"><button class="btn ghost" type="button" onclick="applyHeldSettings()">Apply them…</button> <button class="btn ghost" type="button" onclick="discardHeldSettings()">Discard them</button></div></div>`:''}

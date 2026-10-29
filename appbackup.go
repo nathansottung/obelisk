@@ -285,7 +285,7 @@ func (a *App) exportAppBackupInto(out *outFolder, name string, includeKeys bool)
 		size = fi.Size()
 	}
 	return ExportResult{
-		TarPath: out.Join(name), SidecarPath: out.Join(sidecar), Bytes: size, ScanFilesLeftOut: leftOut,
+		TarPath: out.Join(name), SidecarPath: out.Join(sidecar), Bytes: size, ScanFilesLeftOut: logLeftOut(a, leftOut),
 		MemberCount: len(members) + 1, IncludesKeys: includeKeys, SchemaVersion: schemaVer,
 	}, nil
 }
@@ -635,6 +635,9 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	if ro, why := ns.ReadOnly(); ro {
 		res.ReadOnly, res.ReadOnlyWhy = true, why
 	}
+	if n := len(res.ScanFilesSkipped); n > 0 {
+		ns.Log("appbackup", fmt.Sprintf("restore skipped %d scan file list(s) that did not match their scan records", n))
+	}
 	return res, nil
 }
 
@@ -810,4 +813,12 @@ func sortedKeys(m map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// logLeftOut records scan file lists an app backup left out, and returns them.
+func logLeftOut(a *App, names []string) []string {
+	if len(names) > 0 {
+		a.Store.Log("appbackup", fmt.Sprintf("app backup left out %d scan file list(s) that are missing or do not match their scan records", len(names)))
+	}
+	return names
 }
