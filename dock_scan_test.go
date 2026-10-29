@@ -9,17 +9,23 @@ import (
 
 // mirrorRefsOn lists the archive paths recorded on vol's mirror package.
 func mirrorRefsOn(app *App, archiveID, volID int) []string {
+	return mirrorPathsOn(app, archiveID, volID, false)
+}
+
+// unknownRefsOn lists the archive paths kept as unknown on vol's mirror package.
+func unknownRefsOn(app *App, archiveID, volID int) []string {
+	return mirrorPathsOn(app, archiveID, volID, true)
+}
+
+func mirrorPathsOn(app *App, archiveID, volID int, unknown bool) []string {
 	var out []string
-	for _, c := range app.Store.Chunks(archiveID) {
-		if !c.Mirror {
-			continue
+	if c := app.mirrorChunkOn(archiveID, volID); c != nil {
+		refs := c.Files
+		if unknown {
+			refs = c.UnknownFiles
 		}
-		for _, cp := range c.Copies {
-			if cp.VolumeID == volID && !cp.Superseded {
-				for _, r := range c.Files {
-					out = append(out, r.RelPath)
-				}
-			}
+		for _, r := range refs {
+			out = append(out, r.RelPath)
 		}
 	}
 	return out
@@ -80,21 +86,30 @@ func TestDockScan_UnreadableFoldersMakeItPartial(t *testing.T) {
 	if c, _ := res["complete"].(bool); c {
 		t.Error("ingest result says complete for a partial scan")
 	}
-	if got := mirrorRefsOn(app, coll.ID, vol.ID); len(got) != 2 {
-		t.Errorf("after a partial rescan the drive's mirror lists %v; the file under the unread folder was dropped (unknown, not missing)", got)
+	// The file under the unread folder is unknown: kept, but not counted as a copy.
+	if got, unk := mirrorRefsOn(app, coll.ID, vol.ID), unknownRefsOn(app, coll.ID, vol.ID); len(got) != 1 || len(unk) != 1 || unk[0] != "deep/b.txt" {
+		t.Errorf("after a partial rescan: mirror %v, unknown %v; want a.txt counted and deep/b.txt unknown", got, unk)
 	}
-
-	// A drive whose root cannot be listed is not scanned at all: the ingest
-	// fails and the earlier snapshot and record stay as they were.
-	before := app.Store.VolumeSnapshot(vol.ID).CapturedAt
-	makeUnlistable(t, drive)
-	if _, err := app.IngestDrive(ds.ID, drive, "SER-1", "D1", "", "", false, noProg); err == nil {
-		t.Error("a drive whose root cannot be listed was ingested")
+	if cov := app.archiveCoverage([]int{coll.ID}); cov.CoveredFiles != 1 || cov.Unknown != 1 {
+		t.Errorf("coverage %d covered, %d unknown; want 1 and 1", cov.CoveredFiles, cov.Unknown)
 	}
-	if got := app.Store.VolumeSnapshot(vol.ID).CapturedAt; !got.Equal(before) {
-		t.Error("a failed scan replaced the snapshot")
+	// Still unknown after another scan that cannot read it.
+	if _, err := app.IngestDrive(ds.ID, drive, "SER-1", "D1", "", "", false, noProg); err != nil {
+		t.Fatal(err)
 	}
-	if got := mirrorRefsOn(app, coll.ID, vol.ID); len(got) != 2 {
-		t.Errorf("a failed scan changed the drive's mirror: %v", got)
+	if unk := unknownRefsOn(app, coll.ID, vol.ID); len(unk) != 1 {
+		t.Errorf("a second partial rescan dropped the unknown file: %v", unk)
+	}
+	// Once the archive holds a newer version, the old one on the drive is not
+	// kept as the archive's file.
+	writeTree(t, src, map[string]string{"deep/b.txt": "bravo v2\n"})
+	if _, _, err := app.ScanFolder(coll.ID, src, noProg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.IngestDrive(ds.ID, drive, "SER-1", "D1", "", "", false, noProg); err != nil {
+		t.Fatal(err)
+	}
+	if unk := unknownRefsOn(app, coll.ID, vol.ID); len(unk) != 0 {
+		t.Errorf("an outdated version was kept as unknown: %v", unk)
 	}
 }

@@ -441,51 +441,73 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 		return nil, err
 	}
 
-	// What this scan could not read is unknown, not gone: content an earlier scan
-	// of this drive saw only in those places stays on the drive's record.
-	unknownHash := map[string]bool{}
-	if prev := a.Store.VolumeSnapshot(vol.ID); prev != nil && snap.Scan == ScanPartial {
+	// What a partial scan could not read is unknown, not gone. A file an earlier
+	// scan matched on this drive, and this scan did not see, is kept apart as
+	// unknown (never counted as a copy or re-stamped as verified) unless the
+	// previous scan saw that content only in places this scan did read, which shows
+	// it is no longer there. Only the archive's current version is kept.
+	knownAbsent := func(string) bool { return false }
+	if prev := a.Store.VolumeSnapshot(vol.ID); prev != nil {
+		seenAt := map[string]bool{} // hash -> every place the previous scan saw it is known now
 		for _, f := range prev.Files {
-			if f.Hash != "" && !snap.Known(f.RelPath) {
-				unknownHash[f.Hash] = true
+			if f.Hash == "" {
+				continue
 			}
+			known, ok := seenAt[f.Hash]
+			seenAt[f.Hash] = (known || !ok) && snap.Known(f.RelPath)
 		}
+		knownAbsent = func(h string) bool { return seenAt[h] }
 	}
 
 	// Record the matches as a verified mirror package per archive.
 	progress(0.84, "recording matches")
-	totalMatched, carried := 0, 0
+	totalMatched, unknownFiles := 0, 0
 	for _, aid := range ds.ArchiveIDs {
 		fm := matchedByArchive[aid]
 		refs := make([]ChunkFileRef, 0, len(fm))
 		for _, f := range fm {
 			refs = append(refs, ChunkFileRef{FileID: f.ID, RelPath: f.RelPath, SizeBytes: f.SizeBytes, Hash: f.Hash})
 		}
-		kept := 0
-		if prior := a.mirrorChunkOn(aid, vol.ID); prior != nil && len(unknownHash) > 0 {
-			for _, r := range prior.Files {
-				if _, seen := fm[r.FileID]; !seen && unknownHash[r.Hash] {
-					refs = append(refs, r)
-					kept++
+		var unknown []ChunkFileRef
+		if prior := a.mirrorChunkOn(aid, vol.ID); prior != nil && snap.Scan == ScanPartial {
+			current := map[int]string{}
+			for _, f := range a.Store.FilesOf(aid) {
+				current[f.ID] = f.Hash
+			}
+			seen := map[int]bool{}
+			for _, r := range append(append([]ChunkFileRef(nil), prior.Files...), prior.UnknownFiles...) {
+				if _, matched := fm[r.FileID]; matched || seen[r.FileID] {
+					continue
+				}
+				seen[r.FileID] = true
+				if h, ok := current[r.FileID]; ok && r.Hash != "" && h == r.Hash && !knownAbsent(r.Hash) {
+					unknown = append(unknown, r)
 				}
 			}
 		}
-		if len(refs) == 0 {
+		if len(refs) == 0 && len(unknown) == 0 {
+			if p := a.mirrorChunkOn(aid, vol.ID); p != nil && len(p.UnknownFiles) > 0 {
+				p.UnknownFiles = nil
+				a.Store.UpdateChunk(p)
+			}
 			continue
 		}
 		sort.Slice(refs, func(i, j int) bool { return refs[i].RelPath < refs[j].RelPath })
+		sort.Slice(unknown, func(i, j int) bool { return unknown[i].RelPath < unknown[j].RelPath })
 		c := a.upsertMirrorChunk(aid, vol, mountPath, refs, mode)
-		if kept > 0 {
+		c.UnknownFiles = unknown
+		a.Store.UpdateChunk(c)
+		if len(unknown) > 0 {
 			a.Store.AppendVerifyEvent(c, VerifyEvent{At: time.Now().UTC(), OK: true, Path: mountPath, Advisory: true,
-				Note: fmt.Sprintf("%d file(s) kept from an earlier scan: they are in folders this scan could not read, so they were not checked again", kept)})
+				Note: fmt.Sprintf("%d file(s) an earlier scan found here are unknown: this scan could not read where they were, so they are not counted until a scan reads them again", len(unknown))})
 		}
 		totalMatched += len(fm)
-		carried += kept
+		unknownFiles += len(unknown)
 	}
 
 	d := &DockDrive{VolumeID: vol.ID, Serial: vol.Serial, Label: vol.Label, Mode: mode,
 		Matched: totalMatched, MatchedBytes: matchedBytes, Historical: hist, Other: other, Unreadable: unreadable,
-		Scan: snap.Scan, UnreadableFolders: len(snap.UnreadableFolders), Unknown: carried}
+		Scan: snap.Scan, UnreadableFolders: len(snap.UnreadableFolders), Unknown: unknownFiles}
 	if snap.Scan == ScanPartial {
 		d.Note = fmt.Sprintf("partial scan: %d folder(s) and %d file(s) could not be read; what they hold is unknown", len(snap.UnreadableFolders), len(snap.UnreadableFiles))
 	}
@@ -720,6 +742,7 @@ type CoverageArchive struct {
 	TotalFiles   int     `json:"total_files"`
 	CoveredFiles int     `json:"covered_files"`
 	Uncovered    int     `json:"uncovered_files"`
+	Unknown      int     `json:"unknown_files,omitempty"` // not covered, but on a drive a partial scan could not read
 	Pct          float64 `json:"pct"`
 	TotalBytes   int64   `json:"total_bytes"`
 	CoveredBytes int64   `json:"covered_bytes"`
@@ -733,6 +756,7 @@ type Coverage struct {
 	Pct          float64           `json:"pct"`
 	TotalBytes   int64             `json:"total_bytes"`
 	CoveredBytes int64             `json:"covered_bytes"`
+	Unknown      int               `json:"unknown_files,omitempty"` // not covered, but on a drive a partial scan could not read
 }
 
 // archiveCoverage computes, for the selected archives, how many source files now
@@ -741,6 +765,7 @@ type Coverage struct {
 func (a *App) archiveCoverage(archiveIDs []int) Coverage {
 	coveredIDs := map[int]bool{}
 	coveredHashes := map[string]bool{}
+	unknownIDs := map[int]bool{} // on a drive a partial scan could not read
 	for _, c := range a.Store.Chunks(0) {
 		if c.VerifiedCopyCount() == 0 {
 			continue
@@ -752,6 +777,9 @@ func (a *App) archiveCoverage(archiveIDs []int) Coverage {
 			if ref.Hash != "" {
 				coveredHashes[ref.Hash] = true
 			}
+		}
+		for _, ref := range c.UnknownFiles {
+			unknownIDs[ref.FileID] = true
 		}
 	}
 	var cov Coverage
@@ -767,6 +795,8 @@ func (a *App) archiveCoverage(archiveIDs []int) Coverage {
 			if coveredIDs[f.ID] || (f.Hash != "" && coveredHashes[f.Hash]) {
 				ca.CoveredFiles++
 				ca.CoveredBytes += f.SizeBytes
+			} else if unknownIDs[f.ID] {
+				ca.Unknown++
 			}
 		}
 		ca.Uncovered = ca.TotalFiles - ca.CoveredFiles
@@ -778,6 +808,7 @@ func (a *App) archiveCoverage(archiveIDs []int) Coverage {
 		cov.CoveredFiles += ca.CoveredFiles
 		cov.TotalBytes += ca.TotalBytes
 		cov.CoveredBytes += ca.CoveredBytes
+		cov.Unknown += ca.Unknown
 	}
 	cov.Uncovered = cov.TotalFiles - cov.CoveredFiles
 	if cov.TotalFiles > 0 {

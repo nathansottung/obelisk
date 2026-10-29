@@ -203,42 +203,46 @@ type ChunkFileRef struct {
 }
 
 type Chunk struct {
-	ID              int                `json:"id"`
-	CollectionID    int                `json:"collection_id"`
-	Name            string             `json:"name"`
-	Status          string             `json:"status"` // PLANNED BUILDING STAGED WRITING WRITTEN VERIFIED FAILED
-	MediaKind       string             `json:"media_kind"`
-	TargetBytes     int64              `json:"target_bytes"`
-	DataBytes       int64              `json:"data_bytes"`
-	EncBytes        int64              `json:"enc_bytes"`
-	FileCount       int                `json:"file_count"`
-	SrcRoot         string             `json:"src_root"`
-	HashAlg         string             `json:"hash_alg"`
-	TarHash         string             `json:"tar_hash"`
-	EncHash         string             `json:"enc_hash"` // hash of the payload file as written to media (ciphertext when encrypted, tar when not)
-	Encrypted       bool               `json:"encrypted"`
-	KeyRef          string             `json:"key_ref"`
-	PrivateManifest bool               `json:"private_manifest,omitempty"` // medium carries manifest.json.gpg, no plaintext listing
-	Par2            int                `json:"par2_redundancy"`
-	StagedDir       string             `json:"staged_dir"`
-	WrittenDest     string             `json:"written_dest"`
-	VerifyOK        *bool              `json:"verify_ok"`
-	Error           string             `json:"error"`
-	Files           []ChunkFileRef     `json:"files"`
-	BuildTimings    map[string]float64 `json:"build_timings,omitempty"`   // per-stage seconds: tar, hash, stage_verify, encrypt/stage, crypt_verify, par2
-	BuildVerified   *BuildVerified     `json:"build_verified,omitempty"`  // build-time proof the payload faithfully contains the source
-	VerifyEvents    []VerifyEvent      `json:"verify_events,omitempty"`   // append-only integrity-check log
-	RingStats       *RingStats         `json:"ring_stats,omitempty"`      // last write's ring-buffer telemetry
-	BuildWarnings   []string           `json:"build_warnings,omitempty"`  // non-fatal build issues the operator should see (e.g. BagIt tag files that failed to write)
-	Spanned         bool               `json:"spanned"`                   // payload split across several media
-	Segments        []Segment          `json:"segments,omitempty"`        // one per medium/tape when Spanned
-	Copies          []Copy             `json:"copies,omitempty"`          // physical copies of this chunk on registered volumes
-	Adopted         bool               `json:"adopted,omitempty"`         // cataloged from pre-existing media, not built here
-	Mirror          bool               `json:"mirror,omitempty"`          // content-hash-matched loose files on a drive (dock mirror adoption), not a packaged payload
-	ListingUnknown  bool               `json:"listing_unknown,omitempty"` // adopted without a manifest/TOC — contents unenumerated
-	CreatedAt       time.Time          `json:"created_at"`
-	WrittenAt       *time.Time         `json:"written_at,omitempty"`
-	VerifiedAt      *time.Time         `json:"verified_at,omitempty"`
+	ID              int            `json:"id"`
+	CollectionID    int            `json:"collection_id"`
+	Name            string         `json:"name"`
+	Status          string         `json:"status"` // PLANNED BUILDING STAGED WRITING WRITTEN VERIFIED FAILED
+	MediaKind       string         `json:"media_kind"`
+	TargetBytes     int64          `json:"target_bytes"`
+	DataBytes       int64          `json:"data_bytes"`
+	EncBytes        int64          `json:"enc_bytes"`
+	FileCount       int            `json:"file_count"`
+	SrcRoot         string         `json:"src_root"`
+	HashAlg         string         `json:"hash_alg"`
+	TarHash         string         `json:"tar_hash"`
+	EncHash         string         `json:"enc_hash"` // hash of the payload file as written to media (ciphertext when encrypted, tar when not)
+	Encrypted       bool           `json:"encrypted"`
+	KeyRef          string         `json:"key_ref"`
+	PrivateManifest bool           `json:"private_manifest,omitempty"` // medium carries manifest.json.gpg, no plaintext listing
+	Par2            int            `json:"par2_redundancy"`
+	StagedDir       string         `json:"staged_dir"`
+	WrittenDest     string         `json:"written_dest"`
+	VerifyOK        *bool          `json:"verify_ok"`
+	Error           string         `json:"error"`
+	Files           []ChunkFileRef `json:"files"`
+	// UnknownFiles (mirror packages): archive files an earlier dock scan found on
+	// this drive that a later, partial scan could not read. Not counted as copies
+	// or verified until a scan reads them again.
+	UnknownFiles   []ChunkFileRef     `json:"unknown_files,omitempty"`
+	BuildTimings   map[string]float64 `json:"build_timings,omitempty"`   // per-stage seconds: tar, hash, stage_verify, encrypt/stage, crypt_verify, par2
+	BuildVerified  *BuildVerified     `json:"build_verified,omitempty"`  // build-time proof the payload faithfully contains the source
+	VerifyEvents   []VerifyEvent      `json:"verify_events,omitempty"`   // append-only integrity-check log
+	RingStats      *RingStats         `json:"ring_stats,omitempty"`      // last write's ring-buffer telemetry
+	BuildWarnings  []string           `json:"build_warnings,omitempty"`  // non-fatal build issues the operator should see (e.g. BagIt tag files that failed to write)
+	Spanned        bool               `json:"spanned"`                   // payload split across several media
+	Segments       []Segment          `json:"segments,omitempty"`        // one per medium/tape when Spanned
+	Copies         []Copy             `json:"copies,omitempty"`          // physical copies of this chunk on registered volumes
+	Adopted        bool               `json:"adopted,omitempty"`         // cataloged from pre-existing media, not built here
+	Mirror         bool               `json:"mirror,omitempty"`          // content-hash-matched loose files on a drive (dock mirror adoption), not a packaged payload
+	ListingUnknown bool               `json:"listing_unknown,omitempty"` // adopted without a manifest/TOC — contents unenumerated
+	CreatedAt      time.Time          `json:"created_at"`
+	WrittenAt      *time.Time         `json:"written_at,omitempty"`
+	VerifiedAt     *time.Time         `json:"verified_at,omitempty"`
 }
 
 // Statuses a chunk can hold. ADOPTED-VERIFIED marks a package cataloged from
@@ -434,7 +438,8 @@ type DockDrive struct {
 	Other        int    `json:"other"`      // readable files matching nothing in the selected archives
 	Unreadable   int    `json:"unreadable"`
 	// Scan is the snapshot's completeness ("complete" / "partial"); Unknown counts
-	// files kept on the record because this scan could not read where they were.
+	// archive files an earlier scan found on the drive that this scan could not
+	// read (Chunk.UnknownFiles).
 	Scan              string     `json:"scan,omitempty"`
 	UnreadableFolders int        `json:"unreadable_folders,omitempty"`
 	Unknown           int        `json:"unknown,omitempty"`
