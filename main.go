@@ -844,6 +844,7 @@ func api(mux *http.ServeMux, app *App) {
 			return map[string]any{
 				"tar_path": res.TarPath, "sidecar_path": res.SidecarPath, "bytes": res.Bytes,
 				"member_count": res.MemberCount, "includes_keys": res.IncludesKeys, "artifacts": arts,
+				"scan_files_left_out": res.ScanFilesLeftOut,
 			}, nil
 		}))
 	})
@@ -955,7 +956,7 @@ func api(mux *http.ServeMux, app *App) {
 			rw := row{Collection: c, Files: len(fr), Bytes: b, Chunks: len(app.Store.Chunks(c.ID))}
 			if d := app.Store.DriftReport(c.ID); d != nil {
 				info := d.InfoCounts["new"] + d.InfoCounts["modified"] + d.InfoCounts["missing"] + d.InfoCounts["moved"]
-				rw.Drift = map[string]any{"at": d.At, "changes": d.Changes(), "informational": info}
+				rw.Drift = map[string]any{"at": d.At, "changes": d.Changes(), "unknown": d.Unknown(), "informational": info}
 			}
 			out = append(out, rw)
 		}
@@ -1144,11 +1145,11 @@ func api(mux *http.ServeMux, app *App) {
 			d, err := app.ReconcileCollection(id, scope, p)
 			var res map[string]any
 			if d != nil {
-				res = map[string]any{"collection_id": id, "changes": d.Changes(), "scoped": scope != ""}
+				res = map[string]any{"collection_id": id, "changes": d.Changes(), "unknown": d.Unknown(), "scoped": scope != ""}
 				if scope == "" {
 					// Whole-archive run persists the badge-linked report — deep-link to it.
 					res["artifacts"] = []Artifact{{
-						Kind: "drift", Label: fmt.Sprintf("Drift report — %d change(s)", d.Changes()),
+						Kind: "drift", Label: driftLabel(d),
 						Count: d.Changes(), ShowView: "drift", ShowID: id,
 					}}
 				} else {
@@ -2704,6 +2705,8 @@ func api(mux *http.ServeMux, app *App) {
 			"smart": snap.Smart, "report": app.driveReport(snap),
 		})
 	})
+	// Comparing scans and the cross-drive lists (compare_routes.go).
+	registerCompareRoutes(mux, app)
 	// The drive's scan history, newest first: one record per scan (complete or
 	// partial); the file lists stay in the scans folder.
 	mux.HandleFunc("GET /api/volumes/{id}/scans", func(w http.ResponseWriter, r *http.Request) {

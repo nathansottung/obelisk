@@ -77,7 +77,7 @@ func (a *App) DataMap() (DataMap, error) {
 		Name: "Drive scan history",
 		What: "The file list of each scan of a docked drive (paths, sizes, hashes), compressed, so earlier scans can be compared. Nothing here is your file content.",
 		Path: a.scansDir(),
-		Note: fmt.Sprintf("The newest %d scans of each drive are kept (scan_history_retained in the settings file). App backups do not include them.", scansRetained(cfg)),
+		Note: fmt.Sprintf("The newest %d scans of each drive are kept (scan_history_retained in the settings file). App backups include them.", scansRetained(cfg)),
 	})
 
 	staging := DataLocation{

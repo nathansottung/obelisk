@@ -24,6 +24,10 @@ require (
 	// create, rename and dispose plus ACL and volume queries, and Linux renameat,
 	// fstatfs and flock. Pure Go, no CGO. See docs/ARCHITECTURE.md.
 	golang.org/x/sys v0.44.0
+	// Unicode normalization (NFC) for comparing file names across drives and
+	// platforms (classify.go): the same accented name can be stored in two forms.
+	// From the Go project, pure Go, no CGO. See docs/ARCHITECTURE.md.
+	golang.org/x/text v0.41.0
 )
 
 // klauspost/cpuid is BLAKE3's only transitive dep — a tiny pure-Go CPU-feature

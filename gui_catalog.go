@@ -112,8 +112,14 @@ func validateGUICatalog(c *catalog) error {
 	// Refuse advanced populated sections rather than partially presenting their meaning.
 	allowed := map[string]bool{"SchemaVersion": true, "NextID": true, "Collections": true, "Folders": true, "Files": true, "Chunks": true, "Volumes": true, "Locations": true, "Audit": true}
 	v := reflect.ValueOf(*c)
+	populated := func(f reflect.Value) bool {
+		if f.Kind() == reflect.Pointer {
+			return !f.IsNil()
+		}
+		return f.Len() > 0
+	}
 	for i := 0; i < v.NumField(); i++ {
-		if !allowed[v.Type().Field(i).Name] && v.Field(i).Len() > 0 {
+		if !allowed[v.Type().Field(i).Name] && populated(v.Field(i)) {
 			return fmt.Errorf("unsupported populated section: %s", v.Type().Field(i).Name)
 		}
 	}

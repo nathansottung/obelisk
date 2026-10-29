@@ -1,8 +1,11 @@
 package main
 
 // drift.go — inventory reconciliation. Compare a collection's source folders as
-// they are NOW against what its chunks actually hold, and classify every path:
-// UNCHANGED, NEW, MODIFIED, MISSING, MOVED. The NEW state (a file present on
+// they are NOW against what its chunks actually hold, and classify every path
+// with the shared classifier (classify.go): UNCHANGED, NEW, MODIFIED, MISSING,
+// MOVED, or UNKNOWN for a packaged file in a folder or file the rescan could not
+// read. Paths are compared by this platform's rules (letter case is ignored on
+// Windows and macOS; names are compared in one Unicode form). The NEW state (a file present on
 // disk but not yet in any package) is surfaced to users as UNARCHIVED; the
 // stored state value stays "NEW" so old drift reports keep loading — the UI/docs
 // map it for display. Different file types drift for different reasons, so the
@@ -103,7 +106,6 @@ func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress
 		fileID                int
 	}
 	backedByPath := map[string]*backed{}
-	backedByHash := map[string][]*backed{}
 	for _, c := range a.Store.Chunks(collectionID) {
 		if c.Status == "FAILED" {
 			continue
@@ -132,9 +134,6 @@ func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress
 			}
 			b := &backed{abs: abs, rel: rel, hash: h, chunk: c.Name, vols: vols, fileID: cf.FileID}
 			backedByPath[abs] = b
-			if h != "" {
-				backedByHash[h] = append(backedByHash[h], b)
-			}
 		}
 	}
 
@@ -144,6 +143,14 @@ func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress
 	// table and the drift report are written — never the source files.
 	progress(0.02, "listing files")
 	var paths []string
+	var unread []string      // folders and files the rescan could not read (path-rule keys)
+	var unreadShown []string // the same, as found, for the report (at most 200)
+	noteUnread := func(p string) {
+		unread = append(unread, HostPathRules().key(filepath.ToSlash(p)))
+		if len(unreadShown) < 200 {
+			unreadShown = append(unreadShown, p)
+		}
+	}
 	perFolder := map[string]int{}
 	for _, fo := range folders {
 		// Scoped rescan: skip a scanned root that can't intersect the prefix, and prune
@@ -153,6 +160,8 @@ func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress
 		}
 		_ = filepath.WalkDir(fo.Path, func(p string, d os.DirEntry, err error) error {
 			if err != nil {
+				// Not read: what it holds is unknown, not missing.
+				noteUnread(p)
 				return nil
 			}
 			if d.IsDir() {
@@ -189,6 +198,10 @@ func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress
 			a.Store.UpsertFile(File{CollectionID: collectionID, FolderID: fol,
 				RelPath: filepath.ToSlash(rel), SizeBytes: size, HashAlg: "SHA256", Hash: sha, Blake3: b3, ModTime: mtime})
 		}
+	}, func(p, kind, msg string) {
+		mu.Lock()
+		noteUnread(p)
+		mu.Unlock()
 	})
 	a.Store.Flush()
 
@@ -217,6 +230,8 @@ func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress
 			e.New++
 		case "MOVED":
 			e.Moved++
+		case "UNKNOWN":
+			e.Unknown++
 		}
 		if it.Informational {
 			info[strings.ToLower(it.State)]++
@@ -226,51 +241,52 @@ func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress
 		items = append(items, it)
 	}
 
-	missing := map[string]*backed{}
-	for abs, b := range backedByPath {
-		if curByAbs[abs] == nil {
-			missing[abs] = b
-		}
-	}
-	usedMissing := map[string]bool{}
+	// Compare with the shared classifier: the packaged files are the reference and
+	// what is on disk now the other set. A packaged file in a folder (or a file)
+	// the rescan could not read is UNKNOWN, never MISSING.
+	rules := HostPathRules()
 	relOf := func(abs string) string {
 		if rel, e := filepath.Rel(folderPath[perFolder[abs]], abs); e == nil {
 			return filepath.ToSlash(rel)
 		}
 		return abs
 	}
-
-	for abs, c := range curByAbs {
-		if b := backedByPath[abs]; b != nil {
-			if b.hash == c.hash {
-				counts["unchanged"]++
-			} else {
-				it := DriftItem{State: "MODIFIED", Path: b.rel, Hash: c.hash, Chunk: b.chunk, Volumes: b.vols, FileID: b.fileID, PriorHash: b.hash}
-				it.PriorVersion = a.priorVersionLocator(b.fileID, b.hash)
-				add(it)
-			}
-			continue
-		}
-		// NEW unless its content matches a now-missing backed-up file (MOVED).
-		var src *backed
-		for _, cand := range backedByHash[c.hash] {
-			if missing[cand.abs] != nil && !usedMissing[cand.abs] {
-				src = cand
-				break
-			}
-		}
-		if src != nil {
-			usedMissing[src.abs] = true
-			add(DriftItem{State: "MOVED", Path: relOf(abs), Hash: c.hash, MovedFrom: src.rel})
-		} else {
-			add(DriftItem{State: "NEW", Path: relOf(abs), Hash: c.hash})
-		}
+	var refSide, curSide ClassSide
+	for abs, b := range backedByPath {
+		refSide.Files = append(refSide.Files, ClassFile{Path: filepath.ToSlash(abs), Hash: b.hash})
 	}
-	for abs, b := range missing {
-		if usedMissing[abs] {
-			continue
+	for abs, c := range curByAbs {
+		curSide.Files = append(curSide.Files, ClassFile{Path: filepath.ToSlash(abs), Hash: c.hash, Size: c.size})
+	}
+	curSide.Known = func(p string) bool {
+		k := rules.key(p)
+		for _, u := range unread {
+			if k == u || strings.HasPrefix(k, u+"/") {
+				return false
+			}
 		}
-		add(DriftItem{State: "MISSING", Path: b.rel, Hash: b.hash, Chunk: b.chunk, Volumes: b.vols})
+		return true
+	}
+	for _, r := range Classify(refSide, curSide, rules).Results {
+		b := backedByPath[filepath.FromSlash(r.RefPath)]
+		switch r.State {
+		case ClassSame:
+			counts["unchanged"]++
+		case ClassChanged:
+			it := DriftItem{State: "MODIFIED", Path: b.rel, Hash: r.Hash, Chunk: b.chunk, Volumes: b.vols, FileID: b.fileID, PriorHash: b.hash}
+			it.PriorVersion = a.priorVersionLocator(b.fileID, b.hash)
+			add(it)
+		case ClassMoved:
+			add(DriftItem{State: "MOVED", Path: relOf(filepath.FromSlash(r.Path)), Hash: r.Hash, MovedFrom: b.rel})
+		case ClassNew:
+			add(DriftItem{State: "NEW", Path: relOf(filepath.FromSlash(r.Path)), Hash: r.Hash})
+		case ClassMissing:
+			add(DriftItem{State: "MISSING", Path: b.rel, Hash: b.hash, Chunk: b.chunk, Volumes: b.vols})
+		case ClassUnknown:
+			if b != nil {
+				add(DriftItem{State: "UNKNOWN", Path: b.rel, Hash: b.hash, Chunk: b.chunk, Volumes: b.vols})
+			}
+		}
 	}
 
 	byExt := make([]ExtDrift, 0, len(extAgg))
@@ -287,7 +303,7 @@ func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress
 
 	infoTotal := info["new"] + info["modified"] + info["missing"] + info["moved"]
 	rep := &DriftReport{At: time.Now().UTC(), CollectionID: collectionID,
-		Counts: counts, InfoCounts: info, ByExt: byExt, Items: items}
+		Counts: counts, InfoCounts: info, ByExt: byExt, Items: items, Unread: unreadShown}
 	if persist {
 		a.Store.ReplaceDriftReport(rep) // whole-archive run drives the Archives drift badge
 		a.Store.Log("reconcile", fmt.Sprintf("archive %d: %d change(s), %d informational", collectionID, rep.Changes(), infoTotal))
@@ -296,4 +312,13 @@ func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress
 	}
 	progress(1.0, fmt.Sprintf("%d changes · %d informational", rep.Changes(), infoTotal))
 	return rep, nil
+}
+
+// driftLabel names a drift report by its changes and its unknown files.
+func driftLabel(d *DriftReport) string {
+	l := fmt.Sprintf("Drift report — %d change(s)", d.Changes())
+	if n := d.Unknown(); n > 0 {
+		l += fmt.Sprintf(", %d unknown (could not be read)", n)
+	}
+	return l
 }

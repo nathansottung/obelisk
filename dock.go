@@ -29,7 +29,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -66,10 +65,10 @@ type DockCandidate struct {
 
 // StartDockSession opens a session reconciling against archiveIDs, snapshotting
 // the mounts present now so the watcher can diff for newly-inserted drives.
+//
+// With no archives the session only scans: each drive's snapshot and scan are
+// recorded, and nothing is matched or adopted.
 func (a *App) StartDockSession(archiveIDs []int) (*DockSession, error) {
-	if len(archiveIDs) == 0 {
-		return nil, fmt.Errorf("choose at least one Archive to reconcile the drives against")
-	}
 	for _, id := range archiveIDs {
 		if a.Store.Collection(id) == nil {
 			return nil, fmt.Errorf("archive %d not found", id)
@@ -80,7 +79,11 @@ func (a *App) StartDockSession(archiveIDs []int) (*DockSession, error) {
 		baseline = append(baseline, m.Path)
 	}
 	ds := a.Store.AddDockSession(&DockSession{ArchiveIDs: archiveIDs, Baseline: baseline, Status: "ACTIVE"})
-	a.Store.Log("dock", fmt.Sprintf("session %d started for archive(s) %v", ds.ID, archiveIDs))
+	if len(archiveIDs) == 0 {
+		a.Store.Log("dock", fmt.Sprintf("session %d started to scan drives only (no archive)", ds.ID))
+	} else {
+		a.Store.Log("dock", fmt.Sprintf("session %d started for archive(s) %v", ds.ID, archiveIDs))
+	}
 	return ds, nil
 }
 
@@ -308,7 +311,6 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 	if err := a.Store.CheckOutsideSources(mountPath); err != nil {
 		return nil, err
 	}
-	reg := a.formatRegistry() // extension → sustainability tier + workflow role
 
 	// Content indexes from the selected archives. The dock first-pass matches by
 	// BLAKE3 (the fast hot-loop hash) when the catalog has it, falling back to
@@ -343,65 +345,21 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 		}
 	}
 
-	// Walk the drive (skipping our own sidecar dir and OS junk), collect files.
+	// Walk and hash the drive (recording what it cannot read), and classify each
+	// file by content against the archives.
 	progress(0.06, "scanning drive")
-	// Every folder the walk cannot list, and every system folder it skips, is
-	// recorded, so the snapshot can say which parts of the drive it did not see.
-	var paths []string
-	var gaps scanGaps
-	if err := dockWalkDir(mountPath, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			if p == mountPath {
-				return err // the drive itself cannot be read: no scan at all
-			}
-			gaps.unreadableFolders = append(gaps.unreadableFolders, ScanGap{RelPath: driveRel(mountPath, p), Reason: scanReason(err)})
-			return nil // the rest of the drive is still scanned
-		}
-		if d.IsDir() {
-			if p != mountPath && skipDockDir(d.Name()) {
-				gaps.skippedFolders = append(gaps.skippedFolders, ScanGap{RelPath: driveRel(mountPath, p), Reason: "system folder, not scanned"})
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		paths = append(paths, p)
-		return nil
-	}); err != nil {
-		return nil, fmt.Errorf("cannot read the docked drive %s: %s", mountPath, scanReason(err))
-	}
-
-	// Hash all files in parallel; for EACH file both (a) record a snapshot entry
-	// (role + best-effort EXIF) and (b) classify it by content against the archives.
-	var mu sync.Mutex
 	matchedByArchive := map[int]map[int]*File{} // archiveID -> fileID -> File
-	snapFiles := make([]SnapFile, 0, len(paths))
 	var matchedBytes int64
 	var hist, other int
-	var hashed int64
-	total := len(paths)
-	if total == 0 {
-		total = 1
-	}
-	parallelHash(paths,
-		func(done int) {
-			progress(0.06+float64(done)/float64(total)*0.74, progStats(0, 0, int64(done), int64(len(paths)), "hashing drive files"))
+	snapFiles, gaps, unreadable, serr := a.scanTree(mountPath, cfg,
+		func(done, total int) {
+			progress(0.06+float64(done)/float64(max(total, 1))*0.74, progStats(0, 0, int64(done), int64(total), "hashing drive files"))
 		},
-		func(p, sha, b3 string, size int64, mtime time.Time) {
-			atomic.AddInt64(&hashed, 1)
-			// Snapshot entry — classify by role, and for still-image roles pull the
-			// EXIF capture time + camera body serial (bounded header read, outside the
-			// lock; unparseable = empty, never an error).
-			rel := driveRel(mountPath, p)
-			role, crit := classifyRole(reg, rel)
-			sf := SnapFile{RelPath: rel, SizeBytes: size, ModTime: mtime, Hash: sha, Blake3: b3, Role: role, Critical: crit}
-			sf.ShotAt, sf.CameraSerial = a.extractMediaMeta(p, role, cfg)
-			mu.Lock()
-			defer mu.Unlock()
-			snapFiles = append(snapFiles, sf)
+		func(sf SnapFile) {
 			// BLAKE3 first (fast path), then SHA-256 for legacy catalog entries.
-			fs, ok := currentByBlake3[b3]
+			fs, ok := currentByBlake3[sf.Blake3]
 			if !ok {
-				fs, ok = currentByHash[sha]
+				fs, ok = currentByHash[sf.Hash]
 			}
 			if ok {
 				for _, f := range fs {
@@ -425,18 +383,15 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 						f.CameraSerial = sf.CameraSerial
 					}
 				}
-			} else if histHashes[sha] {
+			} else if histHashes[sf.Hash] {
 				hist++
 			} else {
 				other++
 			}
-		},
-		func(p, kind, msg string) {
-			mu.Lock()
-			defer mu.Unlock()
-			gaps.unreadableFiles = append(gaps.unreadableFiles, ScanGap{RelPath: driveRel(mountPath, p), Reason: fileScanReason(kind)})
 		})
-	unreadable := len(paths) - int(hashed)
+	if serr != nil {
+		return nil, fmt.Errorf("cannot read the docked drive %s: %s", mountPath, scanReason(serr))
+	}
 
 	snap := a.buildSnapshot(ds, vol, health, snapFiles, unreadable, gaps)
 	// The scan's own record and file list are saved before the snapshot and the
@@ -452,7 +407,8 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 	// previous scan saw that content only in places this scan did read, which shows
 	// it is no longer there. Only the archive's current version is kept.
 	knownAbsent := func(string) bool { return false }
-	if prev := a.Store.VolumeSnapshot(vol.ID); prev != nil {
+	// Only a snapshot of the whole drive says where things were on it.
+	if prev := a.Store.VolumeSnapshot(vol.ID); prev != nil && prev.Root == "" {
 		seenAt := map[string]bool{} // hash -> every place the previous scan saw it is known now
 		for _, f := range prev.Files {
 			if f.Hash == "" {
@@ -576,6 +532,62 @@ func (a *App) buildSnapshot(ds *DockSession, vol *Volume, health *SmartSnapshot,
 
 // dockWalkDir walks a docked drive. A variable so a test can make the walk fail.
 var dockWalkDir = filepath.WalkDir
+
+// scanTree walks root and hashes every file under it, read-only, recording each
+// folder it cannot list, each file it cannot read and each system folder it skips.
+// each is called for every file hashed, one at a time, with its snapshot entry
+// (role, and best-effort media metadata). It returns the entries, the gaps and
+// the number of files that could not be hashed; an error means root itself could
+// not be read and nothing was scanned.
+func (a *App) scanTree(root string, cfg Config, progress func(done, total int), each func(SnapFile)) ([]SnapFile, scanGaps, int, error) {
+	var paths []string
+	var gaps scanGaps
+	if err := dockWalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if p == root {
+				return err // the top folder itself cannot be read: no scan at all
+			}
+			gaps.unreadableFolders = append(gaps.unreadableFolders, ScanGap{RelPath: driveRel(root, p), Reason: scanReason(err)})
+			return nil // the rest is still scanned
+		}
+		if d.IsDir() {
+			if p != root && skipDockDir(d.Name()) {
+				gaps.skippedFolders = append(gaps.skippedFolders, ScanGap{RelPath: driveRel(root, p), Reason: "system folder, not scanned"})
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		paths = append(paths, p)
+		return nil
+	}); err != nil {
+		return nil, scanGaps{}, 0, err
+	}
+	reg := a.formatRegistry()
+	var mu sync.Mutex
+	files := make([]SnapFile, 0, len(paths))
+	parallelHash(paths,
+		func(done int) { progress(done, len(paths)) },
+		func(p, sha, b3 string, size int64, mtime time.Time) {
+			// Role, and for still-image roles the EXIF capture time + camera body
+			// serial (bounded header read, outside the lock; unparseable = empty).
+			rel := driveRel(root, p)
+			role, crit := classifyRole(reg, rel)
+			sf := SnapFile{RelPath: rel, SizeBytes: size, ModTime: mtime, Hash: sha, Blake3: b3, Role: role, Critical: crit}
+			sf.ShotAt, sf.CameraSerial = a.extractMediaMeta(p, role, cfg)
+			mu.Lock()
+			defer mu.Unlock()
+			files = append(files, sf)
+			if each != nil {
+				each(sf)
+			}
+		},
+		func(p, kind, msg string) {
+			mu.Lock()
+			defer mu.Unlock()
+			gaps.unreadableFiles = append(gaps.unreadableFiles, ScanGap{RelPath: driveRel(root, p), Reason: fileScanReason(kind)})
+		})
+	return files, gaps, len(paths) - len(files), nil
+}
 
 // scanGaps collects what a drive scan did not read.
 type scanGaps struct {

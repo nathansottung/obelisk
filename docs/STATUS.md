@@ -15,3 +15,5 @@ tracked in the defect register, [development/OB_STATUS.md](development/OB_STATUS
 | Delete gate: prepare, confirm with a typed word, re-count before running | Safety | Merged | [#9](https://github.com/nathansottung/obelisk/pull/9) | 2026-10-28 |
 | Config trust: burn command without a shell, validated tools and keystores, owner-only secrets | Safety | Merged | [#10](https://github.com/nathansottung/obelisk/pull/10) | 2026-10-29 |
 | Slice C: guard the remaining writers | Safety | Merged | [#12](https://github.com/nathansottung/obelisk/pull/12) | 2026-10-29 |
+| Cross-drive, part 1: record what each drive scan could not read, and keep a history of scans | Coverage | Merged | [#13](https://github.com/nathansottung/obelisk/pull/13) | 2026-10-29 |
+| Cross-drive, part 2: compare drives against a reference (reports only), shared file classifier, scan history in app backups | Coverage | Merged | [#14](https://github.com/nathansottung/obelisk/pull/14) | 2026-10-29 |

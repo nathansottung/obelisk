@@ -502,6 +502,7 @@ const HELP={
   jobs:['Jobs — background work','Long operations (scan, build, write, verify, compare, recovery kit) run in the background so the UI stays responsive. It is safe to navigate away; this list refreshes automatically while anything is still running. Click any job — running or finished — to open its detail: a plain summary, live counters, and an Artifacts list where every output has a Show action that opens the thing itself. Jobs persist across restarts; one interrupted by a shutdown shows as INTERRUPTED so you can re-run it.'],
   explore:['Explore data — structure, sizes & what’s verified','One screen to browse any archive or inventoried drive the same way: a size-weighted treemap (area = bytes) plus a breakdown panel (totals, largest folders, roles, per-extension counts). Colour the map by Protection, Drift, or Validation — verified ✓ (a proven copy exists), hashed-but-unverified, or failed ✗ — always shown as colour + text. Reachable on its own, or opened scoped from a scan/verify job’s "View results".'],
   settings:['Settings — one config file','Everything lives in one config.json in the data folder: paths to the external tools, the staging folder, keystore locations, redundancy goal, re-verify window, write throttle, and the optical burn command. Preflight at the top shows whether tar/gpg/par2 (and any LTFS tape) are ready.'],
+  compare:['Compare drives — reports only','Pick a drive or an archive as the reference, then compare any drive scan against it: each file is Same, Changed, Moved, New, Missing or Unknown (in a place one side could not read). Each comparison is saved with its counts, and its list exports as CSV or JSON. Files by drive lists what only one drive holds and what two or more hold, from each drive’s latest complete scan. Nothing here changes a package, copy or count.'],
   where:['Where your data lives — the honesty map','One screen listing everything Obelisk ever writes — the catalog and its daily backups, config, keystores, staging, the destinations you pick, the small inventory/seal sidecars it puts ONLY on media it writes itself, and the reversible quarantine folders — followed by the equally prominent inverse: what it NEVER writes to (your source folders and drives you adopt). Every path is read from your live settings. The one enforcement rule (every write destination is checked against your sources and refused if it lands inside one) is backed by named tests you can run yourself.'],
 };
 function helpBtn(k){return `<button class="help" aria-label="Help: what the ${esc(k)} view is for" title="What is this view for?" onclick="showHelp('${k}')">i</button>`}
@@ -770,8 +771,8 @@ async function doRecompute2(id){try{const r=await api('POST','/api/protection/re
    colors (or drift state). Computed from the catalog only — never the disk. One
    zoom level per request; click a folder to zoom in, breadcrumb to zoom out. */
 const PROT_HEX={COMPLETE:'#2e5e4e',OVER_COMPLETE:'#1e3d8f',PARTIAL:'#9a6b1f',NOT_BACKED_UP:'#a03123',OUT_OF_POLICY:'#6b2d86',UNASSIGNED:'#8a938c'};
-const DRIFT={UNCHANGED:{c:'#2e5e4e',t:'Unchanged'},MOVED:{c:'#1e3d8f',t:'Moved'},NEW:{c:'#8a938c',t:'Unarchived'},MODIFIED:{c:'#9a6b1f',t:'Modified'},MISSING:{c:'#a03123',t:'Missing'}};
-const DRIFT_ORDER=['UNCHANGED','MOVED','NEW','MODIFIED','MISSING'];
+const DRIFT={UNCHANGED:{c:'#2e5e4e',t:'Unchanged'},MOVED:{c:'#1e3d8f',t:'Moved'},NEW:{c:'#8a938c',t:'Unarchived'},MODIFIED:{c:'#9a6b1f',t:'Modified'},MISSING:{c:'#a03123',t:'Missing'},UNKNOWN:{c:'#6b2d86',t:'Unknown (not read)'}};
+const DRIFT_ORDER=['UNCHANGED','MOVED','NEW','MODIFIED','UNKNOWN','MISSING'];
 /* Validation coloring — catalog-derived verify state (Explorer). Green = a verified
    copy exists; red = a covering copy failed a check; neutral = hashed but no verified
    copy; grey = not even hashed. Text carries the ✓/✗ so status is never colour-alone. */
@@ -1184,7 +1185,7 @@ async function vHome(){
     h+=`<a class="hcard" href="#vault">
       <div class="hcard-t">${esc(a.name)}${a.sourceless?' <span class="etag" style="font-size:9px">adopted</span>':''}</div>
       <div class="dim" style="font-size:11.5px">${commaN(a.files)} files · ${homeBytes(a.bytes)}</div>
-      <div style="margin-top:7px">${prot}${a.drift_changes?` <a href="#" data-call="vDrift" data-args="${callArgs(a.id,a.name)}" class="etag due" style="text-decoration:none">${commaN(a.drift_changes)} drift</a>`:''}</div>
+      <div style="margin-top:7px">${prot}${a.drift_changes?` <a href="#" data-call="vDrift" data-args="${callArgs(a.id,a.name)}" class="etag due" style="text-decoration:none">${commaN(a.drift_changes)} drift</a>`:''}${a.drift_unknown?` <a href="#" data-call="vDrift" data-args="${callArgs(a.id,a.name)}" class="etag due" style="text-decoration:none" title="the last rescan could not read where these files are">${commaN(a.drift_unknown)} unknown</a>`:''}</div>
     </a>`;
   }
   if(ung){
@@ -1200,6 +1201,7 @@ async function vHome(){
   // (3) Health strip — each a click-through.
   const chips=[];
   if(hl.under_protected)chips.push(`<a class="btn danger" href="#protection">Warning: ${commaN(hl.under_protected)} under-protected file${hl.under_protected===1?'':'s'}</a>`);
+  if(hl.drift_unknown)chips.push(`<a class="btn ghost" href="#vault" title="the last rescans could not read where these files are">${commaN(hl.drift_unknown)} file${hl.drift_unknown===1?'':'s'} not checked by the last rescan</a>`);
   if(hl.drift_alarms)chips.push(`<a class="btn ghost" href="#vault">${commaN(hl.drift_alarms)} drift change${hl.drift_alarms===1?'':'s'} · ${hl.drift_archives} archive${hl.drift_archives===1?'':'s'}</a>`);
   if(hl.verify_due)chips.push(`<a class="btn ghost" href="#packages">${commaN(hl.verify_due)} package${hl.verify_due===1?'':'s'} verify-due</a>`);
   if(hl.failing_volumes)chips.push(`<a class="btn danger" href="#volumes">Warning: ${hl.failing_volumes} drive${hl.failing_volumes===1?'':'s'} reporting failing health</a>`);
@@ -1524,7 +1526,7 @@ async function vVault(){
       <button class="btn ghost" data-call="mirrorDlg" data-args="${callArgs(c.id,c.name)}">Mirror backup…</button>
       <button class="btn ghost" data-call="doReconcile" data-args="${callArgs(c.id,c.name)}">Rescan & compare</button>`;
       const slActions=`<button class="btn ghost" data-call="adoptFolderDlg" data-args="${callArgs(c.id,c.name)}">Adopt a drive…</button>`;
-      h+=`<tr><td>${!sl?`<span id="arccar-${c.id}" class="ftcar" role="button" tabindex="0" aria-expanded="false" aria-label="Show folder tree for ${esc(c.name)}" onclick="ftreeToggle(${c.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}"></span>`:''}${esc(c.name)}${sl?' <span class="etag" title="No source folder — its files are the union of adopted drives">scattered</span>':''}${!sl&&dr&&dr.changes>0?` <a href="#" data-call="vDrift" data-args="${callArgs(c.id,c.name)}" class="etag due" style="text-decoration:none">${dr.changes} changes${dr.informational?' · '+dr.informational+' informational':''}</a>`:(!sl&&dr)?` <span class="etag enc">in sync</span>`:''}</td>
+      h+=`<tr><td>${!sl?`<span id="arccar-${c.id}" class="ftcar" role="button" tabindex="0" aria-expanded="false" aria-label="Show folder tree for ${esc(c.name)}" onclick="ftreeToggle(${c.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}"></span>`:''}${esc(c.name)}${sl?' <span class="etag" title="No source folder — its files are the union of adopted drives">scattered</span>':''}${!sl&&dr&&(dr.changes>0||dr.unknown>0)?` <a href="#" data-call="vDrift" data-args="${callArgs(c.id,c.name)}" class="etag due" style="text-decoration:none" title="${dr.unknown?'the last rescan could not read where some files are, so it could not check them':''}">${dr.changes?dr.changes+' changes':''}${dr.changes&&dr.unknown?' · ':''}${dr.unknown?dr.unknown+' unknown':''}${dr.informational?' · '+dr.informational+' informational':''}</a>`:(!sl&&dr)?` <span class="etag enc">in sync</span>`:''}</td>
       <td class="num">${c.files}</td><td class="num">${GB(c.bytes)} GB</td>
       <td class="num">${c.chunks}</td><td class="row" style="justify-content:flex-end">
       ${sl?slActions:srcActions}
@@ -1968,28 +1970,29 @@ async function vDrift(id,name){
   <div class="row" style="margin-bottom:10px"><button class="btn ghost" onclick="loc('vault')">← Vault</button>
     <button class="btn" data-call="doReconcile" data-args="${callArgs(id,name||'')}">Rescan again</button></div>
   <div class="panel"><h2>Summary</h2><div class="row" style="gap:14px">
-    <span class="stamp ${changes?'FAILED':'VERIFIED'}">${changes} changes</span>
-    <span class="dim">unchanged ${c.unchanged||0} · <span title="present on disk, not yet in any package">unarchived ${c.new||0}</span> · modified ${c.modified||0} · missing ${c.missing||0} · moved ${c.moved||0}</span>
-    ${infoTotal?`<span class="dim">informational (excluded): ${infoTotal}</span>`:''}</div></div>
+    <span class="stamp ${changes||c.unknown?'FAILED':'VERIFIED'}">${changes} changes${c.unknown?' · '+c.unknown+' unknown':''}</span>
+    <span class="dim">unchanged ${c.unchanged||0} · <span title="present on disk, not yet in any package">unarchived ${c.new||0}</span> · modified ${c.modified||0} · missing ${c.missing||0} · moved ${c.moved||0} · <span title="in a folder or file the rescan could not read">unknown ${c.unknown||0}</span></span>
+    ${infoTotal?`<span class="dim">informational (excluded): ${infoTotal}</span>`:''}</div>
+    ${(d.unread||[]).length?`<div style="font-size:12.5px;margin-top:6px;color:var(--bad)">Could not read: ${d.unread.slice(0,5).map(esc).join(', ')}${d.unread.length>5?', …':''}. Packaged files there are Unknown, not Missing; reconnect or fix access and rescan.</div>`:''}</div>
   <div class="panel"><h2>By file type — different types mean different things</h2>`;
   const rows=(d.by_ext||[]).filter(e=>!e.informational);const inf=(d.by_ext||[]).filter(e=>e.informational);
   if(!rows.length&&!inf.length)h+='<div class="empty">No differences — sources match the backup.</div>';
-  else{h+='<table><tr><th>Type</th><th class="num">Missing</th><th class="num">Modified</th><th class="num" title="present on disk, not yet in any package">Unarchived</th><th class="num">Moved</th></tr>';
+  else{h+='<table><tr><th>Type</th><th class="num">Missing</th><th class="num">Modified</th><th class="num" title="present on disk, not yet in any package">Unarchived</th><th class="num">Moved</th><th class="num" title="in a place the rescan could not read">Unknown</th></tr>';
     for(const e of rows)h+=extRow(e);
-    if(inf.length){h+='<tr><td colspan="5" class="dim" style="padding-top:8px">informational (sidecar churn — excluded from alarm totals)</td></tr>';for(const e of inf)h+=extRow(e,true);}
+    if(inf.length){h+='<tr><td colspan="6" class="dim" style="padding-top:8px">informational (sidecar churn — excluded from alarm totals)</td></tr>';for(const e of inf)h+=extRow(e,true);}
     h+='</table>'}
   h+='</div>';
   const items=d.items||[];
   // State value stays "NEW" in the catalog JSON; it renders as UNARCHIVED.
-  const STATE_LABEL={MISSING:'MISSING',MODIFIED:'MODIFIED',NEW:'UNARCHIVED',MOVED:'MOVED'};
-  const STATE_HINT={NEW:'present on disk, not yet in any package'};
-  for(const st of ['MISSING','MODIFIED','NEW','MOVED']){const list=items.filter(it=>it.state===st&&!it.informational);
+  const STATE_LABEL={MISSING:'MISSING',MODIFIED:'MODIFIED',NEW:'UNARCHIVED',MOVED:'MOVED',UNKNOWN:'UNKNOWN'};
+  const STATE_HINT={NEW:'present on disk, not yet in any package',UNKNOWN:'in a folder or file the rescan could not read, so whether it is still there is not known'};
+  for(const st of ['MISSING','MODIFIED','NEW','MOVED','UNKNOWN']){const list=items.filter(it=>it.state===st&&!it.informational);
     if(list.length)h+=`<div class="panel"><h2${STATE_HINT[st]?` title="${STATE_HINT[st]}"`:''}>${STATE_LABEL[st]} (${list.length})</h2>${itemList(list)}</div>`}
   const infoItems=items.filter(it=>it.informational);
   if(infoItems.length)h+=`<div class="panel" style="opacity:.65"><h2 class="dim">Informational (${infoItems.length}) — sidecar churn, not counted</h2>${itemList(infoItems)}</div>`;
   $('#view').innerHTML=h;
 }
-function extRow(e,muted){return `<tr${muted?' class="dim"':''}><td class="mono">${esc(e.ext||'(no ext)')}</td><td class="num">${e.missing||0}</td><td class="num">${e.modified||0}</td><td class="num">${e.new||0}</td><td class="num">${e.moved||0}</td></tr>`}
+function extRow(e,muted){return `<tr${muted?' class="dim"':''}><td class="mono">${esc(e.ext||'(no ext)')}</td><td class="num">${e.missing||0}</td><td class="num">${e.modified||0}</td><td class="num">${e.new||0}</td><td class="num">${e.moved||0}</td><td class="num">${e.unknown||0}</td></tr>`}
 function itemList(list){let h='<table>';for(const it of list){
   // For a MODIFIED file the backed-up bytes are now a RETAINED prior version —
   // show it inline as the restore source (and link to the full history).
@@ -3023,7 +3026,7 @@ function perfStripHTML(s){
 function jobArtifact(j){if(j.status!=='COMPLETED'||!j.result)return '';const r=j.result;
   if(j.kind==='recoverykit'&&r.output_dir)return ` <button class="btn ghost" style="font-size:11px;padding:1px 8px" onclick='showKitResult(${JSON.stringify(r)})'>Show kit</button>`;
   if(j.kind==='mirror'&&r.sidecar!=null)return ` <span class="dim" style="font-size:10.5px">${r.mirrored||0} files${r.failed?' · '+r.failed+' failed':''}${r.sidecar?' · sidecar written':''}</span>`;
-  if(j.kind==='reconcile'&&r.collection_id)return ` <button class="btn ghost" style="font-size:11px;padding:1px 8px" onclick="vDrift(${r.collection_id},'')">View drift (${r.changes||0})</button>`;
+  if(j.kind==='reconcile'&&r.collection_id)return ` <button class="btn ghost" style="font-size:11px;padding:1px 8px" onclick="vDrift(${r.collection_id},'')">View drift (${r.changes||0}${r.unknown?' · '+r.unknown+' unknown':''})</button>`;
   if(j.kind==='scan'&&r.files!=null)return ` <span class="dim" style="font-size:10.5px">${r.files} file(s) cataloged</span>`;
   return ''}
 // Honesty on the Jobs row: plainly name what a job WRITES and where — by kind, so
@@ -3278,16 +3281,14 @@ async function dockStart(){
   let h=`${hdr('Inventory drives','plug in a drive, get a complete record of what is on it','dock')}
   <div class="panel"><div class="dim" style="margin-bottom:8px"><b>Read-only, both ways.</b> Obelisk only ever <b>hashes</b> the NAS archive folders to match drive contents, and it never writes to a docked drive either — adopted media stay untouched. The full inventory of each drive is recorded in the <b>catalog snapshot</b>, browsable later with the drive unplugged.</div>
     <h2>Start a session</h2>
-    <div class="dim" style="font-size:12px;margin-bottom:6px">Choose the Archive(s) these drives should be compared against (e.g. both a business and a personal archive that live on the NAS).</div>`;
-  if(!colls.length)h+='<div class="empty">Create an Archive first (Vault → Create archive), then start a dock session.</div>';
-  else{h+=colls.map(c=>`<label class="row" style="gap:8px;align-items:center"><input type="checkbox" class="dka" value="${c.id}" style="width:auto"> <b>${esc(c.name)}</b> <span class="dim">· ${c.files||0} files</span></label>`).join('');
-    h+=`<div class="row" style="margin-top:14px"><button class="btn" onclick="doStartDock()">Start dock session →</button></div>`}
+    <div class="dim" style="font-size:12px;margin-bottom:6px">Choose the Archive(s) these drives should be compared against (e.g. both a business and a personal archive that live on the NAS), or choose none to only scan and record each drive.</div>`;
+  h+=colls.map(c=>`<label class="row" style="gap:8px;align-items:center"><input type="checkbox" class="dka" value="${c.id}" style="width:auto"> <b>${esc(c.name)}</b> <span class="dim">· ${c.files||0} files</span></label>`).join('');
+  h+=`<div class="row" style="margin-top:14px"><button class="btn" onclick="doStartDock()">Start dock session →</button></div>`;
   $('#view').innerHTML=h+'</div>';
 }
 async function doStartDock(){
   const ids=[...document.querySelectorAll('.dka:checked')].map(e=>parseInt(e.value));
-  if(!ids.length){toast('Pick at least one archive',1);return}
-  try{await api('POST','/api/dock/sessions',{archive_ids:ids});toast('Dock session started');vDock()}catch(e){toast(e.message,1)}}
+  try{await api('POST','/api/dock/sessions',{archive_ids:ids});toast(ids.length?'Dock session started':'Scan-only session started: drives are recorded, nothing is matched');vDock()}catch(e){toast(e.message,1)}}
 function covBar(pct){return `<div style="background:var(--line);border-radius:6px;height:10px;overflow:hidden"><div style="width:${Math.max(0,Math.min(100,pct||0))}%;height:100%;background:var(--ok)"></div></div>`}
 function renderDock(d){
   const ds=d.session, cov=d.coverage||{}, banner=dockBanner; dockBanner=null;
@@ -4081,6 +4082,7 @@ function appRestoreSummary(r){
     <div class="panel"><div style="font-size:14px">Recovered <b>${r.archives}</b> archive(s), <b>${(r.files||0).toLocaleString()}</b> file(s), <b>${r.volumes}</b> volume(s), <b>${r.packages}</b> package(s), and <b>${r.jobs}</b> job(s). Verification history (<b>${r.verify_events}</b> recorded check(s)) came across intact.</div>
     ${r.included_keys&&r.keystore_note?`<div class="err" style="margin-top:6px">Encryption keystores were included, but not put into use: ${esc(r.keystore_note)}</div>`:r.included_keys?'<div class="dim" style="margin-top:6px">Encryption keystores were included and restored.</div>':'<div class="dim" style="margin-top:6px">Encryption keys were not in this backup — copy your keystore files onto this machine and point <b>Settings → keystores</b> at them.</div>'}
     <div class="dim" style="margin-top:8px">Your previous records were saved to <span class="mono">${esc(r.pre_restore_dir||'')}</span>.</div>
+    ${(r.scan_files_skipped||[]).length?`<div class="err" style="margin-top:6px">${r.scan_files_skipped.length} drive scan file list(s) in the backup did not match their scan records and were not restored; those scans have no file list now.</div>`:''}
     ${r.read_only?`<div class="err" style="margin-top:8px">${esc(r.read_only_why||'')}</div>`:''}
     ${r.held_settings?`<div class="err" style="margin-top:8px">The backup's program settings were <b>not</b> applied, because they choose what runs on this computer: burn command <span class="mono">${esc(r.held_settings.burn_command||'(none)')}</span>, par2 extra arguments <span class="mono">${esc(r.held_settings.par2_extra_args||'(none)')}</span>, tool paths <span class="mono">${esc(Object.entries(r.held_settings.tools||{}).map(([k,v])=>k+'='+v).join(', ')||'(none)')}</span>, tape tool <span class="mono">${esc(r.held_settings.tape_tool||'(none)')}</span>. Your current ones are kept.
       <div class="row" style="margin-top:6px"><button class="btn ghost" type="button" onclick="applyHeldSettings()">Apply them…</button> <button class="btn ghost" type="button" onclick="discardHeldSettings()">Discard them</button></div></div>`:''}
@@ -4480,7 +4482,78 @@ function dlg(html,onGo){let d=$('#dlg');if(!d){d=document.createElement('dialog'
   dlgGo=async()=>{try{await onGo();d.close()}catch(e){toast(e.message,1)}};
   d.showModal()}
 function go(){if(dlgGo)dlgGo()}
-const views={home:vHome,vault:vVault,protection:vProtection,integrity:vIntegrity,packages:vChunks,burn:vBurn,volumes:vVolumes,locations:vLocations,dock:vDock,cardcheck:vCardCheck,events:vEvents,templates:vTemplates,plans:vPlans,conflicts:vConflicts,quarantine:vQuarantine,keys:vKeys,jobs:vJobs,job:vJobDetail,explore:vExplore,settings:vSettings,where:vWhere};
+const views={home:vHome,vault:vVault,protection:vProtection,integrity:vIntegrity,packages:vChunks,burn:vBurn,volumes:vVolumes,locations:vLocations,dock:vDock,cardcheck:vCardCheck,events:vEvents,templates:vTemplates,plans:vPlans,conflicts:vConflicts,compare:vCompare,quarantine:vQuarantine,keys:vKeys,jobs:vJobs,job:vJobDetail,explore:vExplore,settings:vSettings,where:vWhere};
+/* ================= Compare drives =================
+   A drive's scan against a reference (a drive's latest complete scan, a chosen
+   scan, or an archive's current files), saved as a run with its counts. Also the
+   cross-drive lists. Reports only: nothing here changes a package, copy or count. */
+const CMP_LABEL={same:'Same',changed:'Changed',moved:'Moved',new:'New',missing:'Missing',unknown:'Unknown'};
+const CMP_HINT={same:'same path, same content',changed:'same path, different content',moved:'same content, now at another path',new:'only in the scan being compared',missing:'only in the reference, and the scan read where it was',unknown:'in a place one side could not read, so nothing can be said'};
+const CMP_COLOR={missing:'var(--bad)',changed:'var(--bad)',unknown:'var(--ink-3)',new:'var(--blue)',moved:'var(--ink-2)',same:'var(--ok)'};
+let _cmpView={state:'',q:'',offset:0};
+async function vCompare(arg){
+  const [refR,scR,runR,volRows,colls]=await Promise.all([api('GET','/api/reference'),api('GET','/api/scans'),api('GET','/api/compare/runs'),api('GET','/api/volumes'),api('GET','/api/collections')]);
+  const ref=refR.reference,scans=scR.scans||[],runs=runR.runs||[];
+  const vols=(volRows||[]).map(x=>x.volume||x); // /api/volumes rows carry the volume under "volume"
+  const volName=id=>{const v=(vols||[]).find(x=>x.id===id);return v?v.label:'volume '+id};
+  const collName=id=>{const c=(colls||[]).find(x=>x.id===id);return c?c.name:'archive '+id};
+  const refText=ref?(ref.kind==='archive'?'archive '+collName(ref.id):'drive '+volName(ref.id)):'none';
+  const scanText=s=>`${s.volume_label} · ${(s.scan.at||'').slice(0,16).replace('T',' ')} · ${commaN(s.scan.total_files)} files${s.scan.scan==='partial'?' · partial':''}${s.scan.root?' · folder '+s.scan.root:''}`;
+  let h=`${hdr('Compare drives','what changed between scans, and what is on one drive only','compare')}
+  <div class="panel"><div class="dim" style="margin-bottom:8px">Reports only: comparing never changes a package, a copy or a count.</div>
+    <h2>Reference</h2><div>Current reference: <b>${esc(refText)}</b></div>
+    <div class="row" style="gap:8px;margin-top:6px"><select id="cmpRefSet"><option value="">none</option>${(vols||[]).map(v=>`<option value="volume:${v.id}">drive ${esc(v.label)}</option>`).join('')}${(colls||[]).map(c=>`<option value="archive:${c.id}">archive ${esc(c.name)}</option>`).join('')}</select> <button class="btn ghost" onclick="cmpSetRef()">Set reference</button></div>
+    <h2 style="margin-top:14px">New comparison</h2>`;
+  if(!scans.length)h+='<div class="empty">No drive scans yet. Inventory a drive first (Inventory drives).</div>';
+  else h+=`<label>Compare this scan</label><select id="cmpOther" class="full">${scans.map(s=>`<option value="${s.scan.id}">${esc(scanText(s))}</option>`).join('')}</select>
+    <label>against</label><select id="cmpRef" class="full"><option value="">the reference (${esc(refText)})</option>${scans.map(s=>`<option value="scan:${s.scan.id}">scan: ${esc(scanText(s))}</option>`).join('')}${(colls||[]).map(c=>`<option value="archive:${c.id}">archive ${esc(c.name)} (its current files)</option>`).join('')}</select>
+    <div class="row" style="margin-top:10px"><button class="btn" onclick="cmpRun()">Compare</button></div>`;
+  h+='</div>';
+  // History of saved runs.
+  h+=`<div class="panel"><h2>Comparisons (${runs.length})</h2>`;
+  if(!runs.length)h+='<div class="dim">None yet.</div>';
+  else h+='<table><tr><th>When</th><th>Scan</th><th>Against</th>'+ClassStates().map(st=>`<th class="num" title="${esc(CMP_HINT[st])}">${CMP_LABEL[st]}</th>`).join('')+'<th></th></tr>'+
+    runs.map(r=>`<tr${String(r.id)===String(arg)?' style="background:var(--line-2)"':''}><td class="mono">${esc((r.at||'').slice(0,16).replace('T',' '))}</td><td>${esc(r.other_label)}${r.other_complete?'':' <span class="dim">(partial)</span>'}</td><td>${esc(r.ref_label)}${r.ref_complete?'':' <span class="dim">(partial)</span>'}</td>`+
+      ClassStates().map(st=>`<td class="num">${commaN((r.counts||{})[st]||0)}</td>`).join('')+`<td><a href="#compare/${r.id}" onclick="_cmpView={state:'',q:'',offset:0}">Open</a></td></tr>`).join('')+'</table>';
+  h+='</div><div id="cmpRunBox"></div>';
+  // Cross-drive lists.
+  h+=`<div class="panel"><h2>Files by drive</h2><div class="dim" style="font-size:12px;margin-bottom:6px">From each drive's latest complete scan, matched by content.</div>
+    <div class="row" style="gap:8px"><select id="cmpListVol"><option value="">choose a drive</option>${[...new Set(scans.map(s=>s.scan.volume_id))].map(id=>`<option value="${id}">${esc(volName(id))}</option>`).join('')}</select> <button class="btn ghost" onclick="cmpLists()">Show</button></div>
+    <div id="cmpListBox" style="margin-top:8px"></div></div>`;
+  $('#view').innerHTML=h;
+  if(arg)cmpShowRun(arg);
+}
+function ClassStates(){return ['same','changed','moved','new','missing','unknown']}
+async function cmpSetRef(){const v=$('#cmpRefSet').value;const [kind,id]=v?v.split(':'):['',0];
+  try{await api('POST','/api/reference',{kind,id:Number(id)});toast(kind?'Reference set':'Reference cleared');vCompare()}catch(e){toast(e.message,1)}}
+async function cmpRun(){const other=Number($('#cmpOther').value),r=$('#cmpRef').value;let ref={};
+  if(r){const [k,id]=r.split(':');ref=k==='scan'?{scan_id:Number(id)}:{archive_id:Number(id)}}
+  try{const res=await api('POST','/api/compare',{ref,other_scan_id:other});_cmpView={state:'',q:'',offset:0};toast('Comparison saved');location.hash='#compare/'+res.run.id}catch(e){toast(e.message,1)}}
+function cmpQuery(){const p=new URLSearchParams();if(_cmpView.state)p.set('state',_cmpView.state);if(_cmpView.q)p.set('q',_cmpView.q);return p.toString()}
+async function cmpShowRun(id){
+  const box=$('#cmpRunBox');if(!box)return;
+  let d;try{d=await api('GET','/api/compare/runs/'+id+'?'+cmpQuery()+'&offset='+_cmpView.offset+'&limit=200')}catch(e){box.innerHTML='<div class="err">'+esc(e.message)+'</div>';return}
+  const r=d.run,c=r.counts||{},q=cmpQuery();
+  let h=`<div class="panel"><h2>${esc(r.other_label)} against ${esc(r.ref_label)} <span class="dim" style="font-size:12px">${esc((r.at||'').slice(0,16).replace('T',' '))}</span></h2>`;
+  if(!r.other_complete||!r.ref_complete)h+=`<div style="font-size:12.5px;color:var(--bad);margin-bottom:6px">One side is a partial scan: files in places it could not read are Unknown, not Missing.</div>`;
+  h+='<div class="row" style="gap:6px;flex-wrap:wrap">'+[''].concat(ClassStates()).map(st=>`<button class="btn ${_cmpView.state===st?'':'ghost'}" style="font-size:11.5px;padding:2px 9px" title="${esc(CMP_HINT[st]||'every state')}" onclick="_cmpView.state='${st}';_cmpView.offset=0;cmpShowRun(${r.id})">${st?CMP_LABEL[st]+' '+commaN(c[st]||0):'All '+commaN(r.total)}</button>`).join('')+'</div>';
+  h+=`<div class="row" style="gap:8px;margin-top:8px"><input id="cmpQ" placeholder="filter by path" value="${esc(_cmpView.q)}" style="flex:1" onkeydown="if(event.key==='Enter'){_cmpView.q=this.value.trim();_cmpView.offset=0;cmpShowRun(${r.id})}"> <a class="btn ghost" href="${esc(mediaURL('/api/compare/runs/'+r.id+'/export?format=csv'+(q?'&'+q:'')))}" target="_blank">Export CSV</a> <a class="btn ghost" href="${esc(mediaURL('/api/compare/runs/'+r.id+'/export?format=json'+(q?'&'+q:'')))}" target="_blank">Export JSON</a></div>`;
+  const rows=d.results||[];
+  h+=`<div class="dim" style="font-size:11.5px;margin:6px 0">${commaN(d.matching)} matching${d.matching>rows.length?` · showing ${commaN(d.offset+1)}–${commaN(d.offset+rows.length)}`:''}</div>`;
+  if(rows.length)h+='<table><tr><th>State</th><th>In the reference</th><th>In this scan</th></tr>'+rows.map(x=>`<tr><td style="color:${CMP_COLOR[x.state]||'inherit'}" title="${esc(CMP_HINT[x.state]||'')}">${esc(CMP_LABEL[x.state]||x.state)}</td><td class="mono">${esc(x.ref_path||'')}</td><td class="mono">${esc(x.path||'')}</td></tr>`).join('')+'</table>';
+  if(d.matching>d.offset+rows.length||d.offset>0)h+=`<div class="row" style="gap:8px;margin-top:8px">${d.offset>0?`<button class="btn ghost" onclick="_cmpView.offset=Math.max(0,_cmpView.offset-200);cmpShowRun(${r.id})">Previous</button>`:''}${d.matching>d.offset+rows.length?`<button class="btn ghost" onclick="_cmpView.offset+=200;cmpShowRun(${r.id})">Next</button>`:''}</div>`;
+  box.innerHTML=h+'</div>';
+}
+async function cmpLists(){
+  const vid=$('#cmpListVol').value,box=$('#cmpListBox');if(!box)return;
+  let l;try{l=await api('GET','/api/xdrive/lists'+(vid?'?volume_id='+encodeURIComponent(vid):''))}catch(e){box.innerHTML='<div class="err">'+esc(e.message)+'</div>';return}
+  const exp=(list,fmt)=>esc(mediaURL('/api/xdrive/lists/export?format='+fmt+'&list='+list+(vid?'&volume_id='+encodeURIComponent(vid):'')));
+  const tbl=es=>es.length?'<table><tr><th>Places</th><th class="num">Size</th></tr>'+es.slice(0,100).map(e=>`<tr><td class="mono">${e.places.map(p=>esc(p.label+': '+p.path)).join('<br>')}</td><td class="num">${commaN(e.size)}</td></tr>`).join('')+'</table>'+(es.length>100?`<div class="dim" style="font-size:11.5px">…and ${commaN(es.length-100)} more (export for all)</div>`:''):'<div class="dim">None.</div>';
+  let h=`<div class="dim" style="font-size:11.5px">Scans used: ${(l.scans||[]).map(s=>esc(s.label+' '+(s.at||'').slice(0,10))).join(', ')||'none'}${(l.left_out||[]).length?' · left out (no complete scan): '+l.left_out.map(x=>esc(x.label)).join(', '):''}</div>`;
+  if(vid)h+=`<h3 style="margin-top:8px">Only on this drive (${commaN(l.only_on.length)}) <a href="${exp('only_on','csv')}" target="_blank">CSV</a> · <a href="${exp('only_on','json')}" target="_blank">JSON</a></h3>${tbl(l.only_on)}`;
+  h+=`<h3 style="margin-top:8px">On two or more drives (${commaN(l.on_two_or_more.length)}) <a href="${exp('on_two_or_more','csv')}" target="_blank">CSV</a> · <a href="${exp('on_two_or_more','json')}" target="_blank">JSON</a></h3>${tbl(l.on_two_or_more)}`;
+  box.innerHTML=h;
+}
 function loc(v){location.hash='#'+v}
 
 /* ---- grouped, collapsible navigation with plain job-description tooltips ---- */
@@ -4515,6 +4588,7 @@ const NAV_GROUPS=[
     ['integrity','Verify','How thoroughly to check your backups — and run those checks','guided'],
     ['explore','Explore data','Browse any archive or drive — structure, sizes, and what’s verified','standard'],
     ['conflicts','Conflicts','Two versions of one file disagree — pick which to keep','standard'],
+    ['compare','Compare drives','Compare a drive’s scans against a reference, and see what is on one drive only','standard'],
   ]},
   {id:'RECOVER',situational:true,items:[
     ['keys','Keys','The passphrases that unlock your encrypted backups — needed to restore','standard'],

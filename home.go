@@ -59,6 +59,7 @@ type HomeArchiveCard struct {
 	UnderProt    int            `json:"under_protected"`
 	Protected    int            `json:"protected"`
 	DriftChanges int            `json:"drift_changes"`
+	DriftUnknown int            `json:"drift_unknown,omitempty"` // packaged files the last rescan could not read
 }
 
 // HomeUngrouped is the distinct card for content known only from drives, in no
@@ -87,6 +88,7 @@ type HomeIncremental struct {
 type HomeHealth struct {
 	UnderProtected int `json:"under_protected"`
 	DriftAlarms    int `json:"drift_alarms"`
+	DriftUnknown   int `json:"drift_unknown,omitempty"` // packaged files the last rescans could not read
 	DriftArchives  int `json:"drift_archives"`
 	VerifyDue      int `json:"verify_due"`
 	FailingVolumes int `json:"failing_volumes"`
@@ -244,6 +246,7 @@ func (a *App) HomeOverview(onlineVolumeIDs map[int]bool) (HomeData, error) {
 		card.Protected = prot.Summary[StatusComplete] + prot.Summary[StatusOverComplete]
 		if dr := a.Store.DriftReport(coll.ID); dr != nil {
 			card.DriftChanges = dr.Changes()
+			card.DriftUnknown = dr.Unknown()
 		}
 		data.Archives = append(data.Archives, card)
 		data.Health.UnderProtected += card.UnderProt
@@ -308,6 +311,7 @@ func (a *App) HomeOverview(onlineVolumeIDs map[int]bool) (HomeData, error) {
 			data.Health.DriftAlarms += ch
 			drifted[dr.CollectionID] = true
 		}
+		data.Health.DriftUnknown += dr.Unknown()
 	}
 	data.Health.DriftArchives = len(drifted)
 	months := cfg.VerifyDueMonths

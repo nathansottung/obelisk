@@ -15,14 +15,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -405,47 +403,34 @@ func (a *App) AdoptFolder(mountPath string, collectionID, volumeID int, progress
 		a.Store.UpdateVolume(vol)
 	}
 
-	// Walk loose files (skip our own sidecar dir + OS junk, like the dock).
-	var paths []string
-	_ = filepath.WalkDir(mountPath, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
+	// Walk and hash the folder read-only, recording what it cannot read (the same
+	// walk as the dock).
+	snapFiles, gaps, unreadable, serr := a.scanTree(mountPath, cfg, func(done, total int) {
+		progress(0.06+float64(done)/float64(max(total, 1))*0.72, progStats(0, 0, int64(done), int64(total), "hashing drive files"))
+	}, nil)
+	if serr != nil {
+		return nil, fmt.Errorf("cannot read folder %s: %s", mountPath, scanReason(serr))
+	}
+	// A folder with no file that could be read is not adopted: there is nothing to
+	// show what the drive holds, so nothing about its copy changes.
+	if len(snapFiles) == 0 {
+		if unreadable > 0 || len(gaps.unreadableFolders) > 0 {
+			return nil, fmt.Errorf("no file under %s could be read (%d folder(s) and %d file(s) could not be); nothing was adopted", mountPath, len(gaps.unreadableFolders), len(gaps.unreadableFiles))
 		}
-		if d.IsDir() {
-			if skipDockDir(d.Name()) {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		paths = append(paths, p)
-		return nil
-	})
-	if len(paths) == 0 {
 		return nil, fmt.Errorf("no files found under %s", mountPath)
 	}
-
-	total := len(paths)
-	reg := a.formatRegistry() // extension → role, for media metadata on still images
-	var mu sync.Mutex
-	hashed := map[string]unionFile{} // abs path -> file
-	// MEDIA READ-ONLY: only hashes are read; nothing is written to the folder.
-	parallelHash(paths,
-		func(done int) {
-			progress(0.06+float64(done)/float64(total)*0.72, progStats(0, 0, int64(done), int64(total), "hashing drive files"))
-		},
-		func(p, sha, b3 string, size int64, _ time.Time) {
-			rel, e := filepath.Rel(mountPath, p)
-			if e != nil {
-				rel = filepath.Base(p)
-			}
-			role, _ := classifyRole(reg, rel)
-			uf := unionFile{RelPath: filepath.ToSlash(rel), Hash: sha, Size: size, Role: role}
-			uf.ShotAt, uf.CameraSerial = a.extractMediaMeta(p, role, cfg)
-			mu.Lock()
-			hashed[p] = uf
-			mu.Unlock()
-		})
-	unreadable := len(paths) - len(hashed)
+	// The scan of the folder is recorded in the drive's scan history before the
+	// archive changes, so a scan that cannot be recorded changes nothing. It does
+	// not set the drive's snapshot: that describes the whole drive, from its root.
+	snap := a.buildSnapshot(&DockSession{}, vol, nil, snapFiles, unreadable, gaps)
+	snap.Root = mountPath
+	if _, err := a.recordScan(snap, cfg.ScanHistoryRetained); err != nil {
+		return nil, err
+	}
+	hashed := map[string]unionFile{}
+	for _, sf := range snapFiles {
+		hashed[sf.RelPath] = unionFile{RelPath: sf.RelPath, Hash: sf.Hash, Size: sf.SizeBytes, Role: sf.Role, ShotAt: sf.ShotAt, CameraSerial: sf.CameraSerial}
+	}
 
 	items := make([]unionFile, 0, len(hashed))
 	for _, it := range hashed {
@@ -472,7 +457,20 @@ func (a *App) AdoptFolder(mountPath string, collectionID, volumeID int, progress
 		refs = append(refs, ChunkFileRef{FileID: fid, RelPath: it.RelPath, SizeBytes: it.Size, Hash: it.Hash})
 	}
 	progress(0.92, "recording copies")
-	a.upsertMirrorChunk(collectionID, vol, mountPath, refs, "mirror-adopt")
+	// What a partial scan could not read is unknown, not gone: files an earlier
+	// adopt recorded here, in places this scan did not read, are kept apart as
+	// unknown (not counted as copies), as the dock does.
+	var unknown []ChunkFileRef
+	if prior := a.mirrorChunkOn(collectionID, vol.ID); prior != nil && snap.Scan == ScanPartial {
+		for _, r := range append(append([]ChunkFileRef(nil), prior.Files...), prior.UnknownFiles...) {
+			if !seen[r.FileID] && !snap.Known(r.RelPath) && !containsRef(unknown, r.FileID) {
+				unknown = append(unknown, r)
+			}
+		}
+	}
+	c := a.upsertMirrorChunk(collectionID, vol, mountPath, refs, "mirror-adopt")
+	c.UnknownFiles = unknown
+	a.Store.UpdateChunk(c)
 
 	// Collision pass: same-logical-file/different-bytes across the union. Class-(a)
 	// second-shooter frames auto-pass (noted); true conflicts (b/c) open a review item.
@@ -494,6 +492,7 @@ func (a *App) AdoptFolder(mountPath string, collectionID, volumeID int, progress
 		"archive": coll.Name, "volume_id": vol.ID, "volume": vol.Label,
 		"files_on_drive": len(refs), "new_to_union": added, "duplicate_in_union": dupInUnion,
 		"union_files": union, "unreadable": unreadable, "summary": summary,
+		"scan": snap.Scan, "unreadable_folders": len(snap.UnreadableFolders),
 		"conflicts": scan.Open, "new_conflicts": scan.New, "second_shooter": scan.SecondShooter,
 	}, nil
 }
