@@ -3962,8 +3962,8 @@ async function saveCfg(){
   // The automatic app backup runs unattended, so anything to decide about a new
   // folder for it (create it, or a choice about who can change it) is asked now.
   const aedEl=$('#aed');
-  if(body.auto_export_dir&&aedEl&&aedEl.value.trim()!==aedEl.defaultValue.trim()&&!(await destGate(body.auto_export_dir))){toast('Settings not saved: choose what to do about '+body.auto_export_dir+' first',1);return}
-  try{await api('PUT','/api/config',body);toast('Settings saved');lamp();vSettings();}catch(e){toast(e.message,1)}
+  try{if(body.auto_export_dir&&aedEl&&aedEl.value.trim()!==aedEl.defaultValue.trim()&&!(await destGate(body.auto_export_dir))){toast('Settings not saved: choose what to do about '+body.auto_export_dir+' first',1);return}
+    await api('PUT','/api/config',body);toast('Settings saved');lamp();vSettings();}catch(e){toast(e.message,1)}
 }
 
 /* ---- folder picker: a read-only server-side browser on every path field ----
