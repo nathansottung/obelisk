@@ -228,7 +228,11 @@ type Chunk struct {
 	// UnknownFiles (mirror packages): archive files an earlier dock scan found on
 	// this drive that a later, partial scan could not read. Not counted as copies
 	// or verified until a scan reads them again.
-	UnknownFiles   []ChunkFileRef     `json:"unknown_files,omitempty"`
+	UnknownFiles []ChunkFileRef `json:"unknown_files,omitempty"`
+	// Sidecars: the SHA-256 of each sidecar the medium must carry (the manifest it
+	// ships and RESTORE.txt), recorded when the package is built. A write needs
+	// them in staging unchanged; a verify reads them back from the medium.
+	Sidecars       map[string]string  `json:"sidecars,omitempty"`
 	BuildTimings   map[string]float64 `json:"build_timings,omitempty"`   // per-stage seconds: tar, hash, stage_verify, encrypt/stage, crypt_verify, par2
 	BuildVerified  *BuildVerified     `json:"build_verified,omitempty"`  // build-time proof the payload faithfully contains the source
 	VerifyEvents   []VerifyEvent      `json:"verify_events,omitempty"`   // append-only integrity-check log

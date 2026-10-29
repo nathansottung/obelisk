@@ -304,13 +304,21 @@ func chunkWritable(c *Chunk) error {
 	if c.Spanned {
 		return fmt.Errorf("package %s is spanned; use span-write (one tape at a time)", c.Name)
 	}
-	if c.StagedDir == "" || (c.Status != "STAGED" && c.Status != "WRITTEN" && c.Status != "VERIFIED" && c.Status != "FAILED") {
+	return chunkStagedForWrite(c)
+}
+
+// chunkStagedForWrite is the check, shared with span writes, that a package's
+// last build succeeded and left its payload and sidecars in staging. A FAILED
+// package (its build failed, or its staged payload was found damaged) is rebuilt
+// first.
+func chunkStagedForWrite(c *Chunk) error {
+	if c.StagedDir == "" || (c.Status != "STAGED" && c.Status != "WRITTEN" && c.Status != "VERIFIED") {
 		return fmt.Errorf("package %s is %s; build it first", c.Name, c.Status)
 	}
 	if payloadPathIn(c.StagedDir, c) == "" {
 		return fmt.Errorf("staged payload missing under %s", c.StagedDir)
 	}
-	return nil
+	return checkStagedSidecars(c)
 }
 
 // writeChunk is WriteChunk into out when the caller already holds the output
@@ -449,8 +457,12 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 		if c.PrivateManifest && n == c.Name+".manifest.json" {
 			continue // private: the ENCRYPTED manifest.json.gpg ships instead
 		}
-		if _, err := out.CopyIn(filepath.Join(c.StagedDir, n), c.Name+"/"+n, 0o644); err != nil {
+		sum, err := out.CopyIn(filepath.Join(c.StagedDir, n), c.Name+"/"+n, 0o644)
+		if err != nil {
 			return mediumFail(err)
+		}
+		if want, ok := c.Sidecars[n]; ok && sum != want {
+			return mediumFail(fmt.Errorf("staged sidecar %s changed during the write; rebuild the package", n))
 		}
 	}
 
@@ -543,6 +555,11 @@ func (a *App) VerifyChunk(id int, destDir string) (map[string]any, error) {
 		return nil, err
 	}
 	ok := rb == c.EncHash
+	// A copy is the payload and its sidecars: they are read back too.
+	sideErr := checkSidecarsAt(c, filepath.Dir(enc))
+	if sideErr != nil {
+		ok = false
+	}
 	now := time.Now().UTC()
 	// Record the result on the copy recorded at the folder that was read, and only
 	// that one; the package status derives from ALL copies, so a single bad medium
@@ -554,7 +571,10 @@ func (a *App) VerifyChunk(id int, destDir string) (map[string]any, error) {
 		c.VerifiedAt = &now
 	}
 	note := "media verify"
-	if !ok {
+	switch {
+	case sideErr != nil:
+		note = "media verify: " + sideErr.Error()
+	case !ok:
 		note = "media verify: hash mismatch medium=" + rb
 	}
 	if credited == 0 {
@@ -642,6 +662,8 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 			note = "campaign: " + herr.Error()
 		} else if !ok {
 			note = "campaign: hash mismatch"
+		} else if serr := checkSidecarsAt(cd.c, filepath.Dir(cd.path)); serr != nil {
+			ok, note = false, "campaign: "+serr.Error()
 		}
 		now := time.Now().UTC()
 		// Copy-level result, on the copy recorded where this payload was read and

@@ -129,8 +129,8 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 	if !c.Spanned || len(c.Segments) == 0 {
 		return nil, fmt.Errorf("package %s is not a spanned package", c.Name)
 	}
-	if c.StagedDir == "" {
-		return nil, fmt.Errorf("package %s is not built yet", c.Name)
+	if err := chunkStagedForWrite(c); err != nil {
+		return nil, err
 	}
 	if strings.TrimSpace(destDir) == "" {
 		return nil, fmt.Errorf("dest_dir (the mounted tape/drive) required")
@@ -295,18 +295,18 @@ func copyPar2Set(stagedDir string, out *outFolder, c *Chunk) error {
 	return nil
 }
 
+// copySidecars copies the package's sidecars (the manifest it ships, encrypted
+// on private media, and RESTORE.txt) to the medium. Each must be in staging,
+// and is named on the medium only once it reads back; one that changed since
+// the build is refused.
 func copySidecars(stagedDir string, out *outFolder, c *Chunk) error {
-	manifest := c.Name + ".manifest.json"
-	if c.PrivateManifest {
-		manifest = c.Name + ".manifest.json.gpg" // private: encrypted listing only
-	}
-	for _, base := range []string{manifest, "RESTORE.txt"} {
-		src := filepath.Join(stagedDir, base)
-		if _, err := os.Stat(src); err != nil {
-			continue
+	for _, base := range requiredSidecars(c) {
+		sum, err := out.CopyIn(filepath.Join(stagedDir, base), c.Name+"/"+base, 0o644)
+		if err != nil {
+			return fmt.Errorf("sidecar %s: %w", base, err)
 		}
-		if _, err := out.CopyIn(src, c.Name+"/"+base, 0o644); err != nil {
-			return err
+		if want, ok := c.Sidecars[base]; ok && sum != want {
+			return fmt.Errorf("staged sidecar %s changed since the build; rebuild the package", base)
 		}
 	}
 	return nil
