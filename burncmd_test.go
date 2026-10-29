@@ -130,3 +130,49 @@ func TestBurnCommand_RefusesProgramLaunchingOptions(t *testing.T) {
 		t.Error("a label filled in as -launch_frontend was accepted")
 	}
 }
+
+// Each burner takes only the options known to burn a disc: anything else is
+// refused, so an option that runs a program, mounts, or writes a file on this
+// computer cannot be added. The documented burn commands are accepted.
+func TestBurnCommand_AllowsOnlyKnownOptions(t *testing.T) {
+	for _, bad := range []string{
+		"xorriso -mount /dev/sr0 sbsector 0 /mnt",
+		"xorriso -outdev stdio:/home/u/.bashrc -map {SRC} / -commit",
+		"xorriso -dev stdio:C:/x.iso -map {SRC} / -commit",
+		"xorriso -as mkisofs -o /tmp/x.iso {SRC}",
+		"xorriso -session_log /tmp/x -outdev /dev/sr0 -map {SRC} / -commit",
+		"xorriso -scdbackup_tag /tmp/x rec -outdev /dev/sr0 -map {SRC} / -commit",
+		"xorriso -outdev /dev/sr0 -check_media data_to=/tmp/x --",
+		"xorriso launch_frontend sh",
+		"cdrskin dev=/dev/sr0 fallback_program=/bin/sh {SRC}",
+		"cdrecord dev=/dev/sr0 msifile=/tmp/x {SRC}",
+		"wodim dev=/dev/sr0 -v --help {SRC}",
+		"growisofs -Z /dev/sr0 -o /tmp/x {SRC}",
+		"growisofs -Z stdio:/tmp/x {SRC}",
+		"imgburn /MODE BUILD /BUILDMODE DISC /SRC {SRC} /DEST C:/Windows/x.iso /START",
+		"imgburn /MODE BUILD /BUILDMODE IMAGEFILE /SRC {SRC} /DEST E: /START",
+		"imgburn /MODE BUILD /SRC {SRC} /DEST E: /LOG C:/x.log /START",
+		"imgburn /MODE BUILD /SRC {SRC} /DEST E: extra",
+	} {
+		if _, err := parseBurnCommand(bad); err == nil {
+			t.Errorf("parseBurnCommand(%q) accepted an option outside the burner's known ones", bad)
+		}
+	}
+	for _, ok := range []string{
+		defaultBurnCommand,
+		`xorriso -outdev /dev/sr0 -volid "{LABEL}" -map "{SRC}" / -commit`,
+		"xorriso -as cdrecord -v dev=/dev/sr0 -eject {SRC}",
+		"xorrecord -v dev=/dev/sr0 -dao blank=as_needed {SRC}",
+		"wodim dev=/dev/sr0 speed=4 -v -dao {SRC}",
+		`growisofs -Z /dev/sr0 -R -J -udf -V "{LABEL}" "{SRC}"`,
+		`"C:\Program Files (x86)\ImgBurn\ImgBurn.exe" /MODE BUILD /BUILDMODE DISC /SRC "{SRC}" /VOLUMELABEL "{LABEL}" /START /CLOSESUCCESS /NOIMAGEDETAILS`,
+	} {
+		if _, err := parseBurnCommand(ok); err != nil {
+			t.Errorf("parseBurnCommand(%q): %v", ok, err)
+		}
+	}
+	// A filled-in placeholder cannot become an option.
+	if _, err := burnArgv("wodim dev=/dev/sr0 -v {SRC}", "-msifile=/tmp/x", "L"); err == nil {
+		t.Error("a folder filled in as an option was accepted")
+	}
+}
