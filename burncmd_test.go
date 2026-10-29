@@ -263,3 +263,36 @@ func TestBurnCommand_RefusesExitValueMasking(t *testing.T) {
 		}
 	}
 }
+
+// {SRC} must be the whole value where the package is read: a path inside it
+// (one file of the package) or beside it (another package, the staging
+// folder) burns something else. And between xorriso's -map and -commit only
+// settings may come: changing the drive, blanking or a cdrecord section there
+// can leave the queued disc without the package.
+func TestBurnCommand_BurnsTheWholePackage(t *testing.T) {
+	for _, bad := range []string{
+		"xorriso -outdev /dev/sr0 -map {SRC}/{LABEL}.manifest.json /m.json -commit",
+		"xorriso -outdev /dev/sr0 -map {SRC}/.. / -commit",
+		"growisofs -Z /dev/sr0 -R {SRC}/{LABEL}.manifest.json",
+		"wodim dev=/dev/sr0 -data {SRC}/{LABEL}.manifest.json",
+		`imgburn /MODE BUILD /BUILDOUTPUTMODE DEVICE /BUILDINPUTMODE STANDARD /SRC {SRC}\{LABEL}.manifest.json /DEST E: /START`,
+		"imgburn /MODE BUILD /BUILDOUTPUTMODE DEVICE /BUILDINPUTMODE STANDARD /SRC {SRC}.txt /DEST E: /START",
+		"xorriso -outdev /dev/sr0 -map {SRC} / -outdev /dev/sr1 -commit",
+		"xorriso -outdev /dev/sr0 -map {SRC} / -dev /dev/sr1 -commit",
+		"xorriso -outdev /dev/sr0 -map {SRC} / -blank all -commit",
+		"xorriso -outdev /dev/sr0 -map {SRC} / -as cdrecord blank=all -- -commit",
+	} {
+		if _, err := parseBurnCommand(bad); err == nil {
+			t.Errorf("parseBurnCommand(%q) accepted a command that does not burn the whole package", bad)
+		}
+	}
+	for _, ok := range []string{
+		defaultBurnCommand,
+		"xorriso -outdev /dev/sr0 -map {SRC} / -volid {LABEL} -commit -eject all",
+		`growisofs -Z /dev/sr0 -R -J -udf -V "{LABEL}" "{SRC}"`,
+	} {
+		if _, err := parseBurnCommand(ok); err != nil {
+			t.Errorf("parseBurnCommand(%q): %v", ok, err)
+		}
+	}
+}

@@ -151,8 +151,17 @@ type burnPlan struct {
 	burned    bool
 }
 
-// burnsSrc reports whether a value names the package folder.
-func burnsSrc(v string) bool { return strings.Contains(v, "{SRC}") }
+// burnsSrc reports whether a value is the package folder: exactly {SRC}, so
+// a path inside it (one file) or beside it (another package, the staging
+// folder) does not count.
+func burnsSrc(v string) bool { return v == "{SRC}" }
+
+// xorrisoNotBeforeCommit are the xorriso commands refused between the -map of
+// {SRC} and its -commit: changing the drive, blanking or a cdrecord section
+// there can leave the queued disc without the package.
+var xorrisoNotBeforeCommit = map[string]bool{
+	"dev": true, "outdev": true, "indev": true, "blank": true, "format": true, "as": true,
+}
 
 // checkBurnArgs checks a burn command's arguments (args[0] is the program)
 // against its burner's allowed options. It runs on the command as written
@@ -222,6 +231,9 @@ func checkXorrisoArgs(args []string, p *burnPlan) error {
 		// later -blank, say, would erase it.
 		if p.burned {
 			return fmt.Errorf("xorriso %s is not allowed after the package is burned", a)
+		}
+		if p.mappedSrc && xorrisoNotBeforeCommit[name] {
+			return fmt.Errorf("xorriso %s is not allowed between -map {SRC} and -commit", a)
 		}
 		if name == "as" {
 			if i+1 >= len(args) || !oneOf("cdrecord", "wodim", "cdrskin", "xorrecord")(args[i+1]) {
