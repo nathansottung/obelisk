@@ -423,19 +423,24 @@ type BuildVerified struct {
 // stats from mirror adoption, and when it finished. Mode records whether this
 // pass adopted the drive fresh or re-verified an already-known one.
 type DockDrive struct {
-	VolumeID     int        `json:"volume_id"`
-	Serial       string     `json:"serial,omitempty"`
-	Label        string     `json:"label,omitempty"`
-	Letter       string     `json:"letter,omitempty"` // mount path / drive letter this drive came up on
-	Mode         string     `json:"mode"`             // "adopt" | "reverify"
-	Matched      int        `json:"matched"`          // files whose content matches a current cataloged source file
-	MatchedBytes int64      `json:"matched_bytes"`
-	Historical   int        `json:"historical"` // files matching an older/packaged version, not the current source
-	Other        int        `json:"other"`      // readable files matching nothing in the selected archives
-	Unreadable   int        `json:"unreadable"`
-	Sidecar      string     `json:"sidecar,omitempty"` // path of the inventory sidecar written onto the drive
-	FinishedAt   *time.Time `json:"finished_at,omitempty"`
-	Note         string     `json:"note,omitempty"`
+	VolumeID     int    `json:"volume_id"`
+	Serial       string `json:"serial,omitempty"`
+	Label        string `json:"label,omitempty"`
+	Letter       string `json:"letter,omitempty"` // mount path / drive letter this drive came up on
+	Mode         string `json:"mode"`             // "adopt" | "reverify"
+	Matched      int    `json:"matched"`          // files whose content matches a current cataloged source file
+	MatchedBytes int64  `json:"matched_bytes"`
+	Historical   int    `json:"historical"` // files matching an older/packaged version, not the current source
+	Other        int    `json:"other"`      // readable files matching nothing in the selected archives
+	Unreadable   int    `json:"unreadable"`
+	// Scan is the snapshot's completeness ("complete" / "partial"); Unknown counts
+	// files kept on the record because this scan could not read where they were.
+	Scan              string     `json:"scan,omitempty"`
+	UnreadableFolders int        `json:"unreadable_folders,omitempty"`
+	Unknown           int        `json:"unknown,omitempty"`
+	Sidecar           string     `json:"sidecar,omitempty"` // path of the inventory sidecar written onto the drive
+	FinishedAt        *time.Time `json:"finished_at,omitempty"`
+	Note              string     `json:"note,omitempty"`
 }
 
 // DockSession is a guided, resumable ingest of a stack of legacy backup drives
@@ -472,6 +477,19 @@ type SnapFile struct {
 	CameraSerial string    `json:"camera_serial,omitempty"` // EXIF BodySerialNumber, best-effort
 }
 
+// ScanGap is a folder or file a drive scan did not read, relative to the drive
+// root, and why.
+type ScanGap struct {
+	RelPath string `json:"rel_path"`
+	Reason  string `json:"reason"`
+}
+
+// Scan completeness values (VolumeSnapshot.Scan).
+const (
+	ScanComplete = "complete"
+	ScanPartial  = "partial"
+)
+
 // VolumeSnapshot is the complete, offline-queryable record of what a drive holds,
 // captured in one dock ingest read pass: every file (tree, size, mtime, both
 // hashes, role, EXIF), the drive's SMART state at capture, and its physical
@@ -495,6 +513,13 @@ type VolumeSnapshot struct {
 	TotalFiles int            `json:"total_files"`
 	TotalBytes int64          `json:"total_bytes"`
 	Unreadable int            `json:"unreadable,omitempty"`
+	// Scan is "complete" when every folder and file of the drive was read, and
+	// "partial" when any could not be; it is empty on snapshots taken before this
+	// was recorded (completeness unknown). See Known.
+	Scan              string    `json:"scan,omitempty"`
+	UnreadableFolders []ScanGap `json:"unreadable_folders,omitempty"` // folders the scan could not list
+	UnreadableFiles   []ScanGap `json:"unreadable_files,omitempty"`   // files the scan could not read
+	SkippedFolders    []ScanGap `json:"skipped_folders,omitempty"`    // system folders not scanned by design
 	// Role rollups (denormalized for the offline view — the per-file Role is the truth).
 	RoleFiles map[string]int   `json:"role_files,omitempty"`
 	RoleBytes map[string]int64 `json:"role_bytes,omitempty"`

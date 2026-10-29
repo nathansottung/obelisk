@@ -91,6 +91,25 @@ type DriveReport struct {
 	Notes          []string        `json:"notes,omitempty"` // ready-to-show one-liners
 }
 
+// Known reports whether the scan read the place rel (a drive-relative path)
+// would be: false for a file it could not read, and for anything under a folder
+// it could not list or skipped. A file that is not Known is unknown, never
+// missing, whatever the snapshot's file list says. Snapshots from before
+// completeness was recorded say nothing about unread folders, so everything they
+// do not list counts as known absent, as it always did.
+func (snap *VolumeSnapshot) Known(rel string) bool {
+	rel = strings.Trim(filepath.ToSlash(rel), "/")
+	under := func(gaps []ScanGap) bool {
+		for _, g := range gaps {
+			if rel == g.RelPath || strings.HasPrefix(rel, g.RelPath+"/") {
+				return true
+			}
+		}
+		return false
+	}
+	return !under(snap.UnreadableFolders) && !under(snap.SkippedFolders) && !under(snap.UnreadableFiles)
+}
+
 // driveReport builds the per-drive ingest report for a stored snapshot, comparing
 // it against every OTHER drive's snapshot in the catalog.
 func (a *App) driveReport(snap *VolumeSnapshot) DriveReport {

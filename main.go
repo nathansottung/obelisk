@@ -2698,7 +2698,9 @@ func api(mux *http.ServeMux, app *App) {
 			"captured_at":  snap.CapturedAt, "session_id": snap.SessionID,
 			"serial": snap.Serial, "model": snap.Model, "device_size": snap.DeviceSize,
 			"total_files": snap.TotalFiles, "total_bytes": snap.TotalBytes, "unreadable": snap.Unreadable,
-			"role_files": snap.RoleFiles, "role_bytes": snap.RoleBytes,
+			"scan": snap.Scan, "unreadable_folders": snap.UnreadableFolders, "unreadable_files": snap.UnreadableFiles,
+			"skipped_folders": snap.SkippedFolders,
+			"role_files":      snap.RoleFiles, "role_bytes": snap.RoleBytes,
 			"smart": snap.Smart, "report": app.driveReport(snap),
 		})
 	})
