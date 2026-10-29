@@ -122,13 +122,17 @@ func growisofsTarget(v string) bool {
 }
 
 // imgburnSwitches are the ImgBurn switches allowed, with a check for the value
-// a switch takes (nil for none). Building writes to a disc only: the build
-// output mode must be DEVICE (/BUILDOUTPUTMODE, or the older name /BUILDMODE),
-// never IMAGEFILE, and DEST a drive letter.
+// a switch takes (nil for none). The command must leave nothing to ImgBurn's
+// saved settings that could send the output to a file: exactly one /MODE, no
+// switch twice, and a build needs /BUILDOUTPUTMODE DEVICE (never IMAGEFILE)
+// from a folder, not a saved .ibb project with its own settings. DEST is a
+// drive letter, and no value may start with "/".
 var imgburnSwitches = map[string]burnValue{
-	"MODE": oneOf("BUILD", "WRITE"), "BUILDOUTPUTMODE": oneOf("DEVICE"), "BUILDMODE": oneOf("DEVICE"),
-	"SRC": anyValue, "DEST": regexp.MustCompile(`^[A-Za-z]:\\?$`).MatchString,
-	"VOLUMELABEL": anyValue, "FILESYSTEM": anyValue, "UDFREVISION": simpleValue,
+	"MODE": oneOf("BUILD", "WRITE"), "BUILDOUTPUTMODE": oneOf("DEVICE"),
+	"BUILDINPUTMODE": oneOf("STANDARD"),
+	"SRC":            func(v string) bool { return !strings.HasSuffix(strings.ToLower(v), ".ibb") },
+	"DEST":           regexp.MustCompile(`^[A-Za-z]:\\?$`).MatchString,
+	"VOLUMELABEL":    anyValue, "FILESYSTEM": anyValue, "UDFREVISION": simpleValue,
 	"SPEED": simpleValue, "VERIFY": oneOf("YES", "NO"), "EJECT": oneOf("YES", "NO"),
 	"ROOTFOLDER": oneOf("YES", "NO"), "TESTMODE": oneOf("YES", "NO"),
 	"RECURSESUBDIRECTORIES": oneOf("YES", "NO"), "INCLUDEHIDDENFILES": oneOf("YES", "NO"),
@@ -275,7 +279,7 @@ func checkGrowisofsArgs(args []string) error {
 }
 
 func checkImgBurnArgs(args []string) error {
-	build, discMode := false, false
+	seen := map[string]string{}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if !strings.HasPrefix(a, "/") {
@@ -286,21 +290,24 @@ func checkImgBurnArgs(args []string) error {
 		if !ok {
 			return fmt.Errorf("ImgBurn %s is not allowed", a)
 		}
+		if _, dup := seen[name]; dup {
+			return fmt.Errorf("ImgBurn %s is given twice", a)
+		}
+		seen[name] = ""
 		if check == nil {
 			continue
 		}
 		i++
-		if i >= len(args) || !check(args[i]) {
+		if i >= len(args) || strings.HasPrefix(args[i], "/") || !check(args[i]) {
 			return fmt.Errorf("ImgBurn %s needs a value it accepts", a)
 		}
-		switch name {
-		case "MODE":
-			build = strings.EqualFold(args[i], "BUILD")
-		case "BUILDOUTPUTMODE", "BUILDMODE":
-			discMode = true
-		}
+		seen[name] = strings.ToUpper(args[i])
 	}
-	if build && !discMode {
+	mode, ok := seen["MODE"]
+	if !ok {
+		return fmt.Errorf("ImgBurn needs /MODE BUILD or /MODE WRITE")
+	}
+	if mode == "BUILD" && seen["BUILDOUTPUTMODE"] != "DEVICE" {
 		return fmt.Errorf("ImgBurn /MODE BUILD needs /BUILDOUTPUTMODE DEVICE, so it writes to a disc and not to an image file")
 	}
 	return nil
