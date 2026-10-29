@@ -90,7 +90,11 @@ func burnArgv(cmd, src, label string) ([]string, error) {
 // code 0 is success; anything else fails the disc with the tail of its output.
 // A variable so tests can see the argument list.
 var runBurnProgram = func(argv []string) error {
-	out, err := burnProgramCommand(argv).CombinedOutput()
+	prog, err := resolveProgram(argv[0])
+	if err != nil {
+		return fmt.Errorf("burn_command: %w", err)
+	}
+	out, err := burnProgramCommand(append([]string{prog}, argv[1:]...)).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%v: %s", err, toolOutputTail(out))
 	}

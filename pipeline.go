@@ -167,14 +167,13 @@ func resolveConfigTool(name string, cfg Config) (string, error) {
 			return "", err
 		}
 		if _, err := os.Stat(p); err == nil {
-			return p, nil
+			return resolveProgram(p)
 		}
 	}
-	p, err := exec.LookPath(name)
-	if err != nil {
+	if _, err := exec.LookPath(name); err != nil {
 		return "", fmt.Errorf("required tool %q not found — see Preflight for install hints", name)
 	}
-	return p, nil
+	return resolveProgram(name)
 }
 
 // toolVersionLine runs "<path> --version" but STOPS WAITING after a short
