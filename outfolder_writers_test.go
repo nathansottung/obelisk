@@ -239,3 +239,21 @@ func TestAppBackupExport_FolderDecidedByRealLocation(t *testing.T) {
 	}
 	assertFileBytes(t, victim, "SOMEONE ELSE'S")
 }
+
+// A docked drive is never a source: a folder link to a source is refused by
+// where it really is, before any volume is registered or anything is adopted.
+func TestDockIngest_SourceDecidedByRealLocation(t *testing.T) {
+	app := dockApp(t)
+	_, link, untouched := sourceBehindLink(t, app)
+	ds, err := app.StartDockSession([]int{app.Store.Collections()[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vols := len(app.Store.Volumes())
+	_, err = app.IngestDrive(ds.ID, link, "SERIAL-L", "LINK", "", "", false, noProg)
+	assertSourceRefusal(t, "docking a link to a source", err)
+	untouched()
+	if n := len(app.Store.Volumes()); n != vols {
+		t.Errorf("a refused drive registered a volume (%d, was %d)", n, vols)
+	}
+}
