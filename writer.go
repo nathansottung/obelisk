@@ -544,22 +544,27 @@ func (a *App) VerifyChunk(id int, destDir string) (map[string]any, error) {
 	}
 	ok := rb == c.EncHash
 	now := time.Now().UTC()
-	if ok {
+	// Record the result on the copy recorded at the folder that was read, and only
+	// that one; the package status derives from ALL copies, so a single bad medium
+	// never marks the package FAILED while another copy or the staged payload is
+	// intact. A read that matches no recorded copy (the staging folder, say)
+	// credits nothing.
+	credited := a.Store.CreditCopyCheck(c, CopyAt{Path: filepath.Dir(enc), Serial: driveSerialAt(base)}, ok, VerifyB)
+	if ok && credited > 0 {
 		c.VerifiedAt = &now
 	}
-	// Record the result on the copy that lives at this medium; the package status
-	// derives from ALL copies, so a single bad medium never marks the package
-	// FAILED while another copy or the staged payload is intact.
 	note := "media verify"
 	if !ok {
 		note = "media verify: hash mismatch medium=" + rb
 	}
-	a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: ok, Path: enc, Note: note})
-	a.Store.UpdateCopyVerify(c, base, ok)
+	if credited == 0 {
+		note += " · no recorded copy at " + filepath.Dir(enc) + " (or the drive could not be told apart), so no copy was credited"
+	}
+	a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: ok, Path: enc, Note: note, Advisory: credited == 0})
 	a.refreshChunkStatus(c)
 	a.Store.UpdateChunk(c)
 	return map[string]any{"chunk": c.Name, "path": enc, "verify_ok": ok, "expected": c.EncHash, "actual": rb,
-		"status": c.Status, "verified_copies": c.VerifiedCopyCount()}, nil
+		"credited": credited, "status": c.Status, "verified_copies": c.VerifiedCopyCount()}, nil
 }
 
 // VerifyCampaign scans dest_dir for chunk folders/payloads whose names match
@@ -614,12 +619,14 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 			continue
 		}
 		for _, cp := range c.Copies {
-			if !cp.Superseded && pathRelated(cp.Path, destDir) {
+			// A mirror's copy is recorded at the mount it was written to.
+			if !cp.Superseded && normPath(cp.Path) == normPath(destDir) {
 				mirrorTargets = append(mirrorTargets, c)
 				break
 			}
 		}
 	}
+	serial := driveSerialAt(destDir) // which drive is being read, when it can be found
 	if len(cands) == 0 && len(mirrorTargets) == 0 {
 		return nil, fmt.Errorf("no cataloged packages or mirrors found on %s (looked for NAME/<payload>, NAME.tar[.gpg], or a mirror rooted here)", destDir)
 	}
@@ -637,14 +644,18 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 			note = "campaign: hash mismatch"
 		}
 		now := time.Now().UTC()
-		if ok {
+		// Copy-level result, on the copy recorded where this payload was read and
+		// only there; package status derives from all copies (a bad medium on this
+		// campaign does not fail a package with other verified copies).
+		credited := a.Store.CreditCopyCheck(cd.c, CopyAt{Path: filepath.Dir(cd.path), Serial: serial}, ok, VerifyB)
+		if ok && credited > 0 {
 			cd.c.VerifiedAt = &now
 			okCount++
 		}
-		// Copy-level result; package status derives from all copies (a bad medium
-		// on this campaign does not fail a package with other verified copies).
-		a.Store.AppendVerifyEvent(cd.c, VerifyEvent{At: now, OK: ok, Path: cd.path, Note: note, Level: VerifyB})
-		a.Store.UpdateCopyVerify(cd.c, destDir, ok)
+		if credited == 0 {
+			note += " · no recorded copy here, so no copy was credited"
+		}
+		a.Store.AppendVerifyEvent(cd.c, VerifyEvent{At: now, OK: ok, Path: cd.path, Note: note, Level: VerifyB, Advisory: credited == 0})
 		a.refreshChunkStatus(cd.c)
 		a.Store.UpdateChunk(cd.c)
 		results = append(results, map[string]any{"chunk": cd.c.Name, "ok": ok, "path": cd.path, "level": VerifyB,
@@ -660,10 +671,13 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 		if !ok {
 			note += " · first bad: " + firstBad
 		}
-		a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: ok, Path: destDir, Note: note, Level: level, Advisory: !levelSatisfiesComplete(level)})
-		a.Store.UpdateCopyVerifyLevel(c, destDir, ok, level)
+		credited := a.Store.CreditCopyCheck(c, CopyAt{Path: destDir, Serial: serial}, ok, level)
+		if credited == 0 {
+			note += " · the drive could not be told apart from another with a copy here, so no copy was credited"
+		}
+		a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: ok, Path: destDir, Note: note, Level: level, Advisory: !levelSatisfiesComplete(level) || credited == 0})
 		if level == VerifyB {
-			if ok {
+			if ok && credited > 0 {
 				c.VerifiedAt = &now
 			}
 			a.refreshChunkStatus(c)
@@ -900,4 +914,13 @@ func copyFile(src, dst string) error {
 		_ = os.Remove(tmp)
 	}
 	return err
+}
+
+// driveSerialAt is the serial of the drive holding path, or "" when it cannot
+// be found. A variable so tests need not probe disks.
+var driveSerialAt = func(path string) string {
+	if id, err := resolveDeviceIdentity(path); err == nil {
+		return id.Serial
+	}
+	return ""
 }

@@ -672,7 +672,7 @@ func (a *App) dockReverifyAtLevel(ds *DockSession, mountPath string, vol *Volume
 				note += " · first bad: " + firstBad
 			}
 			a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: ok, Path: mountPath, Note: note, Level: level, Advisory: true})
-			a.Store.UpdateCopyVerifyLevel(c, mountPath, ok, level)
+			a.Store.CreditCopyCheck(c, CopyAt{Path: mountPath, VolumeID: vol.ID}, ok, level)
 		}
 	}
 	note := fmt.Sprintf("re-verified at level %s (advisory — only full/B satisfies protection)", level)

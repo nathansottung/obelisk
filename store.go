@@ -3317,48 +3317,61 @@ func (s *Store) RecordCopy(c *Chunk, volumeID int, path string, verifiedOK bool)
 	_ = s.save()
 }
 
-// UpdateCopyVerify records a LEVEL-B verify result on the current copy matching
-// path (back-compat: all existing callers are full-content checks).
-func (s *Store) UpdateCopyVerify(c *Chunk, path string, ok bool) {
-	s.UpdateCopyVerifyLevel(c, path, ok, "B")
+// CopyAt says which copy a check read: the folder it read (Path; empty means
+// any folder, for a check addressed to one volume), the volume when the caller
+// knows it (0 when not), and the serial of the drive actually read when it could
+// be found ("" when not).
+type CopyAt struct {
+	Path     string
+	VolumeID int
+	Serial   string
 }
 
-// UpdateCopyVerifyLevel refreshes a copy's verify state at the given level. Level
-// B updates last_verified_at/verify_ok (the qualifying, verify-due-refreshing
-// bar); levels A and C only update the advisory last_check_* fields, so they can
-// never satisfy COMPLETE or reset the verify-due clock.
-func (s *Store) UpdateCopyVerifyLevel(c *Chunk, path string, ok bool, level string) {
+// CreditCopyCheck records a check's result on the copy it read, and only that
+// copy: a current copy recorded at exactly that folder (by normPath), on that
+// volume when one is given, and not on a drive whose recorded serial differs
+// from the one read. When copies on more than one volume still fit, the check
+// cannot say which drive it read, and none is credited. Level B also sets the
+// copy's verified state. It returns how many copies were credited.
+func (s *Store) CreditCopyCheck(c *Chunk, at CopyAt, ok bool, level string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	serialOf := map[int]string{}
+	for _, v := range s.c.Volumes {
+		serialOf[v.ID] = v.Serial
+	}
+	var fit []int
+	vols := map[int]bool{}
+	for i := range c.Copies {
+		cp := c.Copies[i]
+		if cp.Superseded {
+			continue
+		}
+		if at.Path != "" && normPath(cp.Path) != normPath(at.Path) {
+			continue
+		}
+		if at.VolumeID > 0 && cp.VolumeID != at.VolumeID {
+			continue
+		}
+		if vs := serialOf[cp.VolumeID]; at.Serial != "" && vs != "" && !strings.EqualFold(vs, at.Serial) {
+			continue
+		}
+		fit = append(fit, i)
+		vols[cp.VolumeID] = true
+	}
+	if len(fit) == 0 || len(vols) > 1 {
+		return 0
+	}
 	now := time.Now().UTC()
-	apply := func(i int) {
-		v := ok
-		lvl := level
+	for _, i := range fit {
+		v, lvl := ok, level
 		c.Copies[i].LastCheckAt, c.Copies[i].LastCheckLevel, c.Copies[i].LastCheckOK = &now, lvl, &v
 		if level == "B" {
 			c.Copies[i].LastVerifiedAt, c.Copies[i].VerifyOK = &now, &v
 		}
 	}
-	matched := false
-	current := 0
-	var soleIdx int
-	for i := range c.Copies {
-		if c.Copies[i].Superseded {
-			continue
-		}
-		current++
-		soleIdx = i
-		// base-mount vs chunk-subfolder both match (one contains the other),
-		// tolerant of separator/case differences across platforms.
-		if pathRelated(c.Copies[i].Path, path) {
-			apply(i)
-			matched = true
-		}
-	}
-	if !matched && current == 1 {
-		apply(soleIdx)
-	}
 	_ = s.save()
+	return len(fit)
 }
 
 // SupersedeCopy marks the current (non-superseded) copy of c on volumeID as
