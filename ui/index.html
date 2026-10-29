@@ -1981,9 +1981,9 @@ async function vDrift(id,name){
   h+='</div>';
   const items=d.items||[];
   // State value stays "NEW" in the catalog JSON; it renders as UNARCHIVED.
-  const STATE_LABEL={MISSING:'MISSING',MODIFIED:'MODIFIED',NEW:'UNARCHIVED',MOVED:'MOVED'};
-  const STATE_HINT={NEW:'present on disk, not yet in any package'};
-  for(const st of ['MISSING','MODIFIED','NEW','MOVED']){const list=items.filter(it=>it.state===st&&!it.informational);
+  const STATE_LABEL={MISSING:'MISSING',MODIFIED:'MODIFIED',NEW:'UNARCHIVED',MOVED:'MOVED',UNKNOWN:'UNKNOWN'};
+  const STATE_HINT={NEW:'present on disk, not yet in any package',UNKNOWN:'in a folder or file the rescan could not read, so whether it is still there is not known'};
+  for(const st of ['MISSING','MODIFIED','NEW','MOVED','UNKNOWN']){const list=items.filter(it=>it.state===st&&!it.informational);
     if(list.length)h+=`<div class="panel"><h2${STATE_HINT[st]?` title="${STATE_HINT[st]}"`:''}>${STATE_LABEL[st]} (${list.length})</h2>${itemList(list)}</div>`}
   const infoItems=items.filter(it=>it.informational);
   if(infoItems.length)h+=`<div class="panel" style="opacity:.65"><h2 class="dim">Informational (${infoItems.length}) — sidecar churn, not counted</h2>${itemList(infoItems)}</div>`;

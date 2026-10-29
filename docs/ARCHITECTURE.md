@@ -696,6 +696,10 @@ Small, pure-Go, CGO-free libraries — each earns its place against the
   its handle, reading folder ACLs and volume information; on Linux, `renameat`,
   `fstatfs` and `flock`. The standard library has no handle-relative rename or ACL
   reader, and doing these by pathname is exactly what the guard exists to avoid.
+- **`golang.org/x/text`** — Unicode normalization (NFC) for comparing file names
+  across drives and platforms (`classify.go`). The same accented name can be
+  stored as one code point or as a letter plus an accent (macOS writes the second),
+  and the standard library has no normalization tables.
 
 Everything else — tar, gpg, par2 — is an **external tool** shelled out to, on
 purpose (see the custody chain and Recovery Kit): the restore story must not
