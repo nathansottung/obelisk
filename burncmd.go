@@ -21,6 +21,34 @@ var burnPrograms = map[string]bool{
 	"wodim": true, "cdrskin": true, "imgburn": true, "cdburn": true,
 }
 
+// burnRefusedOptions are xorriso commands a burn command may not use: they
+// start other programs (-launch_frontend, -external_filter, -concat pipe), read
+// further commands from a file or the terminal, or write files on this
+// computer outside the disc. xorriso takes one or two leading dashes and "-"
+// for "_", so options are compared in that normal form (see burnOptionWord).
+var burnRefusedOptions = map[string]bool{
+	"launch_frontend": true, "external_filter": true, "concat": true,
+	"options_from_file": true, "dialog": true, "read_mkisofsrc": true,
+	"extract": true, "extract_l": true, "extract_cut": true, "extract_single": true,
+	"extract_boot_images": true, "cpx": true, "cpax": true, "cp_rx": true, "cp_rax": true,
+	"paste_in": true, "osirrox": true, "logfile": true, "errfile_log": true,
+}
+
+// burnOptionWord is an argument in the form burnRefusedOptions lists it.
+func burnOptionWord(a string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimLeft(a, "-")), "-", "_")
+}
+
+// checkBurnArgs refuses an argument list that uses one of burnRefusedOptions.
+func checkBurnArgs(args []string) error {
+	for _, a := range args[1:] {
+		if strings.HasPrefix(a, "-") && burnRefusedOptions[burnOptionWord(a)] {
+			return fmt.Errorf("burn_command may not use %s: it starts other programs, reads more commands, or writes files outside the disc", a)
+		}
+	}
+	return nil
+}
+
 // parseBurnCommand splits a burn command into a program and arguments, and
 // checks it: quotes must be closed, shell syntax (| & ; < > ` $( ) and line
 // breaks) is refused outside quotes, and the program must be a known burner.
@@ -66,6 +94,9 @@ func parseBurnCommand(cmd string) ([]string, error) {
 	if !burnPrograms[prog] {
 		return nil, fmt.Errorf("burn_command must run a disc burner (one of xorriso, xorrecord, growisofs, cdrecord, wodim, cdrskin, ImgBurn, cdburn), not %q", args[0])
 	}
+	if err := checkBurnArgs(args); err != nil {
+		return nil, err
+	}
 	return args, nil
 }
 
@@ -82,6 +113,10 @@ func burnArgv(cmd, src, label string) ([]string, error) {
 		}
 		a = strings.ReplaceAll(a, "{SRC}", src)
 		args[i] = strings.ReplaceAll(a, "{LABEL}", label)
+	}
+	// A filled-in folder or label is checked too.
+	if err := checkBurnArgs(args); err != nil {
+		return nil, err
 	}
 	return args, nil
 }

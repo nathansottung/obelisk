@@ -99,3 +99,34 @@ func TestBurnCommand_ChangeNeedsConfirm(t *testing.T) {
 }
 
 var errStopBurnForTest = errors.New("stopped by the test")
+
+// xorriso can start other programs (-launch_frontend, -external_filter,
+// -concat pipe) and read further commands from a file or the terminal. Those
+// are refused in the burn command under any spelling xorriso accepts, and in
+// a filled-in placeholder.
+func TestBurnCommand_RefusesProgramLaunchingOptions(t *testing.T) {
+	for _, bad := range []string{
+		"xorriso -launch_frontend /bin/sh --",
+		"xorriso --launch-frontend cmd.exe /c del x --",
+		"xorriso -as cdrecord -v dev=/dev/sr0 {SRC} -- -options_from_file /tmp/cmds",
+		"xorriso -external_filter f '' /bin/sh -- -map {SRC} /",
+		"xorriso -concat pipe 'sh -c x' -- /a",
+		"xorriso -dialog on",
+		"xorrecord -v dev=/dev/sr0 {SRC} -- -Launch_Frontend sh --",
+	} {
+		if _, err := parseBurnCommand(bad); err == nil {
+			t.Errorf("parseBurnCommand(%q) accepted an option that starts a program or reads commands", bad)
+		}
+	}
+	for _, ok := range []string{
+		"xorriso -as cdrecord -v dev=/dev/sr0 -eject {SRC}",
+		"xorriso -outdev /dev/sr0 -volid {LABEL} -map {SRC} / -commit",
+	} {
+		if _, err := parseBurnCommand(ok); err != nil {
+			t.Errorf("parseBurnCommand(%q): %v", ok, err)
+		}
+	}
+	if _, err := burnArgv("xorriso -outdev /dev/sr0 -map {SRC} / {LABEL}", "/stage", "-launch_frontend"); err == nil {
+		t.Error("a label filled in as -launch_frontend was accepted")
+	}
+}
