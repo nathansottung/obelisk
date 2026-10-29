@@ -14,4 +14,4 @@ tracked in the defect register, [development/OB_STATUS.md](development/OB_STATUS
 | Slice B: guard plan, quarantine, restore, repair, escrow and staging writes | Safety | Merged | [#8](https://github.com/nathansottung/obelisk/pull/8) | 2026-10-28 |
 | Delete gate: prepare, confirm with a typed word, re-count before running | Safety | Merged | [#9](https://github.com/nathansottung/obelisk/pull/9) | 2026-10-28 |
 | Config trust: burn command without a shell, validated tools and keystores, owner-only secrets | Safety | Merged | [#10](https://github.com/nathansottung/obelisk/pull/10) | 2026-10-29 |
-| Slice C: guard the remaining writers | Safety | Not started | — | 2026-10-29 |
+| Slice C: guard the remaining writers | Safety | Merged | [#12](https://github.com/nathansottung/obelisk/pull/12) | 2026-10-29 |

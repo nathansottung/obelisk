@@ -203,42 +203,46 @@ type ChunkFileRef struct {
 }
 
 type Chunk struct {
-	ID              int                `json:"id"`
-	CollectionID    int                `json:"collection_id"`
-	Name            string             `json:"name"`
-	Status          string             `json:"status"` // PLANNED BUILDING STAGED WRITING WRITTEN VERIFIED FAILED
-	MediaKind       string             `json:"media_kind"`
-	TargetBytes     int64              `json:"target_bytes"`
-	DataBytes       int64              `json:"data_bytes"`
-	EncBytes        int64              `json:"enc_bytes"`
-	FileCount       int                `json:"file_count"`
-	SrcRoot         string             `json:"src_root"`
-	HashAlg         string             `json:"hash_alg"`
-	TarHash         string             `json:"tar_hash"`
-	EncHash         string             `json:"enc_hash"` // hash of the payload file as written to media (ciphertext when encrypted, tar when not)
-	Encrypted       bool               `json:"encrypted"`
-	KeyRef          string             `json:"key_ref"`
-	PrivateManifest bool               `json:"private_manifest,omitempty"` // medium carries manifest.json.gpg, no plaintext listing
-	Par2            int                `json:"par2_redundancy"`
-	StagedDir       string             `json:"staged_dir"`
-	WrittenDest     string             `json:"written_dest"`
-	VerifyOK        *bool              `json:"verify_ok"`
-	Error           string             `json:"error"`
-	Files           []ChunkFileRef     `json:"files"`
-	BuildTimings    map[string]float64 `json:"build_timings,omitempty"`   // per-stage seconds: tar, hash, stage_verify, encrypt/stage, crypt_verify, par2
-	BuildVerified   *BuildVerified     `json:"build_verified,omitempty"`  // build-time proof the payload faithfully contains the source
-	VerifyEvents    []VerifyEvent      `json:"verify_events,omitempty"`   // append-only integrity-check log
-	RingStats       *RingStats         `json:"ring_stats,omitempty"`      // last write's ring-buffer telemetry
-	BuildWarnings   []string           `json:"build_warnings,omitempty"`  // non-fatal build issues the operator should see (e.g. BagIt tag files that failed to write)
-	Spanned         bool               `json:"spanned"`                   // payload split across several media
-	Segments        []Segment          `json:"segments,omitempty"`        // one per medium/tape when Spanned
-	Copies          []Copy             `json:"copies,omitempty"`          // physical copies of this chunk on registered volumes
-	Adopted         bool               `json:"adopted,omitempty"`         // cataloged from pre-existing media, not built here
-	Mirror          bool               `json:"mirror,omitempty"`          // content-hash-matched loose files on a drive (dock mirror adoption), not a packaged payload
-	ListingUnknown  bool               `json:"listing_unknown,omitempty"` // adopted without a manifest/TOC — contents unenumerated
-	CreatedAt       time.Time          `json:"created_at"`
-	WrittenAt       *time.Time         `json:"written_at,omitempty"`
-	VerifiedAt      *time.Time         `json:"verified_at,omitempty"`
+	ID              int            `json:"id"`
+	CollectionID    int            `json:"collection_id"`
+	Name            string         `json:"name"`
+	Status          string         `json:"status"` // PLANNED BUILDING STAGED WRITING WRITTEN VERIFIED FAILED
+	MediaKind       string         `json:"media_kind"`
+	TargetBytes     int64          `json:"target_bytes"`
+	DataBytes       int64          `json:"data_bytes"`
+	EncBytes        int64          `json:"enc_bytes"`
+	FileCount       int            `json:"file_count"`
+	SrcRoot         string         `json:"src_root"`
+	HashAlg         string         `json:"hash_alg"`
+	TarHash         string         `json:"tar_hash"`
+	EncHash         string         `json:"enc_hash"` // hash of the payload file as written to media (ciphertext when encrypted, tar when not)
+	Encrypted       bool           `json:"encrypted"`
+	KeyRef          string         `json:"key_ref"`
+	PrivateManifest bool           `json:"private_manifest,omitempty"` // medium carries manifest.json.gpg, no plaintext listing
+	Par2            int            `json:"par2_redundancy"`
+	StagedDir       string         `json:"staged_dir"`
+	WrittenDest     string         `json:"written_dest"`
+	VerifyOK        *bool          `json:"verify_ok"`
+	Error           string         `json:"error"`
+	Files           []ChunkFileRef `json:"files"`
+	// UnknownFiles (mirror packages): archive files an earlier dock scan found on
+	// this drive that a later, partial scan could not read. Not counted as copies
+	// or verified until a scan reads them again.
+	UnknownFiles   []ChunkFileRef     `json:"unknown_files,omitempty"`
+	BuildTimings   map[string]float64 `json:"build_timings,omitempty"`   // per-stage seconds: tar, hash, stage_verify, encrypt/stage, crypt_verify, par2
+	BuildVerified  *BuildVerified     `json:"build_verified,omitempty"`  // build-time proof the payload faithfully contains the source
+	VerifyEvents   []VerifyEvent      `json:"verify_events,omitempty"`   // append-only integrity-check log
+	RingStats      *RingStats         `json:"ring_stats,omitempty"`      // last write's ring-buffer telemetry
+	BuildWarnings  []string           `json:"build_warnings,omitempty"`  // non-fatal build issues the operator should see (e.g. BagIt tag files that failed to write)
+	Spanned        bool               `json:"spanned"`                   // payload split across several media
+	Segments       []Segment          `json:"segments,omitempty"`        // one per medium/tape when Spanned
+	Copies         []Copy             `json:"copies,omitempty"`          // physical copies of this chunk on registered volumes
+	Adopted        bool               `json:"adopted,omitempty"`         // cataloged from pre-existing media, not built here
+	Mirror         bool               `json:"mirror,omitempty"`          // content-hash-matched loose files on a drive (dock mirror adoption), not a packaged payload
+	ListingUnknown bool               `json:"listing_unknown,omitempty"` // adopted without a manifest/TOC — contents unenumerated
+	CreatedAt      time.Time          `json:"created_at"`
+	WrittenAt      *time.Time         `json:"written_at,omitempty"`
+	VerifiedAt     *time.Time         `json:"verified_at,omitempty"`
 }
 
 // Statuses a chunk can hold. ADOPTED-VERIFIED marks a package cataloged from
@@ -423,19 +427,25 @@ type BuildVerified struct {
 // stats from mirror adoption, and when it finished. Mode records whether this
 // pass adopted the drive fresh or re-verified an already-known one.
 type DockDrive struct {
-	VolumeID     int        `json:"volume_id"`
-	Serial       string     `json:"serial,omitempty"`
-	Label        string     `json:"label,omitempty"`
-	Letter       string     `json:"letter,omitempty"` // mount path / drive letter this drive came up on
-	Mode         string     `json:"mode"`             // "adopt" | "reverify"
-	Matched      int        `json:"matched"`          // files whose content matches a current cataloged source file
-	MatchedBytes int64      `json:"matched_bytes"`
-	Historical   int        `json:"historical"` // files matching an older/packaged version, not the current source
-	Other        int        `json:"other"`      // readable files matching nothing in the selected archives
-	Unreadable   int        `json:"unreadable"`
-	Sidecar      string     `json:"sidecar,omitempty"` // path of the inventory sidecar written onto the drive
-	FinishedAt   *time.Time `json:"finished_at,omitempty"`
-	Note         string     `json:"note,omitempty"`
+	VolumeID     int    `json:"volume_id"`
+	Serial       string `json:"serial,omitempty"`
+	Label        string `json:"label,omitempty"`
+	Letter       string `json:"letter,omitempty"` // mount path / drive letter this drive came up on
+	Mode         string `json:"mode"`             // "adopt" | "reverify"
+	Matched      int    `json:"matched"`          // files whose content matches a current cataloged source file
+	MatchedBytes int64  `json:"matched_bytes"`
+	Historical   int    `json:"historical"` // files matching an older/packaged version, not the current source
+	Other        int    `json:"other"`      // readable files matching nothing in the selected archives
+	Unreadable   int    `json:"unreadable"`
+	// Scan is the snapshot's completeness ("complete" / "partial"); Unknown counts
+	// archive files an earlier scan found on the drive that this scan could not
+	// read (Chunk.UnknownFiles).
+	Scan              string     `json:"scan,omitempty"`
+	UnreadableFolders int        `json:"unreadable_folders,omitempty"`
+	Unknown           int        `json:"unknown,omitempty"`
+	Sidecar           string     `json:"sidecar,omitempty"` // path of the inventory sidecar written onto the drive
+	FinishedAt        *time.Time `json:"finished_at,omitempty"`
+	Note              string     `json:"note,omitempty"`
 }
 
 // DockSession is a guided, resumable ingest of a stack of legacy backup drives
@@ -472,6 +482,19 @@ type SnapFile struct {
 	CameraSerial string    `json:"camera_serial,omitempty"` // EXIF BodySerialNumber, best-effort
 }
 
+// ScanGap is a folder or file a drive scan did not read, relative to the drive
+// root, and why.
+type ScanGap struct {
+	RelPath string `json:"rel_path"`
+	Reason  string `json:"reason"`
+}
+
+// Scan completeness values (VolumeSnapshot.Scan).
+const (
+	ScanComplete = "complete"
+	ScanPartial  = "partial"
+)
+
 // VolumeSnapshot is the complete, offline-queryable record of what a drive holds,
 // captured in one dock ingest read pass: every file (tree, size, mtime, both
 // hashes, role, EXIF), the drive's SMART state at capture, and its physical
@@ -495,6 +518,13 @@ type VolumeSnapshot struct {
 	TotalFiles int            `json:"total_files"`
 	TotalBytes int64          `json:"total_bytes"`
 	Unreadable int            `json:"unreadable,omitempty"`
+	// Scan is "complete" when every folder and file of the drive was read, and
+	// "partial" when any could not be; it is empty on snapshots taken before this
+	// was recorded (completeness unknown). See Known.
+	Scan              string    `json:"scan,omitempty"`
+	UnreadableFolders []ScanGap `json:"unreadable_folders,omitempty"` // folders the scan could not list
+	UnreadableFiles   []ScanGap `json:"unreadable_files,omitempty"`   // files the scan could not read
+	SkippedFolders    []ScanGap `json:"skipped_folders,omitempty"`    // system folders not scanned by design
 	// Role rollups (denormalized for the offline view — the per-file Role is the truth).
 	RoleFiles map[string]int   `json:"role_files,omitempty"`
 	RoleBytes map[string]int64 `json:"role_bytes,omitempty"`
@@ -1046,6 +1076,10 @@ type catalog struct {
 	// (one per volume, keyed by VolumeID). It is what lets Volumes/Treemap describe
 	// an unplugged drive. See VolumeSnapshot.
 	Snapshots []*VolumeSnapshot `json:"volume_snapshots,omitempty"`
+	// Scans: one record per drive scan, newest last, capped per drive. Each
+	// record's file list is stored compressed in the scans folder, not here. See
+	// ScanRecord and scanhistory.go.
+	Scans []*ScanRecord `json:"volume_scans,omitempty"`
 	// Events (named happenings files belong to) and Templates (role→destination
 	// routing documents). Additive in schema v4. See Event / Template.
 	Events    []*Event    `json:"events,omitempty"`
@@ -2736,20 +2770,81 @@ func (s *Store) AppendSmartSnapshot(v *Volume, snap SmartSnapshot) {
 // ---- drive snapshots ---------------------------------------------------
 
 // PutVolumeSnapshot stores (or replaces) the offline inventory for a volume. One
-// snapshot per volume, keyed by VolumeID — a re-ingest overwrites in place.
-// Persists (coalesced under an active batch).
-func (s *Store) PutVolumeSnapshot(snap *VolumeSnapshot) {
+// snapshot per volume, keyed by VolumeID — a re-ingest overwrites in place; earlier
+// scans are kept as ScanRecords. Persists (coalesced under an active batch) and
+// returns the save's error.
+func (s *Store) PutVolumeSnapshot(snap *VolumeSnapshot) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, ex := range s.c.Snapshots {
 		if ex.VolumeID == snap.VolumeID {
 			s.c.Snapshots[i] = snap
-			_ = s.save()
-			return
+			return s.save()
 		}
 	}
 	s.c.Snapshots = append(s.c.Snapshots, snap)
-	_ = s.save()
+	return s.save()
+}
+
+// AddScanRecord records a drive scan, giving it its ID, and drops the oldest
+// records of that drive beyond keep. The catalog is written to disk at once, even
+// inside a batch, so the caller may remove the dropped records' file lists only
+// after this returns them. If the write fails, the record is not added, nothing is
+// dropped, and the error is returned.
+func (s *Store) AddScanRecord(rec *ScanRecord, keep int) ([]*ScanRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prevScans := append([]*ScanRecord(nil), s.c.Scans...)
+	prevID := s.c.NextID["scan"]
+	rec.ID = s.next("scan")
+	s.c.Scans = append(s.c.Scans, rec)
+	n := 0
+	for _, r := range s.c.Scans {
+		if r.VolumeID == rec.VolumeID {
+			n++
+		}
+	}
+	var dropped []*ScanRecord
+	kept := make([]*ScanRecord, 0, len(s.c.Scans))
+	for _, r := range s.c.Scans { // oldest first
+		if r.VolumeID == rec.VolumeID && n > keep {
+			dropped = append(dropped, r)
+			n--
+			continue
+		}
+		kept = append(kept, r)
+	}
+	s.c.Scans = kept
+	if err := s.writeCatalog(); err != nil {
+		s.c.Scans, s.c.NextID["scan"] = prevScans, prevID
+		return nil, err
+	}
+	return dropped, nil
+}
+
+// ScanFileListsInUse is the set of file-list names the scan records point at.
+func (s *Store) ScanFileListsInUse() map[string]bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]bool, len(s.c.Scans))
+	for _, r := range s.c.Scans {
+		out[r.FileList] = true
+	}
+	return out
+}
+
+// ScanRecords returns copies of a drive's scan records, newest first.
+func (s *Store) ScanRecords(volumeID int) []*ScanRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []*ScanRecord
+	for i := len(s.c.Scans) - 1; i >= 0; i-- {
+		if r := s.c.Scans[i]; r.VolumeID == volumeID {
+			c := *r
+			out = append(out, &c)
+		}
+	}
+	return out
 }
 
 // VolumeSnapshot returns the offline inventory for a volume, or nil if the drive

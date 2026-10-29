@@ -19,6 +19,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -89,6 +90,33 @@ type DriveReport struct {
 	FolderOverlaps []FolderOverlap `json:"folder_overlaps,omitempty"`
 	Mirror         *MirrorVerdict  `json:"mirror,omitempty"`
 	Notes          []string        `json:"notes,omitempty"` // ready-to-show one-liners
+}
+
+// Known reports whether the scan read the place rel (a drive-relative path)
+// would be: false for a file it could not read, and for anything under a folder
+// it could not list or skipped. A file that is not Known is unknown, never
+// missing, whatever the snapshot's file list says. Snapshots from before
+// completeness was recorded say nothing about unread folders, so everything they
+// do not list counts as known absent, as it always did.
+func (snap *VolumeSnapshot) Known(rel string) bool {
+	// On Windows a folder's letter case can change between scans; it is the
+	// same folder.
+	fold := func(p string) string {
+		if runtime.GOOS == "windows" {
+			return strings.ToLower(p)
+		}
+		return p
+	}
+	rel = fold(strings.Trim(filepath.ToSlash(rel), "/"))
+	under := func(gaps []ScanGap) bool {
+		for _, g := range gaps {
+			if g := fold(g.RelPath); rel == g || strings.HasPrefix(rel, g+"/") {
+				return true
+			}
+		}
+		return false
+	}
+	return !under(snap.UnreadableFolders) && !under(snap.SkippedFolders) && !under(snap.UnreadableFiles)
 }
 
 // driveReport builds the per-drive ingest report for a stored snapshot, comparing

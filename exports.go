@@ -558,8 +558,10 @@ func (a *App) ImportPlan(exp PlanExport) (res map[string]any, err error) {
 			}
 			total += f.Size
 		}
-		a.Store.PutVolumeSnapshot(&VolumeSnapshot{VolumeID: vol.ID, Serial: d.Serial, Label: d.Label,
-			Files: sfs, TotalFiles: len(sfs), TotalBytes: total})
+		if err := a.Store.PutVolumeSnapshot(&VolumeSnapshot{VolumeID: vol.ID, Serial: d.Serial, Label: d.Label,
+			Files: sfs, TotalFiles: len(sfs), TotalBytes: total}); err != nil {
+			return nil, err
+		}
 	}
 
 	now := time.Now().UTC()

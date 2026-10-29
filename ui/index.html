@@ -2602,6 +2602,10 @@ async function loadVolSnapshot(id){
   const rep=s.report||{};
   let h=`<div class="row" style="align-items:baseline;gap:10px"><h2 style="flex:1">Drive snapshot <span class="etag due" title="This drive may be unplugged — everything below is from the catalog snapshot">from snapshot · drive last seen ${esc(seen)}</span></h2></div>
     <div class="dim" style="font-size:12px;margin-bottom:8px">${commaN(s.total_files)} files · ${GB(s.total_bytes)} GB${s.unreadable?` · ${s.unreadable} unreadable`:''}${s.serial?` · S/N ${esc(s.serial)}`:''}. The full tree, hashes, dates &amp; roles are queryable with the drive back in the box.</div>`;
+  // A partial scan: what the unread folders hold is unknown, not missing.
+  if(s.scan==='partial'){const uf=s.unreadable_folders||[];
+    h+=`<div style="font-size:12.5px;margin:3px 0;color:var(--bad)">Partial scan: ${commaN(uf.length)} folder(s) and ${commaN((s.unreadable_files||[]).length)} file(s) could not be read. What they hold is unknown.${uf.length?' Not read: '+uf.slice(0,5).map(g=>esc(g.rel_path)+' ('+esc(g.reason)+')').join(', ')+(uf.length>5?', …':''):''}</div>`;}
+  else if(!s.scan)h+=`<div class="dim" style="font-size:11.5px;margin:3px 0">This snapshot was taken before Obelisk recorded unread folders, so whether it is complete is not known.</div>`;
   // Report warnings (mirror / duplicate / critical-catalog).
   for(const n of (rep.notes||[])){const risk=/AT RISK/i.test(n);
     h+=`<div style="font-size:12.5px;margin:3px 0;color:${risk?'var(--bad)':'var(--ink-2)'}">${risk?'':'• '}${esc(n)}</div>`;}
@@ -2611,9 +2615,17 @@ async function loadVolSnapshot(id){
     h+=`<div style="display:flex;height:10px;border-radius:3px;overflow:hidden;border:1px solid var(--line)">`+
       (rep.roles||[]).map(r=>`<div title="${esc(r.role)} · ${commaN(r.files)} files · ${GB(r.bytes)} GB" style="width:${Math.max(0.5,r.bytes/tot*100)}%;background:${ROLE_COLOR[r.role]||'var(--ink-3)'}"></div>`).join('')+`</div>`;
     h+=`<div class="dim" style="font-size:11px;margin-top:5px">`+(rep.roles||[]).map(r=>`${roleDot(r.role)}${esc(r.role)} ${commaN(r.files)}${r.critical?' ':''}`).join(' &nbsp; ')+`</div></div>`;}
-  h+=`<div id="snaptree" style="margin-top:8px"><div class="dim">Loading tree…</div></div>`;
+  h+=`<div id="scanhist" style="margin-top:8px"></div><div id="snaptree" style="margin-top:8px"><div class="dim">Loading tree…</div></div>`;
   box.innerHTML=h;
+  scanHistory(id);
   snapTree(id,'');
+}
+// The drive's earlier scans, newest first (each complete or partial).
+async function scanHistory(id){
+  const el=$('#scanhist');if(!el)return;
+  let r;try{r=await api('GET','/api/volumes/'+id+'/scans')}catch(e){el.innerHTML='';return}
+  const sc=r.scans||[];if(!sc.length){el.innerHTML='';return}
+  el.innerHTML=`<div class="dim" style="font-size:11.5px">Scans of this drive: `+sc.slice(0,10).map(x=>`${esc((x.at||'').slice(0,16).replace('T',' '))} · ${commaN(x.total_files)} files · `+(x.scan==='partial'?`<span style="color:var(--bad)">partial (${commaN(x.unreadable_folders||0)} folder(s) not read)</span>`:'complete')).join(' &nbsp;|&nbsp; ')+`</div>`;
 }
 async function snapTree(id,path){
   const el=$('#snaptree');if(!el)return;

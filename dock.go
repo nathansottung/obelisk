@@ -7,17 +7,21 @@ package main
 //
 //   register/match the Volume by serial (idempotent across sessions) → capture
 //   its physical identity → MIRROR-ADOPT it (hash every loose file, match by
-//   CONTENT against the selected archives' cataloged source hashes) → write an
-//   inventory sidecar + catalog snapshot ONTO THE DRIVE → record per-drive
-//   results → "DONE — safe to eject. Insert the next drive."
+//   CONTENT against the selected archives' cataloged source hashes) → record the
+//   drive's snapshot and this scan in the catalog (the scan's file list goes to
+//   the scans folder in the data folder) → record per-drive results → "DONE —
+//   safe to eject. Insert the next drive."
 //
-// It is strictly READ-ONLY toward sources: the archive folders on the NAS are
-// only ever hashed for comparison, and a docked drive that is (by where it
-// really is) a source, inside one or holding one is refused (CheckOutsideSources).
-// The only writes are to the catalog. A drive is identified by its physical serial, so re-inserting one
-// already processed is recognized and offered as a re-verify, not a re-adopt.
+// It is strictly READ-ONLY toward the drive and toward sources: nothing is ever
+// written onto a docked drive, the archive folders on the NAS are only ever
+// hashed for comparison, and a docked drive that is (by where it really is) a
+// source, inside one or holding one is refused (CheckOutsideSources). The only
+// writes are to the catalog and the scans folder. A drive is identified by its
+// physical serial, so re-inserting one already processed is recognized and
+// offered as a re-verify, not a re-adopt.
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -162,6 +166,10 @@ func (a *App) IngestDrive(sessionID int, mountPath, serial, label, mode, level s
 	if fi, err := os.Stat(mountPath); err != nil || !fi.IsDir() {
 		return nil, fmt.Errorf("cannot read docked drive %s", mountPath)
 	}
+	// The drive's top folder must be listable, or there is nothing to scan.
+	if _, err := os.ReadDir(mountPath); err != nil {
+		return nil, fmt.Errorf("cannot read the docked drive %s: %s", mountPath, scanReason(err))
+	}
 	// A registered source is never a docked drive, by where it really is: checked
 	// before any volume is registered.
 	if err := a.Store.CheckOutsideSources(mountPath); err != nil {
@@ -264,6 +272,12 @@ func (a *App) IngestDrive(sessionID int, mountPath, serial, label, mode, level s
 		"message":  "DONE — safe to eject. Insert the next drive.",
 		"coverage": a.archiveCoverage(ds.ArchiveIDs),
 	}
+	// Whether the drive was read in full. Absent on the cheap A/C re-verify, which
+	// does not walk the drive.
+	if drive.Scan != "" {
+		out["scan"], out["complete"] = drive.Scan, drive.Scan == ScanComplete
+		out["unreadable_folders"], out["unknown"] = drive.UnreadableFolders, drive.Unknown
+	}
 	// The per-drive ingest report: role breakdown, duplicates vs. already-cataloged
 	// drives, folder-overlap, and drive-mirror detection with the location verdict.
 	// Built from the snapshot mirrorAdopt just stored (nil on the cheap A/C re-verify
@@ -331,20 +345,30 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 
 	// Walk the drive (skipping our own sidecar dir and OS junk), collect files.
 	progress(0.06, "scanning drive")
+	// Every folder the walk cannot list, and every system folder it skips, is
+	// recorded, so the snapshot can say which parts of the drive it did not see.
 	var paths []string
-	_ = filepath.WalkDir(mountPath, func(p string, d fs.DirEntry, err error) error {
+	var gaps scanGaps
+	if err := dockWalkDir(mountPath, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil // unreadable subtree — keep going
+			if p == mountPath {
+				return err // the drive itself cannot be read: no scan at all
+			}
+			gaps.unreadableFolders = append(gaps.unreadableFolders, ScanGap{RelPath: driveRel(mountPath, p), Reason: scanReason(err)})
+			return nil // the rest of the drive is still scanned
 		}
 		if d.IsDir() {
-			if skipDockDir(d.Name()) {
+			if p != mountPath && skipDockDir(d.Name()) {
+				gaps.skippedFolders = append(gaps.skippedFolders, ScanGap{RelPath: driveRel(mountPath, p), Reason: "system folder, not scanned"})
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		paths = append(paths, p)
 		return nil
-	})
+	}); err != nil {
+		return nil, fmt.Errorf("cannot read the docked drive %s: %s", mountPath, scanReason(err))
+	}
 
 	// Hash all files in parallel; for EACH file both (a) record a snapshot entry
 	// (role + best-effort EXIF) and (b) classify it by content against the archives.
@@ -406,34 +430,113 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 			} else {
 				other++
 			}
+		},
+		func(p, kind, msg string) {
+			mu.Lock()
+			defer mu.Unlock()
+			gaps.unreadableFiles = append(gaps.unreadableFiles, ScanGap{RelPath: driveRel(mountPath, p), Reason: fileScanReason(kind)})
 		})
 	unreadable := len(paths) - int(hashed)
 
+	snap := a.buildSnapshot(ds, vol, health, snapFiles, unreadable, gaps)
+	// The scan's own record and file list are saved before the snapshot and the
+	// mirror records change, so a scan that cannot be recorded fails the ingest and
+	// leaves those as they were.
+	if _, err := a.recordScan(snap, cfg.ScanHistoryRetained); err != nil {
+		return nil, err
+	}
+
+	// What a partial scan could not read is unknown, not gone. A file an earlier
+	// scan matched on this drive, and this scan did not see, is kept apart as
+	// unknown (never counted as a copy or re-stamped as verified) unless the
+	// previous scan saw that content only in places this scan did read, which shows
+	// it is no longer there. Only the archive's current version is kept.
+	knownAbsent := func(string) bool { return false }
+	if prev := a.Store.VolumeSnapshot(vol.ID); prev != nil {
+		seenAt := map[string]bool{} // hash -> every place the previous scan saw it is known now
+		for _, f := range prev.Files {
+			if f.Hash == "" {
+				continue
+			}
+			known, ok := seenAt[f.Hash]
+			seenAt[f.Hash] = (known || !ok) && snap.Known(f.RelPath)
+		}
+		knownAbsent = func(h string) bool { return seenAt[h] }
+	}
+
 	// Record the matches as a verified mirror package per archive.
 	progress(0.84, "recording matches")
-	totalMatched := 0
+	totalMatched, unknownFiles := 0, 0
 	for _, aid := range ds.ArchiveIDs {
 		fm := matchedByArchive[aid]
-		if len(fm) == 0 {
-			continue
-		}
 		refs := make([]ChunkFileRef, 0, len(fm))
 		for _, f := range fm {
 			refs = append(refs, ChunkFileRef{FileID: f.ID, RelPath: f.RelPath, SizeBytes: f.SizeBytes, Hash: f.Hash})
 		}
+		var unknown []ChunkFileRef
+		if prior := a.mirrorChunkOn(aid, vol.ID); prior != nil && snap.Scan == ScanPartial {
+			current := map[int]string{}
+			for _, f := range a.Store.FilesOf(aid) {
+				current[f.ID] = f.Hash
+			}
+			seen := map[int]bool{}
+			for _, r := range append(append([]ChunkFileRef(nil), prior.Files...), prior.UnknownFiles...) {
+				if _, matched := fm[r.FileID]; matched || seen[r.FileID] {
+					continue
+				}
+				seen[r.FileID] = true
+				if h, ok := current[r.FileID]; ok && r.Hash != "" && h == r.Hash && !knownAbsent(r.Hash) {
+					unknown = append(unknown, r)
+				}
+			}
+		}
+		if len(refs) == 0 {
+			// None of this archive's files were found. What the drive's record held
+			// is gone, or unknown where this scan could not read; the copy is not
+			// verified again by a scan that found nothing.
+			if p := a.mirrorChunkOn(aid, vol.ID); p != nil && (len(p.Files) > 0 || len(p.UnknownFiles) > 0) {
+				gone := 0
+				for _, r := range p.Files {
+					if !containsRef(unknown, r.FileID) {
+						gone++
+					}
+				}
+				p.Files, p.FileCount, p.EncBytes, p.DataBytes = nil, 0, 0, 0
+				p.UnknownFiles = unknown
+				a.Store.UpdateChunk(p)
+				a.Store.AppendVerifyEvent(p, VerifyEvent{At: time.Now().UTC(), OK: false, Path: mountPath, Advisory: true,
+					Note: fmt.Sprintf("this scan found none of the archive's files here: %d no longer on the drive, %d unknown (in places it could not read)", gone, len(unknown))})
+			}
+			unknownFiles += len(unknown)
+			continue
+		}
 		sort.Slice(refs, func(i, j int) bool { return refs[i].RelPath < refs[j].RelPath })
-		a.upsertMirrorChunk(aid, vol, mountPath, refs, mode)
+		sort.Slice(unknown, func(i, j int) bool { return unknown[i].RelPath < unknown[j].RelPath })
+		c := a.upsertMirrorChunk(aid, vol, mountPath, refs, mode)
+		c.UnknownFiles = unknown
+		a.Store.UpdateChunk(c)
+		if len(unknown) > 0 {
+			a.Store.AppendVerifyEvent(c, VerifyEvent{At: time.Now().UTC(), OK: true, Path: mountPath, Advisory: true,
+				Note: fmt.Sprintf("%d file(s) an earlier scan found here are unknown: this scan could not read where they were, so they are not counted until a scan reads them again", len(unknown))})
+		}
 		totalMatched += len(fm)
+		unknownFiles += len(unknown)
 	}
 
 	d := &DockDrive{VolumeID: vol.ID, Serial: vol.Serial, Label: vol.Label, Mode: mode,
-		Matched: totalMatched, MatchedBytes: matchedBytes, Historical: hist, Other: other, Unreadable: unreadable}
+		Matched: totalMatched, MatchedBytes: matchedBytes, Historical: hist, Other: other, Unreadable: unreadable,
+		Scan: snap.Scan, UnreadableFolders: len(snap.UnreadableFolders), Unknown: unknownFiles}
+	if snap.Scan == ScanPartial {
+		d.Note = fmt.Sprintf("partial scan: %d folder(s) and %d file(s) could not be read; what they hold is unknown", len(snap.UnreadableFolders), len(snap.UnreadableFiles))
+	}
 
 	// Store the drive's SNAPSHOT — the full offline inventory. NO sidecar is written
 	// to the drive: adopted media are read-only, so the inventory lives in the
 	// catalog alone (see this function's doc + docs/ARCHITECTURE.md).
 	progress(0.92, "recording drive snapshot")
-	a.Store.PutVolumeSnapshot(a.buildSnapshot(ds, vol, health, snapFiles, unreadable))
+	if err := a.Store.PutVolumeSnapshot(snap); err != nil {
+		return nil, fmt.Errorf("saving the drive snapshot: %w", err)
+	}
 
 	if mode == "reverify" {
 		if d.Note != "" {
@@ -447,12 +550,15 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 // buildSnapshot assembles a VolumeSnapshot from the walk's per-file records plus
 // the drive's identity and SMART state, with role rollups denormalized for the
 // offline view. Files are sorted by path for a stable, browsable tree.
-func (a *App) buildSnapshot(ds *DockSession, vol *Volume, health *SmartSnapshot, files []SnapFile, unreadable int) *VolumeSnapshot {
+func (a *App) buildSnapshot(ds *DockSession, vol *Volume, health *SmartSnapshot, files []SnapFile, unreadable int, gaps scanGaps) *VolumeSnapshot {
 	sort.Slice(files, func(i, j int) bool { return files[i].RelPath < files[j].RelPath })
+	gaps.sort()
 	snap := &VolumeSnapshot{
 		VolumeID: vol.ID, CapturedAt: time.Now().UTC(), SessionID: ds.ID,
 		Label: vol.Label, Serial: vol.Serial, Model: vol.Model, DeviceSize: vol.DeviceSize,
 		LocationID: vol.LocationID, Smart: health, Files: files, Unreadable: unreadable,
+		Scan: gaps.completeness(), UnreadableFolders: gaps.unreadableFolders,
+		UnreadableFiles: gaps.unreadableFiles, SkippedFolders: gaps.skippedFolders,
 		RoleFiles: map[string]int{}, RoleBytes: map[string]int64{},
 	}
 	for _, f := range files {
@@ -466,6 +572,51 @@ func (a *App) buildSnapshot(ds *DockSession, vol *Volume, health *SmartSnapshot,
 		snap.RoleBytes[role] += f.SizeBytes
 	}
 	return snap
+}
+
+// dockWalkDir walks a docked drive. A variable so a test can make the walk fail.
+var dockWalkDir = filepath.WalkDir
+
+// scanGaps collects what a drive scan did not read.
+type scanGaps struct {
+	unreadableFolders, unreadableFiles, skippedFolders []ScanGap
+}
+
+func (g *scanGaps) sort() {
+	for _, l := range [][]ScanGap{g.unreadableFolders, g.unreadableFiles, g.skippedFolders} {
+		sort.Slice(l, func(i, j int) bool { return l[i].RelPath < l[j].RelPath })
+	}
+}
+
+// completeness is ScanComplete when the scan read every folder and file it was
+// meant to (system folders are skipped by design), else ScanPartial.
+func (g scanGaps) completeness() string {
+	if len(g.unreadableFolders) > 0 || len(g.unreadableFiles) > 0 {
+		return ScanPartial
+	}
+	return ScanComplete
+}
+
+// scanReason is why a path could not be read, without the path itself.
+func scanReason(err error) string {
+	switch {
+	case errors.Is(err, fs.ErrPermission):
+		return "permission denied"
+	case errors.Is(err, fs.ErrNotExist):
+		return "disappeared during the scan"
+	}
+	return "read error"
+}
+
+// fileScanReason words a hashing problem kind (see parallelHash) for the record.
+func fileScanReason(kind string) string {
+	switch kind {
+	case "unsupported":
+		return "not a regular file"
+	case "stat":
+		return "cannot be opened"
+	}
+	return "read error"
 }
 
 // driveRel returns p as a forward-slashed path relative to the drive mount root,
@@ -572,6 +723,32 @@ func (a *App) upsertMirrorChunk(archiveID int, vol *Volume, mountPath string, re
 	return c
 }
 
+// containsRef reports whether refs holds the file fileID.
+func containsRef(refs []ChunkFileRef, fileID int) bool {
+	for _, r := range refs {
+		if r.FileID == fileID {
+			return true
+		}
+	}
+	return false
+}
+
+// mirrorChunkOn is the archive's mirror package with a current copy on the
+// volume, or nil.
+func (a *App) mirrorChunkOn(archiveID, volumeID int) *Chunk {
+	for _, c := range a.Store.Chunks(archiveID) {
+		if !c.Mirror {
+			continue
+		}
+		for _, cp := range c.Copies {
+			if cp.VolumeID == volumeID && !cp.Superseded {
+				return c
+			}
+		}
+	}
+	return nil
+}
+
 // volumeHasMirror reports whether the volume already holds mirror data for any
 // of the given archives (a current copy on a mirror package).
 func (a *App) volumeHasMirror(volumeID int, archiveIDs []int) bool {
@@ -596,6 +773,7 @@ type CoverageArchive struct {
 	TotalFiles   int     `json:"total_files"`
 	CoveredFiles int     `json:"covered_files"`
 	Uncovered    int     `json:"uncovered_files"`
+	Unknown      int     `json:"unknown_files,omitempty"` // not covered, but on a drive a partial scan could not read
 	Pct          float64 `json:"pct"`
 	TotalBytes   int64   `json:"total_bytes"`
 	CoveredBytes int64   `json:"covered_bytes"`
@@ -609,6 +787,7 @@ type Coverage struct {
 	Pct          float64           `json:"pct"`
 	TotalBytes   int64             `json:"total_bytes"`
 	CoveredBytes int64             `json:"covered_bytes"`
+	Unknown      int               `json:"unknown_files,omitempty"` // not covered, but on a drive a partial scan could not read
 }
 
 // archiveCoverage computes, for the selected archives, how many source files now
@@ -617,6 +796,7 @@ type Coverage struct {
 func (a *App) archiveCoverage(archiveIDs []int) Coverage {
 	coveredIDs := map[int]bool{}
 	coveredHashes := map[string]bool{}
+	unknownIDs := map[int]bool{} // on a drive a partial scan could not read
 	for _, c := range a.Store.Chunks(0) {
 		if c.VerifiedCopyCount() == 0 {
 			continue
@@ -628,6 +808,9 @@ func (a *App) archiveCoverage(archiveIDs []int) Coverage {
 			if ref.Hash != "" {
 				coveredHashes[ref.Hash] = true
 			}
+		}
+		for _, ref := range c.UnknownFiles {
+			unknownIDs[ref.FileID] = true
 		}
 	}
 	var cov Coverage
@@ -643,6 +826,8 @@ func (a *App) archiveCoverage(archiveIDs []int) Coverage {
 			if coveredIDs[f.ID] || (f.Hash != "" && coveredHashes[f.Hash]) {
 				ca.CoveredFiles++
 				ca.CoveredBytes += f.SizeBytes
+			} else if unknownIDs[f.ID] {
+				ca.Unknown++
 			}
 		}
 		ca.Uncovered = ca.TotalFiles - ca.CoveredFiles
@@ -654,6 +839,7 @@ func (a *App) archiveCoverage(archiveIDs []int) Coverage {
 		cov.CoveredFiles += ca.CoveredFiles
 		cov.TotalBytes += ca.TotalBytes
 		cov.CoveredBytes += ca.CoveredBytes
+		cov.Unknown += ca.Unknown
 	}
 	cov.Uncovered = cov.TotalFiles - cov.CoveredFiles
 	if cov.TotalFiles > 0 {
