@@ -151,6 +151,9 @@ func TestBurnCommand_AllowsOnlyKnownOptions(t *testing.T) {
 		"growisofs -Z stdio:/tmp/x {SRC}",
 		"imgburn /MODE BUILD /BUILDMODE DISC /SRC {SRC} /DEST C:/Windows/x.iso /START",
 		"imgburn /MODE BUILD /BUILDMODE IMAGEFILE /SRC {SRC} /DEST E: /START",
+		"imgburn /MODE BUILD /BUILDOUTPUTMODE IMAGEFILE /SRC {SRC} /DEST C: /START",
+		"imgburn /MODE BUILD /BUILDMODE DISC /SRC {SRC} /DEST E: /START",
+		"imgburn /MODE BUILD /SRC {SRC} /DEST E: /START",
 		"imgburn /MODE BUILD /SRC {SRC} /DEST E: /LOG C:/x.log /START",
 		"imgburn /MODE BUILD /SRC {SRC} /DEST E: extra",
 	} {
@@ -165,7 +168,7 @@ func TestBurnCommand_AllowsOnlyKnownOptions(t *testing.T) {
 		"xorrecord -v dev=/dev/sr0 -dao blank=as_needed {SRC}",
 		"wodim dev=/dev/sr0 speed=4 -v -dao {SRC}",
 		`growisofs -Z /dev/sr0 -R -J -udf -V "{LABEL}" "{SRC}"`,
-		`"C:\Program Files (x86)\ImgBurn\ImgBurn.exe" /MODE BUILD /BUILDMODE DISC /SRC "{SRC}" /VOLUMELABEL "{LABEL}" /START /CLOSESUCCESS /NOIMAGEDETAILS`,
+		`"C:\Program Files (x86)\ImgBurn\ImgBurn.exe" /MODE BUILD /BUILDOUTPUTMODE DEVICE /DEST E: /SRC "{SRC}" /VOLUMELABEL "{LABEL}" /START /CLOSESUCCESS /NOIMAGEDETAILS`,
 	} {
 		if _, err := parseBurnCommand(ok); err != nil {
 			t.Errorf("parseBurnCommand(%q): %v", ok, err)

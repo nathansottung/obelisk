@@ -1326,13 +1326,14 @@ disc" shells out to your command template:
 
 ```
 # Windows — ImgBurn
-"C:\Program Files (x86)\ImgBurn\ImgBurn.exe" /MODE BUILD /BUILDMODE DISC ^
-  /SRC "{SRC}" /VOLUMELABEL "{LABEL}" /START /CLOSESUCCESS /NOIMAGEDETAILS
+"C:\Program Files (x86)\ImgBurn\ImgBurn.exe" /MODE BUILD /BUILDOUTPUTMODE DEVICE /DEST E: /SRC "{SRC}" /VOLUMELABEL "{LABEL}" /START /CLOSESUCCESS /NOIMAGEDETAILS
 
 # Linux — growisofs (UDF, label from {LABEL})
 growisofs -Z /dev/sr0 -R -J -udf -V "{LABEL}" "{SRC}"
 ```
-`{SRC}` = the package's staged folder, `{LABEL}` = the package name. If a
+`{SRC}` = the package's staged folder, `{LABEL}` = the package name. Enter the
+command on one line, with `/DEST` set to your burner's drive letter; each
+burner accepts only its options for burning a disc. If a
 **burn verify mount** is set, Obelisk read-back hashes the burned disc
 against the package's `enc_hash` before marking it DONE.
 

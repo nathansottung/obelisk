@@ -122,10 +122,11 @@ func growisofsTarget(v string) bool {
 }
 
 // imgburnSwitches are the ImgBurn switches allowed, with a check for the value
-// a switch takes (nil for none). Building writes to a disc only: BUILDMODE must
-// be DISC and DEST a drive letter.
+// a switch takes (nil for none). Building writes to a disc only: the build
+// output mode must be DEVICE (/BUILDOUTPUTMODE, or the older name /BUILDMODE),
+// never IMAGEFILE, and DEST a drive letter.
 var imgburnSwitches = map[string]burnValue{
-	"MODE": oneOf("BUILD", "WRITE"), "BUILDMODE": oneOf("DISC"),
+	"MODE": oneOf("BUILD", "WRITE"), "BUILDOUTPUTMODE": oneOf("DEVICE"), "BUILDMODE": oneOf("DEVICE"),
 	"SRC": anyValue, "DEST": regexp.MustCompile(`^[A-Za-z]:\\?$`).MatchString,
 	"VOLUMELABEL": anyValue, "FILESYSTEM": anyValue, "UDFREVISION": simpleValue,
 	"SPEED": simpleValue, "VERIFY": oneOf("YES", "NO"), "EJECT": oneOf("YES", "NO"),
@@ -295,12 +296,12 @@ func checkImgBurnArgs(args []string) error {
 		switch name {
 		case "MODE":
 			build = strings.EqualFold(args[i], "BUILD")
-		case "BUILDMODE":
+		case "BUILDOUTPUTMODE", "BUILDMODE":
 			discMode = true
 		}
 	}
 	if build && !discMode {
-		return fmt.Errorf("ImgBurn /MODE BUILD needs /BUILDMODE DISC, so it writes to a disc and not to a file")
+		return fmt.Errorf("ImgBurn /MODE BUILD needs /BUILDOUTPUTMODE DEVICE, so it writes to a disc and not to an image file")
 	}
 	return nil
 }
