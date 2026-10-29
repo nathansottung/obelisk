@@ -147,8 +147,25 @@ var imgburnSwitches = map[string]burnValue{
 // {SRC} where the burner reads what it writes (and, for xorriso, a commit
 // after it).
 type burnPlan struct {
+	template  bool // checking the command as written, with {SRC} unfilled
+	sources   int  // sources given (xorriso -map, a cdrecord track, a growisofs folder, ImgBurn /SRC)
 	mappedSrc bool // xorriso: a -map of {SRC} is waiting for a commit
 	burned    bool
+}
+
+// source records one source the burner reads. The package is the only thing
+// burned: exactly one source, and in the command as written it is {SRC}. A
+// second one could add content or, with xorriso's default overwriting,
+// replace package files of the same name.
+func (p *burnPlan) source(v string) error {
+	p.sources++
+	if p.sources > 1 {
+		return fmt.Errorf("only one source may be given, {SRC}; %q is another", v)
+	}
+	if p.template && !burnsSrc(v) {
+		return fmt.Errorf("the source must be exactly {SRC}, not %q", v)
+	}
+	return nil
 }
 
 // burnsSrc reports whether a value is the package folder: exactly {SRC}, so
@@ -172,7 +189,7 @@ var xorrisoNotBeforeCommit = map[string]bool{
 func checkBurnArgs(args []string, template bool) error {
 	prog := strings.TrimSuffix(strings.ToLower(burnProgramName(args[0])), ".exe")
 	var err error
-	p := &burnPlan{}
+	p := &burnPlan{template: template}
 	switch burnPrograms[prog] {
 	case burnStyleXorriso:
 		err = checkXorrisoArgs(args[1:], p)
@@ -248,7 +265,10 @@ func checkXorrisoArgs(args []string, p *burnPlan) error {
 		}
 		switch name {
 		case "map":
-			if i+1 < len(args) && burnsSrc(args[i+1]) {
+			if i+1 < len(args) {
+				if err := p.source(args[i+1]); err != nil {
+					return fmt.Errorf("xorriso -map: %w", err)
+				}
 				p.mappedSrc = true
 			}
 		case "commit", "commit_eject":
@@ -299,9 +319,10 @@ func checkCdrecordArgs(args []string, dashDash bool, p *burnPlan) ([]string, err
 			continue
 		}
 		// A track to burn: read, never written.
-		if burnsSrc(a) {
-			p.burned = true
+		if err := p.source(a); err != nil {
+			return nil, fmt.Errorf("track: %w", err)
 		}
+		p.burned = true
 	}
 	return nil, nil
 }
@@ -311,9 +332,10 @@ func checkGrowisofsArgs(args []string, p *burnPlan) error {
 		a := args[i]
 		if !strings.HasPrefix(a, "-") {
 			// A folder to burn: read, never written.
-			if burnsSrc(a) {
-				p.burned = true
+			if err := p.source(a); err != nil {
+				return fmt.Errorf("growisofs: %w", err)
 			}
+			p.burned = true
 			continue
 		}
 		if k, v, ok := strings.Cut(a, "="); ok {
@@ -330,8 +352,10 @@ func checkGrowisofsArgs(args []string, p *burnPlan) error {
 		if !ok {
 			return fmt.Errorf("growisofs option %s is not allowed", a)
 		}
+		// A value may not look like an option: growisofs may read it as one
+		// (-V -dry-run would then burn nothing).
 		i++
-		if i >= len(args) || !check(args[i]) {
+		if i >= len(args) || strings.HasPrefix(args[i], "-") || !check(args[i]) {
 			return fmt.Errorf("growisofs %s needs a drive or value it accepts", a)
 		}
 	}
@@ -362,13 +386,16 @@ func checkImgBurnArgs(args []string, p *burnPlan) error {
 			return fmt.Errorf("ImgBurn %s needs a value it accepts", a)
 		}
 		seen[name] = strings.ToUpper(args[i])
-		if name == "SRC" && burnsSrc(args[i]) {
+		if name == "SRC" {
+			if err := p.source(args[i]); err != nil {
+				return fmt.Errorf("ImgBurn /SRC: %w", err)
+			}
 			p.burned = true
 		}
 	}
-	for _, need := range []string{"MODE", "BUILDOUTPUTMODE", "BUILDINPUTMODE", "SRC", "DEST"} {
+	for _, need := range []string{"MODE", "BUILDOUTPUTMODE", "BUILDINPUTMODE", "SRC", "DEST", "START"} {
 		if _, ok := seen[need]; !ok {
-			return fmt.Errorf("ImgBurn needs /MODE BUILD /BUILDOUTPUTMODE DEVICE /BUILDINPUTMODE STANDARD with /SRC and /DEST (missing /%s), so nothing is left to its saved settings", need)
+			return fmt.Errorf("ImgBurn needs /MODE BUILD /BUILDOUTPUTMODE DEVICE /BUILDINPUTMODE STANDARD with /SRC, /DEST and /START (missing /%s), so nothing is left to its saved settings or a click", need)
 		}
 	}
 	return nil

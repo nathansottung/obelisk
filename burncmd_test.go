@@ -296,3 +296,28 @@ func TestBurnCommand_BurnsTheWholePackage(t *testing.T) {
 		}
 	}
 }
+
+// The package is the only thing burned: one source, {SRC}. A second xorriso
+// -map can replace package files (xorriso overwrites same-named files by
+// default), and extra growisofs sources or cdrecord tracks add or put other
+// content first. A growisofs value cannot be one of its options, and ImgBurn
+// must be told to start.
+func TestBurnCommand_BurnsOnlyThePackage(t *testing.T) {
+	for _, bad := range []string{
+		"xorriso -outdev /dev/sr0 -map {SRC} / -map /etc/hostname /{LABEL}.tar.gpg -commit",
+		"xorriso -outdev /dev/sr0 -map {SRC} / -map /etc / -commit",
+		"xorriso -outdev /dev/sr0 -map /x / -commit -map {SRC} / -commit",
+		"xorriso -outdev /dev/sr0 -map /x / -map {SRC} / -commit",
+		"growisofs -Z /dev/sr0 -R {SRC} /etc",
+		"growisofs -Z /dev/sr0 -R /tmp/fake {SRC}",
+		"growisofs -Z /dev/sr0 -V -dry-run -R {SRC}",
+		"growisofs -Z /dev/sr0 -A -use-the-force-luke=dummy -R {SRC}",
+		"wodim dev=/dev/sr0 -data /tmp/fake.iso {SRC}",
+		"xorriso -as cdrecord dev=/dev/sr0 /tmp/fake.iso {SRC}",
+		"imgburn /MODE BUILD /BUILDOUTPUTMODE DEVICE /BUILDINPUTMODE STANDARD /SRC {SRC} /DEST E:",
+	} {
+		if _, err := parseBurnCommand(bad); err == nil {
+			t.Errorf("parseBurnCommand(%q) accepted a command that burns more than the package", bad)
+		}
+	}
+}
