@@ -947,8 +947,12 @@ func verifyTarContents(tarPath string, files []ChunkFileRef) error {
 // returns the hash of the decrypted stream. Used to prove the ciphertext
 // actually decrypts back to the verified tar (compare against tar_hash).
 func decryptRoundtripHash(gpgBin, ciphertext, pass string) (string, error) {
-	cmd := helperCommand(gpgBin, "--batch", "--yes", "--pinentry-mode", "loopback",
-		"--passphrase-fd", "0", "-d", ciphertext)
+	s, err := newGpgSession(gpgBin)
+	if err != nil {
+		return "", err
+	}
+	defer s.close()
+	cmd := helperCommand(gpgBin, s.decryptArgs(ciphertext)...)
 	cmd.Stdin = strings.NewReader(pass)
 	var errb strings.Builder
 	cmd.Stderr = &errb
@@ -1144,9 +1148,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 			return fail(gerr)
 		}
 		c.KeyRef, fpr, chunkPass = ref, keyFpr, pass
-		if err := run(gpgBin, pass, "--batch", "--yes", "--pinentry-mode", "loopback",
-			"--passphrase-fd", "0", "--symmetric", "--cipher-algo", "AES256",
-			"--compress-algo", "none", "-o", payloadPath, tarPath); err != nil {
+		if err := gpgEncrypt(gpgBin, pass, payloadPath, tarPath); err != nil {
 			return fail(err)
 		}
 		if c.EncHash, err = hashFileHex(payloadPath); err != nil {
@@ -1225,9 +1227,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	}
 	if c.PrivateManifest {
 		manPlain := filepath.Join(work, c.Name+".manifest.json")
-		if err := run(gpgBin, chunkPass, "--batch", "--yes", "--pinentry-mode", "loopback",
-			"--passphrase-fd", "0", "--symmetric", "--cipher-algo", "AES256",
-			"--compress-algo", "none", "-o", manPlain+".gpg", manPlain); err != nil {
+		if err := gpgEncrypt(gpgBin, chunkPass, manPlain+".gpg", manPlain); err != nil {
 			return fail(fmt.Errorf("encrypting private manifest: %w", err))
 		}
 	}

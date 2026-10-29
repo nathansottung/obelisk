@@ -73,7 +73,12 @@ func (a *App) ReadMediumManifest(chunkID int, mountPath string) (map[string]any,
 }
 
 func gpgDecryptToMem(gpgBin, pass, path string) ([]byte, error) {
-	cmd := helperCommand(gpgBin, "--batch", "--yes", "--pinentry-mode", "loopback", "--passphrase-fd", "0", "-d", path)
+	s, err := newGpgSession(gpgBin)
+	if err != nil {
+		return nil, err
+	}
+	defer s.close()
+	cmd := helperCommand(gpgBin, s.decryptArgs(path)...)
 	cmd.Stdin = strings.NewReader(pass)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb

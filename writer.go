@@ -843,8 +843,12 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	if err != nil {
 		return nil, err
 	}
-	gpg := helperCommand(gpgBin, "--batch", "--yes", "--pinentry-mode", "loopback",
-		"--passphrase-fd", "0", "-d", enc)
+	gs, err := newGpgSession(gpgBin)
+	if err != nil {
+		return nil, err
+	}
+	defer gs.close()
+	gpg := helperCommand(gpgBin, gs.decryptArgs(enc)...)
 	gpg.Stdin = strings.NewReader(pass)
 	pipe, err := gpg.StdoutPipe()
 	if err != nil {
