@@ -61,6 +61,14 @@ const (
 
 func (a *App) scansDir() string { return filepath.Join(a.DataDir, "scans") }
 
+// scansRetained is how many scans of each drive are kept.
+func scansRetained(cfg Config) int {
+	if cfg.ScanHistoryRetained > 0 {
+		return cfg.ScanHistoryRetained
+	}
+	return defaultScansRetained
+}
+
 // validScanFileName accepts only names this file writes, so a record can never
 // point a read or a removal outside the scans folder.
 func validScanFileName(name string) bool {

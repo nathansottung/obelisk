@@ -19,6 +19,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -98,10 +99,18 @@ type DriveReport struct {
 // completeness was recorded say nothing about unread folders, so everything they
 // do not list counts as known absent, as it always did.
 func (snap *VolumeSnapshot) Known(rel string) bool {
-	rel = strings.Trim(filepath.ToSlash(rel), "/")
+	// On Windows a folder's letter case can change between scans; it is the
+	// same folder.
+	fold := func(p string) string {
+		if runtime.GOOS == "windows" {
+			return strings.ToLower(p)
+		}
+		return p
+	}
+	rel = fold(strings.Trim(filepath.ToSlash(rel), "/"))
 	under := func(gaps []ScanGap) bool {
 		for _, g := range gaps {
-			if rel == g.RelPath || strings.HasPrefix(rel, g.RelPath+"/") {
+			if g := fold(g.RelPath); rel == g || strings.HasPrefix(rel, g+"/") {
 				return true
 			}
 		}

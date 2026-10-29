@@ -4,6 +4,7 @@ package main
 
 import (
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -111,5 +112,14 @@ func TestDockScan_UnreadableFoldersMakeItPartial(t *testing.T) {
 	}
 	if unk := unknownRefsOn(app, coll.ID, vol.ID); len(unk) != 0 {
 		t.Errorf("an outdated version was kept as unknown: %v", unk)
+	}
+}
+
+// On Windows a folder whose letter case changed is still the folder the scan
+// could not read.
+func TestSnapshotKnown_IgnoresCaseOnWindows(t *testing.T) {
+	snap := &VolumeSnapshot{UnreadableFolders: []ScanGap{{RelPath: "Locked"}}}
+	if got := snap.Known("locked/b.txt"); got != (runtime.GOOS != "windows") {
+		t.Errorf("Known(locked/b.txt) = %v on %s", got, runtime.GOOS)
 	}
 }
