@@ -301,3 +301,22 @@ func TestSaveConfig_WriteFoldersDecidedByRealLocation(t *testing.T) {
 		t.Errorf("a keystore beside a source was refused: %v", err)
 	}
 }
+
+// A structure export (on its own, or before an archive is removed) is written
+// into a folder decided by where it really is: a folder link to a source is
+// refused and nothing is written into the source.
+func TestStructureExport_FolderDecidedByRealLocation(t *testing.T) {
+	app := dockApp(t)
+	src, link, untouched := sourceBehindLink(t, app)
+	coll := app.Store.Collections()[0]
+	if _, _, err := app.ScanFolder(coll.ID, src, noProg); err != nil {
+		t.Fatal(err)
+	}
+	_, err := app.writeStructureExportTo(coll.ID, link)
+	assertSourceRefusal(t, "structure export into a link to a source", err)
+	untouched()
+	paths, err := app.writeStructureExportTo(coll.ID, t.TempDir())
+	if err != nil || len(paths) != 3 {
+		t.Fatalf("structure export: %v %v", paths, err)
+	}
+}

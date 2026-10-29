@@ -1604,7 +1604,8 @@ function rmToggle(name,guarded){const b=$('#rm_go');if(!b)return;const typed=(((
 async function rmPickExport(id,name){
   pickFolder('',async p=>{
     if(!p)return;
-    try{await api('POST','/api/collections/'+id+'/structure-export-save',{dir:p});
+    try{if(!(await destGate(p)))return;
+      await api('POST','/api/collections/'+id+'/structure-export-save',{dir:p});
       _rmExportDir=p;const el=$('#rm_exp');if(el)el.value=p;
       toast('Structure Export saved ✓');rmToggle(name,true);
     }catch(e){toast(e.message,1);}

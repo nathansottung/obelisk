@@ -1021,7 +1021,11 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("archive not found"))
 			return
 		}
-		paths, err := app.writeStructureExportTo(id, s(body(r), "dir"))
+		dir := s(body(r), "dir")
+		if strings.TrimSpace(dir) != "" && !outFolderGate(w, app, dir) {
+			return
+		}
+		paths, err := app.writeStructureExportTo(id, dir)
 		if err != nil {
 			jsonErr(w, 400, err)
 			return
