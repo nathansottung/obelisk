@@ -449,7 +449,10 @@ func (s *Store) CheckFileOutsideSources(path string) error {
 			return overlapError(d, r, path, canon, src.registered)
 		}
 	}
-	_ = vol
+	// Sources whose drive is away, or attached somewhere else, as for a folder.
+	if err := snap.decideOffline(vol, abs, canon, path); err != nil {
+		return err
+	}
 	return snap.decideCreate(abs, path)
 }
 

@@ -56,3 +56,24 @@ func TestConfigPaths_UnattachedDriveIsNotRefused(t *testing.T) {
 		t.Error("a keystore inside an unattached source was allowed")
 	}
 }
+
+// A keystore is held to the same rule as a folder for a source whose drive is
+// attached somewhere other than where it was registered: anything on that drive
+// is refused, since the source may be on it.
+func TestKeystoreCheck_SourceDriveAttachedElsewhere(t *testing.T) {
+	app, _ := compatApp(t)
+	here := t.TempDir()
+	vid := pathVolumeID(here)
+	if vid == "" {
+		t.Skip("SKIP (NOT TESTED): no volume identity for the temp folder")
+	}
+	// Registered on this drive under a letter that is not attached now.
+	f := app.Store.AddFolder(app.Store.AddCollection("Moved").ID, unattachedDrive(t)+`Photos`)
+	app.Store.recordFolderVolume(f.ID, vid)
+	if err := app.Store.CheckOutsideSources(here); err == nil {
+		t.Fatal("setup: a folder on the source's drive was allowed")
+	}
+	if err := app.Store.CheckFileOutsideSources(filepath.Join(here, "ks.json")); err == nil {
+		t.Error("a keystore on the drive that holds a moved source was allowed")
+	}
+}
