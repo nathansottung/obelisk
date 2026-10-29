@@ -19,7 +19,6 @@ const (
 	partitionStyleMBR           = 0
 	partitionStyleGPT           = 1
 	partitionInfoExSize         = 144
-	partitionInfoNumberOffset   = 24
 	partitionInfoGPTIDOffset    = 48
 	driveLayoutMBRSigOffset     = 8
 )
@@ -52,12 +51,13 @@ func resolvePartitionID(path string) (string, error) {
 			return id, nil
 		}
 	case partitionStyleMBR:
-		num := binary.LittleEndian.Uint32(info[partitionInfoNumberOffset : partitionInfoNumberOffset+4])
-		sig, err := mbrDiskSignature(h)
+		layout, err := mbrDriveLayout(h)
 		if err != nil {
-			return "", fmt.Errorf("reading the disk signature of %s: %w", path, err)
+			return "", fmt.Errorf("reading the disk layout of %s: %w", path, err)
 		}
-		if id := mbrPartitionID(sig, num); id != "" {
+		sig := binary.LittleEndian.Uint32(layout[driveLayoutMBRSigOffset : driveLayoutMBRSigOffset+4])
+		start := int64(binary.LittleEndian.Uint64(info[8:16]))
+		if id := mbrPartitionID(sig, mbrLinuxNumber(layout, start)); id != "" {
 			return id, nil
 		}
 	}
@@ -95,24 +95,25 @@ func openForQuery(dev string) (windows.Handle, error) {
 	return windows.CreateFile(p, 0, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, 0, 0)
 }
 
-// mbrDiskSignature is the MBR signature of the disk a volume is on.
-func mbrDiskSignature(vol windows.Handle) (uint32, error) {
+// mbrDriveLayout is the DRIVE_LAYOUT_INFORMATION_EX of the MBR disk a volume
+// is on.
+func mbrDriveLayout(vol windows.Handle) ([]byte, error) {
 	var num [12]byte // STORAGE_DEVICE_NUMBER: type, device number, partition number
 	var n uint32
 	if err := windows.DeviceIoControl(vol, ioctlStorageGetDeviceNumber, nil, 0, &num[0], uint32(len(num)), &n, nil); err != nil {
-		return 0, err
+		return nil, err
 	}
 	disk, err := openForQuery(fmt.Sprintf(`\\.\PhysicalDrive%d`, binary.LittleEndian.Uint32(num[4:8])))
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer windows.CloseHandle(disk)
 	layout := make([]byte, 48+128*partitionInfoExSize)
 	if err := windows.DeviceIoControl(disk, ioctlDiskGetDriveLayoutEx, nil, 0, &layout[0], uint32(len(layout)), &n, nil); err != nil {
-		return 0, err
+		return nil, err
 	}
 	if binary.LittleEndian.Uint32(layout[0:4]) != partitionStyleMBR {
-		return 0, fmt.Errorf("the disk is not MBR")
+		return nil, fmt.Errorf("the disk is not MBR")
 	}
-	return binary.LittleEndian.Uint32(layout[driveLayoutMBRSigOffset : driveLayoutMBRSigOffset+4]), nil
+	return layout[:n], nil
 }

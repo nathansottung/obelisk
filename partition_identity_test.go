@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -290,5 +291,34 @@ func TestIngestDrive_LegacyVolumeBindsOnlyWithItsCopies(t *testing.T) {
 	}
 	if v := app.Store.Volume(legacy.ID); v.PartitionID != "gpt:00000000-0000-0000-0000-00000000000a" {
 		t.Errorf("the partition holding the volume's copies was not bound: %q", v.PartitionID)
+	}
+}
+
+// An MBR partition is numbered as Linux numbers it: primaries by slot, logical
+// partitions from 5, whatever Windows' own numbering.
+func TestMbrLinuxNumber(t *testing.T) {
+	const head, size = 48, 144
+	type ent struct {
+		off int64
+		typ byte
+	}
+	layout := func(es ...ent) []byte {
+		b := make([]byte, head+len(es)*size)
+		binary.LittleEndian.PutUint32(b[4:8], uint32(len(es)))
+		for i, e := range es {
+			binary.LittleEndian.PutUint64(b[head+i*size+8:], uint64(e.off))
+			b[head+i*size+32] = e.typ
+		}
+		return b
+	}
+	// Slot 1 empty, slot 2 NTFS, slot 3 extended; two logical partitions, each
+	// followed by its link entry.
+	l := layout(ent{0, 0}, ent{1 << 20, 0x07}, ent{100 << 20, 0x05}, ent{0, 0},
+		ent{101 << 20, 0x07}, ent{200 << 20, 0x05}, ent{0, 0}, ent{0, 0},
+		ent{201 << 20, 0x0c}, ent{0, 0}, ent{0, 0}, ent{0, 0})
+	for off, want := range map[int64]uint32{1 << 20: 2, 101 << 20: 5, 201 << 20: 6, 999: 0} {
+		if got := mbrLinuxNumber(l, off); got != want {
+			t.Errorf("partition at %d: number %d, want %d", off, got, want)
+		}
 	}
 }

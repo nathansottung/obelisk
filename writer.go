@@ -741,6 +741,18 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 		"results": results, "mirror_results": mirrorResults}, nil
 }
 
+// countingReader counts the bytes read through it.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
 func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string, progress func(float64, string)) (map[string]any, error) {
 	c := a.Store.Chunk(id)
 	if c == nil {
@@ -865,12 +877,18 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	if err := gpg.Start(); err != nil {
 		return nil, err
 	}
-	terr := extractTar(bufio.NewReaderSize(pipe, 1<<20), tgt.into, members)
-	_, _ = io.Copy(io.Discard, pipe) // let gpg finish, so its own result is known
+	counted := &countingReader{r: pipe}
+	terr := extractTar(bufio.NewReaderSize(counted, 1<<20), tgt.into, members)
+	killed := false
+	if terr != nil && counted.n > 0 {
+		// The tar failed partway: stop decrypting what will not be unpacked.
+		killed = gpg.Process.Kill() == nil
+	}
+	_, _ = io.Copy(io.Discard, pipe)
 	gerr := gpg.Wait()
-	// gpg's failure comes first: a wrong passphrase gives an empty stream,
+	// gpg's own failure comes first: a wrong passphrase gives an empty stream,
 	// which the tar reader would otherwise report as a missing member.
-	if gerr != nil {
+	if gerr != nil && !killed {
 		return nil, fmt.Errorf("gpg decrypt failed: %s", tail(gpgErr.String(), 400))
 	}
 	if terr != nil {

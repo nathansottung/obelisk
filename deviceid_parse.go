@@ -4,6 +4,7 @@ package main
 // of build tags so it is tested on every platform.
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -177,4 +178,40 @@ func diskutilPartitionID(vol, whole map[string]string) string {
 		return ""
 	}
 	return gptPartitionID(vol["Disk / Partition UUID"])
+}
+
+// mbrLinuxNumber numbers the MBR partition starting at offset the way Linux
+// does in its PARTUUID, from a Windows DRIVE_LAYOUT_INFORMATION_EX: a primary
+// partition is its slot (1-4), and logical partitions are 5, 6, … in the order
+// of the extended boot records. Windows' own PartitionNumber skips empty slots
+// and the extended container, so it differs whenever either is present. 0
+// when the partition is not found.
+//
+// Layout: PartitionStyle u32 @0, PartitionCount u32 @4, then entries of 144
+// bytes from @48. Each entry: StartingOffset i64 @8, and for MBR the partition
+// type byte @32. Entries 0-3 are the primary slots; after them come groups of
+// four per extended boot record, holding a logical partition and a link.
+func mbrLinuxNumber(layout []byte, offset int64) uint32 {
+	const head, size = 48, 144
+	if len(layout) < head {
+		return 0
+	}
+	count := int(binary.LittleEndian.Uint32(layout[4:8]))
+	logical := uint32(4)
+	for i := 0; i < count && head+(i+1)*size <= len(layout); i++ {
+		e := layout[head+i*size : head+(i+1)*size]
+		typ := e[32]
+		used := typ != 0 && typ != 0x05 && typ != 0x0f && typ != 0x85
+		if i >= 4 && used {
+			logical++
+		}
+		if !used || int64(binary.LittleEndian.Uint64(e[8:16])) != offset {
+			continue
+		}
+		if i < 4 {
+			return uint32(i + 1)
+		}
+		return logical
+	}
+	return 0
 }
