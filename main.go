@@ -2325,6 +2325,9 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("output_dir required"))
 			return
 		}
+		if !outFolderGate(w, app, out) {
+			return
+		}
 		resp, jerr := runJob(app, "recoverykit", "Recovery Kit → "+out, func(p func(float64, string)) (map[string]any, error) {
 			return app.BuildRecoveryKit(out, p)
 		})

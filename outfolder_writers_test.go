@@ -188,3 +188,21 @@ func TestBagExport_OutputDecidedByRealLocation(t *testing.T) {
 	}
 	assertFileBytes(t, victim, "SOMEONE ELSE'S")
 }
+
+// The recovery kit (which holds key cards) is written into an output folder
+// decided by where it really is, and a kit file already there (a hard link to
+// another file) is replaced as a name.
+func TestRecoveryKit_OutputDecidedByRealLocation(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	_, link, untouched := sourceBehindLink(t, app)
+	_, err := app.BuildRecoveryKit(link, noProg)
+	assertSourceRefusal(t, "recovery kit into a link to a source", err)
+	untouched()
+
+	out := t.TempDir()
+	victim := plantAtStageName(t, filepath.Join(out, "obelisk-recovery-kit", "README_RECOVERY.md"))
+	if _, err := app.BuildRecoveryKit(out, noProg); err != nil {
+		t.Fatal(err)
+	}
+	assertFileBytes(t, victim, "SOMEONE ELSE'S")
+}

@@ -2888,6 +2888,7 @@ function recoveryKitDlg(){dlg(`<h1>Export Recovery Kit</h1>
   <input id="d1" class="full" placeholder="E:\\safe or /mnt/vault/recovery">${browseBtn('d1')}
   <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Generate</button></div>`,
   async()=>{const d=$('#d1').value.trim();if(!d)return;
+    if(!(await destGate(d)))return;
     const r=await api('POST','/api/recoverykit',{output_dir:d});
     toast('Recovery Kit generating — see Jobs. '+(r.warning||''),1);loc('jobs');
     // Show-the-artifact rule: when the job finishes, surface the kit itself.
