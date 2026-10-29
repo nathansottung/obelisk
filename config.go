@@ -221,6 +221,11 @@ func (a *App) SaveConfig(in map[string]any) (Config, error) {
 			return Config{}, err
 		}
 	}
+	if cfg.TapeTool != prev.TapeTool {
+		if err := checkTapeToolPath(cfg.TapeTool, true); err != nil {
+			return Config{}, err
+		}
+	}
 	for name, p := range cfg.Tools {
 		if old, ok := prev.Tools[name]; ok && old == p {
 			continue

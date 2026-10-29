@@ -81,3 +81,41 @@ func checkPar2ExtraArgs(s string) error {
 	}
 	return nil
 }
+
+// tapeToolProgram is the tape tool a program name is, by exact name (".exe"
+// aside), or "" when it is none of them.
+func tapeToolProgram(p string) string {
+	prog := strings.TrimSuffix(strings.ToLower(filepath.Base(strings.ReplaceAll(p, `\`, "/"))), ".exe")
+	for _, d := range tapeTools {
+		for _, b := range d.Bins {
+			if prog == strings.TrimSuffix(strings.ToLower(b), ".exe") {
+				return d.Name
+			}
+		}
+	}
+	return ""
+}
+
+// checkTapeToolPath checks a configured tape_tool: blank, or an absolute path
+// to a known tape tool. exists also requires a file there (when saving).
+func checkTapeToolPath(p string, exists bool) error {
+	if strings.TrimSpace(p) == "" {
+		return nil
+	}
+	if !filepath.IsAbs(p) {
+		return fmt.Errorf("tape_tool must be an absolute path, not %q", p)
+	}
+	if tapeToolProgram(p) == "" {
+		return fmt.Errorf("tape_tool: %q is not a known tape tool (itdt, tapeinfo, sg_logs, hp_ltt, ltt or hpe_ltt)", p)
+	}
+	if exists {
+		fi, err := os.Stat(p)
+		if err != nil {
+			return fmt.Errorf("tape_tool: %s: %w", p, err)
+		}
+		if !fi.Mode().IsRegular() {
+			return fmt.Errorf("tape_tool: %s is not a program file", p)
+		}
+	}
+	return nil
+}

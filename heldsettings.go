@@ -5,10 +5,10 @@ package main
 //
 // An app backup can come from another machine, or be edited. The settings that
 // choose which program runs and with what arguments (the burn command, tool
-// paths, par2's extra arguments) are therefore not applied by a restore: the
-// current values stay, and the backup's are held here until the user applies
-// them with the typed word "Confirm" (they then pass the same checks as any
-// settings change) or discards them.
+// paths, par2's extra arguments, the tape tool) are therefore not applied by a
+// restore: the current values stay, and the backup's are held here until the
+// user applies them with the typed word "Confirm" (they then pass the same
+// checks as any settings change) or discards them.
 
 import (
 	"encoding/json"
@@ -26,6 +26,7 @@ type HeldSettings struct {
 	BurnCommand   string            `json:"burn_command"`
 	Tools         map[string]string `json:"tools"`
 	Par2ExtraArgs string            `json:"par2_extra_args"`
+	TapeTool      string            `json:"tape_tool,omitempty"`
 	From          string            `json:"from"`
 	At            time.Time         `json:"at"`
 }
@@ -36,7 +37,7 @@ func (a *App) heldSettingsPath() string { return filepath.Join(a.DataDir, "held-
 // restored keeps the current ones, and the backup's are returned when they
 // differ (nil when there is nothing to hold).
 func holdProgramSettings(restored *Config, current Config, from string) *HeldSettings {
-	h := &HeldSettings{BurnCommand: restored.BurnCommand, Tools: restored.Tools, Par2ExtraArgs: restored.Par2ExtraArgs, From: from, At: time.Now().UTC()}
+	h := &HeldSettings{BurnCommand: restored.BurnCommand, Tools: restored.Tools, Par2ExtraArgs: restored.Par2ExtraArgs, TapeTool: restored.TapeTool, From: from, At: time.Now().UTC()}
 	if h.Tools == nil {
 		h.Tools = map[string]string{}
 	}
@@ -44,12 +45,12 @@ func holdProgramSettings(restored *Config, current Config, from string) *HeldSet
 	if cur == nil {
 		cur = map[string]string{}
 	}
-	restored.BurnCommand, restored.Par2ExtraArgs = current.BurnCommand, current.Par2ExtraArgs
+	restored.BurnCommand, restored.Par2ExtraArgs, restored.TapeTool = current.BurnCommand, current.Par2ExtraArgs, current.TapeTool
 	restored.Tools = map[string]string{}
 	for k, v := range cur {
 		restored.Tools[k] = v
 	}
-	if h.BurnCommand == current.BurnCommand && h.Par2ExtraArgs == current.Par2ExtraArgs && reflect.DeepEqual(h.Tools, cur) {
+	if h.BurnCommand == current.BurnCommand && h.Par2ExtraArgs == current.Par2ExtraArgs && h.TapeTool == current.TapeTool && reflect.DeepEqual(h.Tools, cur) {
 		return nil
 	}
 	return h
@@ -107,7 +108,7 @@ func (a *App) ApplyHeldSettings(confirm string) (Config, error) {
 	}
 	cfg, err := a.SaveConfig(map[string]any{
 		"burn_command": h.BurnCommand, "burn_command_confirm": burnCommandConfirmWord,
-		"par2_extra_args": h.Par2ExtraArgs, "tools": tools,
+		"par2_extra_args": h.Par2ExtraArgs, "tape_tool": h.TapeTool, "tools": tools,
 	})
 	if err != nil {
 		return Config{}, fmt.Errorf("the settings from the backup were not applied: %w", err)
