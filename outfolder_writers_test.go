@@ -320,3 +320,31 @@ func TestStructureExport_FolderDecidedByRealLocation(t *testing.T) {
 		t.Fatalf("structure export: %v %v", paths, err)
 	}
 }
+
+// No writer uses the spelling-only source check any more: every call site in
+// the program code is gone (only its definition remains, for tests that show
+// what it misses).
+func TestNoWriterUsesSpellingOnlySourceCheck(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(b), "\n") {
+			code := strings.TrimSpace(line)
+			if strings.HasPrefix(code, "//") || strings.HasPrefix(code, "func (s *Store) AssertOutsideSources(") {
+				continue
+			}
+			if strings.Contains(code, "AssertOutsideSources(") {
+				t.Errorf("%s:%d calls the spelling-only source check: %s", f, i+1, code)
+			}
+		}
+	}
+}

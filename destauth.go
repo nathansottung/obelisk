@@ -31,9 +31,13 @@ package main
 // to ONE SPECIFIC DIRECTORY OBJECT. It does not prove that object is the volume,
 // session or removable medium the operator chose.
 //
-// SCOPE. Only MirrorToVolume and mirror-mode BackupChanges (with their shared leaf
-// copy and inventory sidecar) use this boundary so far. Every other writer still
-// uses AssertOutsideSources.
+// SCOPE. Mirrors, mirror-mode BackupChanges, plan execution and restores use this
+// boundary directly; package and span writes, seal sidecars, BagIt and structure
+// exports, the recovery kit, escrow bundles and app-backup exports use it through
+// an output folder (outfolder.go). Folders written by path or by external tools
+// (staging, the escrow cache, keystores, the auto-export folder) and docked drives
+// are held to its source check (CheckOutsideSources, CheckFileOutsideSources). No
+// writer uses AssertOutsideSources.
 
 import (
 	"crypto/rand"

@@ -1946,9 +1946,9 @@ func (s *Store) SourceRoots() []string {
 //
 // The boundary that does decide those is Store.AuthorizeDestination in destauth.go:
 // it opens the destination, decides on the identity of the opened object, and
-// returns the handle every subsequent write goes through. Mirror runs and
-// mirror-mode BackupChanges use it; every other writer still relies on this check.
-// Do not read a pass from it as authorization to write.
+// returns the handle every subsequent write goes through. Every writer now uses it
+// or its source check (see the SCOPE note in destauth.go); none relies on this
+// check. Do not read a pass from it as authorization to write.
 func (s *Store) AssertOutsideSources(path string) error {
 	if strings.TrimSpace(path) == "" {
 		return nil

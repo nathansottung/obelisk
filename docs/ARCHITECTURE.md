@@ -703,8 +703,11 @@ depend on Obelisk's Go code existing.
 
 ## Destination guard
 
-Mirrors and mirror-mode "back up changes" write through `Store.AuthorizeDestination`
-(`destauth.go`) rather than the older pathname check, `AssertOutsideSources`:
+Mirrors, mirror-mode "back up changes", plan execution and restores write through
+`Store.AuthorizeDestination` (`destauth.go`) rather than the older pathname check,
+`AssertOutsideSources`. Package and span writes, seal sidecars, BagIt and
+structure exports, the Recovery Kit, escrow bundles and app-backup exports use it
+through an output folder (`outfolder.go`):
 
 1. **Decide on the folder actually opened.** The destination is opened (missing
    folders are created one component at a time), its real location is read back
@@ -747,9 +750,14 @@ Mirrors and mirror-mode "back up changes" write through `Store.AuthorizeDestinat
    source whose drive is not attached blocks only a destination on that volume, or,
    with no recorded volume, only a destination whose path could be its path.
 
-The guard does not establish *which medium* a folder is on, does not confine the
-external helpers (tar, gpg, par2), and covers only these two jobs so far; every
-other writer still uses `AssertOutsideSources`.
+The guard does not establish *which medium* a folder is on and does not confine
+the external helpers (tar, gpg, par2). Folders those helpers or other path-based
+writers use (staging, the escrow cache, keystores, the auto-export folder), and
+docked drives, are held to its source check by real location
+(`CheckOutsideSources`; `CheckFileOutsideSources` for keystore files). Where the
+guard is not available (macOS, the BSDs), an output folder is checked by real
+location and by identity, then written through a handle. No writer uses
+`AssertOutsideSources`.
 
 ## Request/job lifecycle
 

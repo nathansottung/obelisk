@@ -125,13 +125,13 @@ func (a *App) DataMap() (DataMap, error) {
 		Paths: adoptedDriveLabels(a),
 	})
 
-	dm.Enforcement = "Every writable destination — staging, a copy target, a keystore, a restore or recovery-kit folder — is resolved to an absolute path and checked against your registered source folders before anything is written. A destination at or beneath a source is refused, not silently redirected."
+	dm.Enforcement = "Every writable destination — staging, a copy target, a keystore, a restore or recovery-kit folder — is checked against your registered source folders by where it really is before anything is written, so a link or another spelling of a source counts as the source. A destination that is a source, is inside one or holds one is refused, not silently redirected."
 	dm.VerifyNote = "Don't take our word for it — this invariant is enforced by tests you can run yourself with `go test ./...`:"
 	dm.VerifyTests = []string{
 		"TestIntegration_SourceSafetyRefusals (integration_test.go) — staging, write, restore, and kit targets inside a source are all refused.",
 		"TestMirror_RefusesSourceDest (mirror_test.go) — a mirror copy cannot target a source folder.",
 		"TestQuarantine_AbsentOnAdoptedAndRefusedForSources (quarantine_test.go) — quarantine never appears on adopted or source data.",
-		"Store.AssertOutsideSources (store.go) — the one guard every write path calls.",
+		"Store.AuthorizeDestination (destauth.go) — the guard writes into a chosen folder go through.",
 	}
 	return dm, nil
 }
