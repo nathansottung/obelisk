@@ -22,7 +22,7 @@ import (
 var execGuardAllowed = map[string]bool{
 	"hardening.go:helperCommand":        true,
 	"hardening.go:helperCommandContext": true,
-	"hardening.go:burnShellCommand":     true,
+	"hardening.go:burnProgramCommand":   true,
 }
 
 func TestProcessStartsOnlyThroughHardeningHelpers(t *testing.T) {
@@ -108,7 +108,8 @@ func TestProcessStartsOnlyThroughHardeningHelpers(t *testing.T) {
 		t.Errorf("process started outside the hardening helpers: %s", v)
 	}
 	// Control: the scan must see the helpers' own calls, or it proves nothing.
-	if len(allowed) < 4 {
-		t.Errorf("scan found only %d exec.Command calls inside the hardening helpers, want at least 4: %v", len(allowed), allowed)
+	// (helperCommand, helperCommandContext and burnProgramCommand: three calls.)
+	if len(allowed) < 3 {
+		t.Errorf("scan found only %d exec.Command calls inside the hardening helpers, want at least 3: %v", len(allowed), allowed)
 	}
 }

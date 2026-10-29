@@ -171,6 +171,17 @@ func (a *App) SaveConfig(in map[string]any) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	// A change of burn_command needs the typed confirmation, which is not saved.
+	// Field names match case-insensitively, so the word is read under any case.
+	confirmBurn := ""
+	for k, v := range in {
+		if strings.EqualFold(k, "burn_command_confirm") {
+			if s, ok := v.(string); ok {
+				confirmBurn = s
+			}
+			delete(in, k)
+		}
+	}
 	b, err := json.Marshal(in)
 	if err != nil {
 		return Config{}, fmt.Errorf("cannot serialize configuration update")
@@ -178,11 +189,50 @@ func (a *App) SaveConfig(in map[string]any) (Config, error) {
 	if _, _, err := decodeConfig(b); err != nil {
 		return Config{}, err
 	}
+	// The checks compare the settings as decoded with the ones in force, so a
+	// key sent under another letter case gets the same checks as its own name.
+	prev := cfg
+	prev.Tools = map[string]string{}
+	for k, v := range cfg.Tools {
+		prev.Tools[k] = v
+	}
+	prev.KeystorePaths = append([]string(nil), cfg.KeystorePaths...)
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return Config{}, fmt.Errorf("configuration update has an invalid field type")
 	}
 	if cfg.Tools == nil {
 		cfg.Tools = map[string]string{}
+	}
+	if next := strings.TrimSpace(cfg.BurnCommand); next != strings.TrimSpace(prev.BurnCommand) {
+		if confirmBurn != burnCommandConfirmWord {
+			return Config{}, fmt.Errorf("changing burn_command runs a different program when discs are burned: type %q to confirm the change", burnCommandConfirmWord)
+		}
+		if next != "" {
+			if _, err := parseBurnCommand(next); err != nil {
+				return Config{}, err
+			}
+		}
+	}
+	if err := checkPar2ExtraArgs(cfg.Par2ExtraArgs); err != nil {
+		return Config{}, err
+	}
+	if !reflect.DeepEqual(cfg.KeystorePaths, prev.KeystorePaths) {
+		if err := checkKeystorePaths(cfg.KeystorePaths); err != nil {
+			return Config{}, err
+		}
+	}
+	if cfg.TapeTool != prev.TapeTool {
+		if err := checkTapeToolPath(cfg.TapeTool, true); err != nil {
+			return Config{}, err
+		}
+	}
+	for name, p := range cfg.Tools {
+		if old, ok := prev.Tools[name]; ok && old == p {
+			continue
+		}
+		if err := checkToolPath(name, p, true); err != nil {
+			return Config{}, err
+		}
 	}
 	if a.Store == nil {
 		return Config{}, fmt.Errorf("configuration update requires an open catalog")
@@ -297,7 +347,8 @@ func (a *App) publishConfig(b []byte, initialize bool) (published bool, err erro
 	}
 	create := a.configIO.createTemp
 	if create == nil {
-		create = func(d, p string) (configTempFile, error) { return os.CreateTemp(d, p) }
+		// The settings hold the access token: owner-only.
+		create = func(d, p string) (configTempFile, error) { return createOwnerOnlyTemp(d, p) }
 	}
 	f, e := create(dir, ".config-*.tmp")
 	if e != nil {
@@ -364,4 +415,32 @@ func loadStartupConfig(dataDir string, initialize bool) (Config, error) {
 		return a.InitializeConfig()
 	}
 	return a.LoadConfig()
+}
+
+// RemoveAuthToken removes the stored access token from the settings, keeping
+// every other setting. The running server keeps the token it started with; the
+// removal takes effect the next time Obelisk starts. A token given in the
+// OBELISK_AUTH_TOKEN or MNEMO_AUTH_TOKEN environment variable is not stored
+// here and is not affected; envToken reports whether one is set.
+func (a *App) RemoveAuthToken() (envToken bool, err error) {
+	a.configMu.Lock()
+	defer a.configMu.Unlock()
+	cfg, fields, err := a.readConfig()
+	if err != nil {
+		return false, err
+	}
+	cfg.AuthToken = ""
+	delete(fields, "auth_token")
+	out, err := encodeConfig(cfg, fields)
+	if err != nil {
+		return false, err
+	}
+	if _, err := a.publishConfig(out, false); err != nil {
+		return false, err
+	}
+	if a.Store != nil {
+		a.Store.Log("config", "the stored access token was removed")
+	}
+	env := strings.TrimSpace(os.Getenv("OBELISK_AUTH_TOKEN")) != "" || strings.TrimSpace(os.Getenv("MNEMO_AUTH_TOKEN")) != ""
+	return env, nil
 }

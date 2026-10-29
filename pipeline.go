@@ -161,15 +161,19 @@ func (a *App) tool(name string) (string, error) {
 // Resolve from a previously validated snapshot; optional probes must not swallow a new config read.
 func resolveConfigTool(name string, cfg Config) (string, error) {
 	if p := cfg.Tools[name]; p != "" {
+		// A configured path must name this tool; one naming another program is
+		// never run (a missing file still falls back to PATH below).
+		if err := checkToolPath(name, p, false); err != nil {
+			return "", err
+		}
 		if _, err := os.Stat(p); err == nil {
-			return p, nil
+			return resolveProgram(p)
 		}
 	}
-	p, err := exec.LookPath(name)
-	if err != nil {
+	if _, err := exec.LookPath(name); err != nil {
 		return "", fmt.Errorf("required tool %q not found — see Preflight for install hints", name)
 	}
-	return p, nil
+	return resolveProgram(name)
 }
 
 // toolVersionLine runs "<path> --version" but STOPS WAITING after a short
@@ -1256,6 +1260,9 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 // use all threads, on par2 builds that support it). If par2 rejects an extra
 // option, it retries once WITHOUT the extras so stock par2cmdline still works.
 func runPar2Create(par2Bin, extraArgs string, redundancy int, par2File, payload string) error {
+	if err := checkPar2ExtraArgs(extraArgs); err != nil {
+		return err
+	}
 	base := []string{"create", fmt.Sprintf("-r%d", redundancy), "-n1"}
 	extra := strings.Fields(extraArgs)
 	args := append(append(append([]string{}, base...), extra...), par2File, payload)

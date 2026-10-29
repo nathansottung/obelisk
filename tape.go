@@ -17,8 +17,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -144,21 +142,24 @@ func defaultTapeDevice() string {
 // (matched to a known def by its binary name), else the first registry tool
 // found on PATH. Returns the def, the resolved binary path, and ok.
 func (a *App) resolveTapeTool(cfg Config) (tapeToolDef, string, bool) {
-	if p := strings.TrimSpace(cfg.TapeTool); p != "" {
-		base := strings.ToLower(filepath.Base(p))
+	if p := strings.TrimSpace(cfg.TapeTool); p != "" && checkTapeToolPath(p, false) == nil {
+		// A configured path must name a known tool exactly; a missing one falls
+		// back to PATH below.
+		name := tapeToolProgram(p)
 		for _, d := range tapeTools {
-			for _, b := range d.Bins {
-				if base == strings.ToLower(b) || strings.HasPrefix(base, strings.TrimSuffix(strings.ToLower(b), ".exe")) {
-					if _, err := os.Stat(p); err == nil {
-						return d, p, true
-					}
+			if d.Name != name {
+				continue
+			}
+			if _, err := os.Stat(p); err == nil {
+				if lp, err := resolveProgram(p); err == nil {
+					return d, lp, true
 				}
 			}
 		}
 	}
 	for _, d := range tapeTools {
 		for _, b := range d.Bins {
-			if lp, err := exec.LookPath(b); err == nil {
+			if lp, err := resolveProgram(b); err == nil {
 				return d, lp, true
 			}
 		}

@@ -259,6 +259,11 @@ func TestRestoreAppBackup_FailedPublishPreservesExistingFile(t *testing.T) {
 	stagedFor := map[string]string{} // final -> the staging file published to it
 	prevRename := renameFile
 	renameFile = func(tmp, final string) error {
+		// The pre-restore copies (made first, also staged and renamed) succeed,
+		// so the restore reaches the publications under test.
+		if strings.Contains(filepath.ToSlash(final), "/pre-restore-") {
+			return prevRename(tmp, final)
+		}
 		stagedAtFailure[tmp] = fileExists(tmp)
 		stagedFor[final] = tmp
 		return fs.ErrPermission

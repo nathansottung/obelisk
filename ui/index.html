@@ -467,6 +467,25 @@ function stagingNeedHTML(dir,free,need,verdict){
   return h}
 const toast=(m,bad)=>{const d=document.createElement('div');if(bad)d.className='bad';d.textContent=m;$('#toast').append(d);setTimeout(()=>d.remove(),bad?7000:3500)};
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// Delegated handlers. Markup never puts data into inline JavaScript: an element
+// names one of the page's functions in data-call (click) or data-input-call
+// (input), and its arguments as JSON in data-args, built with callArgs (escaped
+// as an attribute value, so the browser hands back exactly the JSON). Only the
+// functions listed in UI_CALLS can be called this way.
+const UI_CALLS=new Set(['adoptFolderDlg','assignDlgArchive','backupChangesDlg','backupHistoryDlg','bagExportDlg','bagPackageDlg','censusDlg','doReconcile','doRewriteCopy','dockIngest','dockIngestAnyway','dockReverifyDlg','driveEncDlg','exploreGo','finalizeDlg','integrityArchiveDlg','mirrorDlg','overrideFile','parkFile','planDlg','planExecFromDock','planTree','printLabel','readMediumDlg','removeDlg','restoreDlg','restoreFileVersion','retireDlg','rmPickExport','rmToggle','scanDlg','snapTree','spanWriteDlg','tmZoom','toolBrowse','unsealDlg','vDrift','verifyMirrorDlg','writeDlg']);
+const callArgs=(...a)=>esc(JSON.stringify(a));
+function _uiDispatch(attr,e){
+  const el=e&&e.target&&e.target.closest?e.target.closest('['+attr+']'):null;if(!el)return;
+  const name=el.getAttribute(attr);const fn=window[name];
+  if(!UI_CALLS.has(name)||typeof fn!=='function')return;
+  if(el.tagName==='A'&&e.preventDefault)e.preventDefault();
+  let args;try{args=JSON.parse(el.getAttribute('data-args')||'[]')}catch(_){return}
+  if(!Array.isArray(args))return;
+  fn.apply(null,args);
+}
+document.addEventListener('click',e=>_uiDispatch('data-call',e));
+document.addEventListener('input',e=>_uiDispatch('data-input-call',e));
+function dockIngestAnyway(sid,path,mode,level){const d=$('#dlg');if(d)d.close();dockIngest(sid,path,mode,level,true)}
 
 /* ---- inline help: one shared panel, content in one object (easy to edit) ---- */
 const HELP={
@@ -701,13 +720,13 @@ async function vArchiveProtection(id){
   <div class="panel"><h2>Archive-level profile</h2>
     <div class="row" style="align-items:center;gap:10px">
       <div style="flex:1">Every folder without its own assignment inherits this. ${ap?`<b>${esc(ap.name)}</b> <span class="dim">· ${esc(reqStr(ap))}</span>`:'<span class="protbadge" style="border-color:var(--idle);color:var(--idle)"><b aria-hidden="true"></b> Unassigned</span>'}</div>
-      <button class="btn" onclick="assignDlgArchive(${id},'${esc(ap?ap.id:'')}')">Assign profile…</button></div></div>
+      <button class="btn" data-call="assignDlgArchive" data-args="${callArgs(id,ap?ap.id:'')}">Assign profile…</button></div></div>
   <div class="panel"><h2>Integrity — how hard each copy is proven</h2>
     <div class="row" style="align-items:center;gap:10px">
       <div style="flex:1">The Profile says how many copies; Integrity says how hard each is proven.
         <b style="color:${ivColor(ieff.preset)}">${esc(ieff.preset||'—')}</b>
         <span class="dim">· ${esc(IV_BV[ieff.build_verify]||ieff.build_verify||'')} · par2 ${ieff.par2_redundancy}% · verify ${esc(ieff.routine_verify_level||'')} · due ${ieff.verify_due_months}mo${iv&&iv.override?'':' · inherited (global)'}</span></div>
-      <button class="btn" onclick="integrityArchiveDlg(${id},'${esc(name)}')">Change…</button></div></div>
+      <button class="btn" data-call="integrityArchiveDlg" data-args="${callArgs(id,name)}">Change…</button></div></div>
   <div class="panel"><h2>Folders — give a folder its own profile to override the inherited one</h2>
     <div class="dim" style="font-size:11.5px;margin-bottom:8px">Muted profile = inherited from an ancestor. Solid = an explicit assignment on this folder. A folder's status is the worst status among its files.</div>`;
   if(!_tnodes.length)h+='<div class="empty">No scanned files yet — scan a folder into this archive first.</div>';
@@ -786,7 +805,7 @@ async function vArchiveTreemap(id,color){
   const mode=res.color_by||'protection';
   const crumbs=(res.crumbs||[]).map((c,i,arr)=>i===arr.length-1
     ? `<b>${esc(c.name)}</b>`
-    : `<a href="#" onclick="tmZoom('${esc(c.path)}');return false" style="color:var(--act)">${esc(c.name)}</a>`).join(' <span class="dim">/</span> ');
+    : `<a href="#" data-call="tmZoom" data-args="${callArgs(c.path)}" style="color:var(--act)">${esc(c.name)}</a>`).join(' <span class="dim">/</span> ');
   const drift=res.drift_available;
   const cbtn=(m,label,extra)=>`<button class="btn ${mode===m?'':'ghost'}" style="font-size:11px;padding:2px 10px" ${extra||''} onclick="tmSetColor('${m}')">${label}</button>`;
   const toggle=`<div class="row" style="gap:6px;align-items:center">
@@ -1165,7 +1184,7 @@ async function vHome(){
     h+=`<a class="hcard" href="#vault">
       <div class="hcard-t">${esc(a.name)}${a.sourceless?' <span class="etag" style="font-size:9px">adopted</span>':''}</div>
       <div class="dim" style="font-size:11.5px">${commaN(a.files)} files · ${homeBytes(a.bytes)}</div>
-      <div style="margin-top:7px">${prot}${a.drift_changes?` <a href="#" onclick="vDrift(${a.id},'${esc(a.name)}');return false" class="etag due" style="text-decoration:none">${commaN(a.drift_changes)} drift</a>`:''}</div>
+      <div style="margin-top:7px">${prot}${a.drift_changes?` <a href="#" data-call="vDrift" data-args="${callArgs(a.id,a.name)}" class="etag due" style="text-decoration:none">${commaN(a.drift_changes)} drift</a>`:''}</div>
     </a>`;
   }
   if(ung){
@@ -1494,29 +1513,29 @@ async function vVault(){
     <div id="sres"></div></div>`;
   const drifted=activeCs.filter(c=>c.drift&&c.drift.changes>0);
   if(drifted.length)h=h.replace('<div class="panel"><h2>Find a file',
-    `<div class="panel" style="border-left:3px solid var(--bad)"><b>Unresolved drift:</b> ${drifted.map(c=>`<a href="#" onclick="vDrift(${c.id},'${esc(c.name)}');return false" style="color:var(--act)">${esc(c.name)} (${c.drift.changes})</a>`).join(' · ')} — sources changed since backup.</div>\n  <div class="panel"><h2>Find a file`);
+    `<div class="panel" style="border-left:3px solid var(--bad)"><b>Unresolved drift:</b> ${drifted.map(c=>`<a href="#" data-call="vDrift" data-args="${callArgs(c.id,c.name)}" style="color:var(--act)">${esc(c.name)} (${c.drift.changes})</a>`).join(' · ')} — sources changed since backup.</div>\n  <div class="panel"><h2>Find a file`);
   h+='<div class="panel"><h2>Archives</h2>';
   if(!cs.length) h+='<div class="empty">No archives yet. Create one, then scan a folder into it.</div>';
   else if(!activeCs.length) h+='<div class="empty">No active archives — all are retired (see below).</div>';
   else{h+='<table><tr><th>Name</th><th class="num">Files</th><th class="num">Size</th><th class="num">Packages</th><th></th></tr>';
     for(const c of activeCs){const dr=c.drift;const sl=c.kind==='SOURCELESS';
-      const srcActions=`<button class="btn ghost" onclick="scanDlg(${c.id},'${esc(c.name)}')">Scan folder…</button>
-      <button class="btn ghost" onclick="backupChangesDlg(${c.id},'${esc(c.name)}')">Back up changes…</button>
-      <button class="btn ghost" onclick="mirrorDlg(${c.id},'${esc(c.name)}')">Mirror backup…</button>
-      <button class="btn ghost" onclick="doReconcile(${c.id},'${esc(c.name)}')">Rescan & compare</button>`;
-      const slActions=`<button class="btn ghost" onclick="adoptFolderDlg(${c.id},'${esc(c.name)}')">Adopt a drive…</button>`;
-      h+=`<tr><td>${!sl?`<span id="arccar-${c.id}" class="ftcar" role="button" tabindex="0" aria-expanded="false" aria-label="Show folder tree for ${esc(c.name)}" onclick="ftreeToggle(${c.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}"></span>`:''}${esc(c.name)}${sl?' <span class="etag" title="No source folder — its files are the union of adopted drives">scattered</span>':''}${!sl&&dr&&dr.changes>0?` <a href="#" onclick="vDrift(${c.id},'${esc(c.name)}');return false" class="etag due" style="text-decoration:none">${dr.changes} changes${dr.informational?' · '+dr.informational+' informational':''}</a>`:(!sl&&dr)?` <span class="etag enc">in sync</span>`:''}</td>
+      const srcActions=`<button class="btn ghost" data-call="scanDlg" data-args="${callArgs(c.id,c.name)}">Scan folder…</button>
+      <button class="btn ghost" data-call="backupChangesDlg" data-args="${callArgs(c.id,c.name)}">Back up changes…</button>
+      <button class="btn ghost" data-call="mirrorDlg" data-args="${callArgs(c.id,c.name)}">Mirror backup…</button>
+      <button class="btn ghost" data-call="doReconcile" data-args="${callArgs(c.id,c.name)}">Rescan & compare</button>`;
+      const slActions=`<button class="btn ghost" data-call="adoptFolderDlg" data-args="${callArgs(c.id,c.name)}">Adopt a drive…</button>`;
+      h+=`<tr><td>${!sl?`<span id="arccar-${c.id}" class="ftcar" role="button" tabindex="0" aria-expanded="false" aria-label="Show folder tree for ${esc(c.name)}" onclick="ftreeToggle(${c.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}"></span>`:''}${esc(c.name)}${sl?' <span class="etag" title="No source folder — its files are the union of adopted drives">scattered</span>':''}${!sl&&dr&&dr.changes>0?` <a href="#" data-call="vDrift" data-args="${callArgs(c.id,c.name)}" class="etag due" style="text-decoration:none">${dr.changes} changes${dr.informational?' · '+dr.informational+' informational':''}</a>`:(!sl&&dr)?` <span class="etag enc">in sync</span>`:''}</td>
       <td class="num">${c.files}</td><td class="num">${GB(c.bytes)} GB</td>
       <td class="num">${c.chunks}</td><td class="row" style="justify-content:flex-end">
       ${sl?slActions:srcActions}
-      <button class="btn ghost" onclick="planDlg(${c.id},'${esc(c.name)}')">Plan packages…</button>
-      <button class="btn ghost" onclick="backupHistoryDlg(${c.id},'${esc(c.name)}')">Backup history…</button>
+      <button class="btn ghost" data-call="planDlg" data-args="${callArgs(c.id,c.name)}">Plan packages…</button>
+      <button class="btn ghost" data-call="backupHistoryDlg" data-args="${callArgs(c.id,c.name)}">Backup history…</button>
       <button class="btn ghost" onclick="vArchiveProtection(${c.id})">Protection…</button>
       <button class="btn ghost" onclick="tmOpen(${c.id})">Treemap…</button>
-      <button class="btn ghost" onclick="censusDlg(${c.id},'${esc(c.name)}')">Formats…</button>
-      <button class="btn ghost" onclick="bagExportDlg(${c.id},'${esc(c.name)}')">Export bag…</button>
-      <button class="btn ghost" onclick="retireDlg(${c.id},'${esc(c.name)}')">Retire…</button>
-      <button class="btn ghost" style="color:var(--bad)" onclick="removeDlg(${c.id},'${esc(c.name)}')">Remove…</button></td></tr>${!sl?`<tr id="tree-${c.id}" class="ftrow" style="display:none"><td colspan="5" style="padding:0"><div class="ftree" id="ftree-${c.id}" data-cid="${c.id}" data-name="${esc(c.name)}" role="tree" aria-label="Folders in ${esc(c.name)}" onkeydown="ftreeKey(event,${c.id})"><div class="ftbody"><div class="dim" style="padding:10px 14px">Loading folders…</div></div><div class="ftbar" style="display:none"></div></div></td></tr>`:''}`}
+      <button class="btn ghost" data-call="censusDlg" data-args="${callArgs(c.id,c.name)}">Formats…</button>
+      <button class="btn ghost" data-call="bagExportDlg" data-args="${callArgs(c.id,c.name)}">Export bag…</button>
+      <button class="btn ghost" data-call="retireDlg" data-args="${callArgs(c.id,c.name)}">Retire…</button>
+      <button class="btn ghost" style="color:var(--bad)" data-call="removeDlg" data-args="${callArgs(c.id,c.name)}">Remove…</button></td></tr>${!sl?`<tr id="tree-${c.id}" class="ftrow" style="display:none"><td colspan="5" style="padding:0"><div class="ftree" id="ftree-${c.id}" data-cid="${c.id}" data-name="${esc(c.name)}" role="tree" aria-label="Folders in ${esc(c.name)}" onkeydown="ftreeKey(event,${c.id})"><div class="ftbody"><div class="dim" style="padding:10px 14px">Loading folders…</div></div><div class="ftbar" style="display:none"></div></div></td></tr>`:''}`}
     h+='</table>'}
   // Retired archives — reversible, out of the way. Each shows its tier and can be
   // brought back (either tier) or removed for good.
@@ -1528,7 +1547,7 @@ async function vVault(){
         <td class="row" style="justify-content:flex-end">
           <button class="btn ghost" onclick="unretire(${c.id})">Unretire</button>
           <button class="btn ghost" onclick="retireTier(${c.id},${c.retire_hidden?'false':'true'})">${c.retire_hidden?'Keep counting it':'Hide its numbers'}</button>
-          <button class="btn ghost" style="color:var(--bad)" onclick="removeDlg(${c.id},'${esc(c.name)}')">Remove…</button>
+          <button class="btn ghost" style="color:var(--bad)" data-call="removeDlg" data-args="${callArgs(c.id,c.name)}">Remove…</button>
         </td></tr>`).join('')}</table></details>`;
   }
   h+='</div>';
@@ -1565,12 +1584,12 @@ async function removeDlg(id,name){
   const exportRow=guarded?`<label style="margin-top:12px">Save a fresh Structure Export first — required</label>
     <div class="dim" style="font-size:11px;margin-bottom:4px">A content-free record of every file's hash and where it lives, so you keep a note of what was on those media. Safe to store anywhere.</div>
     <div class="row"><input id="rm_exp" class="mono" placeholder="no folder chosen yet" style="flex:1" readonly>
-      <button type="button" class="btn ghost" onclick="rmPickExport(${id},'${esc(name)}')">Choose folder &amp; save…</button></div>`:'';
+      <button type="button" class="btn ghost" data-call="rmPickExport" data-args="${callArgs(id,name)}">Choose folder &amp; save…</button></div>`:'';
   dlg(`<h1>Remove “${esc(name)}”</h1>
     <div class="panel" style="border-left:3px solid var(--bad);background:rgba(160,49,35,.06)">${consequence}</div>
     ${exportRow}
     <label style="margin-top:12px">Type the archive's name to confirm</label>
-    <input id="rm_name" placeholder="${esc(name)}" autocomplete="off" oninput="rmToggle('${esc(name)}',${guarded})">
+    <input id="rm_name" placeholder="${esc(name)}" autocomplete="off" data-input-call="rmToggle" data-args="${callArgs(name,guarded)}">
     <div class="doctrine">This app never deletes files. This only changes what the app remembers.</div>
     <div class="row" style="margin-top:14px"><button class="btn" id="rm_go" disabled style="background:var(--bad);border-color:var(--bad);color:#fff" onclick="go()">Remove permanently</button></div>`,
   async()=>{
@@ -1946,7 +1965,7 @@ async function vDrift(id,name){
   const infoTotal=(info.new||0)+(info.modified||0)+(info.missing||0)+(info.moved||0);
   let h=`<h1>Drift — ${esc(name||'')}</h1><div class="crumb">rescanned ${esc((d.at||'').replace('T',' ').slice(0,19))} UTC</div>
   <div class="row" style="margin-bottom:10px"><button class="btn ghost" onclick="loc('vault')">← Vault</button>
-    <button class="btn" onclick="doReconcile(${id},'${esc(name||'')}')">Rescan again</button></div>
+    <button class="btn" data-call="doReconcile" data-args="${callArgs(id,name||'')}">Rescan again</button></div>
   <div class="panel"><h2>Summary</h2><div class="row" style="gap:14px">
     <span class="stamp ${changes?'FAILED':'VERIFIED'}">${changes} changes</span>
     <span class="dim">unchanged ${c.unchanged||0} · <span title="present on disk, not yet in any package">unarchived ${c.new||0}</span> · modified ${c.modified||0} · missing ${c.missing||0} · moved ${c.moved||0}</span>
@@ -2096,7 +2115,7 @@ async function showFileVersions(fileId){
       <td class="num">${GB(v.size_bytes)} GB</td>
       <td class="mono" style="font-size:10.5px">${esc((v.hash||'').slice(0,16))}…</td>
       <td style="font-size:11.5px">${locs}</td>
-      <td>${v.packages&&v.packages.length?`<button class="btn ghost" style="font-size:11px;padding:1px 8px" onclick='restoreFileVersion(${fileId},${v.index},"${esc(v.version)}")'>Restore ${esc(v.version)}…</button>`:''}</td>
+      <td>${v.packages&&v.packages.length?`<button class="btn ghost" style="font-size:11px;padding:1px 8px" data-call="restoreFileVersion" data-args="${callArgs(fileId,v.index,v.version)}">Restore ${esc(v.version)}…</button>`:''}</td>
     </tr>`;
   }).join('');
   dlg(`<h1>Versions — ${esc(f.rel_path||'')}</h1>
@@ -2196,15 +2215,15 @@ function actions(c){
   const b=[];
   if(c.status==='PLANNED'||c.status==='FAILED')b.push(`<button class="btn" onclick="doBuild(${c.id})">Build package</button>`);
   if(c.spanned){
-    if(c.staged_dir&&c.status==='STAGED')b.push(`<button class="btn" onclick="spanWriteDlg(${c.id},'${esc(c.name)}')">Write next segment →</button>`);
+    if(c.staged_dir&&c.status==='STAGED')b.push(`<button class="btn" data-call="spanWriteDlg" data-args="${callArgs(c.id,c.name)}">Write next segment →</button>`);
   }else if(c.staged_dir&&c.status!=='PLANNED'&&c.status!=='BUILDING'){
-    b.push(`<button class="btn" onclick="writeDlg(${c.id},'${esc(c.name)}',${c.enc_bytes||c.data_bytes||0})">Write to volume…</button>`);
+    b.push(`<button class="btn" data-call="writeDlg" data-args="${callArgs(c.id,c.name,c.enc_bytes||c.data_bytes||0)}">Write to volume…</button>`);
   }
   if(c.written_dest){
     if(!c.spanned)b.push(`<button class="btn ghost" onclick="doVerify(${c.id})">Verify medium</button>`);
-    b.push(`<button class="btn ghost" onclick="restoreDlg(${c.id},'${esc(c.name)}')">Restore package…</button>`)}
-  if(c.encrypted&&c.staged_dir)b.push(`<button class="btn ghost" onclick="readMediumDlg(${c.id},'${esc(c.name)}')">Read manifest…</button>`);
-  if(c.staged_dir)b.push(`<button class="btn ghost" onclick="bagPackageDlg(${c.id},'${esc(c.name)}')">Export as BagIt…</button>`);
+    b.push(`<button class="btn ghost" data-call="restoreDlg" data-args="${callArgs(c.id,c.name)}">Restore package…</button>`)}
+  if(c.encrypted&&c.staged_dir)b.push(`<button class="btn ghost" data-call="readMediumDlg" data-args="${callArgs(c.id,c.name)}">Read manifest…</button>`);
+  if(c.staged_dir)b.push(`<button class="btn ghost" data-call="bagPackageDlg" data-args="${callArgs(c.id,c.name)}">Export as BagIt…</button>`);
   return b.join('');
 }
 /* Per-package conformant bag for institutional handoff. Storage is untouched —
@@ -2369,7 +2388,7 @@ function copiesLine(c,volmap){const cur=currentCopies(c);const sup=(c.copies||[]
   const parts=cur.map(cp=>{const v=volmap[cp.volume_id]||{};const lbl=esc(v.label||'vol#'+cp.volume_id)+(v.location?' ('+esc(v.location)+')':'');
     let s=`${lbl} — ${copyVerifyLabel(cp)}`;
     if(cp.verify_ok===false&&!c.spanned)
-      s+=` <button class="btn ghost" style="font-size:10px;padding:1px 7px" onclick="doRewriteCopy(${c.id},${cp.volume_id},'${esc(v.label||('vol#'+cp.volume_id))}')">Re-write this copy</button>`;
+      s+=` <button class="btn ghost" style="font-size:10px;padding:1px 7px" data-call="doRewriteCopy" data-args="${callArgs(c.id,cp.volume_id,v.label||('vol#'+cp.volume_id))}">Re-write this copy</button>`;
     return s});
   let h=`<div class="dim" style="font-size:11px">copies: ${parts.join(' · ')||'<span class="dim">none current</span>'}</div>`;
   if(sup.length)h+=`<div class="dim" style="font-size:10.5px;opacity:.65">superseded: ${sup.map(cp=>{const v=volmap[cp.volume_id]||{};return esc(v.label||'vol#'+cp.volume_id)+' '+copyMark(cp.verify_ok)}).join(' · ')}</div>`;
@@ -2539,12 +2558,12 @@ async function volDetail(id){const d=await api('GET','/api/volumes/'+id);const v
   ${deviceIdStr(v)}
   ${sealBanner(v)}
   <div class="row" style="margin-bottom:10px"><button class="btn ghost" onclick="loc('volumes')">← all volumes</button>
-    <button class="btn ghost" onclick="printLabel(${v.id},'${esc(v.barcode||'')}')">Print label</button>
+    <button class="btn ghost" data-call="printLabel" data-args="${callArgs(v.id,v.barcode||'')}">Print label</button>
     <button class="btn ghost" onclick="identifyDlg(${v.id})">Detect drive identity…</button>
-    ${hasMirror?`<button class="btn ghost" onclick="verifyMirrorDlg(${v.id},'${esc(v.label)}')">Re-verify mirror…</button>`:''}
+    ${hasMirror?`<button class="btn ghost" data-call="verifyMirrorDlg" data-args="${callArgs(v.id,v.label)}">Re-verify mirror…</button>`:''}
     <button class="btn ghost" onclick="setVolLocationDlg(${v.id},${v.location_id||0})">Location…</button>
-    <button class="btn ghost" onclick="driveEncDlg(${v.id},${v.drive_encrypted?true:false},'${esc(v.drive_enc_note||'')}')">${v.drive_encrypted?'Drive encryption ':'Drive encryption…'}</button>
-    ${v.sealed?`<button class="btn danger" onclick="unsealDlg(${v.id},'${esc(v.label)}')">Unseal…</button>`:`<button class="btn" onclick="finalizeDlg(${v.id},'${esc(v.label)}')">Finalize (seal)…</button>`}
+    <button class="btn ghost" data-call="driveEncDlg" data-args="${callArgs(v.id,v.drive_encrypted?true:false,v.drive_enc_note||'')}">${v.drive_encrypted?'Drive encryption ':'Drive encryption…'}</button>
+    ${v.sealed?`<button class="btn danger" data-call="unsealDlg" data-args="${callArgs(v.id,v.label)}">Unseal…</button>`:`<button class="btn" data-call="finalizeDlg" data-args="${callArgs(v.id,v.label)}">Finalize (seal)…</button>`}
     ${v.barcode?'':`<button class="btn ghost" onclick="assignBarcode(${v.id})">Assign barcode</button>`}</div>
   ${v.drive_encrypted?`<div class="err" style="margin-bottom:10px"><b>DRIVE-ENCRYPTED (stenc/LTO hardware AES).</b> Outside the par2→gpg→tar restore story: without the <b>drive key</b>, this medium is unreadable by <i>any</i> tool — gpg included. ${v.drive_enc_note?'Drive key: '+esc(v.drive_enc_note):'<b>Drive key location NOT recorded.</b>'}</div>`:''}
   ${mediaHealthCard(d)}
@@ -2557,7 +2576,7 @@ async function volDetail(id){const d=await api('GET','/api/volumes/'+id);const v
       <div style="font-size:11.5px;margin-top:2px">${copyVerifyLabel(c)} <span class="dim">· ${GB(c.bytes)} GB · ${c.file_count} files</span></div>
       <div id="vf${i}" style="display:none;margin-top:4px">
         <div class="dim mono" style="font-size:11px;max-height:200px;overflow:auto">${(c.files||[]).slice(0,500).map(esc).join('<br>')||'—'}</div>
-        <button class="btn ghost" style="margin-top:6px" onclick="readMediumDlg(${c.id},'${esc(c.name)}')">Read manifest from mounted medium…</button></div>
+        <button class="btn ghost" style="margin-top:6px" data-call="readMediumDlg" data-args="${callArgs(c.id,c.name)}">Read manifest from mounted medium…</button></div>
     </div>`});
   $('#view').innerHTML=h+'</div>';
   if(d.has_snapshot)loadVolSnapshot(id);
@@ -2590,11 +2609,11 @@ async function loadVolSnapshot(id){
 async function snapTree(id,path){
   const el=$('#snaptree');if(!el)return;
   let r;try{r=await api('GET','/api/volumes/'+id+'/treemap?path='+encodeURIComponent(path||''))}catch(e){el.innerHTML='<div class="err">'+esc(e.message)+'</div>';return}
-  const crumbs=(r.crumbs||[]).map((c,i,arr)=>i===arr.length-1?`<b>${esc(c.name)}</b>`:`<a href="#" onclick="snapTree(${id},'${esc(c.path)}');return false" style="color:var(--act)">${esc(c.name)}</a>`).join(' <span class="dim">/</span> ');
+  const crumbs=(r.crumbs||[]).map((c,i,arr)=>i===arr.length-1?`<b>${esc(c.name)}</b>`:`<a href="#" data-call="snapTree" data-args="${callArgs(id,c.path)}" style="color:var(--act)">${esc(c.name)}</a>`).join(' <span class="dim">/</span> ');
   let h=`<div style="font-size:12px;margin-bottom:6px">${crumbs}</div>`;
   h+=`<table style="width:100%"><tr><th></th><th>Name</th><th class="num">Size</th><th class="num">Files</th></tr>`;
   for(const c of (r.children||[])){
-    const nm=c.is_dir&&!c.other?`<a href="#" onclick="snapTree(${id},'${esc(c.path)}');return false" style="color:var(--act)">${esc(c.name)}/</a>`:esc(c.name)+(c.is_dir?'/':'');
+    const nm=c.is_dir&&!c.other?`<a href="#" data-call="snapTree" data-args="${callArgs(id,c.path)}" style="color:var(--act)">${esc(c.name)}/</a>`:esc(c.name)+(c.is_dir?'/':'');
     h+=`<tr><td style="width:16px">${roleDot(c.status)}</td><td>${nm}</td><td class="num dim">${GB(c.size)} GB</td><td class="num dim">${c.is_dir?commaN(c.files):''}</td></tr>`;}
   h+=`</table>`;
   if(r.folded)h+=`<div class="dim" style="font-size:11px;margin-top:4px">…${r.folded} smaller entr${r.folded===1?'y':'ies'} folded into “other”.</div>`;
@@ -3155,7 +3174,7 @@ async function vJobDetail(id){
       <div id="perfstrip" class="perfstrip" style="margin-top:12px;margin-bottom:0"></div>`:''}`;
   // "View results" — hash/scan jobs open the Explorer scoped to what they covered.
   if(['scan','verify','reconcile','dock'].includes(j.kind)&&r.collection_id){
-    h+=`<div style="margin-top:12px"><button class="btn" onclick="exploreGo(${r.collection_id},'${esc(r.path||'')}','validation')">View results in Explorer →</button></div>`;
+    h+=`<div style="margin-top:12px"><button class="btn" data-call="exploreGo" data-args="${callArgs(r.collection_id,r.path||'','validation')}">View results in Explorer →</button></div>`;
   }
   h+=`</div>`;
   // ARTIFACTS
@@ -3298,10 +3317,10 @@ async function refreshCandidates(sid){
     const id=c.serial||c.model||''; const bits=[c.label,c.size_bytes?GB(c.size_bytes)+' GB':'',c.model,c.serial?'S/N '+c.serial:''].filter(Boolean).map(esc).join(' · ');
     const reverify=c.already_processed;
     const btn=reverify
-      ? `<button class="btn ghost" onclick="dockReverifyDlg(${sid},'${esc(c.path)}')">Re-verify…</button>`
-      : `<button class="btn" onclick="dockIngest(${sid},'${esc(c.path)}','')">Inventory this drive</button>`;
+      ? `<button class="btn ghost" data-call="dockReverifyDlg" data-args="${callArgs(sid,c.path)}">Re-verify…</button>`
+      : `<button class="btn" data-call="dockIngest" data-args="${callArgs(sid,c.path,'')}">Inventory this drive</button>`;
     // If a compiled plan has pending work this drive can supply, offer to execute it.
-    const planBtns=(c.plan_work||[]).map(pw=>`<button class="btn" style="background:var(--warn)" onclick="planExecFromDock(${pw.plan_id},'${esc(c.path)}','${esc(c.serial||'')}')" title="${commaN(pw.pending)} pending file(s)">Execute “${esc(pw.name)}” (${commaN(pw.pending)})</button>`).join(' ');
+    const planBtns=(c.plan_work||[]).map(pw=>`<button class="btn" style="background:var(--warn)" data-call="planExecFromDock" data-args="${callArgs(pw.plan_id,c.path,c.serial||'')}" title="${commaN(pw.pending)} pending file(s)">Execute “${esc(pw.name)}” (${commaN(pw.pending)})</button>`).join(' ');
     return `<div class="row" style="align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--line)">
       <div style="flex:1"><span class="mono">${esc(c.path)}</span> ${reverify?'<span class="etag due">seen before</span>':''}${c.processed_in_session?'<span class="etag">this session</span>':''}<div class="dim" style="font-size:11.5px">${bits||'identity not resolved (external bridge?)'}</div></div>${planBtns}${btn}</div>`;
   }).join('');
@@ -3356,7 +3375,7 @@ function dockFailingDlg(sid,path,mode,level,res){
     <div class="err" style="font-size:12.5px;margin-bottom:10px">${esc(res.message||h.advisory_why||'SMART reports imminent-failure signals on this drive.')}</div>
     <div class="dim mono" style="font-size:11px;margin-bottom:10px">${esc([h.reallocated_sectors?`${h.reallocated_sectors} reallocated`:'',h.pending_sectors?`${h.pending_sectors} pending`:'',(h.passed===false)?'SMART self-test FAILING':''].filter(Boolean).join(' · ')||'')}</div>
     <div class="dim" style="font-size:12px;margin-bottom:14px">Inventorying is <b>read-only</b> and never writes to the drive — but a failing disk can die mid-read. If anything here is irreplaceable, copy it off first, then continue.</div>
-    <div class="row"><button class="btn danger" onclick="const d=$('#dlg');if(d)d.close();dockIngest(${sid},'${esc(path)}','${esc(mode||'')}','${esc(level||'')}',true)">Continue inventory anyway</button>
+    <div class="row"><button class="btn danger" data-call="dockIngestAnyway" data-args="${callArgs(sid,path,mode||'',level||'')}">Continue inventory anyway</button>
       <button class="btn ghost" onclick="const d=$('#dlg');if(d)d.close()">Stop — I'll rescue data first</button></div>`,
   async()=>{});
 }
@@ -3635,6 +3654,7 @@ async function vSettings(){
     ${advOpen('Advanced settings — network, privacy, sealing, escrow, discs')}
     <label>Access token (for reaching the app from another machine)</label>
     <input id="atok" class="full" style="font:12px var(--mono)" value="" autocomplete="off" placeholder="${tokSet?'a token is set — leave blank to keep it, or type a new one':'a long random secret'}">
+    ${tokSet?'<button type="button" class="btn ghost" style="margin-top:4px" onclick="removeAuthToken()">Remove token</button>':''}
     <div class="help">Only needed when the app is reached from off-box. It binds to localhost by default; the listen address is set with the <span class="mono">-listen</span> flag at startup, and a non-localhost bind refuses to run without a token.</div>
     <label class="row" style="gap:8px;align-items:center;margin-top:14px"><input id="upd" type="checkbox" ${cfg.update_check?'checked':''}> Remind me to check for updates</label>
     <div class="help">Shows a small "a newer release may be available" reminder with a link to the releases page. <b>The app never downloads anything or contacts the network on its own.</b></div>
@@ -3809,7 +3829,7 @@ async function loadTools(){
       :(t.configured?`<div class="tpath">pinned: ${esc(t.configured)} — not found at that path</div>`:'');
     const dl=t.download?`<a class="btn ghost" style="font-size:11px;padding:3px 8px" href="${esc(t.download)}" target="_blank" rel="noopener">Download </a>`:'';
     return `<div class="tool"><div class="tinfo"><div class="tname">${esc(t.name)}</div><div class="tadds">${esc(t.adds)}</div>${path}</div>
-      <div class="tact">${stat}<div class="row" style="justify-content:flex-end">${dl}<button class="btn ghost" style="font-size:11px;padding:3px 8px" onclick="toolBrowse('${esc(t.save_key)}','${esc(t.name)}')">Browse…</button></div></div></div>`;
+      <div class="tact">${stat}<div class="row" style="justify-content:flex-end">${dl}<button class="btn ghost" style="font-size:11px;padding:3px 8px" data-call="toolBrowse" data-args="${callArgs(t.save_key,t.name)}">Browse…</button></div></div></div>`;
   };
   const req=tools.filter(t=>t.required),opt=tools.filter(t=>!t.required);
   box.innerHTML=`<div style="font:600 10px var(--mono);letter-spacing:.12em;color:var(--ink-3);margin:6px 0 2px">NEEDED FOR CORE FEATURES</div>${req.map(row).join('')}
@@ -3921,6 +3941,12 @@ async function saveCfg(){
   put('escrow_on_media',gv('eom'));put('escrow_include_readers',gc('eir'));
   put('finalize_verify_days',int('fvd',30));put('buffer_pct',num('bpc',5));put('smart_block_finalize',gc('sbf'));
   put('burn_command',gt('bc'));put('burn_verify_mount',gt('bv'));put('burn_ecc',gv('becc'));
+  // A different burn command runs a different program when discs are burned: it
+  // needs the typed word, which the server checks.
+  {const bce=$('#bc');if(bce&&bce.value.trim()!==(bce.defaultValue||'').trim()){
+    const w=prompt('The burn command runs a program on this computer every time a disc is burned.\nType Confirm to change it:','');
+    if(w!=='Confirm'){toast('Burn command not changed: type Confirm to change it',1);return}
+    body.burn_command_confirm=w;}}
   put('burn_ecc_device',gt('beccd'));put('burn_ecc_carry',gc('becccarry'));put('optical_ecc',gc('oecc'));
   try{await api('PUT','/api/config',body);toast('Settings saved');lamp();vSettings();}catch(e){toast(e.message,1)}
 }
@@ -4013,12 +4039,23 @@ async function appRestoreInspect(){
     if(el)el.innerHTML=`<span style="color:var(--ok)">✓ Valid backup</span> — schema v${m.schema_version}, made ${esc((m.created||'').slice(0,10))} by ${esc(m.app_version||'?')}, ${(m.members||[]).length} item(s)${m.includes_keys?' · <b>includes keystores</b>':''}.`;
   }catch(e){if(el)el.innerHTML=`<span class="err">${esc(e.message)}</span>`;}
 }
+async function removeAuthToken(){
+  if(!confirm('Remove the stored access token?\n\nObelisk keeps using the current token until it is next started. After that it needs no token on this computer, and refuses to start if it is reachable from other machines until a token is set.'))return;
+  try{const r=await api('POST','/api/config/remove-token',{});toast(r.note||'Token removed',1);vSettings()}catch(e){toast(e.message,1)}}
+async function applyHeldSettings(){
+  const w=prompt('These settings choose which programs run on this computer.\nType Confirm to apply the settings from the backup:','');
+  if(w!=='Confirm'){toast('Not applied: type Confirm to apply them',1);return}
+  try{await api('POST','/api/config/held-settings/apply',{confirm:w});toast('Settings from the backup applied')}catch(e){toast(e.message,1)}}
+async function discardHeldSettings(){
+  try{await api('POST','/api/config/held-settings/discard',{});toast('Settings from the backup discarded')}catch(e){toast(e.message,1)}}
 function appRestoreSummary(r){
   dlg(`<h1>Records restored</h1>
     <div class="panel"><div style="font-size:14px">Recovered <b>${r.archives}</b> archive(s), <b>${(r.files||0).toLocaleString()}</b> file(s), <b>${r.volumes}</b> volume(s), <b>${r.packages}</b> package(s), and <b>${r.jobs}</b> job(s). Verification history (<b>${r.verify_events}</b> recorded check(s)) came across intact.</div>
-    ${r.included_keys?'<div class="dim" style="margin-top:6px">Encryption keystores were included and restored.</div>':'<div class="dim" style="margin-top:6px">Encryption keys were not in this backup — copy your keystore files onto this machine and point <b>Settings → keystores</b> at them.</div>'}
+    ${r.included_keys&&r.keystore_note?`<div class="err" style="margin-top:6px">Encryption keystores were included, but not put into use: ${esc(r.keystore_note)}</div>`:r.included_keys?'<div class="dim" style="margin-top:6px">Encryption keystores were included and restored.</div>':'<div class="dim" style="margin-top:6px">Encryption keys were not in this backup — copy your keystore files onto this machine and point <b>Settings → keystores</b> at them.</div>'}
     <div class="dim" style="margin-top:8px">Your previous records were saved to <span class="mono">${esc(r.pre_restore_dir||'')}</span>.</div>
     ${r.read_only?`<div class="err" style="margin-top:8px">${esc(r.read_only_why||'')}</div>`:''}
+    ${r.held_settings?`<div class="err" style="margin-top:8px">The backup's program settings were <b>not</b> applied, because they choose what runs on this computer: burn command <span class="mono">${esc(r.held_settings.burn_command||'(none)')}</span>, par2 extra arguments <span class="mono">${esc(r.held_settings.par2_extra_args||'(none)')}</span>, tool paths <span class="mono">${esc(Object.entries(r.held_settings.tools||{}).map(([k,v])=>k+'='+v).join(', ')||'(none)')}</span>, tape tool <span class="mono">${esc(r.held_settings.tape_tool||'(none)')}</span>. Your current ones are kept.
+      <div class="row" style="margin-top:6px"><button class="btn ghost" type="button" onclick="applyHeldSettings()">Apply them…</button> <button class="btn ghost" type="button" onclick="discardHeldSettings()">Discard them</button></div></div>`:''}
     <div style="margin-top:10px;font-size:13px"><b>Next:</b> plug in any drive and the app will recognize it by its serial — no re-adopting needed.</div></div>
     <div class="row" style="margin-top:14px"><button class="btn" onclick="go()">Go to Home</button></div>`,
   async()=>{loc('home');});
@@ -4352,20 +4389,20 @@ async function vPlanDetail(id){if(location.hash!=='#plans')location.hash='#plans
     <div class="dim" style="font-size:11.5px;margin-bottom:6px">These files match no route. Edit the template, assign an event, drag them in the tree, or park them to compile.</div>
     <table><tr><th>File</th><th class="num">Size</th><th></th></tr>`;
     for(const u of unrouted.slice(0,200))h+=`<tr><td class="mono" style="font-size:11px">${esc(u.rel_path)}</td><td class="num">${GB(u.size_bytes)} GB</td>
-      <td><button class="btn ghost" style="font-size:10.5px" onclick="parkFile(${p.id},'${esc(u.hash)}')">Park</button>
-        <button class="btn ghost" style="font-size:10.5px" onclick="overrideFile(${p.id},'${esc(u.hash)}','${esc(u.rel_path)}')">Place…</button></td></tr>`;
+      <td><button class="btn ghost" style="font-size:10.5px" data-call="parkFile" data-args="${callArgs(p.id,u.hash)}">Park</button>
+        <button class="btn ghost" style="font-size:10.5px" data-call="overrideFile" data-args="${callArgs(p.id,u.hash,u.rel_path)}">Place…</button></td></tr>`;
     h+='</table></div>';}
   $('#view').innerHTML=h;
   planTree(id,'');
 }
 async function planTree(id,path){const el=$('#plantree');if(!el)return;
   let r;try{r=await api('GET','/api/plans/'+id+'/tree?path='+encodeURIComponent(path||''))}catch(e){el.innerHTML='<div class="err">'+esc(e.message)+'</div>';return}
-  const crumbs=(r.crumbs||[]).map((c,i,a)=>i===a.length-1?`<b>${esc(c.name)}</b>`:`<a href="#" onclick="planTree(${id},'${esc(c.path)}');return false" style="color:var(--act)">${esc(c.name)}</a>`).join(' <span class="dim">/</span> ');
+  const crumbs=(r.crumbs||[]).map((c,i,a)=>i===a.length-1?`<b>${esc(c.name)}</b>`:`<a href="#" data-call="planTree" data-args="${callArgs(id,c.path)}" style="color:var(--act)">${esc(c.name)}</a>`).join(' <span class="dim">/</span> ');
   let h=`<div style="font-size:12px;margin-bottom:6px">${crumbs}</div>`;
   if(!(r.children||[]).length)h+='<div class="dim">No routed files at this level.</div>';
   else{h+='<table style="width:100%"><tr><th></th><th>Name</th><th class="num">Size</th><th class="num">Files</th></tr>';
     for(const c of r.children){const dot=c.status==='SATISFIED'?'var(--ok)':'var(--warn)';
-      const nm=c.is_dir?`<a href="#" onclick="planTree(${id},'${esc(c.path)}');return false" style="color:var(--act)">${esc(c.name)}/</a>`:esc(c.name);
+      const nm=c.is_dir?`<a href="#" data-call="planTree" data-args="${callArgs(id,c.path)}" style="color:var(--act)">${esc(c.name)}/</a>`:esc(c.name);
       h+=`<tr><td style="width:14px"><span title="${c.status}" style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${dot}"></span></td><td>${nm}</td><td class="num dim">${GB(c.size)} GB</td><td class="num dim">${c.is_dir?commaN(c.files):''}</td></tr>`}
     h+='</table>';}
   el.innerHTML=h;

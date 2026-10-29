@@ -32,7 +32,13 @@ func renameReplacing(tmp, final string) error {
 // The file is given perm. The caller writes it, closes it and renames it to final
 // (renameReplacing), and removes it on failure.
 func createStage(final string, perm os.FileMode) (*os.File, error) {
-	f, err := os.CreateTemp(filepath.Dir(final), "."+filepath.Base(final)+".*.tmp")
+	create := os.CreateTemp
+	if perm&0o077 == 0 {
+		// Secret material (keystores, settings, key-bearing backups): created
+		// owner-only, on Windows by an ACL set at creation.
+		create = createOwnerOnlyTemp
+	}
+	f, err := create(filepath.Dir(final), "."+filepath.Base(final)+".*.tmp")
 	if err != nil {
 		return nil, err
 	}
@@ -63,6 +69,21 @@ func writeStage(final string, data []byte, perm os.FileMode) (string, error) {
 		return "", err
 	}
 	return f.Name(), nil
+}
+
+// writeSecretFile writes data to name owner-only (on Windows, an ACL granting
+// only the current user, set when the file is created), staged and renamed into
+// place so a partly written file never appears under the name.
+func writeSecretFile(name string, data []byte) error {
+	tmp, err := writeStage(name, data, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := renameReplacing(tmp, name); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // readFileRetrying is os.ReadFile with the same bounded retry as renameReplacing:

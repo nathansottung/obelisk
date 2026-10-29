@@ -88,6 +88,12 @@ type RestoreResult struct {
 	PreRestoreDir string `json:"pre_restore_dir"`
 	ReadOnly      bool   `json:"read_only,omitempty"`
 	ReadOnlyWhy   string `json:"read_only_why,omitempty"`
+	// HeldSettings are the backup's program settings, not applied (see
+	// heldsettings.go); nil when they match the current ones.
+	HeldSettings *HeldSettings `json:"held_settings,omitempty"`
+	// KeystoreNote says where restored keystores are when they were not made
+	// the keystore paths.
+	KeystoreNote string `json:"keystore_note,omitempty"`
 }
 
 // rawMember is a gathered file: its in-tar name and exact bytes.
@@ -191,7 +197,11 @@ func (a *App) exportAppBackupTo(tarPath string, includeKeys bool) (ExportResult,
 	if err := os.MkdirAll(filepath.Dir(tarPath), 0o755); err != nil {
 		return ExportResult{}, err
 	}
-	f, err := createStage(tarPath, 0o644)
+	perm := os.FileMode(0o644)
+	if includeKeys {
+		perm = 0o600 // carries keystores: owner-only
+	}
+	f, err := createStage(tarPath, perm)
 	if err != nil {
 		return ExportResult{}, err
 	}
@@ -408,7 +418,7 @@ func (a *App) InspectAppBackup(tarPath string) (appBackupManifest, error) {
 // verification happens before ANYTHING is written, so a bad backup leaves the current
 // data dir untouched.
 // preRestoreWriteFile writes a pre-restore copy; a test seam.
-var preRestoreWriteFile = os.WriteFile
+var preRestoreWriteFile = func(name string, b []byte, _ os.FileMode) error { return writeSecretFile(name, b) }
 
 func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	man, members, err := verifyAppBackup(tarPath)
@@ -428,6 +438,8 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	// remains a multi-file operation; a later publication failure can leave a
 	// partial restore and must reach its caller without a success result.
 	var restoredConfig []byte
+	var held *HeldSettings
+	keystoreNote := ""
 	if cfgBytes, ok := members["config.json"]; ok {
 		restored, fields, e := decodeConfig(cfgBytes)
 		if e != nil {
@@ -436,14 +448,27 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 		if restored.AuthToken == "" {
 			restored.AuthToken = curToken
 		}
+		// The settings that choose what runs are not applied from a backup: the
+		// current ones stay, and the backup's are held until the user confirms
+		// them (see heldsettings.go).
+		held = holdProgramSettings(&restored, cfg, tarPath)
 		var paths []string
 		for _, m := range man.Members {
 			if strings.HasPrefix(m.Name, "keystores/") {
 				paths = append(paths, filepath.Join(a.DataDir, "keystores", filepath.Base(m.Name)))
 			}
 		}
+		// The restored keystores land in this data folder. They become the
+		// keystore paths only if that is still a valid set (one keystore, or
+		// several on separate devices): restoring never puts two keystores on
+		// one device. Otherwise the current paths are kept.
 		if len(paths) > 0 {
-			restored.KeystorePaths = paths
+			if err := checkKeystorePaths(paths); err == nil {
+				restored.KeystorePaths = paths
+			} else {
+				restored.KeystorePaths = cfg.KeystorePaths
+				keystoreNote = fmt.Sprintf("The backup's %d keystore(s) were restored to %s, all on one device, so your keystore paths were left as they were. Copy each to a different device and set the keystore paths to them.", len(paths), filepath.Join(a.DataDir, "keystores"))
+			}
 		}
 		// The settings a backup brings get the same checks as settings being
 		// saved, against the sources of the catalog in use and of the catalog
@@ -525,6 +550,11 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 			return RestoreResult{}, fmt.Errorf("restore config.json (other members may already be restored): %w", e)
 		}
 	}
+	if held != nil {
+		if e := a.saveHeldSettings(held); e != nil {
+			return RestoreResult{}, fmt.Errorf("the backup's program settings could not be held for confirmation (other members are already restored): %w", e)
+		}
+	}
 
 	// (6) Reopen the store from the restored files — this runs the migration registry,
 	// bringing an older backup forward — and swap it in.
@@ -540,7 +570,7 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	// (7) Summary.
 	res := RestoreResult{
 		SchemaVersion: man.SchemaVersion, AppVersion: man.AppVersion, Created: man.Created,
-		IncludedKeys: man.IncludesKeys, PreRestoreDir: preDir,
+		IncludedKeys: man.IncludesKeys, PreRestoreDir: preDir, HeldSettings: held, KeystoreNote: keystoreNote,
 		Archives: len(ns.Collections()), Files: len(ns.AllFiles()),
 		Volumes: len(ns.Volumes()), Jobs: len(ns.Jobs()),
 	}
