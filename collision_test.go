@@ -1,0 +1,72 @@
+//go:build !guionly
+
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// A plan that would put two different files at one path (the same name, or
+// names that differ only in letter case or Unicode form) is not compiled.
+func TestPlan_TwoFilesOnePathIsRefused(t *testing.T) {
+	for name, files := range map[string]map[string]string{
+		"same name":  {"x/a.jpg": "A1", "y/a.jpg": "A2"},
+		"case only":  {"x/a.jpg": "A1", "y/A.JPG": "A2"},
+		"NFC vs NFD": {"x/café.jpg": "A1", "y/café.jpg": "A2"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			app := dockApp(t)
+			d := t.TempDir()
+			writeTree(t, d, files)
+			makeSnapshotDrive(t, app, d, "SER-C", "DRIVE-C")
+			tmpl := app.Store.AddTemplate(&Template{Name: "Flat", Routes: map[string]string{RoleDeliverables: "photos/{orig_name}"}})
+			plan := app.Store.AddPlan(&Plan{Name: "Flat move", TemplateID: tmpl.ID, DestinationRoot: filepath.Join(t.TempDir(), "NAS")})
+			_, err := app.CompilePlan(plan.ID)
+			if err == nil || !strings.Contains(err.Error(), "same path") {
+				t.Errorf("compile: %v, want a refusal naming the shared path", err)
+			}
+			if p := app.Store.Plan(plan.ID); p.Status == PlanCompiled {
+				t.Error("the plan was compiled")
+			}
+		})
+	}
+}
+
+// A mirror that would put two different files at one path (here, two source
+// folders whose names differ only in letter case) copies neither and credits
+// neither, and says so.
+func TestMirror_TwoFilesOnePathNeitherCredited(t *testing.T) {
+	app := dockApp(t)
+	coll := app.Store.AddCollection("Photos")
+	a := filepath.Join(t.TempDir(), "Photos")
+	b := filepath.Join(t.TempDir(), "photos")
+	writeTree(t, a, map[string]string{"x.jpg": "FIRST", "only-a.jpg": "A"})
+	writeTree(t, b, map[string]string{"x.jpg": "SECOND"})
+	for _, src := range []string{a, b} {
+		if _, _, err := app.ScanFolder(coll.ID, src, noProg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dest := t.TempDir()
+	vol := app.Store.AddVolume(Volume{Label: "MIR-1", Kind: "HDD"})
+	res, err := app.MirrorToVolume(coll.ID, nil, dest, vol.ID, 0, "", noProgMirror)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Mirrored != 1 || len(res.Collisions) != 2 {
+		t.Errorf("mirrored %d, collisions %v; want only-a.jpg mirrored and both x.jpg reported", res.Mirrored, res.Collisions)
+	}
+	for _, r := range mirrorRefsOn(app, coll.ID, vol.ID) {
+		if strings.HasSuffix(r, "x.jpg") {
+			t.Errorf("a colliding file was credited: %s", r)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dest, "Photos", "x.jpg")); err == nil {
+		if b, _ := os.ReadFile(filepath.Join(dest, "Photos", "x.jpg")); string(b) == "SECOND" {
+			t.Error("the second file overwrote the first")
+		}
+	}
+}

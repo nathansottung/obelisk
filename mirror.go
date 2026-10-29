@@ -128,16 +128,19 @@ func mirrorCopyStream(in, out *os.File, th *throttler, onBytes func(int64)) (str
 
 // MirrorResult is the per-volume outcome (also the API/job return shape).
 type MirrorResult struct {
-	VolumeID int      `json:"volume_id"`
-	Volume   string   `json:"volume"`
-	Dest     string   `json:"dest"`
-	Mirrored int      `json:"mirrored"`
-	Bytes    int64    `json:"bytes"`
-	Changed  int      `json:"changed"` // copied, but source content differs from the catalog hash (source drifted)
-	Failed   int      `json:"failed"`  // copy or verify failed; not finalized
-	Skipped  int      `json:"skipped"` // source unreadable/missing
-	Sidecar  string   `json:"sidecar,omitempty"`
-	Coverage Coverage `json:"coverage"`
+	VolumeID int    `json:"volume_id"`
+	Volume   string `json:"volume"`
+	Dest     string `json:"dest"`
+	Mirrored int    `json:"mirrored"`
+	Bytes    int64  `json:"bytes"`
+	Changed  int    `json:"changed"` // copied, but source content differs from the catalog hash (source drifted)
+	Failed   int    `json:"failed"`  // copy or verify failed; not finalized
+	Skipped  int    `json:"skipped"` // source unreadable/missing
+	// Collisions are files not copied or credited because another file would
+	// land at the same path (by name, ignoring letter case and Unicode form).
+	Collisions []string `json:"collisions,omitempty"`
+	Sidecar    string   `json:"sidecar,omitempty"`
+	Coverage   Coverage `json:"coverage"`
 	// DestinationNotes lists warnings the destination was accepted with and checks
 	// that could not run on its filesystem (for example on exFAT or FAT32).
 	DestinationNotes []string `json:"destination_notes,omitempty"`
@@ -254,13 +257,23 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 	sort.Slice(files, func(i, j int) bool { return files[i].RelPath < files[j].RelPath })
 	refs := make([]ChunkFileRef, 0, len(files))
 	lastTick := time.Now() // paces mid-file progress so live MB/s updates on big files too
+	mrels := make([]string, len(files))
+	for i, f := range files {
+		mrels[i] = f.RelPath
+		if multi {
+			mrels[i] = label[f.FolderID] + "/" + f.RelPath
+		}
+	}
+	// Two files that would land at one path: neither is copied or credited.
+	shared := collidingPaths(mrels)
 	for i, f := range files {
 		doneFiles = int64(i + 1) // file currently being mirrored (matches the "i+1/len" message)
 		srcRoot := folderPath[f.FolderID]
 		srcPath := filepath.Join(srcRoot, filepath.FromSlash(f.RelPath))
-		mrel := f.RelPath
-		if multi {
-			mrel = label[f.FolderID] + "/" + f.RelPath
+		mrel := mrels[i]
+		if shared[i] {
+			res.Collisions = append(res.Collisions, mrel)
+			continue
 		}
 		if i%25 == 0 || len(files) < 50 {
 			report(fmt.Sprintf("mirroring %d/%d — %s", i+1, len(files), f.RelPath))

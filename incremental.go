@@ -234,19 +234,22 @@ func (a *App) BackupDeltaPreview(collectionID int, folderIDs []int, volumeID int
 
 // BackupChangesResult is the outcome of a run (also the API/job return shape).
 type BackupChangesResult struct {
-	SessionID int      `json:"session_id"`
-	Base      string   `json:"base"`
-	Mode      string   `json:"mode"`
-	Files     int      `json:"files"`
-	Bytes     int64    `json:"bytes"`
-	Changed   int      `json:"changed"`
-	Failed    int      `json:"failed"`
-	Skipped   int      `json:"skipped"`
-	Dest      string   `json:"dest,omitempty"`
-	Sidecar   string   `json:"sidecar,omitempty"`
-	Planned   []string `json:"planned_packages,omitempty"` // package mode: the PLANNED chunks to build & write
-	Name      string   `json:"name,omitempty"`
-	Message   string   `json:"message,omitempty"`
+	SessionID int    `json:"session_id"`
+	Base      string `json:"base"`
+	Mode      string `json:"mode"`
+	Files     int    `json:"files"`
+	Bytes     int64  `json:"bytes"`
+	Changed   int    `json:"changed"`
+	Failed    int    `json:"failed"`
+	Skipped   int    `json:"skipped"`
+	// Collisions: files not copied or credited because another file would land
+	// at the same path (by name, ignoring letter case and Unicode form).
+	Collisions []string `json:"collisions,omitempty"`
+	Dest       string   `json:"dest,omitempty"`
+	Sidecar    string   `json:"sidecar,omitempty"`
+	Planned    []string `json:"planned_packages,omitempty"` // package mode: the PLANNED chunks to build & write
+	Name       string   `json:"name,omitempty"`
+	Message    string   `json:"message,omitempty"`
 	// DestinationNotes lists warnings the mirror destination was accepted with and
 	// checks that could not run on its filesystem (for example on exFAT or FAT32).
 	DestinationNotes []string `json:"destination_notes,omitempty"`
@@ -357,12 +360,22 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 	}
 
 	refs := make([]ChunkFileRef, 0, len(files))
+	mrels := make([]string, len(files))
+	for i, f := range files {
+		mrels[i] = f.RelPath
+		if multi {
+			mrels[i] = label[f.FolderID] + "/" + f.RelPath
+		}
+	}
+	// Two files that would land at one path: neither is copied or credited.
+	shared := collidingPaths(mrels)
 	for i, f := range files {
 		srcRoot := folderPath[f.FolderID]
 		srcPath := filepath.Join(srcRoot, filepath.FromSlash(f.RelPath))
-		mrel := f.RelPath
-		if multi {
-			mrel = label[f.FolderID] + "/" + f.RelPath
+		mrel := mrels[i]
+		if shared[i] {
+			res.Collisions = append(res.Collisions, mrel)
+			continue
 		}
 		if i%25 == 0 || len(files) < 50 {
 			report(fmt.Sprintf("backing up %d/%d — %s", i+1, len(files), f.RelPath))
