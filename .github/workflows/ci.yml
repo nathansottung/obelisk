@@ -60,6 +60,11 @@ jobs:
       - name: destination-boundary tests (no skips)
         run: bash scripts/ci/dest-boundary-linux.sh
 
+      # A package restores by hand with only RESTORE.txt's steps and the stock
+      # tools (GNU tar here), byte for byte; gpg output is pinned. No skips.
+      - name: hand restore with GNU tar (no skips)
+        run: node scripts/ci/hand-restore.mjs
+
       # Navigation performance budget for the Archives folder tree: expanding the
       # widest folder of a ~200k-file catalog must stay under 100ms server compute and
       # 50KB payload (TestTreeExpansionBudget). The OBELISK_PERF gate only exempts a
@@ -180,6 +185,18 @@ jobs:
       - name: Known-failure gate
         shell: pwsh
         run: node scripts/ci/go-known-failures.mjs go-test.json
+
+      # A package restores by hand with only RESTORE.txt's steps and the stock
+      # tools (System32 bsdtar here), byte for byte; gpg output is pinned. Same
+      # PATH as the test step. No skips.
+      - name: hand restore with System32 bsdtar (no skips)
+        shell: pwsh
+        run: |
+          $goBin = Split-Path (Get-Command go.exe).Source
+          $nodeBin = Split-Path (Get-Command node.exe).Source
+          $env:Path = @("$env:SystemRoot\System32", $env:SystemRoot, "$env:SystemRoot\System32\Wbem", $env:GNUPG_BIN, (Join-Path $env:RUNNER_TEMP 'par2'), $goBin, $nodeBin) -join ';'
+          if ((Get-Command tar.exe).Source -ne "$env:SystemRoot\System32\tar.exe") { throw 'tar is not System32 tar' }
+          node scripts/ci/hand-restore.mjs
 
       - name: Upload go test JSON
         if: always()

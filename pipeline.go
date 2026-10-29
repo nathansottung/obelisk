@@ -1574,11 +1574,13 @@ func spannedRestoreTxt(c *Chunk) string {
 	return fmt.Sprintf(`HOW TO RESTORE %[1]s   (SPANNED across %[2]d media)
 ==========================================================
 This package's payload was byte-split across %[2]d tapes/drives as
-%[1]s.seg001 … %[1]s.seg%[3]03d. Every tape also carries this file,
-the manifest, and (par2 %[4]s).
+%[1]s.seg001 … %[1]s.seg%[3]03d. Every tape also carries this file
+and the manifest. The par2 set is %[4]s.
 
-STEP 0 — REJOIN the segments into the payload (one universal command).
-Copy every tape's %[1]s.segNNN into ONE folder, then run ONE of:
+STEP 0 — GATHER and REJOIN.
+Copy into ONE folder every tape's %[1]s.segNNN, and the par2 set
+%[11]s.par2 and %[11]s.vol*.par2 (%[4]s): par2
+verify and repair in step 1 read them there. Then run ONE of:
      Windows:  copy /b %[5]s %[10]s
      Unix/mac: cat %[1]s.seg* > %[10]s
 (The zero-padded names sort into the correct order automatically.)
@@ -1595,5 +1597,5 @@ per-segment hashes (manifest / catalog) link every tape to the originals.
 Full file list: %[1]s.manifest.json
 No compression anywhere — extracted bytes are the originals.
 ==========================================================
-`, c.Name, n, n, par2Home, segJoinList(c), decrypt, c.HashAlg, c.EncHash, c.TarHash, pl)
+`, c.Name, n, n, par2Home, segJoinList(c), decrypt, c.HashAlg, c.EncHash, c.TarHash, pl, pl)
 }
