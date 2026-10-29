@@ -70,3 +70,34 @@ func TestMirror_TwoFilesOnePathNeitherCredited(t *testing.T) {
 		}
 	}
 }
+
+// Two folder adopts on one drive keep separate records, and a dock of the whole
+// drive keeps its own: none replaces another's files.
+func TestAdoptFolder_SeparateRecordsPerFolder(t *testing.T) {
+	app := dockApp(t)
+	arch := app.Store.AddCollectionKind("Loose", ArchiveSourceless)
+	drive := t.TempDir()
+	writeTree(t, drive, map[string]string{"W2019/a.jpg": "A", "W2020/b.jpg": "B"})
+	vol := app.Store.AddVolume(Volume{Label: "OLD-9", Kind: "HDD"})
+	for _, f := range []string{"W2019", "W2020"} {
+		if _, err := app.AdoptFolder(filepath.Join(drive, f), arch.ID, vol.ID, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := map[string]bool{}
+	n := 0
+	for _, c := range app.Store.Chunks(arch.ID) {
+		if c.Mirror {
+			n++
+			for _, r := range c.Files {
+				got[r.RelPath] = true
+			}
+		}
+	}
+	if n != 2 || !got["a.jpg"] || !got["b.jpg"] {
+		t.Errorf("%d mirror records with %v; want one per folder, each with its file", n, got)
+	}
+	if cov := app.archiveCoverage([]int{arch.ID}); cov.CoveredFiles != 2 {
+		t.Errorf("coverage %d of 2", cov.CoveredFiles)
+	}
+}

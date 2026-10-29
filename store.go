@@ -232,7 +232,10 @@ type Chunk struct {
 	// Sidecars: the SHA-256 of each sidecar the medium must carry (the manifest it
 	// ships and RESTORE.txt), recorded when the package is built. A write needs
 	// them in staging unchanged; a verify reads them back from the medium.
-	Sidecars       map[string]string  `json:"sidecars,omitempty"`
+	Sidecars map[string]string `json:"sidecars,omitempty"`
+	// MirrorRoot is the folder a mirror record covers when it is one adopted
+	// folder on the drive (as adopted); empty for the whole drive or destination.
+	MirrorRoot     string             `json:"mirror_root,omitempty"`
 	BuildTimings   map[string]float64 `json:"build_timings,omitempty"`   // per-stage seconds: tar, hash, stage_verify, encrypt/stage, crypt_verify, par2
 	BuildVerified  *BuildVerified     `json:"build_verified,omitempty"`  // build-time proof the payload faithfully contains the source
 	VerifyEvents   []VerifyEvent      `json:"verify_events,omitempty"`   // append-only integrity-check log
