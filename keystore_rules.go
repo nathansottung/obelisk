@@ -80,9 +80,10 @@ func checkKeystorePaths(paths []string) error {
 		dev, err := keystoreDeviceOf(abs)
 		if errors.Is(err, errNoExistingParent) {
 			// Nothing on its path exists (its drive is not plugged in): its device
-			// cannot be told, so the device rule cannot be checked for it.
+			// cannot be told, so it is placed by its drive letter or share.
 			// Reachability is reported by the keystore status, not refused here.
-			continue
+			dev = "root:" + strings.ToLower(keystoreRootOf(abs))
+			err = nil
 		}
 		if err != nil {
 			return fmt.Errorf("keystore_paths: cannot tell which device %q is on: %w", p, err)
@@ -93,4 +94,18 @@ func checkKeystorePaths(paths []string) error {
 		seenDev[dev] = p
 	}
 	return nil
+}
+
+// keystoreRootOf is the drive a path is under, for a keystore whose device
+// cannot be read: its volume name (a drive letter or share), or its top folder
+// where paths have none.
+func keystoreRootOf(abs string) string {
+	if v := filepath.VolumeName(abs); v != "" {
+		return v
+	}
+	rest := strings.TrimLeft(filepath.ToSlash(abs), "/")
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		rest = rest[:i]
+	}
+	return "/" + rest
 }

@@ -152,3 +152,26 @@ func TestKeystores_ExistingFilesOnOneDeviceAreRefused(t *testing.T) {
 		}
 	}
 }
+
+// Two keystores whose drive is not plugged in cannot be placed on a device,
+// but two on the same drive letter (or share) are on one device whatever it
+// is, so that set is refused.
+func TestKeystores_TwoUnpluggedOnOneDriveAreRefused(t *testing.T) {
+	prev := keystoreDeviceOf
+	keystoreDeviceOf = func(p string) (string, error) {
+		if strings.Contains(p, "unplugged") {
+			return "", errUnpluggedForTest
+		}
+		return prev(p)
+	}
+	t.Cleanup(func() { keystoreDeviceOf = prev })
+	root := t.TempDir()
+	u1 := filepath.Join(root, "unplugged1", "keys.json")
+	u2 := filepath.Join(root, "unplugged2", "keys.json")
+	if err := checkKeystorePaths([]string{u1, u2}); err == nil || !strings.Contains(err.Error(), "same") {
+		t.Fatalf("two unplugged keystores under one drive: got %v, want a refusal", err)
+	}
+	if err := checkKeystorePaths([]string{filepath.Join(root, "k.json"), u1}); err != nil {
+		t.Fatalf("one unplugged keystore: %v", err)
+	}
+}
