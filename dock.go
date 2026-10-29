@@ -7,15 +7,18 @@ package main
 //
 //   register/match the Volume by serial (idempotent across sessions) → capture
 //   its physical identity → MIRROR-ADOPT it (hash every loose file, match by
-//   CONTENT against the selected archives' cataloged source hashes) → write an
-//   inventory sidecar + catalog snapshot ONTO THE DRIVE → record per-drive
-//   results → "DONE — safe to eject. Insert the next drive."
+//   CONTENT against the selected archives' cataloged source hashes) → record the
+//   drive's snapshot and this scan in the catalog (the scan's file list goes to
+//   the scans folder in the data folder) → record per-drive results → "DONE —
+//   safe to eject. Insert the next drive."
 //
-// It is strictly READ-ONLY toward sources: the archive folders on the NAS are
-// only ever hashed for comparison, and a docked drive that is (by where it
-// really is) a source, inside one or holding one is refused (CheckOutsideSources).
-// The only writes are to the catalog. A drive is identified by its physical serial, so re-inserting one
-// already processed is recognized and offered as a re-verify, not a re-adopt.
+// It is strictly READ-ONLY toward the drive and toward sources: nothing is ever
+// written onto a docked drive, the archive folders on the NAS are only ever
+// hashed for comparison, and a docked drive that is (by where it really is) a
+// source, inside one or holding one is refused (CheckOutsideSources). The only
+// writes are to the catalog and the scans folder. A drive is identified by its
+// physical serial, so re-inserting one already processed is recognized and
+// offered as a re-verify, not a re-adopt.
 
 import (
 	"errors"
