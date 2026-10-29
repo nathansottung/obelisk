@@ -854,6 +854,7 @@ type ExtDrift struct {
 	Modified      int    `json:"modified"`
 	New           int    `json:"new"`
 	Moved         int    `json:"moved"`
+	Unknown       int    `json:"unknown,omitempty"`
 	Informational bool   `json:"informational"`
 }
 
@@ -865,6 +866,19 @@ type DriftReport struct {
 	InfoCounts   map[string]int `json:"info_counts"` // informational-extension totals (excluded from alarms)
 	ByExt        []ExtDrift     `json:"by_ext"`
 	Items        []DriftItem    `json:"items"` // only the changed files (not UNCHANGED)
+	// Unread lists folders and files the rescan could not read (at most 200);
+	// packaged files there are UNKNOWN.
+	Unread []string `json:"unread,omitempty"`
+}
+
+// Unknown returns the number of packaged files the rescan could not check,
+// because it could not read where they are. They are not changes, and an archive
+// with any is not in sync.
+func (r *DriftReport) Unknown() int {
+	if r == nil {
+		return 0
+	}
+	return r.Counts["unknown"]
 }
 
 // Changes returns the number of non-informational changes (the alarm total).

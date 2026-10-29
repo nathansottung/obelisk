@@ -771,8 +771,8 @@ async function doRecompute2(id){try{const r=await api('POST','/api/protection/re
    colors (or drift state). Computed from the catalog only — never the disk. One
    zoom level per request; click a folder to zoom in, breadcrumb to zoom out. */
 const PROT_HEX={COMPLETE:'#2e5e4e',OVER_COMPLETE:'#1e3d8f',PARTIAL:'#9a6b1f',NOT_BACKED_UP:'#a03123',OUT_OF_POLICY:'#6b2d86',UNASSIGNED:'#8a938c'};
-const DRIFT={UNCHANGED:{c:'#2e5e4e',t:'Unchanged'},MOVED:{c:'#1e3d8f',t:'Moved'},NEW:{c:'#8a938c',t:'Unarchived'},MODIFIED:{c:'#9a6b1f',t:'Modified'},MISSING:{c:'#a03123',t:'Missing'}};
-const DRIFT_ORDER=['UNCHANGED','MOVED','NEW','MODIFIED','MISSING'];
+const DRIFT={UNCHANGED:{c:'#2e5e4e',t:'Unchanged'},MOVED:{c:'#1e3d8f',t:'Moved'},NEW:{c:'#8a938c',t:'Unarchived'},MODIFIED:{c:'#9a6b1f',t:'Modified'},MISSING:{c:'#a03123',t:'Missing'},UNKNOWN:{c:'#6b2d86',t:'Unknown (not read)'}};
+const DRIFT_ORDER=['UNCHANGED','MOVED','NEW','MODIFIED','UNKNOWN','MISSING'];
 /* Validation coloring — catalog-derived verify state (Explorer). Green = a verified
    copy exists; red = a covering copy failed a check; neutral = hashed but no verified
    copy; grey = not even hashed. Text carries the ✓/✗ so status is never colour-alone. */
@@ -1185,7 +1185,7 @@ async function vHome(){
     h+=`<a class="hcard" href="#vault">
       <div class="hcard-t">${esc(a.name)}${a.sourceless?' <span class="etag" style="font-size:9px">adopted</span>':''}</div>
       <div class="dim" style="font-size:11.5px">${commaN(a.files)} files · ${homeBytes(a.bytes)}</div>
-      <div style="margin-top:7px">${prot}${a.drift_changes?` <a href="#" data-call="vDrift" data-args="${callArgs(a.id,a.name)}" class="etag due" style="text-decoration:none">${commaN(a.drift_changes)} drift</a>`:''}</div>
+      <div style="margin-top:7px">${prot}${a.drift_changes?` <a href="#" data-call="vDrift" data-args="${callArgs(a.id,a.name)}" class="etag due" style="text-decoration:none">${commaN(a.drift_changes)} drift</a>`:''}${a.drift_unknown?` <a href="#" data-call="vDrift" data-args="${callArgs(a.id,a.name)}" class="etag due" style="text-decoration:none" title="the last rescan could not read where these files are">${commaN(a.drift_unknown)} unknown</a>`:''}</div>
     </a>`;
   }
   if(ung){
@@ -1201,6 +1201,7 @@ async function vHome(){
   // (3) Health strip — each a click-through.
   const chips=[];
   if(hl.under_protected)chips.push(`<a class="btn danger" href="#protection">Warning: ${commaN(hl.under_protected)} under-protected file${hl.under_protected===1?'':'s'}</a>`);
+  if(hl.drift_unknown)chips.push(`<a class="btn ghost" href="#vault" title="the last rescans could not read where these files are">${commaN(hl.drift_unknown)} file${hl.drift_unknown===1?'':'s'} not checked by the last rescan</a>`);
   if(hl.drift_alarms)chips.push(`<a class="btn ghost" href="#vault">${commaN(hl.drift_alarms)} drift change${hl.drift_alarms===1?'':'s'} · ${hl.drift_archives} archive${hl.drift_archives===1?'':'s'}</a>`);
   if(hl.verify_due)chips.push(`<a class="btn ghost" href="#packages">${commaN(hl.verify_due)} package${hl.verify_due===1?'':'s'} verify-due</a>`);
   if(hl.failing_volumes)chips.push(`<a class="btn danger" href="#volumes">Warning: ${hl.failing_volumes} drive${hl.failing_volumes===1?'':'s'} reporting failing health</a>`);
@@ -1525,7 +1526,7 @@ async function vVault(){
       <button class="btn ghost" data-call="mirrorDlg" data-args="${callArgs(c.id,c.name)}">Mirror backup…</button>
       <button class="btn ghost" data-call="doReconcile" data-args="${callArgs(c.id,c.name)}">Rescan & compare</button>`;
       const slActions=`<button class="btn ghost" data-call="adoptFolderDlg" data-args="${callArgs(c.id,c.name)}">Adopt a drive…</button>`;
-      h+=`<tr><td>${!sl?`<span id="arccar-${c.id}" class="ftcar" role="button" tabindex="0" aria-expanded="false" aria-label="Show folder tree for ${esc(c.name)}" onclick="ftreeToggle(${c.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}"></span>`:''}${esc(c.name)}${sl?' <span class="etag" title="No source folder — its files are the union of adopted drives">scattered</span>':''}${!sl&&dr&&dr.changes>0?` <a href="#" data-call="vDrift" data-args="${callArgs(c.id,c.name)}" class="etag due" style="text-decoration:none">${dr.changes} changes${dr.informational?' · '+dr.informational+' informational':''}</a>`:(!sl&&dr)?` <span class="etag enc">in sync</span>`:''}</td>
+      h+=`<tr><td>${!sl?`<span id="arccar-${c.id}" class="ftcar" role="button" tabindex="0" aria-expanded="false" aria-label="Show folder tree for ${esc(c.name)}" onclick="ftreeToggle(${c.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}"></span>`:''}${esc(c.name)}${sl?' <span class="etag" title="No source folder — its files are the union of adopted drives">scattered</span>':''}${!sl&&dr&&(dr.changes>0||dr.unknown>0)?` <a href="#" data-call="vDrift" data-args="${callArgs(c.id,c.name)}" class="etag due" style="text-decoration:none" title="${dr.unknown?'the last rescan could not read where some files are, so it could not check them':''}">${dr.changes?dr.changes+' changes':''}${dr.changes&&dr.unknown?' · ':''}${dr.unknown?dr.unknown+' unknown':''}${dr.informational?' · '+dr.informational+' informational':''}</a>`:(!sl&&dr)?` <span class="etag enc">in sync</span>`:''}</td>
       <td class="num">${c.files}</td><td class="num">${GB(c.bytes)} GB</td>
       <td class="num">${c.chunks}</td><td class="row" style="justify-content:flex-end">
       ${sl?slActions:srcActions}
@@ -1969,15 +1970,16 @@ async function vDrift(id,name){
   <div class="row" style="margin-bottom:10px"><button class="btn ghost" onclick="loc('vault')">← Vault</button>
     <button class="btn" data-call="doReconcile" data-args="${callArgs(id,name||'')}">Rescan again</button></div>
   <div class="panel"><h2>Summary</h2><div class="row" style="gap:14px">
-    <span class="stamp ${changes?'FAILED':'VERIFIED'}">${changes} changes</span>
-    <span class="dim">unchanged ${c.unchanged||0} · <span title="present on disk, not yet in any package">unarchived ${c.new||0}</span> · modified ${c.modified||0} · missing ${c.missing||0} · moved ${c.moved||0}</span>
-    ${infoTotal?`<span class="dim">informational (excluded): ${infoTotal}</span>`:''}</div></div>
+    <span class="stamp ${changes||c.unknown?'FAILED':'VERIFIED'}">${changes} changes${c.unknown?' · '+c.unknown+' unknown':''}</span>
+    <span class="dim">unchanged ${c.unchanged||0} · <span title="present on disk, not yet in any package">unarchived ${c.new||0}</span> · modified ${c.modified||0} · missing ${c.missing||0} · moved ${c.moved||0} · <span title="in a folder or file the rescan could not read">unknown ${c.unknown||0}</span></span>
+    ${infoTotal?`<span class="dim">informational (excluded): ${infoTotal}</span>`:''}</div>
+    ${(d.unread||[]).length?`<div style="font-size:12.5px;margin-top:6px;color:var(--bad)">Could not read: ${d.unread.slice(0,5).map(esc).join(', ')}${d.unread.length>5?', …':''}. Packaged files there are Unknown, not Missing; reconnect or fix access and rescan.</div>`:''}</div>
   <div class="panel"><h2>By file type — different types mean different things</h2>`;
   const rows=(d.by_ext||[]).filter(e=>!e.informational);const inf=(d.by_ext||[]).filter(e=>e.informational);
   if(!rows.length&&!inf.length)h+='<div class="empty">No differences — sources match the backup.</div>';
-  else{h+='<table><tr><th>Type</th><th class="num">Missing</th><th class="num">Modified</th><th class="num" title="present on disk, not yet in any package">Unarchived</th><th class="num">Moved</th></tr>';
+  else{h+='<table><tr><th>Type</th><th class="num">Missing</th><th class="num">Modified</th><th class="num" title="present on disk, not yet in any package">Unarchived</th><th class="num">Moved</th><th class="num" title="in a place the rescan could not read">Unknown</th></tr>';
     for(const e of rows)h+=extRow(e);
-    if(inf.length){h+='<tr><td colspan="5" class="dim" style="padding-top:8px">informational (sidecar churn — excluded from alarm totals)</td></tr>';for(const e of inf)h+=extRow(e,true);}
+    if(inf.length){h+='<tr><td colspan="6" class="dim" style="padding-top:8px">informational (sidecar churn — excluded from alarm totals)</td></tr>';for(const e of inf)h+=extRow(e,true);}
     h+='</table>'}
   h+='</div>';
   const items=d.items||[];
@@ -1990,7 +1992,7 @@ async function vDrift(id,name){
   if(infoItems.length)h+=`<div class="panel" style="opacity:.65"><h2 class="dim">Informational (${infoItems.length}) — sidecar churn, not counted</h2>${itemList(infoItems)}</div>`;
   $('#view').innerHTML=h;
 }
-function extRow(e,muted){return `<tr${muted?' class="dim"':''}><td class="mono">${esc(e.ext||'(no ext)')}</td><td class="num">${e.missing||0}</td><td class="num">${e.modified||0}</td><td class="num">${e.new||0}</td><td class="num">${e.moved||0}</td></tr>`}
+function extRow(e,muted){return `<tr${muted?' class="dim"':''}><td class="mono">${esc(e.ext||'(no ext)')}</td><td class="num">${e.missing||0}</td><td class="num">${e.modified||0}</td><td class="num">${e.new||0}</td><td class="num">${e.moved||0}</td><td class="num">${e.unknown||0}</td></tr>`}
 function itemList(list){let h='<table>';for(const it of list){
   // For a MODIFIED file the backed-up bytes are now a RETAINED prior version —
   // show it inline as the restore source (and link to the full history).

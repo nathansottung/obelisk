@@ -955,7 +955,7 @@ func api(mux *http.ServeMux, app *App) {
 			rw := row{Collection: c, Files: len(fr), Bytes: b, Chunks: len(app.Store.Chunks(c.ID))}
 			if d := app.Store.DriftReport(c.ID); d != nil {
 				info := d.InfoCounts["new"] + d.InfoCounts["modified"] + d.InfoCounts["missing"] + d.InfoCounts["moved"]
-				rw.Drift = map[string]any{"at": d.At, "changes": d.Changes(), "informational": info}
+				rw.Drift = map[string]any{"at": d.At, "changes": d.Changes(), "unknown": d.Unknown(), "informational": info}
 			}
 			out = append(out, rw)
 		}
@@ -1144,7 +1144,7 @@ func api(mux *http.ServeMux, app *App) {
 			d, err := app.ReconcileCollection(id, scope, p)
 			var res map[string]any
 			if d != nil {
-				res = map[string]any{"collection_id": id, "changes": d.Changes(), "scoped": scope != ""}
+				res = map[string]any{"collection_id": id, "changes": d.Changes(), "unknown": d.Unknown(), "scoped": scope != ""}
 				if scope == "" {
 					// Whole-archive run persists the badge-linked report — deep-link to it.
 					res["artifacts"] = []Artifact{{

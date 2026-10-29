@@ -67,7 +67,9 @@ type TreemapResult struct {
 func driftSeverity(s string) int {
 	switch s {
 	case "MISSING":
-		return 5
+		return 6
+	case "UNKNOWN":
+		return 5 // could not be checked: worse than any change that was seen
 	case "MODIFIED":
 		return 4
 	case "NEW":

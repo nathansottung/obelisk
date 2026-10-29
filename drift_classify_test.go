@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -105,5 +106,39 @@ func TestDrift_CaseOnlyRename(t *testing.T) {
 		}
 	} else if got := driftStates(rep); len(got) != 1 || got[0] != "MOVED:PHOTO.JPG<photo.jpg" {
 		t.Errorf("a case-only rename: %v, want MOVED", got)
+	}
+}
+
+// When the rescan cannot read a source (here its folder was renamed away),
+// every packaged file is UNKNOWN, and nothing reports the archive as in sync:
+// the report, the archive list and Home all carry the unknown count, and the
+// report names what could not be read.
+func TestDrift_UnreadSourceIsNeverInSync(t *testing.T) {
+	app, coll, src := driftSetup(t, map[string]string{"a.txt": "alpha\n", "b.txt": "bravo\n"})
+	if err := os.Rename(src, src+"-moved"); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := app.ReconcileCollection(coll.ID, "", noProg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Changes() != 0 || rep.Unknown() != 2 || len(rep.Unread) != 1 {
+		t.Errorf("changes %d, unknown %d, unread %v; want 0, 2 and the source folder", rep.Changes(), rep.Unknown(), rep.Unread)
+	}
+	home, err := app.HomeOverview(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if home.Health.DriftUnknown != 2 || home.Archives[0].DriftUnknown != 2 {
+		t.Errorf("home: %d unknown, card %d; want 2", home.Health.DriftUnknown, home.Archives[0].DriftUnknown)
+	}
+	if driftSeverity("UNKNOWN") <= driftSeverity("MODIFIED") {
+		t.Error("UNKNOWN ranks at or below MODIFIED in the treemap rollup")
+	}
+	html, _ := os.ReadFile(filepath.Join("ui", "index.html"))
+	for _, need := range []string{"dr.unknown", "UNKNOWN:{c:", "a.drift_unknown", "hl.drift_unknown"} {
+		if !strings.Contains(string(html), need) {
+			t.Errorf("UI does not show unknown drift (%q)", need)
+		}
 	}
 }

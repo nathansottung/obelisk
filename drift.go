@@ -143,7 +143,14 @@ func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress
 	// table and the drift report are written — never the source files.
 	progress(0.02, "listing files")
 	var paths []string
-	var unread []string // folders and files the rescan could not read (path-rule keys)
+	var unread []string      // folders and files the rescan could not read (path-rule keys)
+	var unreadShown []string // the same, as found, for the report (at most 200)
+	noteUnread := func(p string) {
+		unread = append(unread, HostPathRules().key(filepath.ToSlash(p)))
+		if len(unreadShown) < 200 {
+			unreadShown = append(unreadShown, p)
+		}
+	}
 	perFolder := map[string]int{}
 	for _, fo := range folders {
 		// Scoped rescan: skip a scanned root that can't intersect the prefix, and prune
@@ -154,7 +161,7 @@ func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress
 		_ = filepath.WalkDir(fo.Path, func(p string, d os.DirEntry, err error) error {
 			if err != nil {
 				// Not read: what it holds is unknown, not missing.
-				unread = append(unread, HostPathRules().key(filepath.ToSlash(p)))
+				noteUnread(p)
 				return nil
 			}
 			if d.IsDir() {
@@ -193,7 +200,7 @@ func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress
 		}
 	}, func(p, kind, msg string) {
 		mu.Lock()
-		unread = append(unread, HostPathRules().key(filepath.ToSlash(p)))
+		noteUnread(p)
 		mu.Unlock()
 	})
 	a.Store.Flush()
@@ -223,6 +230,8 @@ func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress
 			e.New++
 		case "MOVED":
 			e.Moved++
+		case "UNKNOWN":
+			e.Unknown++
 		}
 		if it.Informational {
 			info[strings.ToLower(it.State)]++
@@ -294,7 +303,7 @@ func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress
 
 	infoTotal := info["new"] + info["modified"] + info["missing"] + info["moved"]
 	rep := &DriftReport{At: time.Now().UTC(), CollectionID: collectionID,
-		Counts: counts, InfoCounts: info, ByExt: byExt, Items: items}
+		Counts: counts, InfoCounts: info, ByExt: byExt, Items: items, Unread: unreadShown}
 	if persist {
 		a.Store.ReplaceDriftReport(rep) // whole-archive run drives the Archives drift badge
 		a.Store.Log("reconcile", fmt.Sprintf("archive %d: %d change(s), %d informational", collectionID, rep.Changes(), infoTotal))
