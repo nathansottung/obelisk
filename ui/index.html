@@ -2250,6 +2250,7 @@ async function spanWriteDlg(id,name){
     <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Write + verify this segment</button></div>`,
   async()=>{const d=$('#d1').value.trim();if(!d)return;
     const body={dest_dir:d,throttle_mbps:parseFloat($('#d5').value)||0};Object.assign(body,volChoice());
+    if(!(await destGate(d)))throw new Error('Nothing written: choose what to do about '+d+' first');
     await api('POST',`/api/chunks/${id}/span-write`,body);
     toast('Segment write started — see Jobs. When it verifies, eject & label the tape, mount the next, then click again.',1);loc('jobs')})}
 async function doBuild(id){

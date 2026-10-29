@@ -2101,6 +2101,9 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 409, err)
 			return
 		}
+		if !outFolderGate(w, app, dest) {
+			return
+		}
 		startedOn(w).write(runJob(app, "write", "Span-write next segment of "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {
 			return app.SpanWriteNext(id, dest, f(b, "buffer_gb"), int(f(b, "block_mb")), f(b, "throttle_mbps"), vol, p)
 		}))

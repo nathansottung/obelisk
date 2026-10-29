@@ -5,6 +5,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -93,4 +94,40 @@ func TestWriteChunk_NeverWritesThroughExistingFiles(t *testing.T) {
 	}
 	assertFileBytes(t, payload, "SOMEONE ELSE'S")
 	assertFileBytes(t, sidecar, "OTHER")
+}
+
+// A span write decides the mounted medium by where it really is: a folder link
+// to a source is refused, nothing is written into the source, and the segment
+// stays pending.
+func TestSpanWrite_DestinationDecidedByRealLocation(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	src := t.TempDir()
+	big := strings.Repeat("spanning-payload-", 2500)
+	mustWrite(t, filepath.Join(src, "big.dat"), big)
+	c := app.Store.AddChunk(Chunk{
+		Name: "SPAN-GUARD", Status: "PLANNED", MediaKind: "CUSTOM",
+		TargetBytes: 12000, DataBytes: int64(len(big)), FileCount: 1,
+		SrcRoot: src, HashAlg: "SHA256", Par2: 5, Spanned: true,
+		Segments: planSegments(int64(len(big))+4096, 12000),
+		Files:    []ChunkFileRef{{RelPath: "big.dat", SizeBytes: int64(len(big))}},
+	})
+	if err := app.BuildChunk(c.ID, noProg); err != nil {
+		t.Fatalf("BuildChunk: %v", err)
+	}
+	_, link, untouched := sourceBehindLink(t, app)
+	_, err := app.SpanWriteNext(c.ID, link, 0, 0, 0, 0, noProg)
+	assertSourceRefusal(t, "span write into a link to a source", err)
+	untouched()
+	if st := app.Store.Chunk(c.ID).Segments[0].Status; st != "PENDING" {
+		t.Errorf("refused segment is %s, want PENDING", st)
+	}
+
+	// A segment file already on the medium (a hard link to another file) is
+	// replaced as a name; the other file keeps its bytes.
+	medium := t.TempDir()
+	victim := plantAtStageName(t, filepath.Join(medium, c.Name, c.Name+".seg001"))
+	if _, err := app.SpanWriteNext(c.ID, medium, 0, 0, 0, 0, noProg); err != nil {
+		t.Fatal(err)
+	}
+	assertFileBytes(t, victim, "SOMEONE ELSE'S")
 }
