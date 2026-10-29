@@ -82,3 +82,53 @@ func TestMirrorVerify_AdvisoryFailureDropsCreditAtOnce(t *testing.T) {
 		t.Errorf("after a failed census check the mirror has %d verified copies, want 0", n)
 	}
 }
+
+// A verify campaign whose census of a mirror finds a damaged file takes the
+// credit away and refreshes the package's state at once.
+func TestVerifyCampaign_AdvisoryFailureRefreshesState(t *testing.T) {
+	app := dockApp(t)
+	coll := app.Store.AddCollection("Photos")
+	src := t.TempDir()
+	writeTree(t, src, map[string]string{"a.jpg": "AAAA", "b.jpg": "BBBB"})
+	if _, _, err := app.ScanFolder(coll.ID, src, noProg); err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	vol := app.Store.AddVolume(Volume{Label: "CAMP-D", Kind: "HDD"})
+	if _, err := app.MirrorToVolume(coll.ID, nil, dest, vol.ID, 0, "", noProgMirror); err != nil {
+		t.Fatal(err)
+	}
+	var mirror *Chunk
+	for _, c := range app.Store.Chunks(coll.ID) {
+		if c.Mirror {
+			mirror = c
+		}
+	}
+	if mirror == nil || mirror.VerifiedCopyCount() != 1 {
+		t.Fatalf("setup: want one verified mirror copy, got %+v", mirror)
+	}
+	before := mirror.Status
+	var damaged string
+	_ = filepath.WalkDir(dest, func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && filepath.Base(p) == "a.jpg" {
+			damaged = p
+		}
+		return nil
+	})
+	if damaged == "" {
+		t.Fatal("setup: a.jpg not found on the mirror")
+	}
+	if err := os.WriteFile(damaged, []byte("AA"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.VerifyCampaign(dest, VerifyA, noProg); err != nil {
+		t.Fatal(err)
+	}
+	mirror = app.Store.Chunk(mirror.ID)
+	if mirror.VerifiedCopyCount() != 0 {
+		t.Errorf("the damaged mirror copy still counts as verified")
+	}
+	if mirror.Status == before {
+		t.Errorf("package status stayed %q after its only copy was found damaged", before)
+	}
+}

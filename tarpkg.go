@@ -72,6 +72,14 @@ func tarMemberName(rel string) (string, error) {
 }
 
 func addTarFile(tw *tar.Writer, p, name string) error {
+	// Checked before opening: opening a FIFO put where a file was would block.
+	lst, err := os.Lstat(p)
+	if err != nil {
+		return err
+	}
+	if !lst.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file", name)
+	}
 	f, err := os.Open(p)
 	if err != nil {
 		return err
@@ -81,8 +89,8 @@ func addTarFile(tw *tar.Writer, p, name string) error {
 	if err != nil {
 		return err
 	}
-	if !st.Mode().IsRegular() {
-		return fmt.Errorf("%s is not a regular file", name)
+	if !st.Mode().IsRegular() || !os.SameFile(lst, st) {
+		return fmt.Errorf("%s is not a regular file, or was replaced while it was opened", name)
 	}
 	hdr := &tar.Header{
 		Typeflag: tar.TypeReg,

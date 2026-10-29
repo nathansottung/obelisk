@@ -696,6 +696,7 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 	}
 	// Mirrors: verified at the chosen level (A/C advisory, B satisfies COMPLETE).
 	mirrorResults := make([]map[string]any, 0, len(mirrorTargets))
+	mirrorFailed := false
 	for j, c := range mirrorTargets {
 		progress(float64(len(cands)+j)/float64(len(cands)+len(mirrorTargets)), "verify mirror "+c.Name)
 		ok, checked, bad, firstBad := verifyMirrorChunk(c, destDir, level)
@@ -709,7 +710,12 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 			note += " · the drive could not be told apart from another with a copy here, so no copy was credited"
 		}
 		a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: ok, Path: destDir, Note: note, Level: level, Advisory: !levelSatisfiesComplete(level) || credited == 0})
-		if level == VerifyB {
+		// A full check, or any failed one, can change the package's state: a
+		// copy found damaged loses its credit at once.
+		if level == VerifyB || !ok {
+			if !ok {
+				mirrorFailed = true
+			}
 			if ok && credited > 0 {
 				c.VerifiedAt = &now
 			}
@@ -725,7 +731,7 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 		mirrorResults = append(mirrorResults, map[string]any{"chunk": c.Name, "ok": ok, "level": level,
 			"checked": checked, "bad": bad, "advisory": !levelSatisfiesComplete(level)})
 	}
-	if level == VerifyB && len(mirrorTargets) > 0 {
+	if (level == VerifyB && len(mirrorTargets) > 0) || mirrorFailed {
 		a.Store.RecomputeProtection(nil)
 	}
 	total := len(cands) + len(mirrorTargets)
@@ -860,12 +866,11 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 		return nil, err
 	}
 	terr := extractTar(bufio.NewReaderSize(pipe, 1<<20), tgt.into, members)
-	if terr != nil {
-		_ = gpg.Process.Kill() // stop decrypting what will not be unpacked
-	}
-	_, _ = io.Copy(io.Discard, pipe)
+	_, _ = io.Copy(io.Discard, pipe) // let gpg finish, so its own result is known
 	gerr := gpg.Wait()
-	if gerr != nil && terr == nil {
+	// gpg's failure comes first: a wrong passphrase gives an empty stream,
+	// which the tar reader would otherwise report as a missing member.
+	if gerr != nil {
 		return nil, fmt.Errorf("gpg decrypt failed: %s", tail(gpgErr.String(), 400))
 	}
 	if terr != nil {
