@@ -6,10 +6,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -140,5 +142,75 @@ func TestCompare_Routes(t *testing.T) {
 	}
 	if runs := call("GET", "/api/compare/runs", nil)["runs"].([]any); len(runs) != 1 {
 		t.Errorf("%d runs listed", len(runs))
+	}
+}
+
+// A run's results, and the cross-drive lists, export as CSV and JSON
+// downloads, with the view's filters applied. A cell that a spreadsheet would
+// run as a formula is written as text.
+func TestCompare_Export(t *testing.T) {
+	app := dockApp(t)
+	a := t.TempDir()
+	writeTree(t, a, map[string]string{"a.txt": "alpha\n", "=SUM(1).txt": "formula\n"})
+	ref := scanDrive(t, app, a, "R2")
+	b := t.TempDir()
+	writeTree(t, b, map[string]string{"a.txt": "alpha\n", "n.txt": "new\n"})
+	other := scanDrive(t, app, b, "O2")
+	run, err := app.CompareScans(CompareRef{ScanID: ref.ID}, other.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	api(mux, app)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	get := func(path string) (string, http.Header) {
+		t.Helper()
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != 200 {
+			t.Fatalf("%s: %d %s", path, resp.StatusCode, b)
+		}
+		return string(b), resp.Header
+	}
+	body, hdr := get(fmt.Sprintf("/api/compare/runs/%d/export?format=csv", run.ID))
+	if !strings.Contains(hdr.Get("Content-Disposition"), "attachment") || !strings.HasPrefix(body, "state,ref_path,path,") {
+		t.Errorf("CSV export: %q %q", hdr.Get("Content-Disposition"), body)
+	}
+	if !strings.Contains(body, "'=SUM(1).txt") {
+		t.Errorf("a formula-like path was not written as text: %s", body)
+	}
+	body, _ = get(fmt.Sprintf("/api/compare/runs/%d/export?format=json&state=new", run.ID))
+	var got struct {
+		Run     CompareRun    `json:"run"`
+		Results []ClassResult `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(body), &got); err != nil || len(got.Results) != 1 || got.Results[0].Path != "n.txt" {
+		t.Errorf("JSON export filtered to new: %v %+v", err, got.Results)
+	}
+	body, _ = get("/api/xdrive/lists/export?format=csv&list=on_two_or_more")
+	if !strings.HasPrefix(body, "hash,size,drives,label,path") || !strings.Contains(body, "a.txt") {
+		t.Errorf("lists CSV: %s", body)
+	}
+}
+
+// The compare screen is a view in the app with the controls it needs.
+func TestCompareScreenWiredInUI(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("ui", "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(b)
+	for _, need := range []string{
+		"async function vCompare(", "compare:vCompare", "['compare',", "/api/compare/runs", "/api/xdrive/lists",
+		"/export?format=csv", "/export?format=json", "/api/reference",
+	} {
+		if !strings.Contains(html, need) {
+			t.Errorf("UI missing %q", need)
+		}
 	}
 }

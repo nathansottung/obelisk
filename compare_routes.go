@@ -1,3 +1,5 @@
+//go:build !guionly
+
 package main
 
 // compare_routes.go — the HTTP routes for comparing drive scans (compare.go)
@@ -5,6 +7,8 @@ package main
 // package, copy or count.
 
 import (
+	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -12,6 +16,7 @@ import (
 )
 
 func registerCompareRoutes(mux *http.ServeMux, app *App) {
+	registerCompareExports(mux, app)
 	// The marked reference (a drive or an archive), or null.
 	mux.HandleFunc("GET /api/reference", func(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, map[string]any{"reference": app.Store.Reference()})
@@ -102,6 +107,76 @@ func registerCompareRoutes(mux *http.ServeMux, app *App) {
 		page := results[min(offset, len(results)):min(offset+limit, len(results))]
 		jsonOut(w, map[string]any{"run": run, "matching": len(results), "offset": offset, "results": page})
 	})
+}
+
+// registerCompareExports adds the CSV and JSON downloads of a run's results and
+// of the cross-drive lists.
+func registerCompareExports(mux *http.ServeMux, app *App) {
+	// A run's results with the view's filters (?state=, ?q=), as ?format=csv or json.
+	mux.HandleFunc("GET /api/compare/runs/{id}/export", func(w http.ResponseWriter, r *http.Request) {
+		run, results, ok := compareRunResults(w, r, app)
+		if !ok {
+			return
+		}
+		name := fmt.Sprintf("obelisk-comparison-%d", run.ID)
+		if r.URL.Query().Get("format") == "json" {
+			attachmentHeaders(w, name+".json", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"run": run, "results": results})
+			return
+		}
+		attachmentHeaders(w, name+".csv", "text/csv; charset=utf-8")
+		cw := csv.NewWriter(w)
+		_ = cw.Write([]string{"state", "ref_path", "path", "ref_hash", "hash", "size"})
+		for _, c := range results {
+			_ = cw.Write(csvSafe(c.State, c.RefPath, c.Path, c.RefHash, c.Hash, strconv.FormatInt(c.Size, 10)))
+		}
+		cw.Flush()
+	})
+	// ?list=only_on (with ?volume_id=) or on_two_or_more, as ?format=csv or json.
+	mux.HandleFunc("GET /api/xdrive/lists/export", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		vid, _ := strconv.Atoi(q.Get("volume_id"))
+		l, err := app.CrossDriveLists(vid)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
+		list, entries := "on-two-or-more", l.OnTwoOrMore
+		if q.Get("list") == "only_on" {
+			list, entries = fmt.Sprintf("only-on-volume-%d", vid), l.OnlyOn
+		}
+		name := "obelisk-files-" + list
+		if q.Get("format") == "json" {
+			attachmentHeaders(w, name+".json", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"scans": l.Scans, "left_out": l.LeftOut, "files": entries})
+			return
+		}
+		attachmentHeaders(w, name+".csv", "text/csv; charset=utf-8")
+		cw := csv.NewWriter(w)
+		_ = cw.Write([]string{"hash", "size", "drives", "label", "path"})
+		for _, e := range entries {
+			for _, p := range e.Places {
+				_ = cw.Write(csvSafe(e.Hash, strconv.FormatInt(e.Size, 10), strconv.Itoa(e.Drives), p.Label, p.Path))
+			}
+		}
+		cw.Flush()
+	})
+}
+
+func attachmentHeaders(w http.ResponseWriter, name, contentType string) {
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+}
+
+// csvSafe writes a cell a spreadsheet would run as a formula (one starting with
+// =, +, -, @, a tab or a carriage return) as text, with a leading quote mark.
+func csvSafe(cells ...string) []string {
+	for i, c := range cells {
+		if c != "" && strings.ContainsRune("=+-@\t\r", rune(c[0])) {
+			cells[i] = "'" + c
+		}
+	}
+	return cells
 }
 
 // compareRunResults loads run {id}'s results filtered by ?state= and ?q=.
