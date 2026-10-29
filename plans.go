@@ -596,6 +596,14 @@ func (a *App) CompilePlan(planID int) (PlanReport, error) {
 		}
 		mapping[f.Hash] = f.Planned
 	}
+	if shared := mappingCollisions(mapping); len(shared) > 0 {
+		a.Store.UpdatePlan(plan)
+		shown := shared
+		if len(shown) > 3 {
+			shown = shown[:3]
+		}
+		return rep, fmt.Errorf("plan %q not compiled: %d planned file(s) would share the same path with another file (%s; letter case and accents count as the same). Neither would be placed. Change the template route so each file has its own name, then compile again", plan.Name, len(shared), strings.Join(shown, ", "))
+	}
 	if len(outside) > 0 {
 		a.Store.UpdatePlan(plan)
 		sort.Strings(outside)
@@ -702,6 +710,10 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 	}
 	if plan.Status != PlanCompiled && plan.Status != PlanExecuting {
 		return nil, fmt.Errorf("plan %q is %s — compile it before executing", plan.Name, plan.Status)
+	}
+	// A plan compiled before paths were checked for sharing is checked here.
+	if shared := mappingCollisions(plan.Mapping); len(shared) > 0 {
+		return nil, fmt.Errorf("plan %q puts %d file(s) at the same path as another file (%s); compile it again", plan.Name, len(shared), shared[0])
 	}
 	if strings.TrimSpace(plan.DestinationRoot) == "" {
 		return nil, fmt.Errorf("plan has no destination_root")
@@ -1015,5 +1027,21 @@ func (a *App) plansPendingForVolume(volumeID int) []PlanWorkItem {
 			out = append(out, PlanWorkItem{PlanID: p.ID, Name: p.Name, Pending: pending})
 		}
 	}
+	return out
+}
+
+// mappingCollisions lists the planned paths that more than one file would take
+// (by strictPathRules), sorted.
+func mappingCollisions(mapping map[string]string) []string {
+	paths := make([]string, 0, len(mapping))
+	for _, p := range mapping {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	var out []string
+	for i := range collidingPaths(paths) {
+		out = append(out, paths[i])
+	}
+	sort.Strings(out)
 	return out
 }

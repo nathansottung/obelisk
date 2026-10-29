@@ -461,14 +461,14 @@ func (a *App) AdoptFolder(mountPath string, collectionID, volumeID int, progress
 	// adopt recorded here, in places this scan did not read, are kept apart as
 	// unknown (not counted as copies), as the dock does.
 	var unknown []ChunkFileRef
-	if prior := a.mirrorChunkOn(collectionID, vol.ID); prior != nil && snap.Scan == ScanPartial {
+	if prior := a.mirrorChunkAt(collectionID, vol.ID, mountPath); prior != nil && snap.Scan == ScanPartial {
 		for _, r := range append(append([]ChunkFileRef(nil), prior.Files...), prior.UnknownFiles...) {
 			if !seen[r.FileID] && !snap.Known(r.RelPath) && !containsRef(unknown, r.FileID) {
 				unknown = append(unknown, r)
 			}
 		}
 	}
-	c := a.upsertMirrorChunk(collectionID, vol, mountPath, refs, "mirror-adopt")
+	c := a.upsertMirrorChunkAt(collectionID, vol, mountPath, mountPath, refs, "mirror-adopt")
 	c.UnknownFiles = unknown
 	a.Store.UpdateChunk(c)
 

@@ -312,21 +312,15 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 		return nil, err
 	}
 
-	// Content indexes from the selected archives. The dock first-pass matches by
-	// BLAKE3 (the fast hot-loop hash) when the catalog has it, falling back to
-	// SHA-256 for files scanned before BLAKE3 was recorded. Both keys point at the
-	// same File, so a drive file need only match on one.
-	currentByHash := map[string][]*File{}   // current source file(s) by SHA-256
-	currentByBlake3 := map[string][]*File{} // ...and by BLAKE3 (fast path)
-	archiveOfFile := map[int]int{}          // fileID -> archiveID
-	histHashes := map[string]bool{}         // previously-packaged versions no longer current
+	// Content index from the selected archives, by SHA-256: the hash every drive
+	// file is read for in full, and the one that counts a copy.
+	currentByHash := map[string][]*File{} // current source file(s) by SHA-256
+	archiveOfFile := map[int]int{}        // fileID -> archiveID
+	histHashes := map[string]bool{}       // previously-packaged versions no longer current
 	for _, aid := range ds.ArchiveIDs {
 		for _, f := range a.Store.FilesOf(aid) {
 			if f.Hash != "" {
 				currentByHash[f.Hash] = append(currentByHash[f.Hash], f)
-			}
-			if f.Blake3 != "" {
-				currentByBlake3[f.Blake3] = append(currentByBlake3[f.Blake3], f)
 			}
 			archiveOfFile[f.ID] = aid
 		}
@@ -356,12 +350,16 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 			progress(0.06+float64(done)/float64(max(total, 1))*0.74, progStats(0, 0, int64(done), int64(total), "hashing drive files"))
 		},
 		func(sf SnapFile) {
-			// BLAKE3 first (fast path), then SHA-256 for legacy catalog entries.
-			fs, ok := currentByBlake3[sf.Blake3]
-			if !ok {
-				fs, ok = currentByHash[sf.Hash]
+			// A drive file is a copy of an archive file only when its full SHA-256
+			// (the hash on media, computed for every file) and its size are the
+			// archive file's: a BLAKE3 alone could be one left from an older version.
+			var fs []*File
+			for _, f := range currentByHash[sf.Hash] {
+				if f.Hash != "" && f.SizeBytes == sf.SizeBytes {
+					fs = append(fs, f)
+				}
 			}
-			if ok {
+			if len(fs) > 0 {
 				for _, f := range fs {
 					aid := archiveOfFile[f.ID]
 					if matchedByArchive[aid] == nil {
@@ -650,7 +648,8 @@ func (a *App) dockReverifyAtLevel(ds *DockSession, mountPath string, vol *Volume
 	matched, bad := 0, 0
 	for _, aid := range ds.ArchiveIDs {
 		for _, c := range a.Store.Chunks(aid) {
-			if !c.Mirror {
+			// A folder's record is checked at its folder, not at the drive root.
+			if !c.Mirror || c.MirrorRoot != "" {
 				continue
 			}
 			on := false
@@ -672,7 +671,7 @@ func (a *App) dockReverifyAtLevel(ds *DockSession, mountPath string, vol *Volume
 				note += " · first bad: " + firstBad
 			}
 			a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: ok, Path: mountPath, Note: note, Level: level, Advisory: true})
-			a.Store.UpdateCopyVerifyLevel(c, mountPath, ok, level)
+			a.Store.CreditCopyCheck(c, CopyAt{Path: mountPath, VolumeID: vol.ID}, ok, level)
 		}
 	}
 	note := fmt.Sprintf("re-verified at level %s (advisory — only full/B satisfies protection)", level)
@@ -687,6 +686,14 @@ func (a *App) dockReverifyAtLevel(ds *DockSession, mountPath string, vol *Volume
 // (archive, volume): the drive's content-matched files, with a verified copy on
 // the volume. Idempotent — a re-ingest updates the same package in place.
 func (a *App) upsertMirrorChunk(archiveID int, vol *Volume, mountPath string, refs []ChunkFileRef, mode string) *Chunk {
+	return a.upsertMirrorChunkAt(archiveID, vol, "", mountPath, refs, mode)
+}
+
+// upsertMirrorChunkAt is upsertMirrorChunk for the record of one folder (root,
+// as adopted) on the drive; "" is the record of the whole drive or destination.
+// Each folder keeps its own record, so adopting one folder never replaces
+// another's files.
+func (a *App) upsertMirrorChunkAt(archiveID int, vol *Volume, root, mountPath string, refs []ChunkFileRef, mode string) *Chunk {
 	var sum int64
 	for _, r := range refs {
 		sum += r.SizeBytes
@@ -700,19 +707,7 @@ func (a *App) upsertMirrorChunk(archiveID int, vol *Volume, mountPath string, re
 	case "mirror":
 		note = "mirror backup written (copy-then-verified)"
 	}
-	for _, c := range a.Store.Chunks(archiveID) {
-		if !c.Mirror {
-			continue
-		}
-		onVol := false
-		for _, cp := range c.Copies {
-			if cp.VolumeID == vol.ID && !cp.Superseded {
-				onVol = true
-			}
-		}
-		if !onVol {
-			continue
-		}
+	if c := a.mirrorChunkAt(archiveID, vol.ID, root); c != nil {
 		c.Files, c.FileCount, c.EncBytes, c.DataBytes = refs, len(refs), sum, sum
 		c.WrittenDest, c.VerifiedAt, c.VerifyOK, c.Status = mountPath, &now, &ok, StatusAdoptedVerified
 		a.Store.RecordCopy(c, vol.ID, mountPath, true)
@@ -725,8 +720,12 @@ func (a *App) upsertMirrorChunk(archiveID int, vol *Volume, mountPath string, re
 	if coll != nil {
 		safe = safeName(coll.Name)
 	}
-	c := a.Store.AddChunk(Chunk{CollectionID: archiveID,
-		Name: fmt.Sprintf("MIRROR-%s-V%d", safe, vol.ID), Status: StatusAdoptedVerified,
+	name := fmt.Sprintf("MIRROR-%s-V%d", safe, vol.ID)
+	if root != "" {
+		name += "-" + safeName(filepath.Base(root)) + "-" + sha256Hex([]byte(normPath(root)))[:6]
+	}
+	c := a.Store.AddChunk(Chunk{CollectionID: archiveID, MirrorRoot: root,
+		Name: name, Status: StatusAdoptedVerified,
 		MediaKind: nonEmpty(vol.Kind, "HDD"), EncBytes: sum, DataBytes: sum, FileCount: len(refs),
 		HashAlg: "SHA256", Encrypted: false, Adopted: true, Mirror: true, WrittenDest: mountPath,
 		Files: refs, WrittenAt: &now, VerifiedAt: &now, VerifyOK: &ok})
@@ -748,8 +747,14 @@ func containsRef(refs []ChunkFileRef, fileID int) bool {
 // mirrorChunkOn is the archive's mirror package with a current copy on the
 // volume, or nil.
 func (a *App) mirrorChunkOn(archiveID, volumeID int) *Chunk {
+	return a.mirrorChunkAt(archiveID, volumeID, "")
+}
+
+// mirrorChunkAt is the archive's mirror record of folder root on the volume
+// ("" for the whole drive), or nil.
+func (a *App) mirrorChunkAt(archiveID, volumeID int, root string) *Chunk {
 	for _, c := range a.Store.Chunks(archiveID) {
-		if !c.Mirror {
+		if !c.Mirror || normPath(c.MirrorRoot) != normPath(root) {
 			continue
 		}
 		for _, cp := range c.Copies {

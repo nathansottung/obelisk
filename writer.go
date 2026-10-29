@@ -296,7 +296,7 @@ func (a *App) refreshChunkStatus(c *Chunk) {
 }
 
 func (a *App) WriteChunk(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string)) (map[string]any, error) {
-	return a.writeChunk(nil, id, destDir, bufferGB, blockMB, throttleMbps, volumeID, progress)
+	return a.writeChunk(nil, id, destDir, bufferGB, blockMB, throttleMbps, volumeID, progress, nil)
 }
 
 // chunkWritable is the check that a package can be written from staging now.
@@ -304,18 +304,28 @@ func chunkWritable(c *Chunk) error {
 	if c.Spanned {
 		return fmt.Errorf("package %s is spanned; use span-write (one tape at a time)", c.Name)
 	}
-	if c.StagedDir == "" || (c.Status != "STAGED" && c.Status != "WRITTEN" && c.Status != "VERIFIED" && c.Status != "FAILED") {
+	return chunkStagedForWrite(c)
+}
+
+// chunkStagedForWrite is the check, shared with span writes, that a package's
+// last build succeeded and left its payload and sidecars in staging. A FAILED
+// package (its build failed, or its staged payload was found damaged) is rebuilt
+// first.
+func chunkStagedForWrite(c *Chunk) error {
+	if c.StagedDir == "" || (c.Status != "STAGED" && c.Status != "WRITTEN" && c.Status != "VERIFIED") {
 		return fmt.Errorf("package %s is %s; build it first", c.Name, c.Status)
 	}
 	if payloadPathIn(c.StagedDir, c) == "" {
 		return fmt.Errorf("staged payload missing under %s", c.StagedDir)
 	}
-	return nil
+	return checkStagedSidecars(c)
 }
 
 // writeChunk is WriteChunk into out when the caller already holds the output
 // folder for destDir (a re-write), or into destDir opened here when out is nil.
-func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string)) (map[string]any, error) {
+// beforeWrite, when set, runs once every check has passed, just before the
+// first byte is written (a re-write supersedes the old copy there).
+func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string), beforeWrite func()) (map[string]any, error) {
 	cfg, cfgErr := a.LoadConfig()
 	if cfgErr != nil {
 		return nil, cfgErr
@@ -371,10 +381,13 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 			need += st.Size()
 		}
 	}
-	if free, err := diskFree(destDir); err == nil && free < need {
+	if free, err := destFree(destDir); err == nil && free < need {
 		return nil, fmt.Errorf("destination too small: need %.1f GB, free %.1f GB", float64(need)/1e9, float64(free)/1e9)
 	}
 
+	if beforeWrite != nil {
+		beforeWrite()
+	}
 	c.Status = "WRITING"
 	a.Store.UpdateChunk(c)
 	// mediumFail: a write/medium error. The staged artifact is fine, so the
@@ -449,8 +462,12 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 		if c.PrivateManifest && n == c.Name+".manifest.json" {
 			continue // private: the ENCRYPTED manifest.json.gpg ships instead
 		}
-		if _, err := out.CopyIn(filepath.Join(c.StagedDir, n), c.Name+"/"+n, 0o644); err != nil {
+		sum, err := out.CopyIn(filepath.Join(c.StagedDir, n), c.Name+"/"+n, 0o644)
+		if err != nil {
 			return mediumFail(err)
+		}
+		if want, ok := c.Sidecars[n]; ok && sum != want {
+			return mediumFail(fmt.Errorf("staged sidecar %s changed during the write; rebuild the package", n))
 		}
 	}
 
@@ -520,8 +537,10 @@ func (a *App) RewriteCopy(id, volumeID int, bufferGB float64, blockMB int, throt
 		return nil, err
 	}
 	defer out.Close()
-	a.Store.SupersedeCopy(c, volumeID)
-	return a.writeChunk(out, id, filepath.Dir(dest), bufferGB, blockMB, throttleMbps, volumeID, progress)
+	// The old copy is superseded only when the write starts: a re-write refused
+	// by a later check (free space, say) leaves it current.
+	return a.writeChunk(out, id, filepath.Dir(dest), bufferGB, blockMB, throttleMbps, volumeID, progress,
+		func() { a.Store.SupersedeCopy(c, volumeID) })
 }
 
 func (a *App) VerifyChunk(id int, destDir string) (map[string]any, error) {
@@ -543,23 +562,36 @@ func (a *App) VerifyChunk(id int, destDir string) (map[string]any, error) {
 		return nil, err
 	}
 	ok := rb == c.EncHash
+	// A copy is the payload and its sidecars: they are read back too.
+	sideErr := checkSidecarsAt(c, filepath.Dir(enc))
+	if sideErr != nil {
+		ok = false
+	}
 	now := time.Now().UTC()
-	if ok {
+	// Record the result on the copy recorded at the folder that was read, and only
+	// that one; the package status derives from ALL copies, so a single bad medium
+	// never marks the package FAILED while another copy or the staged payload is
+	// intact. A read that matches no recorded copy (the staging folder, say)
+	// credits nothing.
+	credited := a.Store.CreditCopyCheck(c, CopyAt{Path: filepath.Dir(enc), Serial: driveSerialAt(base)}, ok, VerifyB)
+	if ok && credited > 0 {
 		c.VerifiedAt = &now
 	}
-	// Record the result on the copy that lives at this medium; the package status
-	// derives from ALL copies, so a single bad medium never marks the package
-	// FAILED while another copy or the staged payload is intact.
 	note := "media verify"
-	if !ok {
+	switch {
+	case sideErr != nil:
+		note = "media verify: " + sideErr.Error()
+	case !ok:
 		note = "media verify: hash mismatch medium=" + rb
 	}
-	a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: ok, Path: enc, Note: note})
-	a.Store.UpdateCopyVerify(c, base, ok)
+	if credited == 0 {
+		note += " · no recorded copy at " + filepath.Dir(enc) + " (or the drive could not be told apart), so no copy was credited"
+	}
+	a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: ok, Path: enc, Note: note, Advisory: credited == 0})
 	a.refreshChunkStatus(c)
 	a.Store.UpdateChunk(c)
 	return map[string]any{"chunk": c.Name, "path": enc, "verify_ok": ok, "expected": c.EncHash, "actual": rb,
-		"status": c.Status, "verified_copies": c.VerifiedCopyCount()}, nil
+		"credited": credited, "status": c.Status, "verified_copies": c.VerifiedCopyCount()}, nil
 }
 
 // VerifyCampaign scans dest_dir for chunk folders/payloads whose names match
@@ -614,16 +646,18 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 			continue
 		}
 		for _, cp := range c.Copies {
-			if !cp.Superseded && pathRelated(cp.Path, destDir) {
+			// A mirror's copy is recorded at the mount it was written to.
+			if !cp.Superseded && normPath(cp.Path) == normPath(destDir) {
 				mirrorTargets = append(mirrorTargets, c)
 				break
 			}
 		}
 	}
+	serial := driveSerialAt(destDir) // which drive is being read, when it can be found
 	if len(cands) == 0 && len(mirrorTargets) == 0 {
 		return nil, fmt.Errorf("no cataloged packages or mirrors found on %s (looked for NAME/<payload>, NAME.tar[.gpg], or a mirror rooted here)", destDir)
 	}
-	var okCount int
+	var okCount, passed int // credited to a copy; read correctly (credited or not)
 	results := make([]map[string]any, 0, len(cands))
 	for i, cd := range cands {
 		progress(float64(i)/float64(len(cands)+len(mirrorTargets)), "verify "+cd.c.Name)
@@ -635,16 +669,25 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 			note = "campaign: " + herr.Error()
 		} else if !ok {
 			note = "campaign: hash mismatch"
+		} else if serr := checkSidecarsAt(cd.c, filepath.Dir(cd.path)); serr != nil {
+			ok, note = false, "campaign: "+serr.Error()
 		}
 		now := time.Now().UTC()
+		// Copy-level result, on the copy recorded where this payload was read and
+		// only there; package status derives from all copies (a bad medium on this
+		// campaign does not fail a package with other verified copies).
+		credited := a.Store.CreditCopyCheck(cd.c, CopyAt{Path: filepath.Dir(cd.path), Serial: serial}, ok, VerifyB)
 		if ok {
+			passed++
+		}
+		if ok && credited > 0 {
 			cd.c.VerifiedAt = &now
 			okCount++
 		}
-		// Copy-level result; package status derives from all copies (a bad medium
-		// on this campaign does not fail a package with other verified copies).
-		a.Store.AppendVerifyEvent(cd.c, VerifyEvent{At: now, OK: ok, Path: cd.path, Note: note, Level: VerifyB})
-		a.Store.UpdateCopyVerify(cd.c, destDir, ok)
+		if credited == 0 {
+			note += " · no recorded copy here, so no copy was credited"
+		}
+		a.Store.AppendVerifyEvent(cd.c, VerifyEvent{At: now, OK: ok, Path: cd.path, Note: note, Level: VerifyB, Advisory: credited == 0})
 		a.refreshChunkStatus(cd.c)
 		a.Store.UpdateChunk(cd.c)
 		results = append(results, map[string]any{"chunk": cd.c.Name, "ok": ok, "path": cd.path, "level": VerifyB,
@@ -660,17 +703,23 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 		if !ok {
 			note += " · first bad: " + firstBad
 		}
-		a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: ok, Path: destDir, Note: note, Level: level, Advisory: !levelSatisfiesComplete(level)})
-		a.Store.UpdateCopyVerifyLevel(c, destDir, ok, level)
+		credited := a.Store.CreditCopyCheck(c, CopyAt{Path: destDir, Serial: serial}, ok, level)
+		if credited == 0 {
+			note += " · the drive could not be told apart from another with a copy here, so no copy was credited"
+		}
+		a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: ok, Path: destDir, Note: note, Level: level, Advisory: !levelSatisfiesComplete(level) || credited == 0})
 		if level == VerifyB {
-			if ok {
+			if ok && credited > 0 {
 				c.VerifiedAt = &now
 			}
 			a.refreshChunkStatus(c)
 			a.Store.UpdateChunk(c)
 		}
 		if ok {
-			okCount++
+			passed++
+		}
+		if ok && credited > 0 && levelSatisfiesComplete(level) {
+			okCount++ // an advisory (A/C) check verifies nothing
 		}
 		mirrorResults = append(mirrorResults, map[string]any{"chunk": c.Name, "ok": ok, "level": level,
 			"checked": checked, "bad": bad, "advisory": !levelSatisfiesComplete(level)})
@@ -681,7 +730,7 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 	total := len(cands) + len(mirrorTargets)
 	progress(1.0, fmt.Sprintf("verified %d/%d ok", okCount, total))
 	a.Store.Log("verify-campaign", fmt.Sprintf("%s: %d/%d ok (mirror level %s)", destDir, okCount, total, level))
-	return map[string]any{"dest_dir": destDir, "checked": total, "ok": okCount, "level": level,
+	return map[string]any{"dest_dir": destDir, "checked": total, "ok": okCount, "passed": passed, "level": level,
 		"results": results, "mirror_results": mirrorResults}, nil
 }
 
@@ -901,3 +950,16 @@ func copyFile(src, dst string) error {
 	}
 	return err
 }
+
+// driveSerialAt is the serial of the drive holding path, or "" when it cannot
+// be found. A variable so tests need not probe disks.
+var driveSerialAt = func(path string) string {
+	if id, err := resolveDeviceIdentity(path); err == nil {
+		return id.Serial
+	}
+	return ""
+}
+
+// destFree is the free space at a write's destination. A variable so a test can
+// make a medium full.
+var destFree = diskFree

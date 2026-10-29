@@ -198,6 +198,11 @@ func (a *App) VerifyMirrorVolume(volumeID int, mount, level string, progress fun
 		if !c.Mirror {
 			continue
 		}
+		// A record of one adopted folder is read at its folder, never at an
+		// overriding mount (that is the drive's, or another folder's).
+		if strings.TrimSpace(mount) != "" && c.MirrorRoot != "" {
+			continue
+		}
 		for _, cp := range c.Copies {
 			if cp.VolumeID == volumeID && !cp.Superseded {
 				base := strings.TrimSpace(mount)
@@ -211,6 +216,15 @@ func (a *App) VerifyMirrorVolume(volumeID int, mount, level string, progress fun
 	}
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("no mirror packages with a current copy on %s", vol.Label)
+	}
+	// The check is credited to this volume's copies only; a drive read at an
+	// overriding mount must not be known to be another drive.
+	liveSerial := ""
+	if m := strings.TrimSpace(mount); m != "" {
+		liveSerial = driveSerialAt(m)
+		if liveSerial != "" && vol.Serial != "" && !strings.EqualFold(liveSerial, vol.Serial) {
+			return nil, fmt.Errorf("the drive at %s is not %s (serial %s, recorded %s)", m, vol.Label, liveSerial, vol.Serial)
+		}
 	}
 	results := make([]map[string]any, 0, len(targets))
 	okAll := true
@@ -228,7 +242,7 @@ func (a *App) VerifyMirrorVolume(volumeID int, mount, level string, progress fun
 			note += " · first bad: " + firstBad
 		}
 		a.Store.AppendVerifyEvent(t.c, VerifyEvent{At: now, OK: ok, Path: t.base, Note: note, Level: level, Advisory: !levelSatisfiesComplete(level)})
-		a.Store.UpdateCopyVerifyLevel(t.c, t.base, ok, level)
+		a.Store.CreditCopyCheck(t.c, CopyAt{VolumeID: volumeID, Serial: liveSerial}, ok, level)
 		if level == VerifyB {
 			if ok {
 				t.c.VerifiedAt = &now

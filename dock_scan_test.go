@@ -20,9 +20,14 @@ func unknownRefsOn(app *App, archiveID, volID int) []string {
 	return mirrorPathsOn(app, archiveID, volID, true)
 }
 
+// mirrorPathsOn gathers the paths from every mirror record of the archive on
+// the volume (the whole drive's and each adopted folder's).
 func mirrorPathsOn(app *App, archiveID, volID int, unknown bool) []string {
 	var out []string
-	if c := app.mirrorChunkOn(archiveID, volID); c != nil {
+	for _, c := range app.Store.Chunks(archiveID) {
+		if !c.Mirror || copyOn(c, volID) == nil {
+			continue
+		}
 		refs := c.Files
 		if unknown {
 			refs = c.UnknownFiles

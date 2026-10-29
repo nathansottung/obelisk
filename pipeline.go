@@ -1024,9 +1024,19 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 		return err
 	}
 	work := filepath.Join(cfg.StagingDir, c.Name)
+	// A build starts from an empty folder: nothing from an earlier build (its
+	// payload, par2 volumes, manifest, RESTORE.txt) can be shipped beside this
+	// one's. Until this build succeeds the package records no staged folder.
+	if rel, err := filepath.Rel(cfg.StagingDir, work); err != nil || rel != filepath.Base(work) || rel == "." || rel == ".." {
+		return fmt.Errorf("package name %q does not make a folder inside staging", c.Name)
+	}
+	if err := os.RemoveAll(work); err != nil {
+		return fmt.Errorf("clearing the earlier build of %s from staging: %w", c.Name, err)
+	}
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return err
 	}
+	c.StagedDir, c.Sidecars = "", nil
 	// Pre-flight against this ONE package's build peak (shared with /api/space-advice
 	// so the pre-build advice and this refusal never disagree).
 	if free, err := diskFree(cfg.StagingDir); err == nil {
@@ -1044,7 +1054,11 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	// signals, not durability guarantees, and losing one doesn't misrepresent the
 	// medium. Only the terminal STAGED write is gated below.
 	_ = setStatus("BUILDING", "")
-	fail := func(err error) error { _ = setStatus("FAILED", err.Error()); return err }
+	fail := func(err error) error {
+		c.StagedDir, c.Sidecars = "", nil // nothing of a failed build is written
+		_ = setStatus("FAILED", err.Error())
+		return err
+	}
 
 	// NUL-delimited, not newline: a newline is a legal character in a POSIX filename,
 	// so a newline-delimited list splits such a name into two paths that do not exist
@@ -1239,7 +1253,20 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 			return fail(fmt.Errorf("encrypting private manifest: %w", err))
 		}
 	}
-	writeRestoreTxt(work, c, cfg.eccIntended())
+	if err := writeRestoreTxt(work, c, cfg.eccIntended()); err != nil {
+		return fail(fmt.Errorf("writing RESTORE.txt: %w", err))
+	}
+	// Record the sidecars the medium must carry, so a write can require them in
+	// staging unchanged and a verify can read them back.
+	sidecars := map[string]string{}
+	for _, name := range requiredSidecars(c) {
+		h, err := hashFileHex(filepath.Join(work, name))
+		if err != nil {
+			return fail(fmt.Errorf("sidecar %s: %w", name, err))
+		}
+		sidecars[name] = h
+	}
+	c.Sidecars = sidecars
 	// BagIt tag files beside the package (institutional legibility). These are a
 	// description layer, not needed to restore — so a write failure does NOT fail the
 	// build, but it must not be swallowed: log it and record it on the package so the
@@ -1420,14 +1447,61 @@ func segJoinList(c *Chunk) string {
 	return strings.Join(parts, "+")
 }
 
-func writeRestoreTxt(dir string, c *Chunk, opticalEcc bool) {
+// requiredSidecars are the sidecars every medium copy carries: the manifest it
+// ships (the encrypted one on private media) and RESTORE.txt.
+func requiredSidecars(c *Chunk) []string {
+	manifest := c.Name + ".manifest.json"
+	if c.PrivateManifest {
+		manifest += ".gpg"
+	}
+	return []string{manifest, "RESTORE.txt"}
+}
+
+// checkStagedSidecars requires each of c's sidecars in its staged folder, and
+// unchanged since the build when its hash was recorded.
+func checkStagedSidecars(c *Chunk) error {
+	for _, name := range requiredSidecars(c) {
+		h, err := hashFileHex(filepath.Join(c.StagedDir, name))
+		if err != nil {
+			return fmt.Errorf("staged sidecar %s of %s is missing (%v); rebuild the package", name, c.Name, err)
+		}
+		if want, ok := c.Sidecars[name]; ok && h != want {
+			return fmt.Errorf("staged sidecar %s of %s changed since the build; rebuild the package", name, c.Name)
+		}
+	}
+	return nil
+}
+
+// checkSidecarsAt reads back c's recorded sidecars beside a payload read from
+// dir on a medium. It checks only packages whose sidecar hashes were recorded,
+// and only in a folder of the package's own name, where RESTORE.txt is its own.
+func checkSidecarsAt(c *Chunk, dir string) error {
+	if len(c.Sidecars) == 0 || filepath.Base(dir) != c.Name {
+		return nil
+	}
+	for _, name := range requiredSidecars(c) {
+		want, ok := c.Sidecars[name]
+		if !ok {
+			continue
+		}
+		h, err := hashFileHex(filepath.Join(dir, name))
+		if err != nil {
+			return fmt.Errorf("sidecar %s is missing on the medium", name)
+		}
+		if h != want {
+			return fmt.Errorf("sidecar %s on the medium does not match the build", name)
+		}
+	}
+	return nil
+}
+
+func writeRestoreTxt(dir string, c *Chunk, opticalEcc bool) error {
 	var t string
 	if c.Spanned {
 		t = spannedRestoreTxt(c)
 		t = appendPrivacyNote(t, c)
 		t = appendOpticalNote(t, c, opticalEcc)
-		_ = os.WriteFile(filepath.Join(dir, "RESTORE.txt"), []byte(t), 0o644)
-		return
+		return os.WriteFile(filepath.Join(dir, "RESTORE.txt"), []byte(t), 0o644)
 	}
 	if c.Encrypted {
 		pl := payloadName(c) // <name>.tar.gpg
@@ -1480,7 +1554,7 @@ No compression anywhere — extracted bytes are the originals.
 	}
 	t = appendPrivacyNote(t, c)
 	t = appendOpticalNote(t, c, opticalEcc)
-	_ = os.WriteFile(filepath.Join(dir, "RESTORE.txt"), []byte(t), 0o644)
+	return os.WriteFile(filepath.Join(dir, "RESTORE.txt"), []byte(t), 0o644)
 }
 
 // appendOpticalNote adds the optional dvdisaster-ECC paragraph for optical

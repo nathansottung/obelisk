@@ -4,6 +4,7 @@ package main
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -86,5 +87,27 @@ func TestAutoExport_DoneForThePeriodTouchesNothing(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Error("a run with this period's backup present waited on the drive")
+	}
+}
+
+// A re-write that the destination's free space refuses changes nothing: the
+// copy it would replace stays current.
+func TestRewriteCopy_NoRoomLeavesTheCopyCurrent(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	c := builtTestChunk(t, app, "REWRITE-ROOM")
+	medium := t.TempDir()
+	vol := app.Store.AddVolume(Volume{Label: "HDD-03", Kind: "HDD"})
+	if _, err := app.WriteChunk(c.ID, medium, 0, 0, 0, vol.ID, noProg); err != nil {
+		t.Fatal(err)
+	}
+	orig := destFree
+	destFree = func(string) (int64, error) { return 1, nil }
+	_, err := app.RewriteCopy(c.ID, vol.ID, 0, 0, 0, noProg)
+	destFree = orig
+	if err == nil || !strings.Contains(err.Error(), "too small") {
+		t.Fatalf("a re-write onto a full medium: %v, want a refusal", err)
+	}
+	if cp := copyOn(app.Store.Chunk(c.ID), vol.ID); cp == nil {
+		t.Error("a refused re-write left the volume with no current copy")
 	}
 }

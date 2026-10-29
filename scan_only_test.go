@@ -69,7 +69,7 @@ func TestAdoptFolder_UnreadableReadoptChangesNothing(t *testing.T) {
 	if _, err := app.AdoptFolder(dir, arch.ID, vol.ID, nil); err != nil {
 		t.Fatal(err)
 	}
-	c := app.mirrorChunkOn(arch.ID, vol.ID)
+	c := app.mirrorChunkAt(arch.ID, vol.ID, dir)
 	events := len(c.VerifyEvents)
 
 	makeUnlistable(t, filepath.Join(dir, "locked"))
@@ -84,15 +84,15 @@ func TestAdoptFolder_UnreadableReadoptChangesNothing(t *testing.T) {
 	if _, err := app.AdoptFolder(dir, arch.ID, vol.ID, nil); err == nil {
 		t.Error("a re-adopt that could read no file ran")
 	}
-	c = app.mirrorChunkOn(arch.ID, vol.ID)
+	c = app.mirrorChunkAt(arch.ID, vol.ID, dir)
 	if len(c.Files) != 1 {
 		t.Errorf("a refused re-adopt changed the copy: %d files", len(c.Files))
 	}
 	_ = events
 }
 
-// A dock after a folder adopt keeps what it cannot read as unknown: the folder's
-// scan is not mistaken for the drive's snapshot.
+// A dock after a folder adopt drops nothing it could not read: the folder keeps
+// its own record, and the folder's scan is not mistaken for the drive's snapshot.
 func TestDock_AfterFolderAdoptUnreadIsUnknown(t *testing.T) {
 	app := dockApp(t)
 	arch := app.Store.AddCollectionKind("Loose", ArchiveSourceless)
@@ -115,7 +115,9 @@ func TestDock_AfterFolderAdoptUnreadIsUnknown(t *testing.T) {
 	if _, err := app.IngestDrive(ds.ID, drive, "SER-D", "D", "", "", false, noProg); err != nil {
 		t.Fatal(err)
 	}
-	if unk := unknownRefsOn(app, arch.ID, vol.ID); len(unk) != 1 {
-		t.Errorf("after a folder adopt, a dock that cannot read the folder: unknown %v, want a.jpg unknown", unk)
+	// The folder's own record keeps a.jpg; the dock's record of the drive, which
+	// could not read the folder, adds nothing and drops nothing.
+	if got := mirrorRefsOn(app, arch.ID, vol.ID); len(got) != 1 || got[0] != "a.jpg" {
+		t.Errorf("after a folder adopt, a dock that cannot read the folder: records %v, want a.jpg kept", got)
 	}
 }

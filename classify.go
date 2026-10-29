@@ -252,3 +252,27 @@ func Classify(ref, other ClassSide, rules PathRules) Classification {
 	}
 	return Classification{Results: out, Counts: counts}
 }
+
+// strictPathRules decide whether two files would land at the same place on a
+// destination: letter case and Unicode form are ignored whatever this platform
+// does, since a drive may be read later where they are.
+var strictPathRules = PathRules{FoldCase: true, Normalize: true}
+
+// collidingPaths returns the indexes of paths that share their place with
+// another (by strictPathRules), so that none of them is written or credited.
+func collidingPaths(paths []string) map[int]bool {
+	byKey := map[string][]int{}
+	for i, p := range paths {
+		k := strictPathRules.key(p)
+		byKey[k] = append(byKey[k], i)
+	}
+	out := map[int]bool{}
+	for _, idx := range byKey {
+		if len(idx) > 1 {
+			for _, i := range idx {
+				out[i] = true
+			}
+		}
+	}
+	return out
+}

@@ -228,7 +228,14 @@ type Chunk struct {
 	// UnknownFiles (mirror packages): archive files an earlier dock scan found on
 	// this drive that a later, partial scan could not read. Not counted as copies
 	// or verified until a scan reads them again.
-	UnknownFiles   []ChunkFileRef     `json:"unknown_files,omitempty"`
+	UnknownFiles []ChunkFileRef `json:"unknown_files,omitempty"`
+	// Sidecars: the SHA-256 of each sidecar the medium must carry (the manifest it
+	// ships and RESTORE.txt), recorded when the package is built. A write needs
+	// them in staging unchanged; a verify reads them back from the medium.
+	Sidecars map[string]string `json:"sidecars,omitempty"`
+	// MirrorRoot is the folder a mirror record covers when it is one adopted
+	// folder on the drive (as adopted); empty for the whole drive or destination.
+	MirrorRoot     string             `json:"mirror_root,omitempty"`
 	BuildTimings   map[string]float64 `json:"build_timings,omitempty"`   // per-stage seconds: tar, hash, stage_verify, encrypt/stage, crypt_verify, par2
 	BuildVerified  *BuildVerified     `json:"build_verified,omitempty"`  // build-time proof the payload faithfully contains the source
 	VerifyEvents   []VerifyEvent      `json:"verify_events,omitempty"`   // append-only integrity-check log
@@ -1170,6 +1177,9 @@ type Store struct {
 	dirty         bool
 	lastSave      time.Time
 	batchInterval time.Duration
+	// saveGen counts saves asked for, so a job can tell whether it changed the
+	// catalog (see SaveGen and ChangedSince).
+	saveGen uint64
 	// failSave is a test-only fault-injection seam: nil in production. When set, it is
 	// consulted at the top of writeCatalog so a test can simulate a disk-write failure
 	// and prove persistence errors propagate instead of being silently dropped.
@@ -1462,8 +1472,12 @@ func (s *Store) backupBeforeMigrate(raw []byte, from int) {
 // per write, O(n·writes) total). EndBatch forces the final write. Callers hold
 // s.mu. Crash-safety is preserved: see BeginBatch.
 func (s *Store) save() error {
+	// The catalog has an unsaved change until a write succeeds (writeCatalog
+	// clears this), so a failed or put-off save is still known about at the end
+	// of a job (see FlushPending).
+	s.dirty = true
+	s.saveGen++
 	if s.batchDepth > 0 {
-		s.dirty = true
 		iv := s.batchInterval
 		if iv <= 0 {
 			iv = 3 * time.Second
@@ -1563,6 +1577,34 @@ func (s *Store) BeginBatch() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.batchDepth++
+}
+
+// SaveGen is the count of saves asked for so far.
+func (s *Store) SaveGen() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveGen
+}
+
+// ChangedSince reports whether a save was asked for after gen and the catalog
+// still holds a change that is not on disk.
+func (s *Store) ChangedSince(gen uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveGen > gen && s.dirty
+}
+
+// FlushPending writes the catalog now if it holds a change that is not on disk
+// yet: a save that failed (and whose error a caller did not see) or one put off
+// while a batch was open. It returns the write's error. A job calls it before it
+// may report success.
+func (s *Store) FlushPending() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.dirty {
+		return nil
+	}
+	return s.writeCatalog()
 }
 
 // EndBatch leaves batched-save mode and forces the final write if anything is
@@ -2057,9 +2099,13 @@ func (s *Store) UpsertFile(f File) *File {
 			}
 			e.FirstSeen = now // the new current version is first seen now
 		}
+		contentChanged := e.Hash != f.Hash
 		e.SizeBytes, e.HashAlg, e.Hash = f.SizeBytes, f.HashAlg, f.Hash
-		if f.Blake3 != "" {
+		switch {
+		case f.Blake3 != "":
 			e.Blake3 = f.Blake3
+		case contentChanged:
+			e.Blake3 = "" // the old BLAKE3 is of the old content: never left to match it
 		}
 		if !f.ModTime.IsZero() {
 			e.ModTime = f.ModTime
@@ -3301,48 +3347,82 @@ func (s *Store) RecordCopy(c *Chunk, volumeID int, path string, verifiedOK bool)
 	_ = s.save()
 }
 
-// UpdateCopyVerify records a LEVEL-B verify result on the current copy matching
-// path (back-compat: all existing callers are full-content checks).
-func (s *Store) UpdateCopyVerify(c *Chunk, path string, ok bool) {
-	s.UpdateCopyVerifyLevel(c, path, ok, "B")
+// CopyAt says which copy a check read: the folder it read (Path; empty means
+// any folder, for a check addressed to one volume), the volume when the caller
+// knows it (0 when not), and the serial of the drive actually read when it could
+// be found ("" when not).
+type CopyAt struct {
+	Path     string
+	VolumeID int
+	Serial   string
 }
 
-// UpdateCopyVerifyLevel refreshes a copy's verify state at the given level. Level
-// B updates last_verified_at/verify_ok (the qualifying, verify-due-refreshing
-// bar); levels A and C only update the advisory last_check_* fields, so they can
-// never satisfy COMPLETE or reset the verify-due clock.
-func (s *Store) UpdateCopyVerifyLevel(c *Chunk, path string, ok bool, level string) {
+// CreditCopyCheck records a check's result on the copy it read, and only that
+// copy: a current copy recorded at exactly that folder (by normPath), on that
+// volume when one is given, and not on a drive whose recorded serial differs
+// from the one read. When copies on more than one volume still fit, the check
+// cannot say which drive it read, and none is credited. Level B also sets the
+// copy's verified state. It returns how many copies were credited.
+func (s *Store) CreditCopyCheck(c *Chunk, at CopyAt, ok bool, level string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	serialOf := map[int]string{}
+	for _, v := range s.c.Volumes {
+		serialOf[v.ID] = v.Serial
+	}
+	var fit []int
+	vols := map[int]bool{}
+	for i := range c.Copies {
+		cp := c.Copies[i]
+		if cp.Superseded {
+			continue
+		}
+		if at.Path != "" && normPath(cp.Path) != normPath(at.Path) {
+			continue
+		}
+		if at.VolumeID > 0 && cp.VolumeID != at.VolumeID {
+			continue
+		}
+		if vs := serialOf[cp.VolumeID]; at.Serial != "" && vs != "" && !strings.EqualFold(vs, at.Serial) {
+			continue
+		}
+		fit = append(fit, i)
+		vols[cp.VolumeID] = true
+	}
+	// A drive now mounted somewhere else: no copy is recorded at the folder read,
+	// but the drive read is known by its serial to be exactly one volume with a
+	// current copy. That copy is credited, and its path updated to where it was
+	// read.
+	// Only a package copy read in a folder of the package's own name: a disk
+	// serial is shared by every partition of the disk.
+	if len(fit) == 0 && at.Path != "" && at.Serial != "" && !c.Mirror && filepath.Base(at.Path) == c.Name {
+		for i := range c.Copies {
+			cp := c.Copies[i]
+			if cp.Superseded || (at.VolumeID > 0 && cp.VolumeID != at.VolumeID) {
+				continue
+			}
+			if vs := serialOf[cp.VolumeID]; vs != "" && strings.EqualFold(vs, at.Serial) {
+				fit = append(fit, i)
+				vols[cp.VolumeID] = true
+			}
+		}
+		if len(fit) == 1 && len(vols) == 1 {
+			c.Copies[fit[0]].Path = at.Path
+		}
+	}
+	if len(fit) == 0 || len(vols) > 1 {
+		return 0
+	}
 	now := time.Now().UTC()
-	apply := func(i int) {
-		v := ok
-		lvl := level
+	for _, i := range fit {
+		v, lvl := ok, level
 		c.Copies[i].LastCheckAt, c.Copies[i].LastCheckLevel, c.Copies[i].LastCheckOK = &now, lvl, &v
 		if level == "B" {
 			c.Copies[i].LastVerifiedAt, c.Copies[i].VerifyOK = &now, &v
 		}
 	}
-	matched := false
-	current := 0
-	var soleIdx int
-	for i := range c.Copies {
-		if c.Copies[i].Superseded {
-			continue
-		}
-		current++
-		soleIdx = i
-		// base-mount vs chunk-subfolder both match (one contains the other),
-		// tolerant of separator/case differences across platforms.
-		if pathRelated(c.Copies[i].Path, path) {
-			apply(i)
-			matched = true
-		}
-	}
-	if !matched && current == 1 {
-		apply(soleIdx)
-	}
 	_ = s.save()
+	return len(fit)
 }
 
 // SupersedeCopy marks the current (non-superseded) copy of c on volumeID as
