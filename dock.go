@@ -312,21 +312,15 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 		return nil, err
 	}
 
-	// Content indexes from the selected archives. The dock first-pass matches by
-	// BLAKE3 (the fast hot-loop hash) when the catalog has it, falling back to
-	// SHA-256 for files scanned before BLAKE3 was recorded. Both keys point at the
-	// same File, so a drive file need only match on one.
-	currentByHash := map[string][]*File{}   // current source file(s) by SHA-256
-	currentByBlake3 := map[string][]*File{} // ...and by BLAKE3 (fast path)
-	archiveOfFile := map[int]int{}          // fileID -> archiveID
-	histHashes := map[string]bool{}         // previously-packaged versions no longer current
+	// Content index from the selected archives, by SHA-256: the hash every drive
+	// file is read for in full, and the one that counts a copy.
+	currentByHash := map[string][]*File{} // current source file(s) by SHA-256
+	archiveOfFile := map[int]int{}        // fileID -> archiveID
+	histHashes := map[string]bool{}       // previously-packaged versions no longer current
 	for _, aid := range ds.ArchiveIDs {
 		for _, f := range a.Store.FilesOf(aid) {
 			if f.Hash != "" {
 				currentByHash[f.Hash] = append(currentByHash[f.Hash], f)
-			}
-			if f.Blake3 != "" {
-				currentByBlake3[f.Blake3] = append(currentByBlake3[f.Blake3], f)
 			}
 			archiveOfFile[f.ID] = aid
 		}
@@ -356,12 +350,16 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 			progress(0.06+float64(done)/float64(max(total, 1))*0.74, progStats(0, 0, int64(done), int64(total), "hashing drive files"))
 		},
 		func(sf SnapFile) {
-			// BLAKE3 first (fast path), then SHA-256 for legacy catalog entries.
-			fs, ok := currentByBlake3[sf.Blake3]
-			if !ok {
-				fs, ok = currentByHash[sf.Hash]
+			// A drive file is a copy of an archive file only when its full SHA-256
+			// (the hash on media, computed for every file) and its size are the
+			// archive file's: a BLAKE3 alone could be one left from an older version.
+			var fs []*File
+			for _, f := range currentByHash[sf.Hash] {
+				if f.Hash != "" && f.SizeBytes == sf.SizeBytes {
+					fs = append(fs, f)
+				}
 			}
-			if ok {
+			if len(fs) > 0 {
 				for _, f := range fs {
 					aid := archiveOfFile[f.ID]
 					if matchedByArchive[aid] == nil {

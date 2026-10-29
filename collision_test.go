@@ -101,3 +101,43 @@ func TestAdoptFolder_SeparateRecordsPerFolder(t *testing.T) {
 		t.Errorf("coverage %d of 2", cov.CoveredFiles)
 	}
 }
+
+// A dock counts a drive file as a copy only when its full SHA-256 and size are
+// the archive file's. An old version whose BLAKE3 was left on the catalog (a
+// rescan with fast hashing off changed only the SHA-256) is not a copy of the
+// current one, and such a rescan no longer leaves the old BLAKE3 behind.
+func TestDock_CopiesNeedAFullHashMatch(t *testing.T) {
+	app := dockApp(t)
+	src := t.TempDir()
+	writeTree(t, src, map[string]string{"a.jpg": "version one\n"})
+	coll := app.Store.AddCollection("Photos")
+	if _, _, err := app.ScanFolder(coll.ID, src, noProg); err != nil {
+		t.Fatal(err)
+	}
+	f := app.Store.FilesOf(coll.ID)[0]
+	_, oldB3, err := hashFileBoth(filepath.Join(src, "a.jpg"))
+	if err != nil || oldB3 == "" {
+		t.Skipf("SKIP (NOT TESTED): no BLAKE3 here (%v)", err)
+	}
+	// A rescan without fast hashing records the new content's SHA-256 only.
+	v2 := sha256Hex([]byte("version two\n"))
+	app.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: f.FolderID, RelPath: f.RelPath, SizeBytes: 12, HashAlg: "SHA256", Hash: v2})
+	f = app.Store.FilesOf(coll.ID)[0]
+	if f.Blake3 == oldB3 {
+		t.Error("the rescan left the old version's BLAKE3 on the file")
+	}
+	// Even with a stale BLAKE3 left on the catalog, the old version is no copy.
+	f.Blake3 = oldB3
+	drive := t.TempDir()
+	writeTree(t, drive, map[string]string{"a.jpg": "version one\n"})
+	ds, err := app.StartDockSession([]int{coll.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.IngestDrive(ds.ID, drive, "SER-B3", "DB3", "", "", false, noProg); err != nil {
+		t.Fatal(err)
+	}
+	if got := mirrorRefsOn(app, coll.ID, app.Store.VolumeBySerial("SER-B3").ID); len(got) != 0 {
+		t.Errorf("an old version was counted as a copy of the current file: %v", got)
+	}
+}

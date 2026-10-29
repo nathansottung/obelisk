@@ -2080,9 +2080,13 @@ func (s *Store) UpsertFile(f File) *File {
 			}
 			e.FirstSeen = now // the new current version is first seen now
 		}
+		contentChanged := e.Hash != f.Hash
 		e.SizeBytes, e.HashAlg, e.Hash = f.SizeBytes, f.HashAlg, f.Hash
-		if f.Blake3 != "" {
+		switch {
+		case f.Blake3 != "":
 			e.Blake3 = f.Blake3
+		case contentChanged:
+			e.Blake3 = "" // the old BLAKE3 is of the old content: never left to match it
 		}
 		if !f.ModTime.IsZero() {
 			e.ModTime = f.ModTime
