@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Each drive scan is its own record (ID, time, drive, complete or not) whose
@@ -79,9 +80,15 @@ func TestScanHistory_RecordsEachScanWithRetention(t *testing.T) {
 	}
 }
 
-// A scan whose record cannot be saved fails the ingest, and changes nothing.
+// A scan whose file list or record cannot be saved fails the ingest, and leaves
+// the drive's scan records, snapshot and earlier file lists as they were. The
+// record is written to disk, not just kept for a later save, before an older
+// file list is removed.
 func TestScanHistory_FailedSaveFailsTheIngest(t *testing.T) {
 	app := dockApp(t)
+	if _, err := app.SaveConfig(map[string]any{"scan_history_retained": 1}); err != nil {
+		t.Fatal(err)
+	}
 	coll := app.Store.AddCollection("Photos")
 	drive := t.TempDir()
 	writeTree(t, drive, map[string]string{"a.txt": "alpha\n"})
@@ -94,17 +101,35 @@ func TestScanHistory_FailedSaveFailsTheIngest(t *testing.T) {
 	if _, err := app.IngestDrive(ds.ID, drive, "SER-F", "DF", "", "", false, noProg); err == nil {
 		t.Error("an ingest whose file list could not be saved succeeded")
 	}
-	if v := app.Store.VolumeBySerial("SER-F"); v != nil && app.Store.VolumeSnapshot(v.ID) != nil {
-		t.Error("a failed ingest stored a snapshot")
+	vol := app.Store.VolumeBySerial("SER-F")
+	if app.Store.VolumeSnapshot(vol.ID) != nil || len(app.Store.ScanRecords(vol.ID)) != 0 {
+		t.Error("a failed ingest stored a snapshot or a scan record")
 	}
 	if err := os.Remove(filepath.Join(app.DataDir, "scans")); err != nil {
 		t.Fatal(err)
 	}
-	// The catalog itself cannot be written.
+
+	// One good scan, then the catalog cannot be written.
+	if _, err := app.IngestDrive(ds.ID, drive, "SER-F", "DF", "", "", false, noProg); err != nil {
+		t.Fatal(err)
+	}
+	first := app.Store.ScanRecords(vol.ID)
+	snapAt := app.Store.VolumeSnapshot(vol.ID).CapturedAt
 	app.Store.failSave = func() error { return errors.New("disk full") }
-	defer func() { app.Store.failSave = nil }()
-	if _, err := app.IngestDrive(ds.ID, drive, "SER-F", "DF", "", "", false, noProg); err == nil {
-		t.Error("an ingest whose catalog save failed succeeded")
+	_, err = app.IngestDrive(ds.ID, drive, "SER-F", "DF", "", "", false, noProg)
+	app.Store.failSave = nil
+	if err == nil || !strings.Contains(err.Error(), "saving the scan record") {
+		t.Errorf("an ingest whose scan record could not be saved: %v, want that failure named", err)
+	}
+	recs := app.Store.ScanRecords(vol.ID)
+	if len(recs) != 1 || recs[0].ID != first[0].ID {
+		t.Errorf("scan records after a failed save: %+v, want only the first scan", recs)
+	}
+	if _, err := app.LoadScanFiles(recs[0]); err != nil {
+		t.Errorf("the kept scan's file list was removed: %v", err)
+	}
+	if !app.Store.VolumeSnapshot(vol.ID).CapturedAt.Equal(snapAt) {
+		t.Error("a failed ingest replaced the snapshot")
 	}
 }
 
@@ -114,4 +139,41 @@ func mkdirFor(t *testing.T, dir string) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+// File lists no record points at (left by a crash, or by an older catalog) are
+// removed once they are an hour old; a fresh one is left for the scan writing it.
+func TestScanHistory_SweepsOrphanedFileLists(t *testing.T) {
+	app := dockApp(t)
+	coll := app.Store.AddCollection("Photos")
+	drive := t.TempDir()
+	writeTree(t, drive, map[string]string{"a.txt": "alpha\n"})
+	dir := mkdirFor(t, filepath.Join(app.DataDir, "scans"))
+	old := filepath.Join(dir, "scan-v9-20200101T000000Z-aaaaaaaaaaaa.json.gz")
+	fresh := filepath.Join(dir, "scan-v9-20200101T000000Z-bbbbbbbbbbbb.json.gz")
+	other := filepath.Join(dir, "notes.txt")
+	for _, p := range []string{old, fresh, other} {
+		mustWrite(t, p, "x")
+	}
+	long := time.Now().Add(-2 * time.Hour)
+	for _, p := range []string{old, other} {
+		if err := os.Chtimes(p, long, long); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ds, err := app.StartDockSession([]int{coll.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.IngestDrive(ds.ID, drive, "SER-S", "DS", "", "", false, noProg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(old); err == nil {
+		t.Error("an hour-old orphaned file list was kept")
+	}
+	for _, p := range []string{fresh, other} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s was removed: %v", filepath.Base(p), err)
+		}
+	}
 }

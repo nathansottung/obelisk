@@ -2787,11 +2787,15 @@ func (s *Store) PutVolumeSnapshot(snap *VolumeSnapshot) error {
 }
 
 // AddScanRecord records a drive scan, giving it its ID, and drops the oldest
-// records of that drive beyond keep. It returns the dropped records (whose file
-// lists the caller removes) and the save's error.
+// records of that drive beyond keep. The catalog is written to disk at once, even
+// inside a batch, so the caller may remove the dropped records' file lists only
+// after this returns them. If the write fails, the record is not added, nothing is
+// dropped, and the error is returned.
 func (s *Store) AddScanRecord(rec *ScanRecord, keep int) ([]*ScanRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	prevScans := append([]*ScanRecord(nil), s.c.Scans...)
+	prevID := s.c.NextID["scan"]
 	rec.ID = s.next("scan")
 	s.c.Scans = append(s.c.Scans, rec)
 	n := 0
@@ -2811,7 +2815,22 @@ func (s *Store) AddScanRecord(rec *ScanRecord, keep int) ([]*ScanRecord, error) 
 		kept = append(kept, r)
 	}
 	s.c.Scans = kept
-	return dropped, s.save()
+	if err := s.writeCatalog(); err != nil {
+		s.c.Scans, s.c.NextID["scan"] = prevScans, prevID
+		return nil, err
+	}
+	return dropped, nil
+}
+
+// ScanFileListsInUse is the set of file-list names the scan records point at.
+func (s *Store) ScanFileListsInUse() map[string]bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]bool, len(s.c.Scans))
+	for _, r := range s.c.Scans {
+		out[r.FileList] = true
+	}
+	return out
 }
 
 // ScanRecords returns copies of a drive's scan records, newest first.

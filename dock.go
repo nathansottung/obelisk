@@ -439,8 +439,9 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 	unreadable := len(paths) - int(hashed)
 
 	snap := a.buildSnapshot(ds, vol, health, snapFiles, unreadable, gaps)
-	// The scan's own record and file list are saved before anything else changes,
-	// so a scan that cannot be recorded fails the ingest and changes nothing.
+	// The scan's own record and file list are saved before the snapshot and the
+	// mirror records change, so a scan that cannot be recorded fails the ingest and
+	// leaves those as they were.
 	if _, err := a.recordScan(snap, cfg.ScanHistoryRetained); err != nil {
 		return nil, err
 	}

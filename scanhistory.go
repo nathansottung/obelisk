@@ -109,15 +109,39 @@ func (a *App) recordScan(snap *VolumeSnapshot, keep int) (*ScanRecord, error) {
 		UnreadableFolders: len(snap.UnreadableFolders), UnreadableFiles: len(snap.UnreadableFiles),
 		SkippedFolders: len(snap.SkippedFolders), FileList: name, FileListSHA256: sha256Hex(buf.Bytes())}
 	dropped, err := a.Store.AddScanRecord(rec, keep)
+	if err != nil {
+		_ = os.Remove(final) // no record points at it
+		return nil, fmt.Errorf("saving the scan record: %w", err)
+	}
+	// The record is on disk; the dropped scans' file lists can go.
 	for _, d := range dropped {
 		if validScanFileName(d.FileList) {
 			_ = os.Remove(filepath.Join(dir, d.FileList))
 		}
 	}
-	if err != nil {
-		return nil, fmt.Errorf("saving the scan record: %w", err)
-	}
+	a.sweepScanFiles(dir)
 	return rec, nil
+}
+
+// sweepScanFiles removes file lists in the scans folder that no record points
+// at (left by a crash, or by a catalog restored from an older backup). Only
+// files older than an hour are removed, so a scan being recorded at the same
+// moment keeps its file.
+func (a *App) sweepScanFiles(dir string) {
+	inUse := a.Store.ScanFileListsInUse()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !e.Type().IsRegular() || !validScanFileName(name) || inUse[name] {
+			continue
+		}
+		if fi, err := e.Info(); err == nil && time.Since(fi.ModTime()) > time.Hour {
+			_ = os.Remove(filepath.Join(dir, name))
+		}
+	}
 }
 
 // LoadScanFiles reads a scan's file list, checking it against its recorded
