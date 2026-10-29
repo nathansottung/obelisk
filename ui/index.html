@@ -2139,7 +2139,7 @@ function bagExportDlg(id,name){dlg(`<h1>Export a BagIt bag — “${esc(name)}�
   <input id="d1" class="full" placeholder="D:\\exports or /mnt/handoff">${browseBtn('d1')}
   <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Export bag</button></div>`,
   async()=>{const p=$('#d1').value.trim();if(!p)return;
-    if(!(await destGate(p)))return;
+    if(!(await destGate(p)))throw new Error('Nothing exported: choose what to do about '+p+' first');
     await api('POST',`/api/collections/${id}/bagit-export`,{output_dir:p});toast('BagIt export started — see Jobs');loc('jobs')});}
 function scanDlg(id,name){dlg(`<h1>Scan into “${esc(name)}”</h1>
   <label>Folder to catalog (walked recursively; every file SHA-256 hashed)</label>
@@ -2236,7 +2236,7 @@ function bagPackageDlg(id,name){dlg(`<h1>Export “${esc(name)}” as a BagIt ba
   <input id="d1" class="full" placeholder="D:\\exports or /mnt/handoff">${browseBtn('d1')}
   <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Export bag</button></div>`,
   async()=>{const p=$('#d1').value.trim();if(!p)return;
-    if(!(await destGate(p)))return;
+    if(!(await destGate(p)))throw new Error('Nothing exported: choose what to do about '+p+' first');
     await api('POST',`/api/chunks/${id}/bagit-export`,{output_dir:p});toast('BagIt export started — see Jobs');loc('jobs')});}
 async function spanWriteDlg(id,name){
   const [c,vols]=await Promise.all([api('GET','/api/chunks/'+id),api('GET','/api/volumes')]);
@@ -2889,7 +2889,7 @@ function recoveryKitDlg(){dlg(`<h1>Export Recovery Kit</h1>
   <input id="d1" class="full" placeholder="E:\\safe or /mnt/vault/recovery">${browseBtn('d1')}
   <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Generate</button></div>`,
   async()=>{const d=$('#d1').value.trim();if(!d)return;
-    if(!(await destGate(d)))return;
+    if(!(await destGate(d)))throw new Error('No kit written: choose what to do about '+d+' first');
     const r=await api('POST','/api/recoverykit',{output_dir:d});
     toast('Recovery Kit generating — see Jobs. '+(r.warning||''),1);loc('jobs');
     // Show-the-artifact rule: when the job finishes, surface the kit itself.
@@ -4028,7 +4028,7 @@ function appBackupDlg(){
     const dest=(($('#abdest')||{}).value||'').trim();if(!dest){toast('Destination folder required',1);throw new Error('dest')}
     const keys=!!($('#abkeys')&&$('#abkeys').checked);
     if(keys&&!confirm('Include your encryption keystores (secrets) in this backup? Anyone with the file could decrypt your archives. Only continue for a backup you will keep private.'))throw new Error('cancelled');
-    if(!(await destGate(dest)))return;
+    if(!(await destGate(dest)))throw new Error('No backup written: choose what to do about '+dest+' first');
     await api('POST','/api/appbackup/export',{dest_dir:dest,include_keys:keys});
     toast('Backup started — see Jobs for the file it writes',1);loc('jobs');
   });
