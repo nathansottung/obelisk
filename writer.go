@@ -296,6 +296,26 @@ func (a *App) refreshChunkStatus(c *Chunk) {
 }
 
 func (a *App) WriteChunk(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string)) (map[string]any, error) {
+	return a.writeChunk(nil, id, destDir, bufferGB, blockMB, throttleMbps, volumeID, progress)
+}
+
+// chunkWritable is the check that a package can be written from staging now.
+func chunkWritable(c *Chunk) error {
+	if c.Spanned {
+		return fmt.Errorf("package %s is spanned; use span-write (one tape at a time)", c.Name)
+	}
+	if c.StagedDir == "" || (c.Status != "STAGED" && c.Status != "WRITTEN" && c.Status != "VERIFIED" && c.Status != "FAILED") {
+		return fmt.Errorf("package %s is %s; build it first", c.Name, c.Status)
+	}
+	if payloadPathIn(c.StagedDir, c) == "" {
+		return fmt.Errorf("staged payload missing under %s", c.StagedDir)
+	}
+	return nil
+}
+
+// writeChunk is WriteChunk into out when the caller already holds the output
+// folder for destDir (a re-write), or into destDir opened here when out is nil.
+func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string)) (map[string]any, error) {
 	cfg, cfgErr := a.LoadConfig()
 	if cfgErr != nil {
 		return nil, cfgErr
@@ -313,23 +333,19 @@ func (a *App) WriteChunk(id int, destDir string, bufferGB float64, blockMB int, 
 	if c == nil {
 		return nil, fmt.Errorf("package %d not found", id)
 	}
-	if c.Spanned {
-		return nil, fmt.Errorf("package %s is spanned; use span-write (one tape at a time)", c.Name)
-	}
-	if c.StagedDir == "" || (c.Status != "STAGED" && c.Status != "WRITTEN" && c.Status != "VERIFIED" && c.Status != "FAILED") {
-		return nil, fmt.Errorf("package %s is %s; build it first", c.Name, c.Status)
-	}
-	enc := payloadPathIn(c.StagedDir, c)
-	if enc == "" {
-		return nil, fmt.Errorf("staged payload missing under %s", c.StagedDir)
-	}
-	// The destination is decided by where it really is, and every file is written
-	// beneath the folder that was decided about (see outfolder.go).
-	out, err := a.openOutFolder(destDir)
-	if err != nil {
+	if err := chunkWritable(c); err != nil {
 		return nil, err
 	}
-	defer out.Close()
+	enc := payloadPathIn(c.StagedDir, c)
+	// The destination is decided by where it really is, and every file is written
+	// beneath the folder that was decided about (see outfolder.go).
+	if out == nil {
+		var err error
+		if out, err = a.openOutFolder(destDir); err != nil {
+			return nil, err
+		}
+		defer out.Close()
+	}
 	// Preserve whatever name the payload was staged under (current <name>.tar /
 	// <name>.tar.gpg, or the legacy .tar.gpg for a plaintext package built before
 	// the rename) so the on-medium payload stays consistent with its sidecars.
@@ -492,14 +508,20 @@ func (a *App) RewriteCopy(id, volumeID int, bufferGB float64, blockMB int, throt
 	if dest == "" {
 		return nil, fmt.Errorf("no current copy of %s on volume %d to re-write", c.Name, volumeID)
 	}
-	// Decide the folder before the old copy is marked superseded, so a refused
-	// re-write changes nothing.
-	if err := a.outFolderReady(filepath.Dir(dest)); err != nil {
+	// Check the package and open the folder (deciding it and taking its lease)
+	// before the old copy is marked superseded, so a re-write that cannot run
+	// changes nothing. WriteChunk rebuilds dest as destDir/<name>, so the copy
+	// folder's parent is opened.
+	if err := chunkWritable(c); err != nil {
 		return nil, err
 	}
+	out, err := a.openOutFolder(filepath.Dir(dest))
+	if err != nil {
+		return nil, err
+	}
+	defer out.Close()
 	a.Store.SupersedeCopy(c, volumeID)
-	// WriteChunk rebuilds dest as destDir/<name>, so pass the copy folder's parent.
-	return a.WriteChunk(id, filepath.Dir(dest), bufferGB, blockMB, throttleMbps, volumeID, progress)
+	return a.writeChunk(out, id, filepath.Dir(dest), bufferGB, blockMB, throttleMbps, volumeID, progress)
 }
 
 func (a *App) VerifyChunk(id int, destDir string) (map[string]any, error) {
