@@ -1,15 +1,21 @@
 // CI gate for `go test -json` output on Windows. Passes only when the set of failing
 // top-level tests is exactly the known list below: a new failure fails the gate,
 // and so does a known failure that passed, was skipped or did not run. A package
-// failure with no failing test (build error, crash outside a test) also fails.
+// failure with no failing test (build error, crash outside a test) also fails, and
+// so does a must-pass test that did not pass.
 // Skips are listed; they are not passes.
 //
 // Usage: node scripts/ci/go-known-failures.mjs GO_TEST_JSON_FILE
 import fs from 'node:fs';
 
-// Tar member-name handling with non-ASCII and hostile names under the Windows
-// system tar (bsdtar). Tracked as a known Windows gap; remove entries as it is fixed.
-const known = [
+// No known Windows failures. Add an entry only for a tracked gap, and remove it
+// as it is fixed.
+const known = [];
+
+// Tests that once failed here and must now pass: a skip or a missing run fails
+// the gate too. The Unicode and hostile tar names under Windows, fixed by
+// Obelisk's own tar writer and reader (tarpkg.go).
+const mustPass = [
   'TestBuildChunk_UnicodeFilenames_ExactMembers',
   'TestBuildChunk_UnicodeSourceRoot',
   'TestBuildChunk_UnicodeStagingDir',
@@ -45,10 +51,12 @@ const failingPackagesWithoutTests = [...packages].filter(([p, a]) => a === 'fail
 for (const t of known) console.log(`  KNOWN ${failed.includes(t) ? 'failed as expected' : 'NOT FAILED (' + status(t) + ')'}: ${t}`);
 for (const t of unexpected) console.log('  NEW FAILURE: ' + t);
 for (const p of failingPackagesWithoutTests) console.log('  PACKAGE FAILED WITHOUT A FAILING TEST: ' + p);
+const notPassed = mustPass.filter(t => status(t) !== 'pass');
+for (const t of mustPass) console.log(`  MUST PASS ${status(t) === 'pass' ? 'passed' : 'NOT PASSED (' + status(t) + ')'}: ${t}`);
 if (!events.length) console.log('  NO go test -json EVENTS');
 
-if (unexpected.length || missing.length || failingPackagesWithoutTests.length || !events.length) {
-  console.error(`Gate failed: ${unexpected.length} new failure(s), ${missing.length} known failure(s) did not fail, ${failingPackagesWithoutTests.length} package(s) failed without a failing test.`);
+if (unexpected.length || missing.length || failingPackagesWithoutTests.length || notPassed.length || !events.length) {
+  console.error(`Gate failed: ${unexpected.length} new failure(s), ${missing.length} known failure(s) did not fail, ${notPassed.length} must-pass test(s) did not pass, ${failingPackagesWithoutTests.length} package(s) failed without a failing test.`);
   process.exit(1);
 }
-console.log(`Gate passed: failures are exactly the ${known.length} known Windows failures.`);
+console.log(`Gate passed: failures are exactly the ${known.length} known Windows failures, and the ${mustPass.length} must-pass tests passed.`);
