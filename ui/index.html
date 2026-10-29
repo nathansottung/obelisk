@@ -3278,16 +3278,14 @@ async function dockStart(){
   let h=`${hdr('Inventory drives','plug in a drive, get a complete record of what is on it','dock')}
   <div class="panel"><div class="dim" style="margin-bottom:8px"><b>Read-only, both ways.</b> Obelisk only ever <b>hashes</b> the NAS archive folders to match drive contents, and it never writes to a docked drive either — adopted media stay untouched. The full inventory of each drive is recorded in the <b>catalog snapshot</b>, browsable later with the drive unplugged.</div>
     <h2>Start a session</h2>
-    <div class="dim" style="font-size:12px;margin-bottom:6px">Choose the Archive(s) these drives should be compared against (e.g. both a business and a personal archive that live on the NAS).</div>`;
-  if(!colls.length)h+='<div class="empty">Create an Archive first (Vault → Create archive), then start a dock session.</div>';
-  else{h+=colls.map(c=>`<label class="row" style="gap:8px;align-items:center"><input type="checkbox" class="dka" value="${c.id}" style="width:auto"> <b>${esc(c.name)}</b> <span class="dim">· ${c.files||0} files</span></label>`).join('');
-    h+=`<div class="row" style="margin-top:14px"><button class="btn" onclick="doStartDock()">Start dock session →</button></div>`}
+    <div class="dim" style="font-size:12px;margin-bottom:6px">Choose the Archive(s) these drives should be compared against (e.g. both a business and a personal archive that live on the NAS), or choose none to only scan and record each drive.</div>`;
+  h+=colls.map(c=>`<label class="row" style="gap:8px;align-items:center"><input type="checkbox" class="dka" value="${c.id}" style="width:auto"> <b>${esc(c.name)}</b> <span class="dim">· ${c.files||0} files</span></label>`).join('');
+  h+=`<div class="row" style="margin-top:14px"><button class="btn" onclick="doStartDock()">Start dock session →</button></div>`;
   $('#view').innerHTML=h+'</div>';
 }
 async function doStartDock(){
   const ids=[...document.querySelectorAll('.dka:checked')].map(e=>parseInt(e.value));
-  if(!ids.length){toast('Pick at least one archive',1);return}
-  try{await api('POST','/api/dock/sessions',{archive_ids:ids});toast('Dock session started');vDock()}catch(e){toast(e.message,1)}}
+  try{await api('POST','/api/dock/sessions',{archive_ids:ids});toast(ids.length?'Dock session started':'Scan-only session started: drives are recorded, nothing is matched');vDock()}catch(e){toast(e.message,1)}}
 function covBar(pct){return `<div style="background:var(--line);border-radius:6px;height:10px;overflow:hidden"><div style="width:${Math.max(0,Math.min(100,pct||0))}%;height:100%;background:var(--ok)"></div></div>`}
 function renderDock(d){
   const ds=d.session, cov=d.coverage||{}, banner=dockBanner; dockBanner=null;

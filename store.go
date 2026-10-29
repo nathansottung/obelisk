@@ -518,6 +518,9 @@ type VolumeSnapshot struct {
 	TotalFiles int            `json:"total_files"`
 	TotalBytes int64          `json:"total_bytes"`
 	Unreadable int            `json:"unreadable,omitempty"`
+	// Root is the folder that was scanned when it was not the whole drive (a folder
+	// adopt), as given; empty for a dock scan of the drive.
+	Root string `json:"root,omitempty"`
 	// Scan is "complete" when every folder and file of the drive was read, and
 	// "partial" when any could not be; it is empty on snapshots taken before this
 	// was recorded (completeness unknown). See Known.

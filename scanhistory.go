@@ -27,6 +27,7 @@ type ScanRecord struct {
 	VolumeID          int       `json:"volume_id"`
 	At                time.Time `json:"at"`
 	SessionID         int       `json:"session_id,omitempty"`
+	Root              string    `json:"root,omitempty"` // the folder scanned, when not the whole drive
 	Label             string    `json:"label,omitempty"`
 	Serial            string    `json:"serial,omitempty"`
 	Scan              string    `json:"scan"` // ScanComplete or ScanPartial
@@ -46,6 +47,7 @@ type ScanFileList struct {
 	VolumeID          int        `json:"volume_id"`
 	At                time.Time  `json:"at"`
 	Scan              string     `json:"scan"`
+	Root              string     `json:"root,omitempty"`
 	Files             []SnapFile `json:"files"`
 	UnreadableFolders []ScanGap  `json:"unreadable_folders,omitempty"`
 	UnreadableFiles   []ScanGap  `json:"unreadable_files,omitempty"`
@@ -83,7 +85,7 @@ func (a *App) recordScan(snap *VolumeSnapshot, keep int) (*ScanRecord, error) {
 		keep = defaultScansRetained
 	}
 	list := ScanFileList{Format: scanFileListFormat, Version: 1, VolumeID: snap.VolumeID, At: snap.CapturedAt,
-		Scan: snap.Scan, Files: snap.Files, UnreadableFolders: snap.UnreadableFolders,
+		Scan: snap.Scan, Root: snap.Root, Files: snap.Files, UnreadableFolders: snap.UnreadableFolders,
 		UnreadableFiles: snap.UnreadableFiles, SkippedFolders: snap.SkippedFolders}
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
@@ -112,7 +114,7 @@ func (a *App) recordScan(snap *VolumeSnapshot, keep int) (*ScanRecord, error) {
 		_ = os.Remove(tmp)
 		return nil, fmt.Errorf("saving the scan's file list: %w", err)
 	}
-	rec := &ScanRecord{VolumeID: snap.VolumeID, At: snap.CapturedAt, SessionID: snap.SessionID, Label: snap.Label,
+	rec := &ScanRecord{VolumeID: snap.VolumeID, At: snap.CapturedAt, SessionID: snap.SessionID, Root: snap.Root, Label: snap.Label,
 		Serial: snap.Serial, Scan: snap.Scan, TotalFiles: snap.TotalFiles, TotalBytes: snap.TotalBytes,
 		UnreadableFolders: len(snap.UnreadableFolders), UnreadableFiles: len(snap.UnreadableFiles),
 		SkippedFolders: len(snap.SkippedFolders), FileList: name, FileListSHA256: sha256Hex(buf.Bytes())}
