@@ -718,8 +718,8 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 		if ok {
 			passed++
 		}
-		if ok && credited > 0 {
-			okCount++
+		if ok && credited > 0 && levelSatisfiesComplete(level) {
+			okCount++ // an advisory (A/C) check verifies nothing
 		}
 		mirrorResults = append(mirrorResults, map[string]any{"chunk": c.Name, "ok": ok, "level": level,
 			"checked": checked, "bad": bad, "advisory": !levelSatisfiesComplete(level)})

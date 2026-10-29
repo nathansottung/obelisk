@@ -3393,7 +3393,9 @@ func (s *Store) CreditCopyCheck(c *Chunk, at CopyAt, ok bool, level string) int 
 	// but the drive read is known by its serial to be exactly one volume with a
 	// current copy. That copy is credited, and its path updated to where it was
 	// read.
-	if len(fit) == 0 && at.Path != "" && at.Serial != "" {
+	// Only a package copy read in a folder of the package's own name: a disk
+	// serial is shared by every partition of the disk.
+	if len(fit) == 0 && at.Path != "" && at.Serial != "" && !c.Mirror && filepath.Base(at.Path) == c.Name {
 		for i := range c.Copies {
 			cp := c.Copies[i]
 			if cp.Superseded || (at.VolumeID > 0 && cp.VolumeID != at.VolumeID) {

@@ -3109,6 +3109,7 @@ function jobStamp(j){
   if(st==='INTERRUPTED')return 'INTERRUPTED';
   if(j&&j.unrecorded)return 'UNRECORDED';
   if(st!=='COMPLETED')return 'BUILDING';
+  if(j.result&&j.result.catalog_not_recorded)return 'UNRECORDED'; // read-only catalog
   // A completed job is green only when it verified something and every check
   // passed; one whose check failed says so; any other is plainly COMPLETED.
   const o=jobCheckOutcome(j);
@@ -3132,6 +3133,7 @@ function jobCheckOutcome(j){const r=(j&&j.result)||{};
 function jobStampText(j){
   const st=(j&&j.status)||'';
   if(j&&j.unrecorded&&st==='COMPLETED')return 'NOT RECORDED';
+  if(st==='COMPLETED'&&j.result&&j.result.catalog_not_recorded)return 'NOT RECORDED';
   if(st==='COMPLETED'){const o=jobCheckOutcome(j);if(o==='pass')return 'VERIFIED';if(o==='fail')return 'CHECK FAILED';}
   return st;}
 /* The plain-language line under a job. Each state gets its OWN sentence — never one

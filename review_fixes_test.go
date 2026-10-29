@@ -111,3 +111,48 @@ func TestBurn_RefusesAFailedPackage(t *testing.T) {
 		t.Errorf("burning a FAILED package: %v, want a refusal", err)
 	}
 }
+
+// A disk serial is shared by every partition of the disk, so a check read at
+// another folder of that disk is not credited to the copy by its serial alone.
+func TestCreditCopyCheck_SerialNeedsThePackageFolder(t *testing.T) {
+	st, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := st.AddVolume(Volume{Label: "DISK", Serial: "SER-P"})
+	c := st.AddChunk(Chunk{Name: "PKG"})
+	st.RecordCopy(c, v.ID, "E:/PKG", false)
+	if n := st.CreditCopyCheck(c, CopyAt{Path: "F:/OTHER", Serial: "SER-P"}, true, "B"); n != 0 {
+		t.Errorf("credited %d from another folder of the same disk, want 0", n)
+	}
+	if n := st.CreditCopyCheck(c, CopyAt{Path: "F:/PKG", Serial: "SER-P"}, true, "B"); n != 1 {
+		t.Errorf("credited %d at the package's own folder on the moved disk, want 1", n)
+	}
+}
+
+// A campaign's mirror check at an advisory level verifies nothing, so it never
+// counts toward the campaign's verified total.
+func TestVerifyCampaign_AdvisoryMirrorIsNotCounted(t *testing.T) {
+	app := dockApp(t)
+	coll := app.Store.AddCollection("Photos")
+	src := t.TempDir()
+	writeTree(t, src, map[string]string{"a.jpg": "A"})
+	if _, _, err := app.ScanFolder(coll.ID, src, noProg); err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	vol := app.Store.AddVolume(Volume{Label: "CAMP-1", Kind: "HDD"})
+	if _, err := app.MirrorToVolume(coll.ID, nil, dest, vol.ID, 0, "", noProgMirror); err != nil {
+		t.Fatal(err)
+	}
+	res, err := app.VerifyCampaign(dest, VerifyA, noProg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mr, _ := res["mirror_results"].([]map[string]any); len(mr) != 1 {
+		t.Fatalf("setup: mirror results %v, want the mirror checked", res["mirror_results"])
+	}
+	if ok, _ := res["ok"].(int); ok != 0 {
+		t.Errorf("ok %d after an advisory check, want 0", ok)
+	}
+}

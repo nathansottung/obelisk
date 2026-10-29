@@ -131,6 +131,7 @@ ck(jobStamp(campOK)==='VERIFIED','a verify that passed every check shows VERIFIE
 ck(jobStamp({...clean,kind:'verify',result:{all_ok:true,advisory:true}})==='COMPLETED','an advisory (level A/C) check that passed is not VERIFIED');
 ck(jobStamp({...clean,kind:'verify',result:{checked:2,ok:1,passed:2}})==='COMPLETED','a verify that read every copy correctly but could credit only some is COMPLETED, not CHECK FAILED');
 ck(jobStamp({...wrOK,unrecorded:true})==='UNRECORDED','an unrecorded job stays UNRECORDED even if it verified');
+ck(jobStamp({...wrOK,result:{...wrOK.result,catalog_not_recorded:'the catalog is read-only'}})==='UNRECORDED'&&jobStampText({...wrOK,result:{...wrOK.result,catalog_not_recorded:'the catalog is read-only'}})==='NOT RECORDED','a job on a read-only catalog is NOT RECORDED, not VERIFIED');
 // An advisory check (level A or C) never counts as the last verification.
 ck(latestOKTime({verify_events:[{ok:true,at:'2026-10-01T00:00:00Z',advisory:true}]})===null,'an advisory OK check must not reset the verify-due clock');
 ck(jobRecordingNote(unrec).includes(JOB_UNRECORDED_MSG),'the unrecorded warning must be shown in plain words');
