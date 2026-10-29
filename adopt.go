@@ -188,7 +188,12 @@ func (a *App) payloadTOC(payloadPath, keyRef string, encrypted bool) ([]ChunkFil
 	if err != nil {
 		return nil, err
 	}
-	gpg := helperCommand(gpgBin, "--batch", "--yes", "--pinentry-mode", "loopback", "--passphrase-fd", "0", "-d", payloadPath)
+	gs, err := newGpgSession(gpgBin)
+	if err != nil {
+		return nil, err
+	}
+	defer gs.close()
+	gpg := helperCommand(gpgBin, gs.decryptArgs(payloadPath)...)
 	gpg.Stdin = strings.NewReader(pass)
 	pipe, err := gpg.StdoutPipe()
 	if err != nil {

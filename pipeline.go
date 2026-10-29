@@ -834,10 +834,9 @@ func buildUsesWindowsExternalTar() bool {
 	if buildUsesWindowsExternalTarHook != nil {
 		return buildUsesWindowsExternalTarHook()
 	}
-	// Every package today is constructed by the configured external tar; there is no
-	// native writer yet. When one lands (OBX-006 §8 option 1), this is the predicate
-	// that stops applying to the paths it replaces.
-	return runtime.GOOS == "windows"
+	// Packages are written by Obelisk's own tar writer (tarpkg.go), on every
+	// platform, so no build runs the external tar this containment was for.
+	return false
 }
 
 // windowsTarUnverifiedBuildRefusal is the operator-facing reason a Windows build at
@@ -948,8 +947,12 @@ func verifyTarContents(tarPath string, files []ChunkFileRef) error {
 // returns the hash of the decrypted stream. Used to prove the ciphertext
 // actually decrypts back to the verified tar (compare against tar_hash).
 func decryptRoundtripHash(gpgBin, ciphertext, pass string) (string, error) {
-	cmd := helperCommand(gpgBin, "--batch", "--yes", "--pinentry-mode", "loopback",
-		"--passphrase-fd", "0", "-d", ciphertext)
+	s, err := newGpgSession(gpgBin)
+	if err != nil {
+		return "", err
+	}
+	defer s.close()
+	cmd := helperCommand(gpgBin, s.decryptArgs(ciphertext)...)
 	cmd.Stdin = strings.NewReader(pass)
 	var errb strings.Builder
 	cmd.Stderr = &errb
@@ -1000,11 +1003,8 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	if err := assertWindowsTarBuildVerifiable(iv); err != nil {
 		return err
 	}
-	tarBin, err := a.tool("tar")
-	if err != nil {
-		return err
-	}
 	var gpgBin string
+	var err error
 	if c.Encrypted {
 		if gpgBin, err = a.tool("gpg"); err != nil {
 			return err
@@ -1060,20 +1060,6 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 		return err
 	}
 
-	// NUL-delimited, not newline: a newline is a legal character in a POSIX filename,
-	// so a newline-delimited list splits such a name into two paths that do not exist
-	// and the file silently never enters the archive. GNU tar also reads a leading "-"
-	// in a plain list as an OPTION. With --null (below) every name is taken verbatim,
-	// exactly as the catalog recorded it. Staging-only: this list never ships on media.
-	list := filepath.Join(work, "filelist.txt")
-	var sb strings.Builder
-	for _, cf := range c.Files {
-		sb.WriteString(cf.RelPath + "\x00")
-	}
-	if err := os.WriteFile(list, []byte(sb.String()), 0o644); err != nil {
-		return fail(err)
-	}
-
 	tarPath := filepath.Join(work, c.Name+".tar")
 	payloadPath := filepath.Join(work, payloadName(c)) // <name>.tar.gpg (ciphertext) when encrypted, <name>.tar (the tar itself) when not
 
@@ -1119,15 +1105,11 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 
 	progress(0.05, "tar…")
 	t := time.Now()
-	// SOURCE READ-ONLY: `tar -c … -C <SrcRoot> -T list` only READS the source
-	// files; it writes exclusively to tarPath in the (validated) staging dir. tar
-	// -c never modifies the files it archives. First member: the manifest (from
-	// staging); then APPEND the source tree so the manifest leads the archive.
-	if err := run(tarBin, "", "--format=posix", "-cf", tarPath, "-C", work, bagPayloadManifestName); err != nil {
-		return fail(err)
-	}
-	if err := run(tarBin, "", "--format=posix", "-rf", tarPath, "-C", c.SrcRoot, "--null", "-T", list); err != nil {
-		return fail(err)
+	// SOURCE READ-ONLY: the source files are only read; the tar is written only to
+	// tarPath in the (validated) staging dir. The manifest leads the archive, then
+	// each catalogued file under its catalogued name (see tarpkg.go).
+	if err := writePackageTar(tarPath, manifestPath, c.SrcRoot, c.Files); err != nil {
+		return fail(fmt.Errorf("writing the package tar: %w", err))
 	}
 	finish("tar", t, 0.28)
 	if buildAfterTarHook != nil { // test-only fault injection between tar and hash
@@ -1166,9 +1148,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 			return fail(gerr)
 		}
 		c.KeyRef, fpr, chunkPass = ref, keyFpr, pass
-		if err := run(gpgBin, pass, "--batch", "--yes", "--pinentry-mode", "loopback",
-			"--passphrase-fd", "0", "--symmetric", "--cipher-algo", "AES256",
-			"--compress-algo", "none", "-o", payloadPath, tarPath); err != nil {
+		if err := gpgEncrypt(gpgBin, pass, payloadPath, tarPath); err != nil {
 			return fail(err)
 		}
 		if c.EncHash, err = hashFileHex(payloadPath); err != nil {
@@ -1247,9 +1227,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	}
 	if c.PrivateManifest {
 		manPlain := filepath.Join(work, c.Name+".manifest.json")
-		if err := run(gpgBin, chunkPass, "--batch", "--yes", "--pinentry-mode", "loopback",
-			"--passphrase-fd", "0", "--symmetric", "--cipher-algo", "AES256",
-			"--compress-algo", "none", "-o", manPlain+".gpg", manPlain); err != nil {
+		if err := gpgEncrypt(gpgBin, chunkPass, manPlain+".gpg", manPlain); err != nil {
 			return fail(fmt.Errorf("encrypting private manifest: %w", err))
 		}
 	}
@@ -1499,6 +1477,7 @@ func writeRestoreTxt(dir string, c *Chunk, opticalEcc bool) error {
 	var t string
 	if c.Spanned {
 		t = spannedRestoreTxt(c)
+		t = appendWindowsTarNote(t, c)
 		t = appendPrivacyNote(t, c)
 		t = appendOpticalNote(t, c, opticalEcc)
 		return os.WriteFile(filepath.Join(dir, "RESTORE.txt"), []byte(t), 0o644)
@@ -1552,9 +1531,24 @@ No compression anywhere — extracted bytes are the originals.
 ==========================================================
 `, c.Name, c.HashAlg, c.EncHash, pl)
 	}
+	t = appendWindowsTarNote(t, c)
 	t = appendPrivacyNote(t, c)
 	t = appendOpticalNote(t, c, opticalEcc)
 	return os.WriteFile(filepath.Join(dir, "RESTORE.txt"), []byte(t), 0o644)
+}
+
+// appendWindowsTarNote says what the tar built into Windows does with a name
+// its code page cannot hold: it refuses that file, says so, and restores the
+// rest. The tar holds every name as UTF-8, so another tar restores it.
+func appendWindowsTarNote(t string, c *Chunk) string {
+	return t + fmt.Sprintf(`
+WINDOWS — the tar built into Windows writes each file name in the system's
+code page. A name that code page cannot hold (Japanese on a Western system,
+for example) is refused with "unreadable filename", and the other files are
+restored. The package keeps every name as UTF-8: to restore those files too,
+extract %[1]s.tar with a tar that keeps Unicode names, such as 7-Zip
+(7z x %[1]s.tar).
+`, c.Name)
 }
 
 // appendOpticalNote adds the optional dvdisaster-ECC paragraph for optical
@@ -1596,11 +1590,13 @@ func spannedRestoreTxt(c *Chunk) string {
 	return fmt.Sprintf(`HOW TO RESTORE %[1]s   (SPANNED across %[2]d media)
 ==========================================================
 This package's payload was byte-split across %[2]d tapes/drives as
-%[1]s.seg001 … %[1]s.seg%[3]03d. Every tape also carries this file,
-the manifest, and (par2 %[4]s).
+%[1]s.seg001 … %[1]s.seg%[3]03d. Every tape also carries this file
+and the manifest. The par2 set is %[4]s.
 
-STEP 0 — REJOIN the segments into the payload (one universal command).
-Copy every tape's %[1]s.segNNN into ONE folder, then run ONE of:
+STEP 0 — GATHER and REJOIN.
+Copy into ONE folder every tape's %[1]s.segNNN, and the par2 set
+%[11]s.par2 and %[11]s.vol*.par2 (%[4]s): par2
+verify and repair in step 1 read them there. Then run ONE of:
      Windows:  copy /b %[5]s %[10]s
      Unix/mac: cat %[1]s.seg* > %[10]s
 (The zero-padded names sort into the correct order automatically.)
@@ -1617,5 +1613,5 @@ per-segment hashes (manifest / catalog) link every tape to the originals.
 Full file list: %[1]s.manifest.json
 No compression anywhere — extracted bytes are the originals.
 ==========================================================
-`, c.Name, n, n, par2Home, segJoinList(c), decrypt, c.HashAlg, c.EncHash, c.TarHash, pl)
+`, c.Name, n, n, par2Home, segJoinList(c), decrypt, c.HashAlg, c.EncHash, c.TarHash, pl, pl)
 }

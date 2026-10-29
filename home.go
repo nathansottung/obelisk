@@ -537,10 +537,10 @@ func (a *App) onlineVolumeIDs() map[int]bool {
 	out := map[int]bool{}
 	for _, m := range enumerateMounts() {
 		id, err := resolveDeviceIdentity(m.Path)
-		if err != nil || strings.TrimSpace(id.Serial) == "" {
+		if err != nil || (strings.TrimSpace(id.Serial) == "" && id.Partition == "") {
 			continue
 		}
-		if v := a.Store.VolumeBySerial(id.Serial); v != nil {
+		if v := a.Store.VolumeByIdentity(id.Serial, id.Partition); v != nil {
 			out[v.ID] = true
 		}
 	}

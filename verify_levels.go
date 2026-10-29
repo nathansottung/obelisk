@@ -189,6 +189,19 @@ func (a *App) VerifyMirrorVolume(volumeID int, mount, level string, progress fun
 	if vol == nil {
 		return nil, fmt.Errorf("volume %d not found", volumeID)
 	}
+	// The check is credited to this volume's copies only; a drive read at an
+	// overriding mount must not be known to be another drive, or another
+	// partition of the volume's disk.
+	liveSerial, livePart := "", ""
+	if m := strings.TrimSpace(mount); m != "" {
+		liveSerial, livePart = driveSerialAt(m), partitionIDAt(m)
+		if liveSerial != "" && vol.Serial != "" && !strings.EqualFold(liveSerial, vol.Serial) {
+			return nil, fmt.Errorf("the drive at %s is not %s (serial %s, recorded %s)", m, vol.Label, liveSerial, vol.Serial)
+		}
+		if same, known := partitionCompare(livePart, vol.PartitionID); known && !same {
+			return nil, fmt.Errorf("the partition at %s is not %s (partition %s, recorded %s)", m, vol.Label, livePart, vol.PartitionID)
+		}
+	}
 	type target struct {
 		c    *Chunk
 		base string
@@ -217,15 +230,6 @@ func (a *App) VerifyMirrorVolume(volumeID int, mount, level string, progress fun
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("no mirror packages with a current copy on %s", vol.Label)
 	}
-	// The check is credited to this volume's copies only; a drive read at an
-	// overriding mount must not be known to be another drive.
-	liveSerial := ""
-	if m := strings.TrimSpace(mount); m != "" {
-		liveSerial = driveSerialAt(m)
-		if liveSerial != "" && vol.Serial != "" && !strings.EqualFold(liveSerial, vol.Serial) {
-			return nil, fmt.Errorf("the drive at %s is not %s (serial %s, recorded %s)", m, vol.Label, liveSerial, vol.Serial)
-		}
-	}
 	results := make([]map[string]any, 0, len(targets))
 	okAll := true
 	for ti, t := range targets {
@@ -242,8 +246,10 @@ func (a *App) VerifyMirrorVolume(volumeID int, mount, level string, progress fun
 			note += " · first bad: " + firstBad
 		}
 		a.Store.AppendVerifyEvent(t.c, VerifyEvent{At: now, OK: ok, Path: t.base, Note: note, Level: level, Advisory: !levelSatisfiesComplete(level)})
-		a.Store.CreditCopyCheck(t.c, CopyAt{VolumeID: volumeID, Serial: liveSerial}, ok, level)
-		if level == VerifyB {
+		a.Store.CreditCopyCheck(t.c, CopyAt{VolumeID: volumeID, Serial: liveSerial, Partition: livePart}, ok, level)
+		// A full check, or any failed one, can change the package's state: a
+		// copy found damaged loses its credit at once.
+		if level == VerifyB || !ok {
 			if ok {
 				t.c.VerifiedAt = &now
 			}
@@ -253,8 +259,8 @@ func (a *App) VerifyMirrorVolume(volumeID int, mount, level string, progress fun
 		results = append(results, map[string]any{"chunk": t.c.Name, "ok": ok, "level": level,
 			"checked": checked, "bad": bad, "advisory": !levelSatisfiesComplete(level)})
 	}
-	// Only a level-B pass can change protection state; refresh the dashboard tally.
-	if level == VerifyB {
+	// A full check or a failed one can change protection; refresh the dashboard tally.
+	if level == VerifyB || !okAll {
 		a.Store.RecomputeProtection(nil)
 	}
 	if progress != nil {

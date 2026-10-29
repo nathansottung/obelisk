@@ -9,7 +9,11 @@ package main
 // and parses its structured output. The platform-specific resolver lives in
 // deviceid_windows.go / deviceid_unix.go behind the shared resolveDeviceIdentity.
 
-import "time"
+import (
+	"os"
+	"strings"
+	"time"
+)
 
 // DeviceIdentity is what we could learn about the physical device behind a path.
 // Any field may be empty when the OS/bridge does not report it.
@@ -19,24 +23,34 @@ type DeviceIdentity struct {
 	SizeBytes int64  `json:"size_bytes,omitempty"`
 	Bus       string `json:"bus,omitempty"`  // e.g. "USB", "SATA", "NVMe" — informs the caveat note
 	Note      string `json:"note,omitempty"` // caveat, e.g. serial may be the bridge's
+	// Partition tells apart the partitions of one disk (see Volume.PartitionID).
+	Partition string `json:"partition,omitempty"`
 }
 
 // resolved reports whether we learned anything worth recording.
 func (d DeviceIdentity) resolved() bool {
-	return d.Serial != "" || d.Model != "" || d.SizeBytes > 0
+	return d.Serial != "" || d.Model != "" || d.SizeBytes > 0 || d.Partition != ""
 }
 
 // resolveVolumeIdentity fills a volume's Serial/Model/DeviceSize/DeviceNote from
 // the device behind path, best-effort. It never overwrites a good serial with a
 // blank one (a later resolve from a dock that masks the serial must not erase a
 // real serial captured earlier). Returns the identity it found and whether the
-// volume was updated. Caller persists via Store.UpdateVolume.
+// volume was updated. Caller persists via Store.UpdateVolume. A volume with a
+// partition recorded is never updated from another partition. One with none
+// recorded takes the partition read only when all its copies are on it.
 func (a *App) resolveVolumeIdentity(v *Volume, path string) (DeviceIdentity, bool) {
 	id, err := resolveDeviceIdentity(path)
 	if err != nil || !id.resolved() {
 		return id, false
 	}
+	if same, known := partitionCompare(v.PartitionID, id.Partition); known && !same {
+		return id, false
+	}
 	changed := false
+	if id.Partition != "" && v.PartitionID == "" && a.volumeCopiesAt(v, path) {
+		v.PartitionID, changed = id.Partition, true
+	}
 	if id.Serial != "" && id.Serial != v.Serial {
 		v.Serial, changed = id.Serial, true
 	}
@@ -54,6 +68,31 @@ func (a *App) resolveVolumeIdentity(v *Volume, path string) (DeviceIdentity, boo
 		v.DeviceAt = &now
 	}
 	return id, changed
+}
+
+// volumeCopiesAt reports whether every current copy recorded on v is found
+// under mount: the evidence needed before a volume recorded without a
+// partition takes the partition at mount. A volume recorded before partitions
+// were kept may hold copies from several partitions of its disk; binding it to
+// one would leave the others' copies with a partition they are not on. A volume
+// with no current copies has nothing to contradict it.
+func (a *App) volumeCopiesAt(v *Volume, mount string) bool {
+	root := normPath(mount)
+	for _, c := range a.Store.Chunks(0) {
+		for _, cp := range c.Copies {
+			if cp.VolumeID != v.ID || cp.Superseded {
+				continue
+			}
+			p := normPath(cp.Path)
+			if p != root && !strings.HasPrefix(p, strings.TrimRight(root, "/")+"/") {
+				return false
+			}
+			if _, err := os.Stat(cp.Path); err != nil {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // busCaveat returns the storage-industry caveat for a bus type: USB/1394 bridges

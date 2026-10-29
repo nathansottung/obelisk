@@ -5,6 +5,7 @@ package main
 // raw-tape (/dev/nst0) backend later; everything above it is agnostic.
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -573,7 +574,7 @@ func (a *App) VerifyChunk(id int, destDir string) (map[string]any, error) {
 	// never marks the package FAILED while another copy or the staged payload is
 	// intact. A read that matches no recorded copy (the staging folder, say)
 	// credits nothing.
-	credited := a.Store.CreditCopyCheck(c, CopyAt{Path: filepath.Dir(enc), Serial: driveSerialAt(base)}, ok, VerifyB)
+	credited := a.Store.CreditCopyCheck(c, CopyAt{Path: filepath.Dir(enc), Serial: driveSerialAt(base), Partition: partitionIDAt(base)}, ok, VerifyB)
 	if ok && credited > 0 {
 		c.VerifiedAt = &now
 	}
@@ -653,7 +654,7 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 			}
 		}
 	}
-	serial := driveSerialAt(destDir) // which drive is being read, when it can be found
+	serial, part := driveSerialAt(destDir), partitionIDAt(destDir) // which drive and partition are being read, when they can be found
 	if len(cands) == 0 && len(mirrorTargets) == 0 {
 		return nil, fmt.Errorf("no cataloged packages or mirrors found on %s (looked for NAME/<payload>, NAME.tar[.gpg], or a mirror rooted here)", destDir)
 	}
@@ -676,7 +677,7 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 		// Copy-level result, on the copy recorded where this payload was read and
 		// only there; package status derives from all copies (a bad medium on this
 		// campaign does not fail a package with other verified copies).
-		credited := a.Store.CreditCopyCheck(cd.c, CopyAt{Path: filepath.Dir(cd.path), Serial: serial}, ok, VerifyB)
+		credited := a.Store.CreditCopyCheck(cd.c, CopyAt{Path: filepath.Dir(cd.path), Serial: serial, Partition: part}, ok, VerifyB)
 		if ok {
 			passed++
 		}
@@ -695,6 +696,7 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 	}
 	// Mirrors: verified at the chosen level (A/C advisory, B satisfies COMPLETE).
 	mirrorResults := make([]map[string]any, 0, len(mirrorTargets))
+	mirrorFailed := false
 	for j, c := range mirrorTargets {
 		progress(float64(len(cands)+j)/float64(len(cands)+len(mirrorTargets)), "verify mirror "+c.Name)
 		ok, checked, bad, firstBad := verifyMirrorChunk(c, destDir, level)
@@ -703,12 +705,17 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 		if !ok {
 			note += " · first bad: " + firstBad
 		}
-		credited := a.Store.CreditCopyCheck(c, CopyAt{Path: destDir, Serial: serial}, ok, level)
+		credited := a.Store.CreditCopyCheck(c, CopyAt{Path: destDir, Serial: serial, Partition: part}, ok, level)
 		if credited == 0 {
 			note += " · the drive could not be told apart from another with a copy here, so no copy was credited"
 		}
 		a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: ok, Path: destDir, Note: note, Level: level, Advisory: !levelSatisfiesComplete(level) || credited == 0})
-		if level == VerifyB {
+		// A full check, or any failed one, can change the package's state: a
+		// copy found damaged loses its credit at once.
+		if level == VerifyB || !ok {
+			if !ok {
+				mirrorFailed = true
+			}
 			if ok && credited > 0 {
 				c.VerifiedAt = &now
 			}
@@ -724,7 +731,7 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 		mirrorResults = append(mirrorResults, map[string]any{"chunk": c.Name, "ok": ok, "level": level,
 			"checked": checked, "bad": bad, "advisory": !levelSatisfiesComplete(level)})
 	}
-	if level == VerifyB && len(mirrorTargets) > 0 {
+	if (level == VerifyB && len(mirrorTargets) > 0) || mirrorFailed {
 		a.Store.RecomputeProtection(nil)
 	}
 	total := len(cands) + len(mirrorTargets)
@@ -732,6 +739,18 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 	a.Store.Log("verify-campaign", fmt.Sprintf("%s: %d/%d ok (mirror level %s)", destDir, okCount, total, level))
 	return map[string]any{"dest_dir": destDir, "checked": total, "ok": okCount, "passed": passed, "level": level,
 		"results": results, "mirror_results": mirrorResults}, nil
+}
+
+// countingReader counts the bytes read through it.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
 }
 
 func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string, progress func(float64, string)) (map[string]any, error) {
@@ -780,10 +799,6 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	if err != nil {
 		return nil, err
 	}
-	tarBin, err := a.tool("tar")
-	if err != nil {
-		return nil, err
-	}
 	var gpgBin string
 	if c.Encrypted {
 		if gpgBin, err = a.tool("gpg"); err != nil {
@@ -824,14 +839,17 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	}
 	if !c.Encrypted {
 		// Unencrypted: the payload is a plain tar; extract it directly, no gpg.
+		// Obelisk reads the tar itself (tarpkg.go): member names are matched
+		// exactly as stored, whatever their characters, and never read as options.
 		progress(0.25, "extract")
-		// "--" ends option parsing: members are archive member names chosen by the
-		// caller, and a member beginning with "-" would otherwise be read as a tar
-		// option rather than as the file to restore.
-		targs := []string{"-xf", enc, "-C", tgt.into, "--"}
-		targs = append(targs, members...)
-		if err := run(tarBin, "", targs...); err != nil {
-			return nil, fmt.Errorf("tar extract failed: %v", err)
+		pf, err := os.Open(enc)
+		if err != nil {
+			return nil, err
+		}
+		xerr := extractTar(bufio.NewReaderSize(pf, 1<<20), tgt.into, members)
+		pf.Close()
+		if xerr != nil {
+			return nil, fmt.Errorf("tar extract failed: %v", xerr)
 		}
 		res, err := a.finishRestore(c, tgt, outputDir, repaired, restoreWarnings, progress)
 		succeeded = err == nil
@@ -843,35 +861,44 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	if err != nil {
 		return nil, err
 	}
-	gpg := helperCommand(gpgBin, "--batch", "--yes", "--pinentry-mode", "loopback",
-		"--passphrase-fd", "0", "-d", enc)
+	gs, err := newGpgSession(gpgBin)
+	if err != nil {
+		return nil, err
+	}
+	defer gs.close()
+	gpg := helperCommand(gpgBin, gs.decryptArgs(enc)...)
 	gpg.Stdin = strings.NewReader(pass)
 	pipe, err := gpg.StdoutPipe()
 	if err != nil {
 		return nil, err
 	}
-	targs := []string{"-xf", "-", "-C", tgt.into, "--"} // "--": member names are never options
-	targs = append(targs, members...)
-	tarc := helperCommand(tarBin, targs...)
-	tarc.Stdin = pipe
-	var tarErr strings.Builder
-	tarc.Stderr = &tarErr
 	var gpgErr strings.Builder
 	gpg.Stderr = &gpgErr
-
 	if err := gpg.Start(); err != nil {
 		return nil, err
 	}
-	if err := tarc.Start(); err != nil {
-		return nil, err
+	counted := &countingReader{r: pipe}
+	terr := extractTar(bufio.NewReaderSize(counted, 1<<20), tgt.into, members)
+	killed := false
+	if terr != nil && counted.n > 0 {
+		// The tar failed partway: stop decrypting what will not be unpacked.
+		killed = gpg.Process.Kill() == nil
 	}
-	terr := tarc.Wait()
+	_, _ = io.Copy(io.Discard, pipe)
 	gerr := gpg.Wait()
-	if gerr != nil {
+	// gpg's own failure comes first: a wrong passphrase gives an empty stream,
+	// which the tar reader would otherwise report as a missing member.
+	if gerr != nil && !killed {
 		return nil, fmt.Errorf("gpg decrypt failed: %s", tail(gpgErr.String(), 400))
 	}
 	if terr != nil {
-		return nil, fmt.Errorf("tar extract failed: %s", tail(tarErr.String(), 400))
+		// gpg may have failed on its own before it was stopped (a damaged
+		// payload fails its integrity check partway): keep what it said. It
+		// runs quiet, so stderr holds only warnings and errors.
+		if g := strings.TrimSpace(gpgErr.String()); killed && g != "" {
+			return nil, fmt.Errorf("tar extract failed: %v (%s)", terr, tail(g, 400))
+		}
+		return nil, fmt.Errorf("tar extract failed: %v", terr)
 	}
 	res, err := a.finishRestore(c, tgt, outputDir, repaired, restoreWarnings, progress)
 	succeeded = err == nil
@@ -956,6 +983,16 @@ func copyFile(src, dst string) error {
 var driveSerialAt = func(path string) string {
 	if id, err := resolveDeviceIdentity(path); err == nil {
 		return id.Serial
+	}
+	return ""
+}
+
+// partitionIDAt is the partition ID of the volume holding path (see
+// Volume.PartitionID), or "" when it cannot be found. A variable so tests need
+// not probe disks.
+var partitionIDAt = func(path string) string {
+	if id, err := resolvePartitionID(path); err == nil {
+		return id
 	}
 	return ""
 }

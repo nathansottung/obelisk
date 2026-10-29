@@ -313,6 +313,11 @@ type Volume struct {
 	DeviceSize int64      `json:"device_size,omitempty"` // total device capacity in bytes
 	DeviceNote string     `json:"device_note,omitempty"` // e.g. "USB bridge — serial may be the bridge's, not the drive's"
 	DeviceAt   *time.Time `json:"device_at,omitempty"`   // when identity was last resolved
+	// PartitionID tells apart the partitions of one disk, which all share the
+	// disk's Serial: the volume GUID on Windows, the partition UUID on Linux and
+	// the volume UUID on macOS. Empty when it could not be read, or for a volume
+	// recorded before it was kept.
+	PartitionID string `json:"partition_id,omitempty"`
 	// Drive-mortality (SMART) snapshots, append-only, newest last. A COMPLEMENT to
 	// hash verification — SMART hints at failure risk, it never proves data intact.
 	SmartHistory []SmartSnapshot `json:"smart_history,omitempty"`
@@ -2660,20 +2665,76 @@ func (s *Store) VolumeByBarcode(barcode string) *Volume {
 	return nil
 }
 
-// VolumeBySerial finds a volume by its resolved physical serial — the key to
-// recognizing a re-inserted drive across dock sessions. Empty serial never
-// matches (many volumes have none).
-func (s *Store) VolumeBySerial(serial string) *Volume {
+// VolumeBySerial finds a volume by its physical serial when the partition is
+// not known. See VolumeByIdentity.
+func (s *Store) VolumeBySerial(serial string) *Volume { return s.VolumeByIdentity(serial, "") }
+
+// VolumesWithSerial counts the volumes recorded with a disk serial.
+func (s *Store) VolumesWithSerial(serial string) int {
 	serial = strings.TrimSpace(serial)
 	if serial == "" {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, v := range s.c.Volumes {
+		if strings.EqualFold(strings.TrimSpace(v.Serial), serial) {
+			n++
+		}
+	}
+	return n
+}
+
+// VolumeByIdentity finds the volume for a drive read: the key to recognizing a
+// re-inserted drive across dock sessions. Every partition of a disk shares the
+// disk's serial, so a partition is matched by its partition ID too:
+//   - the volume with this serial and partition ID;
+//   - with no serial (a dock that masks it), the one volume with this
+//     partition ID;
+//   - else the one volume with this serial whose partition is not known to
+//     differ (none recorded, from before partitions were kept, or an ID of
+//     another kind);
+//   - with the partition unknown, the one volume with this serial.
+//
+// Anything else, including two volumes that could fit, matches none.
+func (s *Store) VolumeByIdentity(serial, partition string) *Volume {
+	serial, partition = strings.TrimSpace(serial), strings.TrimSpace(partition)
+	if serial == "" && partition == "" {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var sameSerial, samePart, unpartitioned []*Volume
 	for _, v := range s.c.Volumes {
-		if strings.EqualFold(strings.TrimSpace(v.Serial), serial) {
-			return v
+		vs := strings.TrimSpace(v.Serial)
+		same, known := partitionCompare(v.PartitionID, partition)
+		if known && same {
+			if serial == "" || vs == "" || strings.EqualFold(vs, serial) {
+				samePart = append(samePart, v)
+			}
+			continue
 		}
+		if serial != "" && strings.EqualFold(vs, serial) {
+			sameSerial = append(sameSerial, v)
+			if !known {
+				unpartitioned = append(unpartitioned, v)
+			}
+		}
+	}
+	one := func(vs []*Volume) *Volume {
+		if len(vs) == 1 {
+			return vs[0]
+		}
+		return nil
+	}
+	switch {
+	case partition != "" && len(samePart) > 0:
+		return one(samePart)
+	case partition != "" && serial != "":
+		return one(unpartitioned)
+	case partition == "":
+		return one(sameSerial)
 	}
 	return nil
 }
@@ -3349,26 +3410,34 @@ func (s *Store) RecordCopy(c *Chunk, volumeID int, path string, verifiedOK bool)
 
 // CopyAt says which copy a check read: the folder it read (Path; empty means
 // any folder, for a check addressed to one volume), the volume when the caller
-// knows it (0 when not), and the serial of the drive actually read when it could
-// be found ("" when not).
+// knows it (0 when not), and the serial and partition ID of the drive actually
+// read when they could be found ("" when not).
 type CopyAt struct {
-	Path     string
-	VolumeID int
-	Serial   string
+	Path      string
+	VolumeID  int
+	Serial    string
+	Partition string
 }
 
 // CreditCopyCheck records a check's result on the copy it read, and only that
 // copy: a current copy recorded at exactly that folder (by normPath), on that
-// volume when one is given, and not on a drive whose recorded serial differs
-// from the one read. When copies on more than one volume still fit, the check
+// volume when one is given, and not on a drive whose recorded serial or
+// partition differs from the one read. When copies on more than one volume still fit, the check
 // cannot say which drive it read, and none is credited. Level B also sets the
-// copy's verified state. It returns how many copies were credited.
+// copy's verified state, and a failed check at any level clears it. It returns
+// how many copies were credited.
 func (s *Store) CreditCopyCheck(c *Chunk, at CopyAt, ok bool, level string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	serialOf := map[int]string{}
+	serialOf, partOf := map[int]string{}, map[int]string{}
 	for _, v := range s.c.Volumes {
-		serialOf[v.ID] = v.Serial
+		serialOf[v.ID], partOf[v.ID] = v.Serial, v.PartitionID
+	}
+	// Credits never cross partitions: a copy on a volume whose recorded
+	// partition is known to differ from the one read is never credited.
+	otherPartition := func(volID int) bool {
+		same, known := partitionCompare(partOf[volID], at.Partition)
+		return known && !same
 	}
 	var fit []int
 	vols := map[int]bool{}
@@ -3386,22 +3455,26 @@ func (s *Store) CreditCopyCheck(c *Chunk, at CopyAt, ok bool, level string) int 
 		if vs := serialOf[cp.VolumeID]; at.Serial != "" && vs != "" && !strings.EqualFold(vs, at.Serial) {
 			continue
 		}
+		if otherPartition(cp.VolumeID) {
+			continue
+		}
 		fit = append(fit, i)
 		vols[cp.VolumeID] = true
 	}
 	// A drive now mounted somewhere else: no copy is recorded at the folder read,
-	// but the drive read is known by its serial to be exactly one volume with a
-	// current copy. That copy is credited, and its path updated to where it was
-	// read.
-	// Only a package copy read in a folder of the package's own name: a disk
-	// serial is shared by every partition of the disk.
-	if len(fit) == 0 && at.Path != "" && at.Serial != "" && !c.Mirror && filepath.Base(at.Path) == c.Name {
+	// but the partition read is known by its disk serial and partition ID to be
+	// exactly one volume with a current copy. That copy is credited, and its path
+	// updated to where it was read. The serial alone is not enough: every
+	// partition of a disk shares it. Only a package copy read in a folder of the
+	// package's own name.
+	if len(fit) == 0 && at.Path != "" && at.Serial != "" && at.Partition != "" && !c.Mirror && filepath.Base(at.Path) == c.Name {
 		for i := range c.Copies {
 			cp := c.Copies[i]
 			if cp.Superseded || (at.VolumeID > 0 && cp.VolumeID != at.VolumeID) {
 				continue
 			}
-			if vs := serialOf[cp.VolumeID]; vs != "" && strings.EqualFold(vs, at.Serial) {
+			vs := serialOf[cp.VolumeID]
+			if same, known := partitionCompare(partOf[cp.VolumeID], at.Partition); vs != "" && strings.EqualFold(vs, at.Serial) && known && same {
 				fit = append(fit, i)
 				vols[cp.VolumeID] = true
 			}
@@ -3417,8 +3490,13 @@ func (s *Store) CreditCopyCheck(c *Chunk, at CopyAt, ok bool, level string) int 
 	for _, i := range fit {
 		v, lvl := ok, level
 		c.Copies[i].LastCheckAt, c.Copies[i].LastCheckLevel, c.Copies[i].LastCheckOK = &now, lvl, &v
-		if level == "B" {
+		switch {
+		case level == "B":
 			c.Copies[i].LastVerifiedAt, c.Copies[i].VerifyOK = &now, &v
+		case !ok:
+			// A copy found damaged loses its credit at once, whatever level of
+			// check found it. Only a full check can give the credit back.
+			c.Copies[i].VerifyOK = &v
 		}
 	}
 	_ = s.save()
