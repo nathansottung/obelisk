@@ -166,6 +166,10 @@ func (a *App) IngestDrive(sessionID int, mountPath, serial, label, mode, level s
 	if fi, err := os.Stat(mountPath); err != nil || !fi.IsDir() {
 		return nil, fmt.Errorf("cannot read docked drive %s", mountPath)
 	}
+	// The drive's top folder must be listable, or there is nothing to scan.
+	if _, err := os.ReadDir(mountPath); err != nil {
+		return nil, fmt.Errorf("cannot read the docked drive %s: %s", mountPath, scanReason(err))
+	}
 	// A registered source is never a docked drive, by where it really is: checked
 	// before any volume is registered.
 	if err := a.Store.CheckOutsideSources(mountPath); err != nil {
@@ -345,7 +349,7 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 	// recorded, so the snapshot can say which parts of the drive it did not see.
 	var paths []string
 	var gaps scanGaps
-	if err := filepath.WalkDir(mountPath, func(p string, d fs.DirEntry, err error) error {
+	if err := dockWalkDir(mountPath, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if p == mountPath {
 				return err // the drive itself cannot be read: no scan at all
@@ -555,6 +559,9 @@ func (a *App) buildSnapshot(ds *DockSession, vol *Volume, health *SmartSnapshot,
 	}
 	return snap
 }
+
+// dockWalkDir walks a docked drive. A variable so a test can make the walk fail.
+var dockWalkDir = filepath.WalkDir
 
 // scanGaps collects what a drive scan did not read.
 type scanGaps struct {
