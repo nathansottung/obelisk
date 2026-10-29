@@ -296,7 +296,7 @@ func (a *App) refreshChunkStatus(c *Chunk) {
 }
 
 func (a *App) WriteChunk(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string)) (map[string]any, error) {
-	return a.writeChunk(nil, id, destDir, bufferGB, blockMB, throttleMbps, volumeID, progress)
+	return a.writeChunk(nil, id, destDir, bufferGB, blockMB, throttleMbps, volumeID, progress, nil)
 }
 
 // chunkWritable is the check that a package can be written from staging now.
@@ -323,7 +323,9 @@ func chunkStagedForWrite(c *Chunk) error {
 
 // writeChunk is WriteChunk into out when the caller already holds the output
 // folder for destDir (a re-write), or into destDir opened here when out is nil.
-func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string)) (map[string]any, error) {
+// beforeWrite, when set, runs once every check has passed, just before the
+// first byte is written (a re-write supersedes the old copy there).
+func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string), beforeWrite func()) (map[string]any, error) {
 	cfg, cfgErr := a.LoadConfig()
 	if cfgErr != nil {
 		return nil, cfgErr
@@ -379,10 +381,13 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 			need += st.Size()
 		}
 	}
-	if free, err := diskFree(destDir); err == nil && free < need {
+	if free, err := destFree(destDir); err == nil && free < need {
 		return nil, fmt.Errorf("destination too small: need %.1f GB, free %.1f GB", float64(need)/1e9, float64(free)/1e9)
 	}
 
+	if beforeWrite != nil {
+		beforeWrite()
+	}
 	c.Status = "WRITING"
 	a.Store.UpdateChunk(c)
 	// mediumFail: a write/medium error. The staged artifact is fine, so the
@@ -532,8 +537,10 @@ func (a *App) RewriteCopy(id, volumeID int, bufferGB float64, blockMB int, throt
 		return nil, err
 	}
 	defer out.Close()
-	a.Store.SupersedeCopy(c, volumeID)
-	return a.writeChunk(out, id, filepath.Dir(dest), bufferGB, blockMB, throttleMbps, volumeID, progress)
+	// The old copy is superseded only when the write starts: a re-write refused
+	// by a later check (free space, say) leaves it current.
+	return a.writeChunk(out, id, filepath.Dir(dest), bufferGB, blockMB, throttleMbps, volumeID, progress,
+		func() { a.Store.SupersedeCopy(c, volumeID) })
 }
 
 func (a *App) VerifyChunk(id int, destDir string) (map[string]any, error) {
@@ -946,3 +953,7 @@ var driveSerialAt = func(path string) string {
 	}
 	return ""
 }
+
+// destFree is the free space at a write's destination. A variable so a test can
+// make a medium full.
+var destFree = diskFree
