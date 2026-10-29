@@ -3116,10 +3116,15 @@ function jobStamp(j){
 // jobCheckOutcome reads a job's result for a verification it ran: 'pass' when
 // every check passed, 'fail' when any did not, null when it verified nothing.
 function jobCheckOutcome(j){const r=(j&&j.result)||{};
-  if(r.verify_ok===true)return 'pass';
   if(r.verify_ok===false)return 'fail';
-  if(typeof r.all_ok==='boolean')return r.all_ok?'pass':'fail';
-  if(typeof r.checked==='number'&&typeof r.ok==='number')return r.checked>0&&r.ok===r.checked?'pass':'fail';
+  if(r.verify_ok===true)return r.credited===0?null:'pass';
+  // An advisory check (level A or C) verifies nothing, even when it passes.
+  if(typeof r.all_ok==='boolean')return !r.all_ok?'fail':r.advisory?null:'pass';
+  if(typeof r.checked==='number'&&typeof r.ok==='number'){
+    const read=typeof r.passed==='number'?r.passed:r.ok;
+    if(read<r.checked)return 'fail';            // a check failed
+    return r.checked>0&&r.ok===r.checked?'pass':null; // read fine, but not every copy credited
+  }
   return null;}
 // The stamp's WORDS. An unrecorded COMPLETED must not read "COMPLETED" on its own,
 // because that is the half of the truth that is misleading. Every other status reads as

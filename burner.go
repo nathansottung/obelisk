@@ -158,8 +158,10 @@ func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, 
 		set("FAILED", fmt.Sprintf("package %d not found in catalog", disc.ChunkID))
 		return nil, errors.New(disc.Detail)
 	}
-	if c.StagedDir == "" {
-		set("FAILED", "package has no staged_dir — build it before burning")
+	// The same gate as a write: the package's last build succeeded and its payload
+	// and sidecars are in staging, unchanged.
+	if err := burnStagedCheck(c); err != nil {
+		set("FAILED", err.Error())
 		return nil, errors.New(disc.Detail)
 	}
 	if _, err := os.Stat(c.StagedDir); err != nil {
@@ -308,3 +310,7 @@ func (a *App) carryEccToNextDisc(q *BurnQueue, current *BurnDisc, c *Chunk, eccP
 	}
 	a.Store.Log("ecc", fmt.Sprintf("%s: ECC carried onto next disc %s (%s)", c.Name, nc.Name, dst))
 }
+
+// burnStagedCheck is the write gate a burn applies (chunkStagedForWrite). A
+// variable so the burn-command tests, which stage no real package, can run.
+var burnStagedCheck = chunkStagedForWrite

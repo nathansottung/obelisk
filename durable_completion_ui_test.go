@@ -128,6 +128,8 @@ ck(jobStamp(wrBad)==='CHECKFAIL'&&jobStampText(wrBad)==='CHECK FAILED','a write 
 ck(jobStamp(camp)==='CHECKFAIL','a verify that passed 2 of 3 shows CHECK FAILED');
 ck(jobStamp(mir)==='CHECKFAIL','a mirror verify that did not all pass shows CHECK FAILED');
 ck(jobStamp(campOK)==='VERIFIED','a verify that passed every check shows VERIFIED');
+ck(jobStamp({...clean,kind:'verify',result:{all_ok:true,advisory:true}})==='COMPLETED','an advisory (level A/C) check that passed is not VERIFIED');
+ck(jobStamp({...clean,kind:'verify',result:{checked:2,ok:1,passed:2}})==='COMPLETED','a verify that read every copy correctly but could credit only some is COMPLETED, not CHECK FAILED');
 ck(jobStamp({...wrOK,unrecorded:true})==='UNRECORDED','an unrecorded job stays UNRECORDED even if it verified');
 // An advisory check (level A or C) never counts as the last verification.
 ck(latestOKTime({verify_events:[{ok:true,at:'2026-10-01T00:00:00Z',advisory:true}]})===null,'an advisory OK check must not reset the verify-due clock');

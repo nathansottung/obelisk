@@ -15,6 +15,11 @@ import (
 func burnSetupForTest(t *testing.T, label string) (*App, int, string) {
 	t.Helper()
 	app := dockApp(t)
+	// These tests are about the burn command, not the write gate: the package's
+	// name holds characters no file name can, so no real package is staged.
+	prev := burnStagedCheck
+	burnStagedCheck = func(*Chunk) error { return nil }
+	t.Cleanup(func() { burnStagedCheck = prev })
 	staged := t.TempDir()
 	mustWrite(t, filepath.Join(staged, "payload.tar"), "PAYLOAD")
 	c := app.Store.AddChunk(Chunk{Name: label, Status: "BUILT", MediaKind: "BD-R25", StagedDir: staged})

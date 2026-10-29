@@ -1579,28 +1579,6 @@ func (s *Store) BeginBatch() {
 	s.batchDepth++
 }
 
-// EndBatch leaves batched-save mode and forces the final write if anything is
-// pending, RETURNING the error so a caller cannot report success for work that was
-// never persisted (OB-002).
-//
-// Two deliberate properties:
-//
-//   - The error is returned, not dropped. Coalesced progress is allowed to sit in
-//     memory during a batch, but the moment a job claims completion its catalog
-//     changes must have reached the disk. Every caller folds this into its own error
-//     via endBatchInto.
-//   - It flushes whenever the catalog is dirty, NOT only when the depth reaches
-//     zero. batchDepth is shared by every concurrent job, so the old
-//     `batchDepth == 0` condition meant a job finishing while ANOTHER job still held
-//     a batch wrote nothing and simply hoped that other job would flush later —
-//     someone else's unrelated work became the precondition for this job's
-//     durability. A finishing job now always writes.
-//
-// The tradeoff: when two jobs overlap, the flush also persists the other job's
-// partially-applied state. That is safe — the catalog is one document written under
-// s.mu, so it is always internally consistent, and every batched job is an
-// idempotent re-run (see BeginBatch), so persisting its progress early can only save
-// work on a replay. The cost is one extra full-catalog write per overlapping job.
 // SaveGen is the count of saves asked for so far.
 func (s *Store) SaveGen() uint64 {
 	s.mu.Lock()
@@ -1629,6 +1607,28 @@ func (s *Store) FlushPending() error {
 	return s.writeCatalog()
 }
 
+// EndBatch leaves batched-save mode and forces the final write if anything is
+// pending, RETURNING the error so a caller cannot report success for work that was
+// never persisted (OB-002).
+//
+// Two deliberate properties:
+//
+//   - The error is returned, not dropped. Coalesced progress is allowed to sit in
+//     memory during a batch, but the moment a job claims completion its catalog
+//     changes must have reached the disk. Every caller folds this into its own error
+//     via endBatchInto.
+//   - It flushes whenever the catalog is dirty, NOT only when the depth reaches
+//     zero. batchDepth is shared by every concurrent job, so the old
+//     `batchDepth == 0` condition meant a job finishing while ANOTHER job still held
+//     a batch wrote nothing and simply hoped that other job would flush later —
+//     someone else's unrelated work became the precondition for this job's
+//     durability. A finishing job now always writes.
+//
+// The tradeoff: when two jobs overlap, the flush also persists the other job's
+// partially-applied state. That is safe — the catalog is one document written under
+// s.mu, so it is always internally consistent, and every batched job is an
+// idempotent re-run (see BeginBatch), so persisting its progress early can only save
+// work on a replay. The cost is one extra full-catalog write per overlapping job.
 func (s *Store) EndBatch() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

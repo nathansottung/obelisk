@@ -657,7 +657,7 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 	if len(cands) == 0 && len(mirrorTargets) == 0 {
 		return nil, fmt.Errorf("no cataloged packages or mirrors found on %s (looked for NAME/<payload>, NAME.tar[.gpg], or a mirror rooted here)", destDir)
 	}
-	var okCount int
+	var okCount, passed int // credited to a copy; read correctly (credited or not)
 	results := make([]map[string]any, 0, len(cands))
 	for i, cd := range cands {
 		progress(float64(i)/float64(len(cands)+len(mirrorTargets)), "verify "+cd.c.Name)
@@ -677,6 +677,9 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 		// only there; package status derives from all copies (a bad medium on this
 		// campaign does not fail a package with other verified copies).
 		credited := a.Store.CreditCopyCheck(cd.c, CopyAt{Path: filepath.Dir(cd.path), Serial: serial}, ok, VerifyB)
+		if ok {
+			passed++
+		}
 		if ok && credited > 0 {
 			cd.c.VerifiedAt = &now
 			okCount++
@@ -713,6 +716,9 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 			a.Store.UpdateChunk(c)
 		}
 		if ok {
+			passed++
+		}
+		if ok && credited > 0 {
 			okCount++
 		}
 		mirrorResults = append(mirrorResults, map[string]any{"chunk": c.Name, "ok": ok, "level": level,
@@ -724,7 +730,7 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 	total := len(cands) + len(mirrorTargets)
 	progress(1.0, fmt.Sprintf("verified %d/%d ok", okCount, total))
 	a.Store.Log("verify-campaign", fmt.Sprintf("%s: %d/%d ok (mirror level %s)", destDir, okCount, total, level))
-	return map[string]any{"dest_dir": destDir, "checked": total, "ok": okCount, "level": level,
+	return map[string]any{"dest_dir": destDir, "checked": total, "ok": okCount, "passed": passed, "level": level,
 		"results": results, "mirror_results": mirrorResults}, nil
 }
 

@@ -94,3 +94,20 @@ func TestJob_FailsOnlyForItsOwnUnsavedChange(t *testing.T) {
 		t.Errorf("result %v, want a note that the catalog is read-only", j.Result)
 	}
 }
+
+// A burn is gated like a write: a package whose last build failed is not burned.
+func TestBurn_RefusesAFailedPackage(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	c := builtTestChunk(t, app, "BURN-FAILED")
+	c.Status = "FAILED"
+	app.Store.UpdateChunk(c)
+	cfg := mustConfig(t, app)
+	cfg.BurnCommand = `xorriso -volid {LABEL} -map {SRC} /`
+	if err := writeConfigForTest(app, cfg); err != nil {
+		t.Fatal(err)
+	}
+	q := app.Store.AddBurnQueue(BurnQueue{Name: "Q", MediaKind: "BD-R25", Discs: []*BurnDisc{{ChunkID: c.ID, Status: "PENDING"}}})
+	if _, err := app.BurnNext(q.ID, func(float64, string) {}); err == nil || !strings.Contains(err.Error(), "build it first") {
+		t.Errorf("burning a FAILED package: %v, want a refusal", err)
+	}
+}
