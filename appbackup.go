@@ -31,6 +31,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -73,23 +74,29 @@ type ExportResult struct {
 	MemberCount   int    `json:"member_count"`
 	IncludesKeys  bool   `json:"includes_keys"`
 	SchemaVersion int    `json:"schema_version"`
+	// ScanFilesLeftOut are scan file lists not put in the backup: missing, or not
+	// matching their record.
+	ScanFilesLeftOut []string `json:"scan_files_left_out,omitempty"`
 }
 
 // RestoreResult is the post-restore summary.
 type RestoreResult struct {
-	SchemaVersion int    `json:"schema_version"`
-	AppVersion    string `json:"app_version"`
-	Created       string `json:"created"`
-	IncludedKeys  bool   `json:"included_keys"`
-	Archives      int    `json:"archives"`
-	Files         int    `json:"files"`
-	Volumes       int    `json:"volumes"`
-	Packages      int    `json:"packages"`
-	Jobs          int    `json:"jobs"`
-	VerifyEvents  int    `json:"verify_events"`
-	PreRestoreDir string `json:"pre_restore_dir"`
-	ReadOnly      bool   `json:"read_only,omitempty"`
-	ReadOnlyWhy   string `json:"read_only_why,omitempty"`
+	// ScanFilesSkipped are the backup's scan file lists not restored because they
+	// do not match a scan record in the backup's catalog.
+	ScanFilesSkipped []string `json:"scan_files_skipped,omitempty"`
+	SchemaVersion    int      `json:"schema_version"`
+	AppVersion       string   `json:"app_version"`
+	Created          string   `json:"created"`
+	IncludedKeys     bool     `json:"included_keys"`
+	Archives         int      `json:"archives"`
+	Files            int      `json:"files"`
+	Volumes          int      `json:"volumes"`
+	Packages         int      `json:"packages"`
+	Jobs             int      `json:"jobs"`
+	VerifyEvents     int      `json:"verify_events"`
+	PreRestoreDir    string   `json:"pre_restore_dir"`
+	ReadOnly         bool     `json:"read_only,omitempty"`
+	ReadOnlyWhy      string   `json:"read_only_why,omitempty"`
 	// HeldSettings are the backup's program settings, not applied (see
 	// heldsettings.go); nil when they match the current ones.
 	HeldSettings *HeldSettings `json:"held_settings,omitempty"`
@@ -139,15 +146,6 @@ func (a *App) gatherMembers(includeKeys bool) ([]rawMember, error) {
 		members = append(members, rawMember{"formats.json", b})
 	}
 
-	// scans/<name> — each recorded drive scan's file list (scanhistory.go), so the
-	// scan history moves with the catalog. A list missing from the scans folder is
-	// left out; its record then has no file list on the restored side.
-	for _, name := range a.Store.scanFileListNames() {
-		if b, err := os.ReadFile(filepath.Join(a.scansDir(), name)); err == nil {
-			members = append(members, rawMember{"scans/" + name, b})
-		}
-	}
-
 	if includeKeys {
 		seen := map[string]bool{}
 		for _, ksPath := range cfg.KeystorePaths {
@@ -188,6 +186,25 @@ func (a *App) exportAppBackupInto(out *outFolder, name string, includeKeys bool)
 	members, err := a.gatherMembers(includeKeys)
 	if err != nil {
 		return ExportResult{}, err
+	}
+	// scans/<name> — each recorded drive scan's file list (scanhistory.go), so the
+	// scan history moves with the catalog. A list that is missing, or does not
+	// match its record's SHA-256, is left out and reported; its record then has
+	// no file list on the restored side. It never fails the backup.
+	var leftOut []string
+	lists := a.Store.scanFileLists()
+	names := make([]string, 0, len(lists))
+	for name := range lists {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		b, err := os.ReadFile(filepath.Join(a.scansDir(), name))
+		if err != nil || sha256Hex(b) != lists[name] {
+			leftOut = append(leftOut, name)
+			continue
+		}
+		members = append(members, rawMember{"scans/" + name, b})
 	}
 
 	// Schema version comes from the catalog member itself, so the manifest states what
@@ -268,7 +285,7 @@ func (a *App) exportAppBackupInto(out *outFolder, name string, includeKeys bool)
 		size = fi.Size()
 	}
 	return ExportResult{
-		TarPath: out.Join(name), SidecarPath: out.Join(sidecar), Bytes: size,
+		TarPath: out.Join(name), SidecarPath: out.Join(sidecar), Bytes: size, ScanFilesLeftOut: leftOut,
 		MemberCount: len(members) + 1, IncludesKeys: includeKeys, SchemaVersion: schemaVer,
 	}, nil
 }
@@ -510,9 +527,10 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	}
 
 	// Each scan file list must be the one a scan record in the backup's catalog
-	// names, with its recorded SHA-256; anything else stops the restore here,
-	// before anything changes.
-	if err := checkBackupScanFiles(man, members); err != nil {
+	// names, with its recorded SHA-256. One that is not is skipped (and reported):
+	// it never stops the rest of the restore.
+	skipScans, err := checkBackupScanFiles(man, members)
+	if err != nil {
 		return RestoreResult{}, err
 	}
 
@@ -561,6 +579,9 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 				return RestoreResult{}, fmt.Errorf("restore %s: %w", m.Name, err)
 			}
 		case strings.HasPrefix(m.Name, "scans/"):
+			if skipScans[m.Name] {
+				continue
+			}
 			if err := writeFile(filepath.Join(a.scansDir(), strings.TrimPrefix(m.Name, "scans/")), b, 0o600); err != nil {
 				return RestoreResult{}, fmt.Errorf("restore %s: %w", m.Name, err)
 			}
@@ -598,7 +619,8 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 
 	// (7) Summary.
 	res := RestoreResult{
-		SchemaVersion: man.SchemaVersion, AppVersion: man.AppVersion, Created: man.Created,
+		ScanFilesSkipped: sortedKeys(skipScans),
+		SchemaVersion:    man.SchemaVersion, AppVersion: man.AppVersion, Created: man.Created,
 		IncludedKeys: man.IncludesKeys, PreRestoreDir: preDir, HeldSettings: held, KeystoreNote: keystoreNote,
 		Archives: len(ns.Collections()), Files: len(ns.AllFiles()),
 		Volumes: len(ns.Volumes()), Jobs: len(ns.Jobs()),
@@ -754,31 +776,38 @@ func (a *App) copyPreRestore(cfg Config, preDir string) error {
 	return nil
 }
 
-// checkBackupScanFiles refuses a backup whose scans/ members are not exactly the
-// file lists its own catalog's scan records name, with their recorded SHA-256.
-func checkBackupScanFiles(man appBackupManifest, members map[string][]byte) error {
+// checkBackupScanFiles returns the backup's scans/ members to skip: those that
+// are not a file list its own catalog's scan records name, with the recorded
+// SHA-256. It fails only when the catalog itself cannot be read.
+func checkBackupScanFiles(man appBackupManifest, members map[string][]byte) (map[string]bool, error) {
 	want := map[string]string{} // file list -> recorded SHA-256
 	if catBytes, ok := members["catalog.json"]; ok {
 		var c catalog
 		if err := decodeCatalogJSON(catBytes, &c); err != nil {
-			return fmt.Errorf("the backup's catalog is damaged: %w", err)
+			return nil, fmt.Errorf("the backup's catalog is damaged: %w", err)
 		}
 		for _, r := range c.Scans {
 			want[r.FileList] = r.FileListSHA256
 		}
 	}
+	skip := map[string]bool{}
 	for _, m := range man.Members {
 		name, ok := strings.CutPrefix(m.Name, "scans/")
 		if !ok {
 			continue
 		}
-		sum, recorded := want[name]
-		switch {
-		case !recorded:
-			return fmt.Errorf("the backup's scan file %s belongs to no scan in its catalog; nothing was restored", name)
-		case sha256Hex(members[m.Name]) != sum:
-			return fmt.Errorf("the backup's scan file %s does not match its scan record (changed or damaged); nothing was restored", name)
+		if sum, recorded := want[name]; !recorded || sha256Hex(members[m.Name]) != sum {
+			skip[m.Name] = true
 		}
 	}
-	return nil
+	return skip, nil
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

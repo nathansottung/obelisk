@@ -154,14 +154,14 @@ func (a *App) sweepScanFiles(dir string) {
 	}
 }
 
-// scanFileListNames lists the file-list names of every scan record.
-func (s *Store) scanFileListNames() []string {
+// scanFileLists maps each scan record's file-list name to its recorded SHA-256.
+func (s *Store) scanFileLists() map[string]string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]string, 0, len(s.c.Scans))
+	out := make(map[string]string, len(s.c.Scans))
 	for _, r := range s.c.Scans {
 		if validScanFileName(r.FileList) {
-			out = append(out, r.FileList)
+			out[r.FileList] = r.FileListSHA256
 		}
 	}
 	return out

@@ -5,7 +5,6 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -47,14 +46,14 @@ func TestAppBackup_CarriesScanHistory(t *testing.T) {
 	}
 }
 
-// A restore refuses, before changing anything, a backup whose scan file list
-// does not match the scan record in the backup's own catalog.
-func TestAppBackup_RestoreChecksScanFiles(t *testing.T) {
+// One damaged scan file never makes an app backup unrestorable: the export
+// leaves it out (and says so), and a restore that meets one skips it and
+// restores everything else.
+func TestAppBackup_DamagedScanFileIsLeftOut(t *testing.T) {
 	src := dockApp(t)
 	drive := t.TempDir()
 	writeTree(t, drive, map[string]string{"a.txt": "alpha\n"})
-	rec := scanDrive(t, src, drive, "BK2")
-	// The file list changes after it was recorded.
+	rec := scanDrive(t, src, drive, "BK3")
 	if err := os.WriteFile(filepath.Join(src.DataDir, "scans", rec.FileList), []byte("not the scan"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -62,13 +61,25 @@ func TestAppBackup_RestoreChecksScanFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dst := dockApp(t)
-	catBefore, _ := os.ReadFile(filepath.Join(dst.DataDir, "catalog.json"))
-	_, err = dst.RestoreAppBackup(res.TarPath)
-	if err == nil || !strings.Contains(err.Error(), "scan") {
-		t.Fatalf("a backup with a changed scan file list: %v, want a refusal naming it", err)
+	if memberNames(readManifest(t, res.TarPath))["scans/"+rec.FileList] || len(res.ScanFilesLeftOut) != 1 {
+		t.Errorf("export: damaged scan file included, or not reported (%v)", res.ScanFilesLeftOut)
 	}
-	if catAfter, _ := os.ReadFile(filepath.Join(dst.DataDir, "catalog.json")); string(catAfter) != string(catBefore) {
-		t.Error("a refused restore changed the catalog")
+	dst := dockApp(t)
+	if _, err := dst.RestoreAppBackup(res.TarPath); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if v := dst.Store.VolumeBySerial("BK3"); v == nil || len(dst.Store.ScanRecords(v.ID)) != 1 {
+		t.Error("the catalog was not restored")
+	}
+
+	// A backup that carries a scan file not matching its record (made by hand):
+	// the restore skips that file and says so.
+	man := appBackupManifest{Members: []appBackupMember{{Name: "scans/" + rec.FileList}}}
+	members := map[string][]byte{"scans/" + rec.FileList: []byte("tampered")}
+	catBytes, _ := os.ReadFile(filepath.Join(src.DataDir, "catalog.json"))
+	members["catalog.json"] = catBytes
+	skip, err := checkBackupScanFiles(man, members)
+	if err != nil || !skip["scans/"+rec.FileList] {
+		t.Errorf("a mismatched scan file: skip %v, err %v; want it skipped", skip, err)
 	}
 }

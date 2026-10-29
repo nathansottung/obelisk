@@ -844,6 +844,7 @@ func api(mux *http.ServeMux, app *App) {
 			return map[string]any{
 				"tar_path": res.TarPath, "sidecar_path": res.SidecarPath, "bytes": res.Bytes,
 				"member_count": res.MemberCount, "includes_keys": res.IncludesKeys, "artifacts": arts,
+				"scan_files_left_out": res.ScanFilesLeftOut,
 			}, nil
 		}))
 	})
