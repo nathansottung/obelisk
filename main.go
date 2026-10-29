@@ -1972,6 +1972,9 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("output_dir required"))
 			return
 		}
+		if !outFolderGate(w, app, out) {
+			return
+		}
 		startedOn(w).write(runJob(app, "bagit-export", "BagIt export → "+out, func(p func(float64, string)) (map[string]any, error) {
 			return app.ExportBag(id, out, p)
 		}))
@@ -1986,6 +1989,9 @@ func api(mux *http.ServeMux, app *App) {
 		out := s(body(r), "output_dir")
 		if out == "" {
 			jsonErr(w, 400, fmt.Errorf("output_dir required"))
+			return
+		}
+		if !outFolderGate(w, app, out) {
 			return
 		}
 		startedOn(w).write(runJob(app, "bagit-export", "BagIt export → "+out, func(p func(float64, string)) (map[string]any, error) {

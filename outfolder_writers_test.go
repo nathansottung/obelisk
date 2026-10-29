@@ -170,3 +170,21 @@ func TestFinalize_SidecarDecidedByRealLocation(t *testing.T) {
 	}
 	assertFileBytes(t, victim, "SOMEONE ELSE'S")
 }
+
+// A BagIt export decides its output folder by where it really is, and a bag
+// file already there (a hard link to another file) is replaced as a name.
+func TestBagExport_OutputDecidedByRealLocation(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	c := builtTestChunk(t, app, "BAG-GUARD")
+	_, link, untouched := sourceBehindLink(t, app)
+	_, err := app.ExportPackageBag(c.ID, link, noProg)
+	assertSourceRefusal(t, "bag export into a link to a source", err)
+	untouched()
+
+	out := t.TempDir()
+	victim := plantAtStageName(t, filepath.Join(out, "BAG-GUARD-bag", "bagit.txt"))
+	if _, err := app.ExportPackageBag(c.ID, out, noProg); err != nil {
+		t.Fatal(err)
+	}
+	assertFileBytes(t, victim, "SOMEONE ELSE'S")
+}

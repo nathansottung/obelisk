@@ -2138,6 +2138,7 @@ function bagExportDlg(id,name){dlg(`<h1>Export a BagIt bag — “${esc(name)}�
   <input id="d1" class="full" placeholder="D:\\exports or /mnt/handoff">${browseBtn('d1')}
   <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Export bag</button></div>`,
   async()=>{const p=$('#d1').value.trim();if(!p)return;
+    if(!(await destGate(p)))return;
     await api('POST',`/api/collections/${id}/bagit-export`,{output_dir:p});toast('BagIt export started — see Jobs');loc('jobs')});}
 function scanDlg(id,name){dlg(`<h1>Scan into “${esc(name)}”</h1>
   <label>Folder to catalog (walked recursively; every file SHA-256 hashed)</label>
@@ -2234,6 +2235,7 @@ function bagPackageDlg(id,name){dlg(`<h1>Export “${esc(name)}” as a BagIt ba
   <input id="d1" class="full" placeholder="D:\\exports or /mnt/handoff">${browseBtn('d1')}
   <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Export bag</button></div>`,
   async()=>{const p=$('#d1').value.trim();if(!p)return;
+    if(!(await destGate(p)))return;
     await api('POST',`/api/chunks/${id}/bagit-export`,{output_dir:p});toast('BagIt export started — see Jobs');loc('jobs')});}
 async function spanWriteDlg(id,name){
   const [c,vols]=await Promise.all([api('GET','/api/chunks/'+id),api('GET','/api/volumes')]);
