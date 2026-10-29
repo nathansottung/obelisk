@@ -41,9 +41,10 @@ func newGpgSession(gpgBin string) (*gpgSession, error) {
 }
 
 // args are the options every run takes: the isolated home, no options file,
-// batch mode, no passphrase cache, and the passphrase read from stdin.
+// batch mode, quiet (so stderr holds only warnings and errors), no passphrase
+// cache, and the passphrase read from stdin.
 func (s *gpgSession) args() []string {
-	return []string{"--homedir", s.home, "--no-options", "--batch", "--yes",
+	return []string{"--homedir", s.home, "--no-options", "--batch", "--quiet", "--yes",
 		"--no-symkey-cache", "--pinentry-mode", "loopback", "--passphrase-fd", "0"}
 }
 

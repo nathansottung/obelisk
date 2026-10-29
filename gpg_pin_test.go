@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -156,5 +157,37 @@ func TestGpgSession_IsolatedAndUncached(t *testing.T) {
 	}
 	if ents, _ := os.ReadDir(userHome); len(ents) != 0 {
 		t.Errorf("gpg wrote into the operator's GNUPGHOME: %v", ents)
+	}
+}
+
+// A successful decrypt says nothing on stderr, so anything gpg does print
+// there is a failure worth reporting, never routine information.
+func TestGpgSession_DecryptIsQuietOnSuccess(t *testing.T) {
+	gpgBin := nativeTools(t)["gpg"]
+	dir := t.TempDir()
+	in, enc := filepath.Join(dir, "in.txt"), filepath.Join(dir, "in.txt.gpg")
+	if err := os.WriteFile(in, []byte("quiet please\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := gpgEncrypt(gpgBin, "a test passphrase", enc, in); err != nil {
+		t.Fatal(err)
+	}
+	s, err := newGpgSession(gpgBin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	cmd := helperCommand(gpgBin, s.decryptArgs(enc)...)
+	cmd.Stdin = strings.NewReader("a test passphrase")
+	var out, errb strings.Builder
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("decrypt: %v: %s", err, errb.String())
+	}
+	if out.String() != "quiet please\n" {
+		t.Errorf("decrypted %q", out.String())
+	}
+	if e := strings.TrimSpace(errb.String()); e != "" {
+		t.Errorf("a successful decrypt wrote to stderr: %q", e)
 	}
 }

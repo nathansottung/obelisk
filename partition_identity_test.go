@@ -339,6 +339,16 @@ func TestMbrLinuxNumber(t *testing.T) {
 	if got := mbrLinuxNumber(z, 201<<20); got != 5 {
 		t.Errorf("logical after a zero-length entry: number %d, want 5", got)
 	}
+	// A primary slot with a type but no size is skipped, as Linux skips it; one
+	// with a size but type 0 keeps its slot number.
+	p := layout(ent{1 << 20, 0x07}, ent{50 << 20, 0x07}, ent{60 << 20, 0}, ent{0, 0})
+	binary.LittleEndian.PutUint64(p[head+0*size+16:], 0)
+	if got := mbrLinuxNumber(p, 1<<20); got != 0 {
+		t.Errorf("a typed zero-length primary: number %d, want 0", got)
+	}
+	if got := mbrLinuxNumber(p, 60<<20); got != 3 {
+		t.Errorf("a type-0 primary with a size: number %d, want 3", got)
+	}
 	if got := mbrLinuxNumber(l[:40], 1<<20); got != 0 {
 		t.Errorf("a short layout gave %d, want 0", got)
 	}
