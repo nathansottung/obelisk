@@ -344,23 +344,36 @@ func rejoinSegments(sourceDir, outputDir string, c *Chunk, progress func(float64
 		}
 	}
 	joined := filepath.Join(outputDir, base)
-	out, err := os.Create(joined)
+	// Joined into a new staging file, created exclusively, and renamed into place:
+	// a file already at the joined name is never written through.
+	out, err := createStage(joined, 0o644)
 	if err != nil {
 		return "", nil, err
 	}
-	defer out.Close()
+	tmp := out.Name()
+	failJoin := func(err error) (string, []string, error) {
+		out.Close()
+		_ = os.Remove(tmp)
+		return "", nil, err
+	}
 	buf := make([]byte, 8<<20)
 	for i, sp := range segs {
 		progress(float64(i)/float64(len(segs))*0.2, fmt.Sprintf("rejoin %d/%d", i+1, len(segs)))
 		in, err := os.Open(sp)
 		if err != nil {
-			return "", nil, err
+			return failJoin(err)
 		}
 		if _, err := io.CopyBuffer(out, in, buf); err != nil {
 			in.Close()
-			return "", nil, err
+			return failJoin(err)
 		}
 		in.Close()
+	}
+	if err := finalizeWrite(out, joined); err != nil {
+		return failJoin(err)
+	}
+	if err := renameReplacing(tmp, joined); err != nil {
+		return failJoin(err)
 	}
 	// Bring the par2 set next to the joined payload for verify/repair. A failure here
 	// is NOT swallowed: the payload rejoined fine, but without its par2 set the

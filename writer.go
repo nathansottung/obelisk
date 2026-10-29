@@ -43,7 +43,36 @@ type RingStats struct {
 // (source) and written (destination) byte counts, the buffer fill percentage, and the
 // live stall count — feeding the Performance strip's ring gauge. It must be cheap and
 // non-blocking; pass nil when no live telemetry is wanted.
+//
+// dst is written as a new staging file beside it, created exclusively, and renamed
+// to dst only once it is flushed, so a file already at dst (or a hard link to
+// another file) is replaced as a name and never written through.
 func ringCopy(src, dst string, offset, length int64, blockMB int, bufferGB, throttleMbps float64, progress func(done, total int64), live func(read, written int64, fillPct, stalls int)) (string, RingStats, error) {
+	out, err := createStage(dst, 0o644)
+	if err != nil {
+		return "", RingStats{}, err
+	}
+	tmp := out.Name()
+	hash, stats, err := ringCopyTo(src, out, offset, length, blockMB, bufferGB, throttleMbps, progress, live)
+	if err == nil {
+		// The payload is not written until the medium says it is (see finalizeWrite).
+		err = finalizeWrite(out, dst)
+	}
+	if err == nil {
+		err = renameReplacing(tmp, dst)
+	}
+	if err != nil {
+		out.Close()
+		_ = os.Remove(tmp)
+		return "", stats, err
+	}
+	return hash, stats, nil
+}
+
+// ringCopyTo is ringCopy into out, an open file the caller owns: it writes the
+// stream and returns its hash, and leaves flushing, closing and naming the file to
+// the caller.
+func ringCopyTo(src string, out *os.File, offset, length int64, blockMB int, bufferGB, throttleMbps float64, progress func(done, total int64), live func(read, written int64, fillPct, stalls int)) (string, RingStats, error) {
 	block := blockMB << 20
 	depth := int(bufferGB * float64(1<<30) / float64(block))
 	if depth < 2 {
@@ -67,12 +96,6 @@ func ringCopy(src, dst string, offset, length int64, blockMB int, bufferGB, thro
 			total = st.Size() - offset
 		}
 	}
-	out, err := os.Create(dst)
-	if err != nil {
-		return "", stats, err
-	}
-	defer out.Close() // safety net for the error paths; the success path closes explicitly below
-
 	ch := make(chan []byte, depth)
 	errCh := make(chan error, 1)
 	h := sha256.New()
@@ -167,14 +190,6 @@ func ringCopy(src, dst string, offset, length int64, blockMB int, bufferGB, thro
 	case err := <-errCh:
 		return "", stats, err
 	default:
-	}
-	// The payload is not written until the medium says it is. Closing on a deferred
-	// call would swallow the error from the final flush — a full disk, or a write
-	// error on the tape/drive that only surfaces at close — and we would return a
-	// stream hash computed over the bytes we MEANT to write, describing a file that
-	// is short on the medium. Fail here instead, with no hash.
-	if err := finalizeWrite(out, dst); err != nil {
-		return "", stats, err
 	}
 	secs := time.Since(start).Seconds()
 	stats.Bytes, stats.Seconds = written, round2(secs)
@@ -807,22 +822,33 @@ func tail(s string, n int) string {
 	return cleanToolText(s, n)
 }
 
+// copyFile copies src to dst through a new staging file beside dst, created
+// exclusively and renamed to dst once flushed, so a file already at dst is
+// replaced as a name and never written through.
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	out, err := os.Create(dst)
+	out, err := createStage(dst, 0o644)
 	if err != nil {
 		return err
 	}
-	defer out.Close() // safety net for the error paths; the success path closes explicitly below
-	if _, err := io.Copy(out, in); err != nil {
-		return err
+	tmp := out.Name()
+	_, err = io.Copy(out, in)
+	if err == nil {
+		// Same rule as the payload stream: a sidecar (par2 block, manifest,
+		// RESTORE.txt) whose final flush fails is a sidecar that is not on the
+		// medium, and the caller must hear about it rather than read a nil error.
+		err = finalizeWrite(out, dst)
 	}
-	// Same rule as the payload stream: a sidecar (par2 block, manifest, RESTORE.txt)
-	// whose final flush fails is a sidecar that is not on the medium, and the caller
-	// must hear about it rather than read a nil error.
-	return finalizeWrite(out, dst)
+	if err == nil {
+		err = renameReplacing(tmp, dst)
+	}
+	if err != nil {
+		out.Close()
+		_ = os.Remove(tmp)
+	}
+	return err
 }
