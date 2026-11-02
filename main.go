@@ -20,11 +20,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	qrcode "github.com/skip2/go-qrcode"
@@ -145,6 +147,19 @@ func main() {
 		auth = "ON — Authorization: Bearer <token> required for /api"
 	}
 	log.Printf("Obelisk %s — http://%s  (data: %s · auth: %s)", appVersion, addr, *dataDir, auth)
+	// On an interrupt or termination signal, save what is pending and close the
+	// catalog before exiting.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		sig := <-stop
+		log.Printf("%v: saving the catalog and stopping", sig)
+		if err := app.Shutdown(); err != nil {
+			log.Printf("saving the catalog on shutdown: %v", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}()
 	log.Fatal(http.ListenAndServe(addr, apiGuard(authMiddleware(mux, token))))
 }
 

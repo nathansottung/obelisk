@@ -1209,7 +1209,12 @@ type Store struct {
 	// Every record still lives in c; each save writes the records that changed.
 	be     catalogBackend
 	closed bool // Close was called; every later save is refused
-	jobs   struct {
+	// lostErr is a change the catalog database dropped where no caller could be
+	// told (a failed commit, a file write whose method returns no error). Every
+	// later save, FlushPending and EndBatch return it, so no job reports success
+	// after it. It lasts until the store is reopened.
+	lostErr error
+	jobs    struct {
 		mu      sync.Mutex
 		next    int
 		rows    []*Job
@@ -1270,10 +1275,11 @@ func catalogEngine() (string, error) {
 // implementation (catalogdb_store.go) is linked into the full build only.
 type catalogBackend interface {
 	// flush writes every record of c that changed since the last commit, in one
-	// transaction, and commits it. A failed write leaves the transaction open and
-	// returns the error, so the next flush tries again. A failed commit returns the
-	// error and the catalog as last committed, which the store adopts.
-	flush(c *catalog) (*catalog, error)
+	// transaction, and commits it. A record the database refuses is reported and
+	// tried again by the next flush; the others commit. A failed commit returns a
+	// *catalogChangesLost: memory is kept and written again next time, but the
+	// transaction's file writes are gone.
+	flush(c *catalog) error
 	close() error
 	// abandon closes the database without writing anything, for a startup that
 	// was refused after the database was opened.
@@ -1282,7 +1288,7 @@ type catalogBackend interface {
 	// File records live in the database, never in memory (catalogdb_files.go).
 	// Writes join the open transaction, which the next save commits.
 	fileScan(q fileQuery, fn func(*File) error) error
-	filePage(q fileQuery, cur fileCursor, n int) ([]*File, fileCursor, error)
+	filePage(q fileQuery, cur fileCursor, n int) ([]*File, fileCursor, bool, error)
 	fileGet(id int) (*File, error)
 	fileByKey(collectionID, folderID int, relPath string) (*File, error)
 	filePut(f *File, isNew bool) error
@@ -1604,22 +1610,15 @@ func (s *Store) writeCatalog() error {
 		return errors.New("the catalog is closed")
 	}
 	if s.be != nil {
-		committed, err := s.be.flush(&s.c)
-		if committed != nil {
-			// The commit failed and was rolled back: the store returns to what the
-			// database holds, so memory never claims records that are not there.
-			s.c = *committed
-			if s.c.NextID == nil {
-				s.c.NextID = map[string]int{}
-			}
-			s.fileIdx = nil
-			s.dirty = false
+		err := s.be.flush(&s.c)
+		if lost := (*catalogChangesLost)(nil); errors.As(err, &lost) && s.lostErr == nil {
+			s.lostErr = err
 		}
 		if err != nil {
 			return err
 		}
 		s.lastSave, s.dirty = time.Now(), false
-		return nil
+		return s.lostErr
 	}
 	// Pretty-print small catalogs (human-inspectable with any text editor — the
 	// whole point of the JSON store) but switch to COMPACT JSON once the catalog
@@ -1673,6 +1672,9 @@ func (s *Store) writeCatalog() error {
 	s.dailyBackup(b)
 	return nil
 }
+
+// UsesDatabase reports whether the store runs on the catalog database engine.
+func (s *Store) UsesDatabase() bool { return s.be != nil }
 
 // Close saves anything not yet written and closes the catalog database. Every
 // later save is refused. A catalog.json store has nothing to close.
@@ -1735,7 +1737,7 @@ func (s *Store) FlushPending() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.dirty {
-		return nil
+		return s.lostErr
 	}
 	return s.writeCatalog()
 }
@@ -1769,7 +1771,7 @@ func (s *Store) EndBatch() error {
 		s.batchDepth--
 	}
 	if !s.dirty {
-		return nil
+		return s.lostErr
 	}
 	return s.writeCatalog()
 }

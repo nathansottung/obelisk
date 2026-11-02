@@ -536,6 +536,8 @@ func (a *App) ScanFolder(collectionID int, root string, progress func(float64, s
 	total := len(paths)
 	var scanned int64         // files actually recorded (not merely enqueued)
 	reg := a.formatRegistry() // extension → role, for media metadata on still images
+	var recordMu sync.Mutex
+	var recordErr error // the first file the catalog could not record
 	parallelHash(paths, func(d int) {
 		progress(float64(d)/float64(total), progStats(0, 0, int64(d), int64(total), "hashing source files"))
 	}, func(p, sha, b3 string, size int64, mtime time.Time) {
@@ -547,11 +549,21 @@ func (a *App) ScanFolder(collectionID int, root string, progress func(float64, s
 			f := File{CollectionID: collectionID, FolderID: folder.ID,
 				RelPath: filepath.ToSlash(rel), SizeBytes: size, HashAlg: "SHA256", Hash: sha, Blake3: b3, ModTime: mtime, Role: role}
 			f.ShotAt, f.CameraSerial = a.extractMediaMeta(p, role, cfg)
-			a.Store.UpsertFile(f)
+			if _, err := a.Store.UpsertFileErr(f); err != nil {
+				recordMu.Lock()
+				if recordErr == nil {
+					recordErr = err
+				}
+				recordMu.Unlock()
+				return
+			}
 			atomic.AddInt64(&scanned, 1)
 		}
 	}, addProblem)
-	a.Store.Flush()
+	if recordErr != nil {
+		return int(scanned), problems, fmt.Errorf("the catalog could not record a scanned file: %w", recordErr)
+	}
+	a.Store.Flush() // its error is the batch's: the caller's EndBatch reports the final write
 	a.Store.Log("scan", fmt.Sprintf("archive %d: %s (%d files, %d problems)", collectionID, root, scanned, len(problems)))
 	return int(scanned), problems, nil
 }

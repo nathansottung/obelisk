@@ -74,6 +74,7 @@ func orderedJobRestoreBundle(t *testing.T, rows []rawMember, duplicateManifest b
 }
 
 func TestJobRestoreMembers_RefusalBeforePublication(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	good := []byte(`{"next":70,"rows":[{"id":70,"status":"FAILED","label":"incoming"}]}`)
 	bad := []byte(`{"rows":[null]}`)
 	type fixture struct {

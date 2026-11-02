@@ -188,6 +188,7 @@ func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress
 	}
 	curByAbs := map[string]*cur{}
 	var mu sync.Mutex
+	var recordErr error // the first file the catalog could not record, under mu
 	parallelHash(paths, func(dd int) {
 		if total > 0 {
 			progress(0.05+0.7*float64(dd)/float64(total), progStats(0, 0, int64(dd), int64(total), "hashing changed files"))
@@ -198,15 +199,26 @@ func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress
 		mu.Unlock()
 		fol := perFolder[p]
 		if rel, e := filepath.Rel(folderPath[fol], p); e == nil {
-			a.Store.UpsertFile(File{CollectionID: collectionID, FolderID: fol,
-				RelPath: filepath.ToSlash(rel), SizeBytes: size, HashAlg: "SHA256", Hash: sha, Blake3: b3, ModTime: mtime})
+			if _, err := a.Store.UpsertFileErr(File{CollectionID: collectionID, FolderID: fol,
+				RelPath: filepath.ToSlash(rel), SizeBytes: size, HashAlg: "SHA256", Hash: sha, Blake3: b3, ModTime: mtime}); err != nil {
+				mu.Lock()
+				if recordErr == nil {
+					recordErr = err
+				}
+				mu.Unlock()
+			}
 		}
 	}, func(p, kind, msg string) {
 		mu.Lock()
 		noteUnread(p)
 		mu.Unlock()
 	})
-	a.Store.Flush()
+	if recordErr != nil {
+		return nil, fmt.Errorf("the catalog could not record a rescanned file: %w", recordErr)
+	}
+	if err := a.Store.FlushPending(); err != nil { // not batched: its save is reported here
+		return nil, fmt.Errorf("the rescan finished but the catalog could not be saved, so it is NOT recorded: %w", err)
+	}
 
 	progress(0.82, "comparing")
 	counts := map[string]int{}

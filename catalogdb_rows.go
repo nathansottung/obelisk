@@ -34,18 +34,16 @@ func (e *dbEnc) fail(format string, a ...any) {
 	}
 }
 
-// t stores a time as UTC Unix nanoseconds; the zero time is NULL. A time outside
-// what nanoseconds can hold (about 1678 to 2261) is refused rather than changed.
+// t stores a time as UTC Unix nanoseconds when it fits, and otherwise as its exact
+// RFC 3339 text in UTC; the zero time is NULL.
 func (e *dbEnc) t(t time.Time) any {
 	if t.IsZero() {
 		return nil
 	}
-	ns := t.UnixNano()
-	if ns == catalogDBZeroTime || !time.Unix(0, ns).Equal(t) {
-		e.fail("the time %s cannot be stored exactly", t.Format(time.RFC3339Nano))
-		return nil
+	if ns := t.UnixNano(); ns != catalogDBZeroTime && time.Unix(0, ns).Equal(t) {
+		return ns
 	}
-	return ns
+	return t.UTC().Format(time.RFC3339Nano)
 }
 
 // tp stores a pointer time: NULL for nil, catalogDBZeroTime for a zero time.
@@ -118,26 +116,60 @@ func hashBytes(s string) ([]byte, bool) {
 	return raw, err == nil
 }
 
+// dbInt reads an INTEGER column, or a time column that may hold the text form of a
+// time (see dbEnc.t).
+type dbInt struct {
+	Int64 int64
+	Valid bool
+	tm    *time.Time // a time kept as RFC 3339 text, parsed
+}
+
+func (n *dbInt) Scan(src any) error {
+	*n = dbInt{}
+	switch v := src.(type) {
+	case nil:
+	case int64:
+		n.Int64, n.Valid = v, true
+	case string, []byte:
+		text, _ := v.(string)
+		if b, ok := v.([]byte); ok {
+			text = string(b)
+		}
+		t, err := time.Parse(time.RFC3339Nano, text)
+		if err != nil {
+			return fmt.Errorf("the time %q in the catalog database cannot be read: %w", text, err)
+		}
+		t = t.UTC()
+		n.tm, n.Valid = &t, true
+	default:
+		return fmt.Errorf("unexpected %T in an integer or time column", src)
+	}
+	return nil
+}
+
 // Readers: the inverse of each encoder.
-func tget(n sql.NullInt64) time.Time {
-	if !n.Valid {
+func tget(n dbInt) time.Time {
+	switch {
+	case !n.Valid:
 		return time.Time{}
+	case n.tm != nil:
+		return *n.tm
 	}
 	return time.Unix(0, n.Int64).UTC()
 }
 
-func tpget(n sql.NullInt64) *time.Time {
+func tpget(n dbInt) *time.Time {
 	if !n.Valid {
 		return nil
 	}
-	if n.Int64 == catalogDBZeroTime {
+	if n.tm == nil && n.Int64 == catalogDBZeroTime {
 		return &time.Time{}
 	}
-	t := time.Unix(0, n.Int64).UTC()
+	t := tget(n)
 	return &t
 }
 
-func bpget(n sql.NullInt64) *bool {
+func bpget(n dbInt) *bool {
 	if !n.Valid {
 		return nil
 	}
@@ -683,7 +715,7 @@ func exportCatalogTables(tx *sql.Tx, withFiles bool) (*catalog, error) {
 		}
 		return nil
 	}
-	type nint = sql.NullInt64
+	type nint = dbInt
 	type nstr = sql.NullString
 
 	meta := map[string]string{}

@@ -183,6 +183,9 @@ func (a *App) exportAppBackupTo(tarPath string, includeKeys bool) (ExportResult,
 // (per-period filename). The bundle is staged in a new file and named only once
 // it reads back as written.
 func (a *App) exportAppBackupInto(out *outFolder, name string, includeKeys bool) (ExportResult, error) {
+	if a.Store.UsesDatabase() {
+		return ExportResult{}, errAppBackupNoDatabase
+	}
 	members, err := a.gatherMembers(includeKeys)
 	if err != nil {
 		return ExportResult{}, err
@@ -297,6 +300,9 @@ func appBackupBaseName(t time.Time) string {
 
 // ExportAppBackup writes a dated app-backup bundle into destDir and returns a summary.
 func (a *App) ExportAppBackup(destDir string, includeKeys bool) (ExportResult, error) {
+	if a.Store.UsesDatabase() {
+		return ExportResult{}, errAppBackupNoDatabase
+	}
 	if strings.TrimSpace(destDir) == "" {
 		return ExportResult{}, fmt.Errorf("a destination folder is required")
 	}
@@ -456,6 +462,9 @@ func (a *App) InspectAppBackup(tarPath string) (appBackupManifest, error) {
 var preRestoreWriteFile = func(name string, b []byte, _ os.FileMode) error { return writeSecretFile(name, b) }
 
 func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
+	if a.Store.UsesDatabase() {
+		return RestoreResult{}, errAppBackupNoDatabase
+	}
 	man, members, err := verifyAppBackup(tarPath)
 	if err != nil {
 		return RestoreResult{}, err
@@ -825,3 +834,10 @@ func logLeftOut(a *App, names []string) []string {
 	}
 	return names
 }
+
+// errAppBackupNoDatabase refuses app backup, restore and data-folder moves on the
+// catalog database engine until they carry catalog.db: an app backup without the
+// catalog, or a restore the database ignores, is worse than none.
+var errAppBackupNoDatabase = errors.New("app backups, restores and data folder moves do not carry the catalog " +
+	"database (catalog.db) yet, so they are refused while the catalog database engine is in use. Run with " +
+	"OBELISK_CATALOG_ENGINE=json to use them")

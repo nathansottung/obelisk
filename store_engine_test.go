@@ -155,25 +155,6 @@ func TestCatalogEngine_WriteErrorsPropagate(t *testing.T) {
 	}
 }
 
-// A commit that fails leaves the store holding exactly what the database holds.
-func TestCatalogEngine_FailedCommitReturnsToCommittedState(t *testing.T) {
-	s := openEngineStore(t, "sqlite", t.TempDir())
-	kept := s.AddCollection("kept")
-	be := s.be.(*dbBackend)
-	be.failCommit = func() error { return errors.New("disk full") }
-	lost := s.AddCollection("lost") // its save fails at the commit
-	be.failCommit = nil
-	if s.Collection(lost.ID) != nil {
-		t.Error("the store still holds a record whose commit failed")
-	}
-	if s.Collection(kept.ID) == nil {
-		t.Error("the committed record is gone")
-	}
-	if err := s.FlushPending(); err != nil {
-		t.Fatalf("after returning to the committed state: %v", err)
-	}
-}
-
 // catalogEngineScenario drives a store through records of every kind and the
 // ways they change, the same way on any engine.
 func catalogEngineScenario(t *testing.T, s *Store) {

@@ -215,7 +215,7 @@ func (s *Store) fileIter(q fileQuery) iter.Seq2[*File, error] {
 		var cur fileCursor
 		for {
 			s.mu.Lock()
-			page, next, err := s.be.filePage(q, cur, filePageSize)
+			page, next, more, err := s.be.filePage(q, cur, filePageSize)
 			s.mu.Unlock()
 			if err != nil {
 				yield(nil, err)
@@ -226,7 +226,7 @@ func (s *Store) fileIter(q fileQuery) iter.Seq2[*File, error] {
 					return
 				}
 			}
-			if len(page) < filePageSize {
+			if !more {
 				return
 			}
 			cur = next
@@ -361,9 +361,17 @@ func mergeFileUpsert(e *File, f File, now time.Time, keep int) {
 	}
 }
 
-// UpsertFile is UpsertFileErr for callers that report errors through the next save.
+// UpsertFile is UpsertFileErr for callers that cannot take an error: a failure is
+// kept, and every later save reports it (see lostErr).
 func (s *Store) UpsertFile(f File) *File {
-	nf, _ := s.UpsertFileErr(f)
+	nf, err := s.UpsertFileErr(f)
+	if err != nil {
+		s.mu.Lock()
+		if s.lostErr == nil {
+			s.lostErr = fmt.Errorf("a file change could not be recorded: %w", err)
+		}
+		s.mu.Unlock()
+	}
 	return nf
 }
 

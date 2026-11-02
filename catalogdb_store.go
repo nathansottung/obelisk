@@ -40,6 +40,10 @@ type dbBackend struct {
 	// failCommit is a test seam: nil in production. When set, its error stands in
 	// for a failed commit.
 	failCommit func() error
+	// failFileWrite and failAfterFileUpdate are test seams: nil in production. They
+	// stand in for a file write the database refuses, before it starts and after the
+	// file's row is updated.
+	failFileWrite, failAfterFileUpdate func() error
 }
 
 // openDBBackend opens dataDir's catalog.db. When there is none, an existing
@@ -162,16 +166,16 @@ func (b *dbBackend) stmt(query string) (*sql.Stmt, error) {
 	return st, nil
 }
 
-func (b *dbBackend) flush(c *catalog) (*catalog, error) {
+func (b *dbBackend) flush(c *catalog) error {
 	if b.closed {
-		return nil, errCatalogClosed
+		return errCatalogClosed
 	}
 	units := catalogUnits(c, false)
 	next := make(map[string]string, len(units))
 	var changed []catalogUnit
 	for _, u := range units {
 		if _, dup := next[u.key]; dup {
-			return nil, fmt.Errorf("the catalog holds two records named %s; neither was saved", u.key)
+			return fmt.Errorf("the catalog holds two records named %s; neither was saved", u.key)
 		}
 		next[u.key] = u.hash
 		if b.hashes[u.key] != u.hash {
@@ -185,27 +189,38 @@ func (b *dbBackend) flush(c *catalog) (*catalog, error) {
 		}
 	}
 	if len(changed) == 0 && len(removed) == 0 && b.tx == nil {
-		return nil, nil
+		return nil
 	}
 	w, err := b.writer()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	tx := b.tx
+	// Each record is its own savepoint: one the database refuses is reported and
+	// keeps its old hash, so the next save tries it again, while the others commit.
+	var unitErrs []error
 	for _, k := range removed {
-		if err := deleteCatalogUnit(tx, k); err != nil {
-			return nil, err
+		if err := savepoint(tx, "unit", func() error { return deleteCatalogUnit(tx, k) }); err != nil {
+			unitErrs = append(unitErrs, err)
+			next[k] = b.hashes[k]
 		}
 	}
 	for _, u := range changed {
-		if err := deleteCatalogUnit(tx, u.key); err != nil {
-			return nil, err
-		}
-		if err := u.write(w); err != nil {
-			return nil, err
+		if err := savepoint(tx, "unit", func() error {
+			if err := deleteCatalogUnit(tx, u.key); err != nil {
+				return err
+			}
+			return u.write(w)
+		}); err != nil {
+			unitErrs = append(unitErrs, err)
+			if old, ok := b.hashes[u.key]; ok {
+				next[u.key] = old
+			} else {
+				delete(next, u.key)
+			}
 		}
 	}
-	b.lastWritten, b.lastRemoved = len(changed), len(removed)
+	b.lastWritten, b.lastRemoved = len(changed)-len(unitErrs), len(removed)
 	b.endTx()
 	commit := tx.Commit
 	if b.failCommit != nil {
@@ -215,15 +230,18 @@ func (b *dbBackend) flush(c *catalog) (*catalog, error) {
 	}
 	if err := commit(); err != nil {
 		tx.Rollback()
-		committed, rerr := loadCatalogWithoutFiles(b.d)
-		if rerr != nil {
-			return nil, fmt.Errorf("saving the catalog database: %w; reading it back also failed: %v", err, rerr)
+		// Memory keeps every record; the hashes go back to what the database holds,
+		// so the next save writes them again. File writes in the transaction cannot
+		// be replayed from memory: they are lost, and the store says so from now on.
+		if committed, rerr := loadCatalogWithoutFiles(b.d); rerr == nil {
+			b.hashes = catalogUnitHashes(committed)
+		} else {
+			b.hashes = map[string]string{}
 		}
-		b.hashes = catalogUnitHashes(committed)
-		return committed, fmt.Errorf("saving the catalog database: %w", err)
+		return &catalogChangesLost{err: err}
 	}
 	b.hashes = next
-	return nil, nil
+	return errors.Join(unitErrs...)
 }
 
 func (b *dbBackend) close() error {

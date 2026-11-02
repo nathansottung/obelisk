@@ -413,13 +413,15 @@ catalog until the cutover slice. Until then the database engine is opt-in:
   `catalogdb_migrate.go`). Schema v1: the high-volume records (files and their
   versions, package listings, copies, segments, verify events, drive snapshots,
   plans' per-hash entries, drift items, the audit log) are normalized tables with
-  32-byte hash BLOBs and UTC-nanosecond times; small records are kept whole as
+  32-byte hash BLOBs and times as UTC nanoseconds (or exact RFC 3339 text for a
+  time outside what nanoseconds hold, such as the 1601 a Windows file with no
+  date reports); small records are kept whole as
   JSON, one row each. A package listing stores its path, size and hash only when
   they differ from its file's; triggers write the file's values into the listing
   before the file changes or is removed, so a package keeps naming the bytes it
   holds. A file's path is indexed but not unique: a sourceless archive keeps two
   files at one path when their bytes differ. The one-way move refuses an unknown, duplicate or
-  differently-cased key, a non-canonical hash or a time it cannot store exactly;
+  differently-cased key and a non-canonical hash;
   imports into a staging database; and publishes only when SQLite's integrity
   check, the row count of every table and a section-by-section hash of the
   catalog read back all match. It then keeps the exact `catalog.json` bytes as
@@ -436,8 +438,13 @@ catalog until the cutover slice. Until then the database engine is opt-in:
   that changed since the last commit, in one transaction: each record is a unit
   with a key, a hash of its content and place, and its write. Saves inside a
   batch are coalesced as for `catalog.json`, so a batch commits about every 3 s.
-  A failed write returns its error and stays pending for the next save; a failed
-  commit is rolled back and the store returns to what the database holds.
+  Each record and each file write is its own savepoint: one the database refuses
+  is reported and tried again by the next save, and the rest commit. A failed
+  commit keeps every record in memory to be written again, but the file writes it
+  held are lost, so from then on every save reports it until the store is
+  reopened. App backup, restore and data-folder moves refuse on this engine until
+  they carry `catalog.db` (S8), and the server closes the store on an interrupt
+  or termination signal.
 - **S4 — files** (`store_files.go`, `catalogdb_files.go`). File records live
   only in the `file` and `file_version` tables on the database engine. `FilesOf`
   and `AllFiles` are iterators that read a page at a time; search, counts,
