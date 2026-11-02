@@ -64,8 +64,9 @@ archive that can damage its sources or say "verified" when it isn't.
 - **Slices:**
   - S0 driver, S1 open layer and S2 the proven one-way move: merged
     ([#17](https://github.com/nathansottung/obelisk/pull/17)).
-  - S3 small records written through.
-  - S4 files.
+  - S3 records written through and S4 files in their tables, with the opt-in
+    engine switch and the whole suite on both engines: merged
+    ([#18](https://github.com/nathansottung/obelisk/pull/18)).
   - S5 packages.
   - S6 drives, scans and plans.
   - S7 audit log and jobs in the same transaction.

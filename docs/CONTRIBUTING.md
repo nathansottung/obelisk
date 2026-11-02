@@ -75,6 +75,12 @@ Match the surrounding code — it is intentional, not accidental:
 - **The `Store` is the only thing that touches `catalog.json`.** Persistence,
   migrations, and reboot recovery live in `store.go`. Other files call `Store`
   methods; they never marshal the catalog themselves.
+- **File records go through `Store` methods.** Only `store.go` and
+  `store_files.go` reach `s.c.Files` (a test checks this). Every `*File` a method
+  returns is a copy: to change a file, pass it back through a method
+  (`UpsertFileErr`, `BackfillFileMedia`, …). The test run fails if a handed-out
+  copy was changed and never passed back, because on the database engine that
+  change would be lost.
 - **Never break the restore doctrine.** The on-media artifacts must always be
   restorable by hand with `par2` / `gpg` / `tar`. par2 is computed over the
   payload; no compression layer, ever. If a change touches build/write/restore,

@@ -390,8 +390,10 @@ startup load is the remaining item the SQLite PR closes.
 
 ### The SQLite engine, in slices
 
-The swap lands in slices, each with its tests. `catalog.json` stays the live
-catalog until the cutover slice; until then nothing in the app opens a database.
+The swap lands in slices, each with its tests. `catalog.json` stays the default
+catalog until the cutover slice. Until then the database engine is opt-in:
+`OBELISK_CATALOG_ENGINE=sqlite` runs a store on `catalog.db` (moving an existing
+`catalog.json` in first), and CI runs the whole suite on both engines.
 
 - **S0 — driver.** `modernc.org/sqlite`, pinned, full build only (see
   "Dependencies"). CI cross-builds every release target with CGO off.
@@ -429,6 +431,20 @@ catalog until the cutover slice; until then nothing in the app opens a database.
   abandoned, or after publishing it refuses to choose, so that save is never
   lost. Each step is resumable. The portable export writes the catalog back as
   v8 JSON.
+- **S3 — write-through** (`catalogdb_store.go`). On the database engine the
+  store keeps its records in memory as before, and a save writes only the records
+  that changed since the last commit, in one transaction: each record is a unit
+  with a key, a hash of its content and place, and its write. Saves inside a
+  batch are coalesced as for `catalog.json`, so a batch commits about every 3 s.
+  A failed write returns its error and stays pending for the next save; a failed
+  commit is rolled back and the store returns to what the database holds.
+- **S4 — files** (`store_files.go`, `catalogdb_files.go`). File records live
+  only in the `file` and `file_version` tables on the database engine. `FilesOf`
+  and `AllFiles` are iterators that read a page at a time; search, counts,
+  upserts, event membership, conflict resolution and removal are SQL. Every
+  `*File` a `Store` method returns, on either engine, is the caller's own copy:
+  a change reaches the catalog only through a method, which the test run's copy
+  guard enforces.
 
 Measured on the Windows dev box (SSD): a million files each listed in one
 package move from a 647 MB `catalog.json` to a 382 MB `catalog.db` in under two
