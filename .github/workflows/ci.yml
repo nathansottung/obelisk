@@ -83,6 +83,12 @@ jobs:
       - name: tree-expansion budget
         run: OBELISK_PERF=1 go test -run TestTreeExpansionBudget -v ./...
 
+      # The catalog move into SQLite at a million files, each listed in a package:
+      # import, integrity check, row counts and the section-by-section comparison
+      # must all pass. Skipped in the plain test run for time; enforced here.
+      - name: catalog database million-file move
+        run: OBELISK_SCALE=1 go test -run TestCatalogDBRoundTrip1M -v -timeout 20m ./...
+
       # The race detector needs cgo (a C toolchain), which the Ubuntu runner has but
       # the CGO_ENABLED=0 release build deliberately does not. Run it here so every
       # push/PR is checked for data races even though release binaries stay pure-Go.

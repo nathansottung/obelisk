@@ -388,6 +388,46 @@ de-quadratic-ized, the adoption write-storm eliminated, search and memory
 healthy — which make 1M-file ingest *feasible today*; the ~4.4 s one-time
 startup load is the remaining item the SQLite PR closes.
 
+### The SQLite engine, in slices
+
+The swap lands in slices, each with its tests. `catalog.json` stays the live
+catalog until the cutover slice; until then nothing in the app opens a database.
+
+- **S0 — driver.** `modernc.org/sqlite`, pinned, full build only (see
+  "Dependencies"). CI cross-builds every release target with CGO off.
+- **S1 — open layer** (`catalogdb.go`). WAL with `synchronous=FULL`; one writer
+  connection running immediate transactions; a read pool that cannot write. The
+  open is classified like `catalog.json`'s (OB-001): only a missing file becomes a
+  new catalog, and an empty, foreign, unreadable or blocked file is refused
+  unchanged. A newer schema opens read-only. A data folder on a network
+  filesystem (NFS, SMB/CIFS, 9P, AFS, Ceph; a UNC path or mapped network drive on
+  Windows) is refused, because WAL needs shared memory and locks those cannot
+  give. On Windows, SQLite's own I/O layer waits out a scanner holding the
+  database or its `-wal` for a moment; a lasting hold is refused with nothing
+  changed.
+- **S2 — move, check, export** (`catalogdb_schema.go`, `catalogdb_rows.go`,
+  `catalogdb_migrate.go`). Schema v1: the high-volume records (files and their
+  versions, package listings, copies, segments, verify events, drive snapshots,
+  plans' per-hash entries, drift items, the audit log) are normalized tables with
+  32-byte hash BLOBs and UTC-nanosecond times; small records are kept whole as
+  JSON, one row each. A package listing stores its path, size and hash only when
+  they differ from its file's. The one-way move refuses an unknown, duplicate or
+  differently-cased key, a non-canonical hash or a time it cannot store exactly;
+  imports into a staging database; and publishes only when SQLite's integrity
+  check, the row count of every table and a section-by-section hash of the
+  catalog read back all match. It then keeps the exact `catalog.json` bytes as
+  `catalog.json.pre-sqlite-v<N>-<time>` and replaces `catalog.json` with a stub
+  whose `schema_version` (1000) makes any older build open the folder read-only
+  instead of starting an empty catalog. Each step is resumable. The portable
+  export writes the catalog back as v8 JSON.
+
+Measured on the Windows dev box (SSD): a million files each listed in one
+package move from a 647 MB `catalog.json` to a 382 MB `catalog.db` in under two
+minutes including the full check, and the database opens in 14 ms. The engine
+benchmark (`TestCatalogDBEngineScale`) inserts about 100k file rows a second,
+answers key and hash lookups in under a millisecond, and writes a `VACUUM INTO`
+backup of a million-row database in about 2.6 s.
+
 ## Volume identity & labels
 
 A `Volume` is a physical medium the operator can hold. Beyond the human label,

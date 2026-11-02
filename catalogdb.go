@@ -276,6 +276,14 @@ func (d *catalogDB) createSchema() error {
 		if _, err := tx.Exec(`CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT`); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(catalogDBSchemaV1); err != nil {
+			return err
+		}
+		for _, d := range catalogDBDocTables {
+			if _, err := tx.Exec(fmt.Sprintf(catalogDBDocTableDDL, d.table)); err != nil {
+				return err
+			}
+		}
 		for _, kv := range [][2]string{
 			{"format", catalogDBFormat},
 			{"schema_version", strconv.Itoa(catalogDBSchemaVersion)},
