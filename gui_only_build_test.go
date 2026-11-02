@@ -74,6 +74,19 @@ func hasSymbol(nm, sym string) bool {
 	return false
 }
 
+// sqliteSymbolPrefix names every symbol of the SQLite driver and its C runtime.
+const sqliteSymbolPrefix = "modernc.org/"
+
+func hasSymbolPrefix(nm, prefix string) bool {
+	for _, line := range strings.Split(nm, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && strings.HasPrefix(fields[len(fields)-1], prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestGUIOnlyBinary(t *testing.T) {
 	dir := t.TempDir()
 	gui := buildBinary(t, dir, "obelisk-gui", guiTestVersion, "guionly")
@@ -99,6 +112,13 @@ func TestGUIOnlyBinary(t *testing.T) {
 			if hasSymbol(guiNM, sym) {
 				t.Errorf("launcher-only build links %s", sym)
 			}
+		}
+		// The SQLite catalog engine is linked into the full build only.
+		if !hasSymbolPrefix(fullNM, sqliteSymbolPrefix) {
+			t.Fatalf("control: full build lacks %s symbols, so this check proves nothing", sqliteSymbolPrefix)
+		}
+		if hasSymbolPrefix(guiNM, sqliteSymbolPrefix) {
+			t.Errorf("launcher-only build links %s", sqliteSymbolPrefix)
 		}
 		for _, sym := range []string{"main.runGUIInventory", "main.runGUICatalog", "main.appVersion"} {
 			if !hasSymbol(guiNM, sym) {

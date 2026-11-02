@@ -67,9 +67,11 @@ Match the surrounding code — it is intentional, not accidental:
 - **Flat files, one concern each.** New feature areas get their own top-level
   file (see [`ARCHITECTURE.md`](ARCHITECTURE.md)), all `package main`. Don't
   introduce package trees or internal frameworks.
-- **Standard library first.** The only third-party dependency is QR-code
-  generation. Adding a dependency needs a strong, stated reason in the PR;
-  anything that pulls in CGO is a hard no (the whole point is a static binary).
+- **Standard library first.** Each third-party dependency is listed with its
+  reason in [`ARCHITECTURE.md`](ARCHITECTURE.md) ("Dependencies"). Adding one
+  needs a strong, stated reason in the PR; anything that pulls in CGO is a hard
+  no (the whole point is a static binary), and every release target must still
+  build with CGO off (CI checks this).
 - **The `Store` is the only thing that touches `catalog.json`.** Persistence,
   migrations, and reboot recovery live in `store.go`. Other files call `Store`
   methods; they never marshal the catalog themselves.

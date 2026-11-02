@@ -388,6 +388,55 @@ de-quadratic-ized, the adoption write-storm eliminated, search and memory
 healthy — which make 1M-file ingest *feasible today*; the ~4.4 s one-time
 startup load is the remaining item the SQLite PR closes.
 
+### The SQLite engine, in slices
+
+The swap lands in slices, each with its tests. `catalog.json` stays the live
+catalog until the cutover slice; until then nothing in the app opens a database.
+
+- **S0 — driver.** `modernc.org/sqlite`, pinned, full build only (see
+  "Dependencies"). CI cross-builds every release target with CGO off.
+- **S1 — open layer** (`catalogdb.go`). WAL with `synchronous=FULL`; one writer
+  connection running immediate transactions; a read pool opened in SQLite's
+  read-only mode. The open is classified like `catalog.json`'s (OB-001): only a
+  missing file becomes a new catalog, built under a temporary name and published
+  without replacing anything, and an empty, foreign, unreadable or blocked file
+  is refused unchanged. A newer schema opens in SQLite's read-only mode, so even a
+  commit waiting in its `-wal` is left as found. A data folder on a network
+  filesystem (NFS, SMB/CIFS, 9P, AFS, Ceph; a UNC path or mapped network drive on
+  Windows) is refused, because WAL needs shared memory and locks those cannot
+  give. On Windows, SQLite's own I/O layer waits out a scanner holding the
+  database or its `-wal` for a moment; a lasting hold is refused with nothing
+  changed.
+- **S2 — move, check, export** (`catalogdb_schema.go`, `catalogdb_rows.go`,
+  `catalogdb_migrate.go`). Schema v1: the high-volume records (files and their
+  versions, package listings, copies, segments, verify events, drive snapshots,
+  plans' per-hash entries, drift items, the audit log) are normalized tables with
+  32-byte hash BLOBs and UTC-nanosecond times; small records are kept whole as
+  JSON, one row each. A package listing stores its path, size and hash only when
+  they differ from its file's; triggers write the file's values into the listing
+  before the file changes or is removed, so a package keeps naming the bytes it
+  holds. A file's path is indexed but not unique: a sourceless archive keeps two
+  files at one path when their bytes differ. The one-way move refuses an unknown, duplicate or
+  differently-cased key, a non-canonical hash or a time it cannot store exactly;
+  imports into a staging database; and publishes only when SQLite's integrity
+  check, the row count of every table and a section-by-section hash of the
+  catalog read back all match. It then keeps the exact `catalog.json` bytes as
+  `catalog.json.pre-sqlite-v<N>-<time>` and replaces `catalog.json` with a stub
+  whose `schema_version` (1000) makes any older build open the folder read-only
+  instead of starting an empty catalog. One move runs at a time (an OS lock on
+  `catalog.db.move-lock`), and `catalog.json` is re-read before publishing and
+  again before the stub: if another copy of Obelisk saved meanwhile, the move is
+  abandoned, or after publishing it refuses to choose, so that save is never
+  lost. Each step is resumable. The portable export writes the catalog back as
+  v8 JSON.
+
+Measured on the Windows dev box (SSD): a million files each listed in one
+package move from a 647 MB `catalog.json` to a 382 MB `catalog.db` in under two
+minutes including the full check, and the database opens in 14 ms. The engine
+benchmark (`TestCatalogDBEngineScale`) inserts about 100k file rows a second,
+answers key and hash lookups in under a millisecond, and writes a `VACUUM INTO`
+backup of a million-row database in about 2.6 s.
+
 ## Volume identity & labels
 
 A `Volume` is a physical medium the operator can hold. Beyond the human label,
@@ -700,6 +749,14 @@ Small, pure-Go, CGO-free libraries — each earns its place against the
   across drives and platforms (`classify.go`). The same accented name can be
   stored as one code point or as a letter plus an accent (macOS writes the second),
   and the standard library has no normalization tables.
+- **`modernc.org/sqlite`** — the SQLite catalog engine (`catalogdb*.go`), for
+  catalogs of millions of files where one JSON file is too slow to load and too
+  costly to rewrite on every change. It is SQLite's C source transpiled to Go,
+  so the binary stays static with no CGO; it brings its own C runtime
+  (`modernc.org/libc`) and a few small helpers. It is linked into the full build
+  only: the launcher-only (`guionly`) build never contains it, which
+  `TestGUIOnlyBinary` checks. Until the cutover, `catalog.json` remains the live
+  catalog and nothing reads or writes a database.
 
 Everything else — tar, gpg, par2 — is an **external tool** shelled out to, on
 purpose (see the custody chain and Recovery Kit): the restore story must not

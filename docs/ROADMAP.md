@@ -55,6 +55,29 @@ archive that can damage its sources or say "verified" when it isn't.
 - **Done when:** a test archive of that size is cataloged, packaged and verified with memory and
   time recorded, and the UI stays responsive throughout.
 
+### Catalog in SQLite
+- **Goal:** the catalog lives in one embedded SQLite database (`catalog.db`, pure Go, no CGO),
+  so a 3-million-file catalog opens in under a second and each change commits on its own
+  instead of rewriting a multi-gigabyte `catalog.json`. The JSON form stays as a portable
+  export.
+- **Depends on:** nothing.
+- **Slices:**
+  - S0 driver, S1 open layer and S2 the proven one-way move: merged
+    ([#17](https://github.com/nathansottung/obelisk/pull/17)).
+  - S3 small records written through.
+  - S4 files.
+  - S5 packages.
+  - S6 drives, scans and plans.
+  - S7 audit log and jobs in the same transaction.
+  - S8 backups: `VACUUM INTO`, 7 daily and 4 weekly copies with a size cap, plus app backup
+    and restore.
+  - S9 cutover: the move runs on open.
+  - S10 proof at 3 million files.
+- **Done when:** an existing data folder upgrades on open with every record proven equal, the
+  whole test suite passes on the database, app backup and restore carry it, and a 3-million-file
+  catalog opens, scans and searches within the times recorded in
+  [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ### Resumable first scan
 - **Goal:** a first scan that stops (crash, reboot, unplugged drive) carries on where it
   stopped instead of starting again.

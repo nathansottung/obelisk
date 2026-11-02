@@ -1,6 +1,6 @@
 module github.com/nathansottung/obelisk
 
-go 1.25.0
+go 1.26.0
 
 // The Go toolchain for CI, release binaries, the container image and the Windows
 // package. The CI and release workflows read this line, CI checks that the
@@ -23,13 +23,31 @@ require (
 	// Native handle calls for the destination guard: Windows handle-relative
 	// create, rename and dispose plus ACL and volume queries, and Linux renameat,
 	// fstatfs and flock. Pure Go, no CGO. See docs/ARCHITECTURE.md.
-	golang.org/x/sys v0.44.0
+	golang.org/x/sys v0.48.0
 	// Unicode normalization (NFC) for comparing file names across drives and
 	// platforms (classify.go): the same accented name can be stored in two forms.
 	// From the Go project, pure Go, no CGO. See docs/ARCHITECTURE.md.
 	golang.org/x/text v0.41.0
+	// The SQLite catalog engine (catalogdb*.go): an embedded, single-file database
+	// for catalogs of millions of files. A transpile of SQLite's C source to Go, so
+	// no CGO. Linked into the full build only, never the launcher-only (guionly)
+	// build. See docs/ARCHITECTURE.md ("Dependencies").
+	modernc.org/sqlite v1.60.1
 )
 
 // klauspost/cpuid is BLAKE3's only transitive dep — a tiny pure-Go CPU-feature
 // probe used to pick the SIMD path. No CGO.
 require github.com/klauspost/cpuid/v2 v2.0.12 // indirect
+
+// modernc.org/sqlite's transitive deps: its C runtime (libc, memory, mathutil) and
+// small helpers. All pure Go, no CGO.
+require (
+	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/google/uuid v1.6.0 // indirect
+	github.com/mattn/go-isatty v0.0.24 // indirect
+	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	modernc.org/libc v1.77.1 // indirect
+	modernc.org/mathutil v1.7.1 // indirect
+	modernc.org/memory v1.12.1 // indirect
+)

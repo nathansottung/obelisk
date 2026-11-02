@@ -52,6 +52,17 @@ jobs:
       - name: go build
         run: go build ./...
 
+      # Every release target builds pure Go (CGO off), with the full build and the
+      # launcher-only build, so a dependency that needs CGO or lacks a target fails
+      # here rather than at release time.
+      - name: cross-build release targets (CGO off)
+        run: |
+          for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
+            echo "  -> ${target}"
+            CGO_ENABLED=0 GOOS="${target%/*}" GOARCH="${target#*/}" go build -o /dev/null .
+            CGO_ENABLED=0 GOOS="${target%/*}" GOARCH="${target#*/}" go build -tags guionly -o /dev/null .
+          done
+
       - name: go test
         run: go test ./... -v
 
@@ -71,6 +82,12 @@ jobs:
       # quick local `go test`; here it is enforced on every push. NOT continue-on-error.
       - name: tree-expansion budget
         run: OBELISK_PERF=1 go test -run TestTreeExpansionBudget -v ./...
+
+      # The catalog move into SQLite at a million files, each listed in a package:
+      # import, integrity check, row counts and the section-by-section comparison
+      # must all pass. Skipped in the plain test run for time; enforced here.
+      - name: catalog database million-file move
+        run: OBELISK_SCALE=1 go test -run TestCatalogDBRoundTrip1M -v -timeout 20m ./...
 
       # The race detector needs cgo (a C toolchain), which the Ubuntu runner has but
       # the CGO_ENABLED=0 release build deliberately does not. Run it here so every
