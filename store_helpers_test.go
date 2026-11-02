@@ -100,3 +100,24 @@ func catalogFileName() string {
 // testHash is a stand-in SHA-256 for test records: the hash of s, so equal names
 // give equal hashes and the database stores it like a real one.
 func testHash(s string) string { return sha256Hex([]byte(s)) }
+
+// pkgFiles is a package's file listing, read through the store as on either
+// engine (the database engine keeps none on the record).
+func pkgFiles(t testing.TB, s *Store, c *Chunk) []ChunkFileRef {
+	t.Helper()
+	refs, err := s.ChunkFiles(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return refs
+}
+
+// AddChunk adds a package for a test, failing loudly when it cannot be recorded
+// (the app itself uses AddChunkErr).
+func (s *Store) AddChunk(c Chunk) *Chunk {
+	nc, err := s.AddChunkErr(c)
+	if err != nil {
+		panic(err)
+	}
+	return nc
+}

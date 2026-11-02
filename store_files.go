@@ -40,6 +40,16 @@ type fileQuery struct {
 	ShotTo       time.Time // capture time at or before (files without one are left out)
 	ByPath       bool      // order by path, then catalog order; otherwise catalog order
 	Versions     bool      // load each file's retained versions
+	// PathsOnly fills only ID, CollectionID, FolderID and RelPath on the database
+	// engine, for a scan that reads nothing else. It applies only with no filter
+	// but CollectionID, IDs and ByPath; otherwise the whole record is read.
+	PathsOnly bool
+}
+
+// pathsOnly reports whether q can be answered from the path columns alone.
+func (q *fileQuery) pathsOnly() bool {
+	return q.PathsOnly && q.EventID == 0 && !q.InEvent && !q.NoEvent && !q.WithHash && !q.WithVersions &&
+		q.Text == "" && q.HashPrefix == "" && q.Role == "" && q.ShotFrom.IsZero() && q.ShotTo.IsZero() && !q.Versions
 }
 
 // errStopFiles ends a file scan early without an error.

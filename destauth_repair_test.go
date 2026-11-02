@@ -109,11 +109,11 @@ func TestDestAuth_ExactWhitespaceNames(t *testing.T) {
 				}
 			}
 			chunks := mirrorChunksFor(app, cid, vol.ID)
-			if len(chunks) != 1 || chunks[0].FileCount != 2 || len(chunks[0].Files) != 2 {
+			if len(chunks) != 1 || chunks[0].FileCount != 2 || len(pkgFiles(t, app.Store, chunks[0])) != 2 {
 				t.Fatalf("catalog chunks=%+v", chunks)
 			}
 			seen := map[string]bool{}
-			for _, ref := range chunks[0].Files {
+			for _, ref := range pkgFiles(t, app.Store, chunks[0]) {
 				want, ok := members[ref.RelPath]
 				if !ok || seen[ref.RelPath] || ref.Hash != sha256Hex([]byte(want)) || ref.SizeBytes != int64(len(want)) {
 					t.Fatalf("false catalog reference: %+v", ref)

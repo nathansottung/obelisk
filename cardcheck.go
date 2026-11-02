@@ -141,7 +141,11 @@ func (a *App) knownContent() (map[string][]string, error) {
 				locs = []string{"Archive: " + coll.Name}
 			}
 		}
-		for _, ref := range c.Files {
+		listed, err := a.Store.ChunkFiles(c.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, ref := range listed {
 			if len(locs) == 0 {
 				add(ref.Hash, "")
 				continue

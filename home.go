@@ -177,7 +177,11 @@ func (a *App) HomeOverview(onlineVolumeIDs map[int]bool) (HomeData, error) {
 		archiveB3[coll.ID] = bset
 	}
 	for _, c := range chunks {
-		for _, ref := range c.Files {
+		listed, err := a.Store.ChunkFiles(c.ID)
+		if err != nil {
+			return HomeData{}, err
+		}
+		for _, ref := range listed {
 			if ref.Hash == "" {
 				continue
 			}

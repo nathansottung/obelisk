@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"runtime/pprof"
 	"strings"
 	"testing"
 	"time"
@@ -560,18 +561,40 @@ func TestCatalogEngineScale1M(t *testing.T) {
 	fo := s.AddFolder(coll.ID, "/srv/scale")
 	t0 := time.Now()
 	s.BeginBatch()
+	refs := make([]ChunkFileRef, 0, n)
 	for i := 0; i < n; i++ {
-		if _, err := s.UpsertFileErr(File{CollectionID: coll.ID, FolderID: fo.ID,
+		f, err := s.UpsertFileErr(File{CollectionID: coll.ID, FolderID: fo.ID,
 			RelPath:   fmt.Sprintf("Clients/%04d/RAW/DSC_%08d.NEF", i%5000, i),
 			SizeBytes: 38_000_000 + int64(i%1000), HashAlg: "SHA256", Hash: fakeHash(i), Blake3: fakeHash(i + n),
-			ModTime: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), Role: RoleOriginals}); err != nil {
+			ModTime: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), Role: RoleOriginals})
+		if err != nil {
 			t.Fatal(err)
 		}
+		refs = append(refs, ChunkFileRef{FileID: f.ID, RelPath: f.RelPath, SizeBytes: f.SizeBytes, Hash: f.Hash})
 	}
 	if err := s.EndBatch(); err != nil {
 		t.Fatal(err)
 	}
 	upsert := time.Since(t0)
+	// Every file in a package of 10,000 with a verified copy, as after a backup.
+	t0 = time.Now()
+	vol := s.AddVolume(Volume{Label: "SCALE-01", Kind: "HDD", Serial: "SCALE1"})
+	s.BeginBatch()
+	const perPackage = 10_000
+	for k := 0; k*perPackage < n; k++ {
+		part := refs[k*perPackage : min((k+1)*perPackage, n)]
+		ch, err := s.AddChunkErr(Chunk{CollectionID: coll.ID, Name: fmt.Sprintf("NSP-C%05d", k+1), Status: "VERIFIED",
+			HashAlg: "SHA256", FileCount: len(part), Files: part})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.RecordCopy(ch, vol.ID, "D:/"+ch.Name, true)
+	}
+	if err := s.EndBatch(); err != nil {
+		t.Fatal(err)
+	}
+	packages := time.Since(t0)
+	refs = nil
 	t0 = time.Now()
 	for i := 0; i < 1000; i++ { // a rescan's worth of unchanged files
 		if _, err := s.UpsertFileErr(File{CollectionID: coll.ID, FolderID: fo.ID,
@@ -619,11 +642,28 @@ func TestCatalogEngineScale1M(t *testing.T) {
 	}
 	sPath := search(SearchQuery{Text: "dsc_00000042", Limit: 50})
 	sHash := search(SearchQuery{Hash: fakeHash(n / 2)[:12], Limit: 50})
+	if out := os.Getenv("OBELISK_CPUPROFILE"); out != "" { // a profile of the protection read
+		pf, err := os.Create(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := pprof.StartCPUProfile(pf); err != nil {
+			t.Fatal(err)
+		}
+		defer pf.Close()
+	}
 	t0 = time.Now()
-	if _, err := s.Protection(coll.ID); err != nil {
+	prot, err := s.Protection(coll.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
 	protection := time.Since(t0)
+	if os.Getenv("OBELISK_CPUPROFILE") != "" {
+		pprof.StopCPUProfile()
+	}
+	if prot.TotalFiles != n {
+		t.Fatalf("protection counted %d of %d files", prot.TotalFiles, n)
+	}
 	fi, err := os.Stat(filepath.Join(dir, map[string]string{"sqlite": catalogDBName, "json": "catalog.json"}[engine]))
 	if err != nil {
 		t.Fatal(err)
@@ -631,6 +671,7 @@ func TestCatalogEngineScale1M(t *testing.T) {
 	t.Logf("\n=== Store on the %s engine, %s files ===\n"+
 		"upsert all (one batch)   %10s  (%s files/s)\n"+
 		"upsert one, unchanged    %10s\n"+
+		"package every file       %10s\n"+
 		"reopen the store         %10s\n"+
 		"heap in use after open   %10.1f MB\n"+
 		"FilesOf, every file      %10s\n"+
@@ -639,7 +680,7 @@ func TestCatalogEngineScale1M(t *testing.T) {
 		"search by hash prefix    %10s\n"+
 		"protection of the archive %9s\n"+
 		"catalog file             %10.1f MB",
-		engine, comma(n), round(upsert), comma(int(float64(n)/upsert.Seconds())), rescan, round(open),
+		engine, comma(n), round(upsert), comma(int(float64(n)/upsert.Seconds())), rescan, round(packages), round(open),
 		float64(m.HeapInuse)/1e6, round(iterate), round(stats), round(sPath), round(sHash), round(protection),
 		float64(fi.Size())/1e6)
 }

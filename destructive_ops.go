@@ -262,7 +262,8 @@ func rewriteCopyTargets(a *App, p map[string]any) ([]destructiveTarget, error) {
 	var cp *Copy
 	for i := range c.Copies {
 		if c.Copies[i].VolumeID == vol && !c.Copies[i].Superseded {
-			cp = &c.Copies[i]
+			cpv := c.Copies[i] // read only; copies change through the store
+			cp = &cpv
 			break
 		}
 	}

@@ -343,7 +343,10 @@ func (a *App) AdoptMedia(mountPath string, collectionID, volumeID int, deep bool
 		ok := true
 		c.WrittenAt, c.VerifiedAt, c.VerifyOK = &now, &now, &ok
 
-		nc := a.Store.AddChunk(c)
+		nc, err := a.Store.AddChunkErr(c)
+		if err != nil {
+			return nil, err
+		}
 		a.Store.RecordCopy(nc, volumeID, cand.dir, true)
 		a.Store.AppendVerifyEvent(nc, VerifyEvent{At: now, OK: true, Path: cand.payloadPath, Note: "adopt: payload hashed"})
 		seen[h] = nc.Name // dedupe identical candidates within this same run
@@ -470,15 +473,20 @@ func (a *App) AdoptFolder(mountPath string, collectionID, volumeID int, progress
 	// unknown (not counted as copies), as the dock does.
 	var unknown []ChunkFileRef
 	if prior := a.mirrorChunkAt(collectionID, vol.ID, mountPath); prior != nil && snap.Scan == ScanPartial {
-		for _, r := range append(append([]ChunkFileRef(nil), prior.Files...), prior.UnknownFiles...) {
+		priorRefs, err := a.chunkListings(prior)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range priorRefs {
 			if !seen[r.FileID] && !snap.Known(r.RelPath) && !containsRef(unknown, r.FileID) {
 				unknown = append(unknown, r)
 			}
 		}
 	}
-	c := a.upsertMirrorChunkAt(collectionID, vol, mountPath, mountPath, refs, "mirror-adopt")
-	c.UnknownFiles = unknown
-	a.Store.UpdateChunk(c)
+	_, err = a.upsertMirrorChunkAt(collectionID, vol, mountPath, mountPath, refs, "mirror-adopt", &unknown)
+	if err != nil {
+		return nil, err
+	}
 
 	// Collision pass: same-logical-file/different-bytes across the union. Class-(a)
 	// second-shooter frames auto-pass (noted); true conflicts (b/c) open a review item.

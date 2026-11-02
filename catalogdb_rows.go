@@ -304,17 +304,58 @@ func (w *rowWriter) file(ord int, f *File) error {
 	return nil
 }
 
-func (w *rowWriter) chunk(i int, ch *Chunk) error {
+// chunkColumns are a package's header values in the chunk table's column order,
+// after id and ord.
+func (w *rowWriter) chunkColumns(ch *Chunk) []any {
 	e := &w.e
-	what := fmt.Sprintf("id %d (%s)", ch.ID, ch.Name)
-	if err := w.exec("chunk", what, ch.ID, i, ch.CollectionID, ch.Name, ch.Status, ch.MediaKind, ch.TargetBytes,
+	return []any{ch.CollectionID, ch.Name, ch.Status, ch.MediaKind, ch.TargetBytes,
 		ch.DataBytes, ch.EncBytes, ch.FileCount, ch.SrcRoot, ch.HashAlg, ch.TarHash, ch.EncHash, b(ch.Encrypted),
 		ch.KeyRef, b(ch.PrivateManifest), ch.Par2, ch.StagedDir, ch.WrittenDest, bp(ch.VerifyOK), ch.Error,
 		e.j(ch.Sidecars), ch.MirrorRoot, e.j(ch.BuildTimings), e.j(ch.BuildVerified), e.j(ch.RingStats),
 		e.j(ch.BuildWarnings), b(ch.Spanned), b(ch.Adopted), b(ch.Mirror), b(ch.ListingUnknown),
-		e.t(ch.CreatedAt), e.tp(ch.WrittenAt), e.tp(ch.VerifiedAt)); err != nil {
+		e.t(ch.CreatedAt), e.tp(ch.WrittenAt), e.tp(ch.VerifiedAt)}
+}
+
+// chunkHeader rewrites a package's header row in place (no delete, so its
+// listings stay), or inserts it, and replaces its copies, segments and verify
+// events. The store writes packages this way; their listings are written by
+// their own methods.
+func (w *rowWriter) chunkHeader(i int, ch *Chunk) error {
+	what := fmt.Sprintf("id %d (%s)", ch.ID, ch.Name)
+	cols := w.chunkColumns(ch)
+	if w.e.err != nil {
+		err := w.e.err
+		w.e.err = nil
+		return fmt.Errorf("chunk %s: %w", what, err)
+	}
+	res, err := w.tx.Exec(`UPDATE chunk SET ord = ?, collection_id = ?, name = ?, status = ?, media_kind = ?,
+		target_bytes = ?, data_bytes = ?, enc_bytes = ?, file_count = ?, src_root = ?, hash_alg = ?, tar_hash = ?,
+		enc_hash = ?, encrypted = ?, key_ref = ?, private_manifest = ?, par2 = ?, staged_dir = ?, written_dest = ?,
+		verify_ok = ?, error = ?, sidecars = ?, mirror_root = ?, build_timings = ?, build_verified = ?, ring_stats = ?,
+		build_warnings = ?, spanned = ?, adopted = ?, mirror = ?, listing_unknown = ?, created_at = ?, written_at = ?,
+		verified_at = ? WHERE id = ?`, append(append([]any{i}, cols...), ch.ID)...)
+	if err != nil {
+		return fmt.Errorf("chunk %s: %w", what, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		if err := w.exec("chunk", what, append([]any{ch.ID, i}, cols...)...); err != nil {
+			return err
+		}
+	}
+	for _, table := range []string{"copy", "segment", "verify_event"} {
+		if _, err := w.tx.Exec(`DELETE FROM `+table+` WHERE chunk_id = ?`, ch.ID); err != nil {
+			return fmt.Errorf("%s %s: %w", table, what, err)
+		}
+	}
+	return w.chunkChildren(ch, what)
+}
+
+func (w *rowWriter) chunk(i int, ch *Chunk) error {
+	what := fmt.Sprintf("id %d (%s)", ch.ID, ch.Name)
+	if err := w.exec("chunk", what, append([]any{ch.ID, i}, w.chunkColumns(ch)...)...); err != nil {
 		return err
 	}
+	e := &w.e
 	for list, refs := range [][]ChunkFileRef{ch.Files, ch.UnknownFiles} {
 		for k, r := range refs {
 			relPath, size, sha := any(r.RelPath), any(r.SizeBytes), any(nil)
@@ -338,6 +379,12 @@ func (w *rowWriter) chunk(i int, ch *Chunk) error {
 			}
 		}
 	}
+	return w.chunkChildren(ch, what)
+}
+
+// chunkChildren writes a package's copies, segments and verify events.
+func (w *rowWriter) chunkChildren(ch *Chunk, what string) error {
+	e := &w.e
 	for k, cp := range ch.Copies {
 		if err := w.exec("copy", what, ch.ID, k, cp.VolumeID, cp.Path, e.tp(cp.WrittenAt), e.tp(cp.LastVerifiedAt),
 			bp(cp.VerifyOK), e.tp(cp.LastCheckAt), cp.LastCheckLevel, bp(cp.LastCheckOK), b(cp.Superseded)); err != nil {
@@ -546,6 +593,9 @@ type catalogUnit struct {
 	key   string
 	hash  string
 	write func(w *rowWriter) error
+	// inPlace units replace their own rows when written, so a flush does not
+	// delete them first (a package's header: deleting it would take its listings).
+	inPlace bool
 }
 
 // unitHash is the fingerprint the write-through compares: the record's place in
@@ -583,7 +633,14 @@ func catalogUnits(c *catalog, withFiles bool) []catalogUnit {
 	}
 	for i, x := range c.Chunks {
 		i, x := i, x
-		add(fmt.Sprintf("chunk:%d", x.ID), i, x, func(w *rowWriter) error { return w.chunk(i, x) })
+		if withFiles {
+			add(fmt.Sprintf("chunk:%d", x.ID), i, x, func(w *rowWriter) error { return w.chunk(i, x) })
+			continue
+		}
+		// The store's packages: the header, copies, segments and verify events; the
+		// listings are written by their own methods and are not in memory.
+		add(fmt.Sprintf("chunk:%d", x.ID), i, x, func(w *rowWriter) error { return w.chunkHeader(i, x) })
+		out[len(out)-1].inPlace = true
 	}
 	for i, x := range c.Volumes {
 		i, x := i, x
@@ -845,49 +902,51 @@ func exportCatalogTables(tx *sql.Tx, withFiles bool) (*catalog, error) {
 	}
 	// A listing's NULL path, size or hash is its file's (see chunk_file), read here
 	// with a join so the files need not be in memory.
-	if err := q("chunk_file", `SELECT cf.chunk_id, cf.list, cf.file_id, cf.rel_path, cf.size_bytes, cf.sha256,
+	if withFiles {
+		if err := q("chunk_file", `SELECT cf.chunk_id, cf.list, cf.file_id, cf.rel_path, cf.size_bytes, cf.sha256,
 		cf.sha256 IS NULL, cf.sample_sha256, f.id IS NOT NULL, f.rel_path, f.size_bytes, f.sha256
 		FROM chunk_file cf LEFT JOIN file f ON f.id = cf.file_id ORDER BY cf.chunk_id, cf.list, cf.ord`,
-		func(r *sql.Rows) error {
-			var id, list int
-			var ref ChunkFileRef
-			var rel, fileRel nstr
-			var size, fileSize nint
-			var sha, sample, fileSha []byte
-			var shaNull, hasFile bool
-			if err := r.Scan(&id, &list, &ref.FileID, &rel, &size, &sha, &shaNull, &sample, &hasFile, &fileRel, &fileSize,
-				&fileSha); err != nil {
-				return err
-			}
-			ch, err := chunkOf(id, "package file")
-			if err != nil {
-				return err
-			}
-			if !hasFile && (!rel.Valid || !size.Valid || shaNull) {
-				return fmt.Errorf("package %d lists file %d, which is not in the catalog, without its own path, size and hash", id, ref.FileID)
-			}
-			ref.RelPath, ref.SizeBytes = rel.String, size.Int64
-			if !rel.Valid {
-				ref.RelPath = fileRel.String
-			}
-			if !size.Valid {
-				ref.SizeBytes = fileSize.Int64
-			}
-			switch {
-			case shaNull:
-				ref.Hash = hget(fileSha)
-			case len(sha) > 0:
-				ref.Hash = hget(sha)
-			}
-			ref.SampleHash = hget(sample)
-			if list == 0 {
-				ch.Files = append(ch.Files, ref)
-			} else {
-				ch.UnknownFiles = append(ch.UnknownFiles, ref)
-			}
-			return nil
-		}); err != nil {
-		return nil, err
+			func(r *sql.Rows) error {
+				var id, list int
+				var ref ChunkFileRef
+				var rel, fileRel nstr
+				var size, fileSize nint
+				var sha, sample, fileSha []byte
+				var shaNull, hasFile bool
+				if err := r.Scan(&id, &list, &ref.FileID, &rel, &size, &sha, &shaNull, &sample, &hasFile, &fileRel, &fileSize,
+					&fileSha); err != nil {
+					return err
+				}
+				ch, err := chunkOf(id, "package file")
+				if err != nil {
+					return err
+				}
+				if !hasFile && (!rel.Valid || !size.Valid || shaNull) {
+					return fmt.Errorf("package %d lists file %d, which is not in the catalog, without its own path, size and hash", id, ref.FileID)
+				}
+				ref.RelPath, ref.SizeBytes = rel.String, size.Int64
+				if !rel.Valid {
+					ref.RelPath = fileRel.String
+				}
+				if !size.Valid {
+					ref.SizeBytes = fileSize.Int64
+				}
+				switch {
+				case shaNull:
+					ref.Hash = hget(fileSha)
+				case len(sha) > 0:
+					ref.Hash = hget(sha)
+				}
+				ref.SampleHash = hget(sample)
+				if list == 0 {
+					ch.Files = append(ch.Files, ref)
+				} else {
+					ch.UnknownFiles = append(ch.UnknownFiles, ref)
+				}
+				return nil
+			}); err != nil {
+			return nil, err
+		}
 	}
 	if err := q("copy", `SELECT chunk_id, volume_id, path, written_at, last_verified_at, verify_ok, last_check_at,
 		last_check_level, last_check_ok, superseded FROM copy ORDER BY chunk_id, ord`, func(r *sql.Rows) error {

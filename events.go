@@ -280,25 +280,9 @@ func (s *Store) EventRollups(collectionID int) ([]EventRollup, error) {
 		vols[v.ID] = v
 	}
 	locs := s.locationsMapLocked()
-	fileCopies := map[int]map[string]physCopy{}
-	for _, ch := range s.c.Chunks {
-		if ch.Status == "FAILED" {
-			continue
-		}
-		pcs := chunkPhysCopies(ch, vols, locs)
-		if len(pcs) == 0 {
-			continue
-		}
-		for _, cf := range ch.Files {
-			m := fileCopies[cf.FileID]
-			if m == nil {
-				m = map[string]physCopy{}
-				fileCopies[cf.FileID] = m
-			}
-			for sig, pc := range pcs {
-				m[sig] = pc
-			}
-		}
+	fileCopies, err := s.fileCopiesLocked(vols, locs, func(*Chunk) bool { return true })
+	if err != nil {
+		return nil, err
 	}
 	folderPath := map[int]string{}
 	for _, fo := range s.c.Folders {

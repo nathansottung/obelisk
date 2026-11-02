@@ -17,7 +17,7 @@ func TestWriteBagItTags(t *testing.T) {
 			{FileID: 1, RelPath: "trip/a.nef", SizeBytes: 100, Hash: "aa"},
 			{FileID: 2, RelPath: "trip/b.nef", SizeBytes: 50, Hash: "bb"},
 		}}
-	writeBagItTags(dir, c)
+	writeBagItTags(dir, c, c.Files)
 
 	decl, err := os.ReadFile(filepath.Join(dir, "bagit.txt"))
 	if err != nil || !strings.Contains(string(decl), "BagIt-Version: 1.0") {
@@ -258,7 +258,7 @@ func TestWriteBagItTags_ManifestOnDiskIsEncoded(t *testing.T) {
 			{FileID: 1, RelPath: "a.nef", SizeBytes: 1, Hash: "aa"},
 			{FileID: 2, RelPath: "two\nlines.nef", SizeBytes: 1, Hash: "bb"},
 		}}
-	if err := writeBagItTags(dir, c); err != nil {
+	if err := writeBagItTags(dir, c, c.Files); err != nil {
 		t.Fatal(err)
 	}
 	man, err := os.ReadFile(filepath.Join(dir, bagPayloadManifestName))

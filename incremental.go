@@ -88,7 +88,7 @@ func normMode(v string, vol *Volume) string {
 
 // hashesOnVolume is the set of content hashes already recorded as a current copy on
 // a volume — the "volume" base subtracts these.
-func (a *App) hashesOnVolume(volumeID int) map[string]bool {
+func (a *App) hashesOnVolume(volumeID int) (map[string]bool, error) {
 	set := map[string]bool{}
 	for _, c := range a.Store.Chunks(0) {
 		on := false
@@ -101,13 +101,17 @@ func (a *App) hashesOnVolume(volumeID int) map[string]bool {
 		if !on {
 			continue
 		}
-		for _, r := range c.Files {
+		listed, err := a.Store.ChunkFiles(c.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range listed {
 			if r.Hash != "" {
 				set[r.Hash] = true
 			}
 		}
 	}
-	return set
+	return set, nil
 }
 
 // incrementalDelta computes the delta file set for a base over a collection, scoped
@@ -158,7 +162,10 @@ func (a *App) incrementalDelta(collectionID int, folderIDs []int, volumeID int, 
 			return st != StatusComplete && st != StatusOverComplete
 		}
 	default: // volume
-		onVol := a.hashesOnVolume(volumeID)
+		onVol, err := a.hashesOnVolume(volumeID)
+		if err != nil {
+			return nil, err
+		}
 		eligible = func(f *File) bool { return f.Hash == "" || !onVol[f.Hash] }
 	}
 
@@ -383,7 +390,11 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 	// filesystem says it does.
 	earlier := map[int]ChunkFileRef{} // fileID -> its ref in the volume's record
 	if prior := a.mirrorChunkOn(collectionID, vol.ID); prior != nil {
-		for _, r := range prior.Files {
+		priorFiles, err := a.Store.ChunkFiles(prior.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range priorFiles {
 			earlier[r.FileID] = r
 		}
 	}
@@ -446,7 +457,9 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 	// inventory files are written, so a stop while writing them never leaves
 	// copies recorded without the backup that made them.
 	if len(refs) > 0 {
-		a.mergeMirrorRefs(collectionID, vol, destDir, refs)
+		if err := a.mergeMirrorRefs(collectionID, vol, destDir, refs); err != nil {
+			return nil, err
+		}
 	}
 	if res.Files > 0 {
 		a.recordBackupSession(collectionID, vol, base, mode, res.Files, res.Bytes, folderIDs, scopePrefix, destDir, res)
@@ -485,7 +498,7 @@ func (a *App) recordBackupSession(collectionID int, vol *Volume, base, mode stri
 // (replacing entries for the same file, adding new ones) so the chunk always
 // reflects the FULL set of files now on that volume — the incremental analogue of
 // upsertMirrorChunk (which replaces wholesale for a full mirror).
-func (a *App) mergeMirrorRefs(archiveID int, vol *Volume, destDir string, deltaRefs []ChunkFileRef) {
+func (a *App) mergeMirrorRefs(archiveID int, vol *Volume, destDir string, deltaRefs []ChunkFileRef) error {
 	now := time.Now().UTC()
 	ok := true
 	for _, c := range a.Store.Chunks(archiveID) {
@@ -502,8 +515,12 @@ func (a *App) mergeMirrorRefs(archiveID int, vol *Volume, destDir string, deltaR
 		if !onVol {
 			continue
 		}
+		listed, err := a.Store.ChunkFiles(c.ID)
+		if err != nil {
+			return err
+		}
 		merged := map[int]ChunkFileRef{}
-		for _, r := range c.Files {
+		for _, r := range listed {
 			merged[r.FileID] = r
 		}
 		for _, r := range deltaRefs {
@@ -516,16 +533,20 @@ func (a *App) mergeMirrorRefs(archiveID int, vol *Volume, destDir string, deltaR
 			sum += r.SizeBytes
 		}
 		sort.Slice(refs, func(i, j int) bool { return refs[i].RelPath < refs[j].RelPath })
-		c.Files, c.FileCount, c.EncBytes, c.DataBytes = refs, len(refs), sum, sum
+		c.FileCount, c.EncBytes, c.DataBytes = len(refs), sum, sum
 		c.WrittenDest, c.VerifiedAt, c.VerifyOK, c.Status = destDir, &now, &ok, StatusAdoptedVerified
+		if err := a.Store.SetChunkLists(c, refs, nil); err != nil {
+			return err
+		}
 		a.Store.RecordCopy(c, vol.ID, destDir, true)
 		a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: true, Path: destDir, Note: "incremental mirror backup"})
 		a.Store.UpdateChunk(c)
-		return
+		return nil
 	}
 	// No mirror chunk on this volume yet — create one from the delta (same shape as a
 	// first full mirror).
-	a.upsertMirrorChunk(archiveID, vol, destDir, deltaRefs, "mirror")
+	_, err := a.upsertMirrorChunk(archiveID, vol, destDir, deltaRefs, "mirror")
+	return err
 }
 
 // planDeltaPackages plans media-sized PLANNED packages from an explicit delta file
@@ -574,35 +595,46 @@ func (a *App) planDeltaPackages(coll *Collection, files []*File, vol *Volume, pr
 		sort.Slice(group, func(i, j int) bool { return group[i].RelPath < group[j].RelPath })
 		var batch []ChunkFileRef
 		var size int64
-		flush := func() {
+		flush := func() error {
 			if len(batch) == 0 {
-				return
+				return nil
 			}
 			seq++
-			c := a.Store.AddChunk(Chunk{CollectionID: coll.ID, Name: fmt.Sprintf("%s-INC%04d", safe, seq),
+			c, err := a.Store.AddChunkErr(Chunk{CollectionID: coll.ID, Name: fmt.Sprintf("%s-INC%04d", safe, seq),
 				Status: "PLANNED", MediaKind: mediaKind, TargetBytes: target, DataBytes: size,
 				FileCount: len(batch), SrcRoot: folders[fid], HashAlg: "SHA256", Par2: par2,
 				Files: append([]ChunkFileRef{}, batch...)})
+			if err != nil {
+				return err
+			}
 			out = append(out, c)
 			batch, size = nil, 0
+			return nil
 		}
 		for _, f := range group {
 			if len(batch) > 0 && size+f.SizeBytes > payload {
-				flush()
+				if err := flush(); err != nil {
+					return nil, err
+				}
 			}
 			batch = append(batch, ChunkFileRef{FileID: f.ID, RelPath: f.RelPath, SizeBytes: f.SizeBytes, Hash: f.Hash})
 			size += f.SizeBytes
 		}
-		flush()
+		if err := flush(); err != nil {
+			return nil, err
+		}
 	}
 	sort.Slice(big, func(i, j int) bool { return big[i].RelPath < big[j].RelPath })
 	for _, f := range big {
 		seq++
 		segs := planSegments(f.SizeBytes+4096, target)
-		c := a.Store.AddChunk(Chunk{CollectionID: coll.ID, Name: fmt.Sprintf("%s-INC%04d", safe, seq),
+		c, err := a.Store.AddChunkErr(Chunk{CollectionID: coll.ID, Name: fmt.Sprintf("%s-INC%04d", safe, seq),
 			Status: "PLANNED", MediaKind: mediaKind, TargetBytes: target, DataBytes: f.SizeBytes,
 			FileCount: 1, SrcRoot: folders[f.FolderID], HashAlg: "SHA256", Par2: par2, Spanned: true, Segments: segs,
 			Files: []ChunkFileRef{{FileID: f.ID, RelPath: f.RelPath, SizeBytes: f.SizeBytes, Hash: f.Hash}}})
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, c)
 	}
 	_ = cfg

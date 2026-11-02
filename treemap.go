@@ -151,23 +151,31 @@ func (s *Store) levelAggregate(collectionID int, dirPath, colorBy string) ([]*tr
 	// explicitly false). Used only by the "validation" coloring — a verified copy
 	// (fileCopies) still wins, so red marks files whose backups failed a check.
 	failedFiles := map[int]bool{}
-	for _, ch := range s.c.Chunks {
+	failedChunk := map[int]bool{}
+	pcsOf := map[int]map[string]physCopy{}
+	for _, ch := range s.chunksLocked() {
 		if ch.CollectionID != collectionID || ch.Status == "FAILED" {
 			continue
 		}
 		for _, cp := range ch.Copies {
 			if cp.VerifyOK != nil && !*cp.VerifyOK {
-				for _, cf := range ch.Files {
-					failedFiles[cf.FileID] = true
-				}
+				failedChunk[ch.ID] = true
 				break
 			}
 		}
-		pcs := chunkPhysCopies(ch, vols, locs)
-		if len(pcs) == 0 {
-			continue
+		if pcs := chunkPhysCopies(ch, vols, locs); len(pcs) > 0 {
+			pcsOf[ch.ID] = pcs
 		}
-		for _, cf := range ch.Files {
+	}
+	if err := s.eachListingLocked(func(ch *Chunk) bool { return failedChunk[ch.ID] || pcsOf[ch.ID] != nil }, true,
+		func(ch *Chunk, cf ChunkFileRef) error {
+			if failedChunk[ch.ID] {
+				failedFiles[cf.FileID] = true
+			}
+			pcs := pcsOf[ch.ID]
+			if pcs == nil {
+				return nil
+			}
 			m := fileCopies[cf.FileID]
 			if m == nil {
 				m = map[string]physCopy{}
@@ -176,7 +184,9 @@ func (s *Store) levelAggregate(collectionID int, dirPath, colorBy string) ([]*tr
 			for sig, pc := range pcs {
 				m[sig] = pc
 			}
-		}
+			return nil
+		}); err != nil {
+		return nil, TreemapResult{}, nil, err
 	}
 
 	folderPath := map[int]string{}

@@ -348,7 +348,11 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 		if !containsInt(ds.ArchiveIDs, c.CollectionID) {
 			continue
 		}
-		for _, ref := range c.Files {
+		listed, err := a.Store.ChunkFiles(c.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, ref := range listed {
 			if ref.Hash == "" {
 				continue
 			}
@@ -468,7 +472,11 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 				current[f.ID] = f.Hash
 			}
 			seen := map[int]bool{}
-			for _, r := range append(append([]ChunkFileRef(nil), prior.Files...), prior.UnknownFiles...) {
+			priorRefs, err := a.chunkListings(prior)
+			if err != nil {
+				return nil, err
+			}
+			for _, r := range priorRefs {
 				if _, matched := fm[r.FileID]; matched || seen[r.FileID] {
 					continue
 				}
@@ -482,16 +490,28 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 			// None of this archive's files were found. What the drive's record held
 			// is gone, or unknown where this scan could not read; the copy is not
 			// verified again by a scan that found nothing.
-			if p := a.mirrorChunkOn(aid, vol.ID); p != nil && (len(p.Files) > 0 || len(p.UnknownFiles) > 0) {
+			p := a.mirrorChunkOn(aid, vol.ID)
+			var pFiles, pUnknown []ChunkFileRef
+			var err error
+			if p != nil {
+				if pFiles, err = a.Store.ChunkFiles(p.ID); err != nil {
+					return nil, err
+				}
+				if pUnknown, err = a.Store.ChunkUnknownFiles(p.ID); err != nil {
+					return nil, err
+				}
+			}
+			if p != nil && (len(pFiles) > 0 || len(pUnknown) > 0) {
 				gone := 0
-				for _, r := range p.Files {
+				for _, r := range pFiles {
 					if !containsRef(unknown, r.FileID) {
 						gone++
 					}
 				}
-				p.Files, p.FileCount, p.EncBytes, p.DataBytes = nil, 0, 0, 0
-				p.UnknownFiles = unknown
-				a.Store.UpdateChunk(p)
+				p.FileCount, p.EncBytes, p.DataBytes = 0, 0, 0
+				if err := a.Store.SetChunkLists(p, nil, &unknown); err != nil {
+					return nil, err
+				}
 				a.Store.AppendVerifyEvent(p, VerifyEvent{At: time.Now().UTC(), OK: false, Path: mountPath, Advisory: true,
 					Note: fmt.Sprintf("this scan found none of the archive's files here: %d no longer on the drive, %d unknown (in places it could not read)", gone, len(unknown))})
 			}
@@ -500,9 +520,10 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 		}
 		sort.Slice(refs, func(i, j int) bool { return refs[i].RelPath < refs[j].RelPath })
 		sort.Slice(unknown, func(i, j int) bool { return unknown[i].RelPath < unknown[j].RelPath })
-		c := a.upsertMirrorChunk(aid, vol, mountPath, refs, mode)
-		c.UnknownFiles = unknown
-		a.Store.UpdateChunk(c)
+		c, err := a.upsertMirrorChunkAt(aid, vol, "", mountPath, refs, mode, &unknown)
+		if err != nil {
+			return nil, err
+		}
 		if len(unknown) > 0 {
 			a.Store.AppendVerifyEvent(c, VerifyEvent{At: time.Now().UTC(), OK: true, Path: mountPath, Advisory: true,
 				Note: fmt.Sprintf("%d file(s) an earlier scan found here are unknown: this scan could not read where they were, so they are not counted until a scan reads them again", len(unknown))})
@@ -696,7 +717,11 @@ func (a *App) dockReverifyAtLevel(ds *DockSession, mountPath string, vol *Volume
 			if !on {
 				continue
 			}
-			ok, checked, b, firstBad := verifyMirrorChunk(c, mountPath, level)
+			listed, err := a.Store.ChunkFiles(c.ID)
+			if err != nil {
+				return nil, err
+			}
+			ok, checked, b, firstBad := verifyMirrorChunk(listed, mountPath, level)
 			matched += checked - b
 			bad += b
 			now := time.Now().UTC()
@@ -728,15 +753,17 @@ func (a *App) dockReverifyAtLevel(ds *DockSession, mountPath string, vol *Volume
 // upsertMirrorChunk creates or refreshes the ADOPTED-VERIFIED mirror package for
 // (archive, volume): the drive's content-matched files, with a verified copy on
 // the volume. Idempotent — a re-ingest updates the same package in place.
-func (a *App) upsertMirrorChunk(archiveID int, vol *Volume, mountPath string, refs []ChunkFileRef, mode string) *Chunk {
-	return a.upsertMirrorChunkAt(archiveID, vol, "", mountPath, refs, mode)
+func (a *App) upsertMirrorChunk(archiveID int, vol *Volume, mountPath string, refs []ChunkFileRef, mode string) (*Chunk, error) {
+	return a.upsertMirrorChunkAt(archiveID, vol, "", mountPath, refs, mode, nil)
 }
 
 // upsertMirrorChunkAt is upsertMirrorChunk for the record of one folder (root,
 // as adopted) on the drive; "" is the record of the whole drive or destination.
 // Each folder keeps its own record, so adopting one folder never replaces
 // another's files.
-func (a *App) upsertMirrorChunkAt(archiveID int, vol *Volume, root, mountPath string, refs []ChunkFileRef, mode string) *Chunk {
+//
+// unknown, unless nil, replaces the record's unknown files in the same save.
+func (a *App) upsertMirrorChunkAt(archiveID int, vol *Volume, root, mountPath string, refs []ChunkFileRef, mode string, unknown *[]ChunkFileRef) (*Chunk, error) {
 	var sum int64
 	for _, r := range refs {
 		sum += r.SizeBytes
@@ -751,12 +778,15 @@ func (a *App) upsertMirrorChunkAt(archiveID int, vol *Volume, root, mountPath st
 		note = "mirror backup written (copy-then-verified)"
 	}
 	if c := a.mirrorChunkAt(archiveID, vol.ID, root); c != nil {
-		c.Files, c.FileCount, c.EncBytes, c.DataBytes = refs, len(refs), sum, sum
+		c.FileCount, c.EncBytes, c.DataBytes = len(refs), sum, sum
 		c.WrittenDest, c.VerifiedAt, c.VerifyOK, c.Status = mountPath, &now, &ok, StatusAdoptedVerified
+		if err := a.Store.SetChunkLists(c, refs, unknown); err != nil {
+			return nil, err
+		}
 		a.Store.RecordCopy(c, vol.ID, mountPath, true)
 		a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: true, Path: mountPath, Note: note})
 		a.Store.UpdateChunk(c)
-		return c
+		return c, nil
 	}
 	coll := a.Store.Collection(archiveID)
 	safe := "ARCHIVE"
@@ -767,14 +797,34 @@ func (a *App) upsertMirrorChunkAt(archiveID int, vol *Volume, root, mountPath st
 	if root != "" {
 		name += "-" + safeName(filepath.Base(root)) + "-" + sha256Hex([]byte(normPath(root)))[:6]
 	}
-	c := a.Store.AddChunk(Chunk{CollectionID: archiveID, MirrorRoot: root,
+	c, err := a.Store.AddChunkErr(Chunk{CollectionID: archiveID, MirrorRoot: root,
 		Name: name, Status: StatusAdoptedVerified,
 		MediaKind: nonEmpty(vol.Kind, "HDD"), EncBytes: sum, DataBytes: sum, FileCount: len(refs),
 		HashAlg: "SHA256", Encrypted: false, Adopted: true, Mirror: true, WrittenDest: mountPath,
-		Files: refs, WrittenAt: &now, VerifiedAt: &now, VerifyOK: &ok})
+		Files: refs, UnknownFiles: derefRefs(unknown), WrittenAt: &now, VerifiedAt: &now, VerifyOK: &ok})
+	if err != nil {
+		return nil, err
+	}
 	a.Store.RecordCopy(c, vol.ID, mountPath, true)
 	a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: true, Path: mountPath, Note: note})
-	return c
+	return c, nil
+}
+
+func derefRefs(p *[]ChunkFileRef) []ChunkFileRef {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+// chunkListings is a package's Files followed by its UnknownFiles.
+func (a *App) chunkListings(c *Chunk) ([]ChunkFileRef, error) {
+	files, err := a.Store.ChunkFiles(c.ID)
+	if err != nil {
+		return nil, err
+	}
+	unknown, err := a.Store.ChunkUnknownFiles(c.ID)
+	return append(files, unknown...), err
 }
 
 // containsRef reports whether refs holds the file fileID.
@@ -861,7 +911,15 @@ func (a *App) archiveCoverage(archiveIDs []int) (Coverage, error) {
 		if c.VerifiedCopyCount() == 0 {
 			continue
 		}
-		for _, ref := range c.Files {
+		listed, err := a.Store.ChunkFiles(c.ID)
+		if err != nil {
+			return Coverage{}, err
+		}
+		unknown, err := a.Store.ChunkUnknownFiles(c.ID)
+		if err != nil {
+			return Coverage{}, err
+		}
+		for _, ref := range listed {
 			if ref.FileID > 0 {
 				coveredIDs[ref.FileID] = true
 			}
@@ -869,7 +927,7 @@ func (a *App) archiveCoverage(archiveIDs []int) (Coverage, error) {
 				coveredHashes[ref.Hash] = true
 			}
 		}
-		for _, ref := range c.UnknownFiles {
+		for _, ref := range unknown {
 			unknownIDs[ref.FileID] = true
 		}
 	}

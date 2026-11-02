@@ -16,6 +16,7 @@ package main
 // "is this copy in another building?" is a fact about the physical medium.
 
 import (
+	"os"
 	"path"
 	"path/filepath"
 	"sort"
@@ -389,25 +390,9 @@ func (s *Store) Protection(collectionID int) (ProtectionResult, error) {
 	}
 	locs := s.locationsMapLocked()
 	// fileID -> deduped verified physical copies (across every non-FAILED chunk).
-	fileCopies := map[int]map[string]physCopy{}
-	for _, ch := range s.c.Chunks {
-		if ch.CollectionID != collectionID || ch.Status == "FAILED" {
-			continue
-		}
-		pcs := chunkPhysCopies(ch, vols, locs)
-		if len(pcs) == 0 {
-			continue
-		}
-		for _, cf := range ch.Files {
-			m := fileCopies[cf.FileID]
-			if m == nil {
-				m = map[string]physCopy{}
-				fileCopies[cf.FileID] = m
-			}
-			for sig, pc := range pcs {
-				m[sig] = pc
-			}
-		}
+	fileCopies, err := s.fileCopiesLocked(vols, locs, func(ch *Chunk) bool { return ch.CollectionID == collectionID })
+	if err != nil {
+		return ProtectionResult{}, err
 	}
 
 	folderPath := map[int]string{}
@@ -430,30 +415,70 @@ func (s *Store) Protection(collectionID int) (ProtectionResult, error) {
 		return v
 	}
 
-	if err := s.eachFileLocked(fileQuery{CollectionID: collectionID}, func(f *File) error {
-		if f.CollectionID != collectionID {
-			return nil
+	// Files in one directory share its profile and its ancestors' aggregates, so
+	// those are worked out once per directory (keyed by folder and the path's
+	// directory part) rather than once per file.
+	type dirKey struct {
+		folderID int
+		relDir   string
+	}
+	type dirInfo struct {
+		prof      *Profile
+		ancestors []*dirAgg
+	}
+	dirInfos := map[dirKey]*dirInfo{}
+	infoFor := func(f *File) *dirInfo {
+		rel := f.RelPath
+		cut := len(rel) - 1
+		for cut >= 0 && !os.IsPathSeparator(rel[cut]) {
+			cut--
+		}
+		key := dirKey{f.FolderID, ""}
+		if cut >= 0 {
+			key.relDir = rel[:cut]
+		}
+		if base := rel[cut+1:]; base == "." || base == ".." || base == "" {
+			key.folderID = -1 // a path whose last element is not a name: not shared
+		}
+		if di := dirInfos[key]; di != nil && key.folderID != -1 {
+			return di
 		}
 		root := folderPath[f.FolderID]
-		full := filepath.ToSlash(filepath.Join(root, f.RelPath))
-		fileDir := path.Dir(full)
-		prof := resolve(fileDir)
-		dims := dimsFromCopies(fileCopies[f.ID], prof)
-		st := statusFor(prof, dims)
-		detail := statusDetail(prof, dims, st)
-		summary[st]++
-		total++
+		fileDir := path.Dir(filepath.ToSlash(filepath.Join(root, rel)))
+		di := &dirInfo{prof: resolve(fileDir)}
 		for _, d := range dirAncestors(fileDir, root) {
 			ag := dirs[d]
 			if ag == nil {
-				dp := resolve(d)
-				ag = &dirAgg{root: root, counts: map[string]int{}, example: map[string]string{}, profile: dp}
+				ag = &dirAgg{root: root, counts: map[string]int{}, example: map[string]string{}, profile: resolve(d)}
 				ag.inherited = !s.hasExplicitAssignmentLocked(collectionID, d)
 				dirs[d] = ag
 			}
+			di.ancestors = append(di.ancestors, ag)
+		}
+		if key.folderID != -1 {
+			dirInfos[key] = di
+		}
+		return di
+	}
+
+	if err := s.eachFileLocked(fileQuery{CollectionID: collectionID, PathsOnly: true}, func(f *File) error {
+		if f.CollectionID != collectionID {
+			return nil
+		}
+		di := infoFor(f)
+		prof := di.prof
+		dims := dimsFromCopies(fileCopies[f.ID], prof)
+		st := statusFor(prof, dims)
+		summary[st]++
+		total++
+		var detail string
+		for _, ag := range di.ancestors {
 			ag.counts[st]++
 			ag.files++
 			if _, seen := ag.example[st]; !seen {
+				if detail == "" {
+					detail = statusDetail(prof, dims, st)
+				}
 				ag.example[st] = detail
 			}
 		}
@@ -499,7 +524,7 @@ func (s *Store) Protection(collectionID int) (ProtectionResult, error) {
 // fileDimsForCollection returns per-file protection dims (copies, kinds, offsite,
 // distinct locations) keyed by file ID — the numbers behind the six-status model,
 // exposed for diagnostics and tests (notably the sourceless-union coverage test).
-func (s *Store) fileDimsForCollection(collectionID int) map[int]fileDims {
+func (s *Store) fileDimsForCollection(collectionID int) (map[int]fileDims, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	vols := map[int]*Volume{}
@@ -507,32 +532,16 @@ func (s *Store) fileDimsForCollection(collectionID int) map[int]fileDims {
 		vols[v.ID] = v
 	}
 	locs := s.locationsMapLocked()
-	fileCopies := map[int]map[string]physCopy{}
-	for _, ch := range s.c.Chunks {
-		if ch.CollectionID != collectionID || ch.Status == "FAILED" {
-			continue
-		}
-		pcs := chunkPhysCopies(ch, vols, locs)
-		if len(pcs) == 0 {
-			continue
-		}
-		for _, cf := range ch.Files {
-			m := fileCopies[cf.FileID]
-			if m == nil {
-				m = map[string]physCopy{}
-				fileCopies[cf.FileID] = m
-			}
-			for sig, pc := range pcs {
-				m[sig] = pc
-			}
-		}
+	fileCopies, err := s.fileCopiesLocked(vols, locs, func(ch *Chunk) bool { return ch.CollectionID == collectionID })
+	if err != nil {
+		return nil, err
 	}
 	prof := s.resolveProfileLocked(collectionID, "")
 	out := make(map[int]fileDims, len(fileCopies))
 	for fid, cps := range fileCopies {
 		out[fid] = dimsFromCopies(cps, prof)
 	}
-	return out
+	return out, nil
 }
 
 // FileStatuses returns the six-status protection verdict for every file in a
@@ -547,25 +556,9 @@ func (s *Store) FileStatuses(collectionID int) (map[int]string, error) {
 		vols[v.ID] = v
 	}
 	locs := s.locationsMapLocked()
-	fileCopies := map[int]map[string]physCopy{}
-	for _, ch := range s.c.Chunks {
-		if ch.CollectionID != collectionID || ch.Status == "FAILED" {
-			continue
-		}
-		pcs := chunkPhysCopies(ch, vols, locs)
-		if len(pcs) == 0 {
-			continue
-		}
-		for _, cf := range ch.Files {
-			m := fileCopies[cf.FileID]
-			if m == nil {
-				m = map[string]physCopy{}
-				fileCopies[cf.FileID] = m
-			}
-			for sig, pc := range pcs {
-				m[sig] = pc
-			}
-		}
+	fileCopies, err := s.fileCopiesLocked(vols, locs, func(ch *Chunk) bool { return ch.CollectionID == collectionID })
+	if err != nil {
+		return nil, err
 	}
 	folderPath := map[int]string{}
 	for _, fo := range s.c.Folders {
@@ -574,7 +567,7 @@ func (s *Store) FileStatuses(collectionID int) (map[int]string, error) {
 		}
 	}
 	out := map[int]string{}
-	if err := s.eachFileLocked(fileQuery{CollectionID: collectionID}, func(f *File) error {
+	if err := s.eachFileLocked(fileQuery{CollectionID: collectionID, PathsOnly: true}, func(f *File) error {
 		if f.CollectionID != collectionID {
 			return nil
 		}

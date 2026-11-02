@@ -85,27 +85,42 @@ func (s *Store) FileVersions(fileID int) ([]FileVersionView, error) {
 		rel string
 	}
 	byHash := map[string][]hit{}
-	for _, ch := range s.c.Chunks {
-		if ch.Status == "FAILED" {
-			continue
+	// This file's own listings, and listings that name no file (a package adopted
+	// from a medium's manifest) holding one of its versions' bytes. Another file
+	// with identical content is not offered. Hits keep catalog order.
+	type ordered struct {
+		ord  int
+		hash string
+		h    hit
+	}
+	var found []ordered
+	ordOf := map[int]int{}
+	for i, ch := range s.chunksLocked() {
+		ordOf[ch.ID] = i
+	}
+	take := func(ch *Chunk, cf ChunkFileRef) error {
+		if ch.Status == "FAILED" || cf.Hash == "" {
+			return nil
 		}
-		for _, cf := range ch.Files {
-			if cf.Hash == "" {
-				continue
-			}
-			if cf.FileID != fileID && cf.FileID != 0 {
-				// A different file with identical content still holds these bytes —
-				// content-addressed, so it is a legitimate restore source. But prefer
-				// same-file matches; include others only when FileID matches or is 0.
-				if cf.FileID != fileID {
-					continue
-				}
-			}
-			byHash[cf.Hash] = append(byHash[cf.Hash], hit{
-				pkg: FileVersionPackage{ChunkID: ch.ID, Chunk: ch.Name, Status: ch.Status, Volumes: chunkVersionVolumes(ch, vol)},
-				rel: cf.RelPath,
-			})
-		}
+		found = append(found, ordered{ordOf[ch.ID], cf.Hash, hit{
+			pkg: FileVersionPackage{ChunkID: ch.ID, Chunk: ch.Name, Status: ch.Status, Volumes: chunkVersionVolumes(ch, vol)},
+			rel: cf.RelPath,
+		}})
+		return nil
+	}
+	if err := s.listingsOfFilesLocked([]int{fileID}, take); err != nil {
+		return nil, err
+	}
+	hashes := []string{f.Hash}
+	for _, v := range f.Versions {
+		hashes = append(hashes, v.Hash)
+	}
+	if err := s.unlinkedListingsLocked(hashes, take); err != nil {
+		return nil, err
+	}
+	sort.SliceStable(found, func(i, j int) bool { return found[i].ord < found[j].ord })
+	for _, o := range found {
+		byHash[o.hash] = append(byHash[o.hash], o.h)
 	}
 
 	build := func(hash, alg string, size int64, mtime, firstSeen time.Time, superseded *time.Time, current bool) FileVersionView {

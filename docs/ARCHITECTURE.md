@@ -454,6 +454,22 @@ catalog until the cutover slice. Until then the database engine is opt-in:
   `*File` a `Store` method returns, on either engine, is the caller's own copy:
   a change reaches the catalog only through a method, which the test run's copy
   guard enforces.
+- **S5 — packages** (`store_chunks.go`, `catalogdb_chunks.go`). A package's
+  header, copies, segments and verify events stay in memory on both engines and
+  are written through in the `chunk`, `copy`, `segment` and `verify_event`
+  tables; the header row is rewritten in place, so saving it never touches the
+  listings. The listings (`Files`, and `UnknownFiles` for a mirror a partial scan
+  could not fully read) live only in `chunk_file` on the database engine and are
+  read when asked for: `ChunkFiles` for one package, and scans that read only the
+  file IDs for protection, coverage and search. A listing names its file by ID
+  and stores its path, size and hash only where they differ from the file's.
+  Outside the store, nothing reads the package list or a listing as a field, or
+  changes copies, segments or verify events except through a method; a test
+  type-checks the package and fails on any such access. Protection reads only
+  each file's ID, folder and path and works out each directory's profile and
+  ancestors once: with a million files in 100 packages of 10,000, each with a
+  verified copy, it takes 3.8 s on the database engine and 1.2 s on
+  `catalog.json` (8.4 s and 3.9 s, without listings, before S5).
 
 Measured on the Windows dev box (SSD): a million files each listed in one
 package move from a 647 MB `catalog.json` to a 382 MB `catalog.db` in under two
