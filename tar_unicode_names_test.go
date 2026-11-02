@@ -127,7 +127,7 @@ func sortedNames(m map[string]bool) []string {
 func newUnicodeTestApp(t *testing.T, tools map[string]string, staging string) *App {
 	t.Helper()
 	dataDir := t.TempDir()
-	store, err := OpenStore(dataDir)
+	store, err := openTestStore(t, dataDir)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}

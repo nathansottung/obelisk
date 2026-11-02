@@ -74,7 +74,7 @@ func TestGUICatalogNativeDecodeAndSearch(t *testing.T) {
 			s.store.persistObserver = func(string, string) { writes++ }
 			s.store.failSave = func() error { writes++; return errors.New("forbidden") }
 			before := guiBytes(t, s.store.c)
-			if len(s.store.Search(SearchQuery{Text: label + "/duplicate"})) != 2 || len(s.store.Search(SearchQuery{Hash: strings.Repeat("a", 8)})) != 1 || len(s.store.Search(SearchQuery{Text: "absent"})) != 0 {
+			if len(noErr[[]map[string]any](t)(s.store.Search(SearchQuery{Text: label + "/duplicate"}))) != 2 || len(noErr[[]map[string]any](t)(s.store.Search(SearchQuery{Hash: strings.Repeat("a", 8)}))) != 1 || len(noErr[[]map[string]any](t)(s.store.Search(SearchQuery{Text: "absent"}))) != 0 {
 				t.Fatal("native query mismatch")
 			}
 			p := s.projection()

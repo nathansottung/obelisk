@@ -60,7 +60,11 @@ func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string))
 	var warnings []string
 
 	progress(0.15, "inventory")
-	inventory := mediaInventoryMD(chunks, volm) + a.retainedVersionsMD()
+	versionsMD, err := a.retainedVersionsMD()
+	if err != nil {
+		return nil, err
+	}
+	inventory := mediaInventoryMD(chunks, volm) + versionsMD
 	if err := out.WriteFile(kitRel+"/"+"MEDIA_INVENTORY.md", []byte(inventory), 0o644); err != nil {
 		return nil, err
 	}
@@ -78,7 +82,11 @@ func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string))
 	// Format sustainability: what formats these archives hold and how to read
 	// them — so "which tools open a .NEF in 2050?" travels with the kit.
 	progress(0.62, "format census")
-	if err := out.WriteFile(kitRel+"/"+"FORMATS.md", []byte(formatCensusMD(a.FormatCensus(0))), 0o644); err != nil {
+	census, err := a.FormatCensus(0)
+	if err != nil {
+		return nil, err
+	}
+	if err := out.WriteFile(kitRel+"/"+"FORMATS.md", []byte(formatCensusMD(census)), 0o644); err != nil {
 		return nil, err
 	}
 
@@ -119,7 +127,7 @@ func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string))
 	// belt-and-suspenders home. Never fail the kit over it: a missing cache just
 	// means a smaller bundle plus a recorded note.
 	progress(0.66, "escrow bundle")
-	escrowPlan := a.planEscrow(EscrowFull, cfg.EscrowIncludeReaders, a.FormatCensus(0), cfg)
+	escrowPlan := a.planEscrow(EscrowFull, cfg.EscrowIncludeReaders, census, cfg)
 	escrowSummary, escErr := a.writeEscrowBundleTo(out, kitRel, escrowPlan, func(f float64, m string) { progress(0.66+0.02*f, m) })
 	if escErr != nil {
 		warnings = append(warnings, "escrow bundle: "+escErr.Error())

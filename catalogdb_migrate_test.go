@@ -357,10 +357,6 @@ func TestCatalogMove_RefusesFaults(t *testing.T) {
 			edit: func(raw []byte) []byte {
 				return bytes.Replace(raw, []byte(c.Files[0].Hash), []byte(c.Files[0].Hash[:40]), 1)
 			}},
-		{name: "time beyond 2261", want: "cannot be stored exactly",
-			edit: func(raw []byte) []byte {
-				return bytes.Replace(raw, []byte(`"at":"2020`), []byte(`"at":"2300`), 1)
-			}},
 		{name: "newer catalog", want: "newer version",
 			edit: func(raw []byte) []byte {
 				return bytes.Replace(raw, []byte(`"schema_version":8`), []byte(`"schema_version":9`), 1)
@@ -493,13 +489,14 @@ func TestCatalogMove_MissingJSONGetsItsStubBack(t *testing.T) {
 // The JSON store of this build, and so every build since schema versioning, opens
 // the moved folder read-only and writes nothing to it.
 func TestCatalogMove_StubOpensReadOnlyInTheJSONStore(t *testing.T) {
+	t.Setenv(catalogEngineEnv, "json")
 	dir := t.TempDir()
 	writeCatalogJSON(t, dir, fullCatalog(t))
 	if _, err := migrateCatalogToDB(dir, catalogMigrateOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	stub := fileBytes(t, filepath.Join(dir, "catalog.json"))
-	s, err := OpenStore(dir)
+	s, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,14 +537,14 @@ func TestCatalogDB_ExportJSONIsPortable(t *testing.T) {
 	}
 	other := t.TempDir()
 	os.WriteFile(filepath.Join(other, "catalog.json"), buf.Bytes(), 0o644)
-	s, err := OpenStore(other)
+	s, err := openTestStore(t, other)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ro, why := s.ReadOnly(); ro {
 		t.Fatalf("the export opened read-only: %s", why)
 	}
-	if got := len(s.AllFiles()); got != len(c.Files) {
+	if got := len(testFiles(t, s.AllFiles())); got != len(c.Files) {
 		t.Errorf("the export has %d files, want %d", got, len(c.Files))
 	}
 	var back catalog
@@ -803,4 +800,18 @@ func TestCatalogDB_ListingsKeepTheirValuesWhenTheFileIsReplaced(t *testing.T) {
 		t.Errorf("replacing the file changed the package's listing:\nbefore %+v\nafter  %+v",
 			before.Chunks[0].Files, after.Chunks[0].Files)
 	}
+}
+
+// Times outside what nanoseconds hold move exactly: a file dated 1601 (the zero
+// FILETIME Windows reports) and an audit entry dated 2300.
+func TestCatalogMove_KeepsTimesOutsideNanoseconds(t *testing.T) {
+	c := fullCatalog(t)
+	c.Files[0].ModTime = time.Date(1601, 1, 1, 0, 0, 0, 0, time.UTC)
+	c.Audit[0].At = time.Date(2300, 1, 2, 3, 4, 5, 6, time.UTC)
+	dir := t.TempDir()
+	raw := writeCatalogJSON(t, dir, c)
+	if _, err := migrateCatalogToDB(dir, catalogMigrateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	assertMoved(t, dir, raw)
 }

@@ -126,7 +126,7 @@ func (a *treemapAgg) node() TreemapNode {
 // drift falls back to protection when no reconcile report exists. The returned
 // TreemapResult has every field set EXCEPT Children/Folded, which each caller fills;
 // the returned severity ranker matches the active coloring mode.
-func (s *Store) levelAggregate(collectionID int, dirPath, colorBy string) ([]*treemapAgg, TreemapResult, func(string) int) {
+func (s *Store) levelAggregate(collectionID int, dirPath, colorBy string) ([]*treemapAgg, TreemapResult, func(string) int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -238,9 +238,9 @@ func (s *Store) levelAggregate(collectionID int, dirPath, colorBy string) ([]*tr
 		return a
 	}
 
-	for _, f := range s.c.Files {
+	if err := s.eachFileLocked(fileQuery{CollectionID: collectionID}, func(f *File) error {
 		if f.CollectionID != collectionID {
-			continue
+			return nil
 		}
 		root := folderPath[f.FolderID]
 		// root is canonical (clean, forward-slashed, no trailing slash) and RelPath is
@@ -267,10 +267,10 @@ func (s *Store) levelAggregate(collectionID int, dirPath, colorBy string) ([]*tr
 				nFull = strings.ToLower(full)
 			}
 			if nFull != nP && !strings.HasPrefix(nFull, nP+"/") {
-				continue // not under the zoomed directory
+				return nil // not under the zoomed directory
 			}
 			if len(full) <= len(P)+1 {
-				continue // guard: the directory itself
+				return nil // guard: the directory itself
 			}
 			rest := full[len(P)+1:] // exact-case remainder (P is a canonical stored prefix)
 			if i := strings.IndexByte(rest, '/'); i >= 0 {
@@ -333,6 +333,9 @@ func (s *Store) levelAggregate(collectionID int, dirPath, colorBy string) ([]*tr
 		if sv := severity(st); sv > a.worstSev {
 			a.worstSev, a.worst = sv, st
 		}
+		return nil
+	}); err != nil {
+		return nil, TreemapResult{}, nil, err
 	}
 
 	// Materialize the children (unsorted); each caller applies its own ordering.
@@ -341,15 +344,18 @@ func (s *Store) levelAggregate(collectionID int, dirPath, colorBy string) ([]*tr
 		all = append(all, a)
 	}
 	res.Crumbs = treemapCrumbs(res.Name, P, folderPath)
-	return all, res, severity
+	return all, res, severity, nil
 }
 
 // Treemap computes one zoom level of the risk treemap for an archive: the immediate
 // children sorted by size, with the small tail folded into a single synthetic
 // "other" block so a directory with tens of thousands of entries still draws a
 // readable handful. See levelAggregate for dirPath/colorBy semantics.
-func (s *Store) Treemap(collectionID int, dirPath, colorBy string) TreemapResult {
-	all, res, severity := s.levelAggregate(collectionID, dirPath, colorBy)
+func (s *Store) Treemap(collectionID int, dirPath, colorBy string) (TreemapResult, error) {
+	all, res, severity, err := s.levelAggregate(collectionID, dirPath, colorBy)
+	if err != nil {
+		return TreemapResult{}, err
+	}
 	sort.Slice(all, func(i, j int) bool {
 		if all[i].size != all[j].size {
 			return all[i].size > all[j].size
@@ -381,7 +387,7 @@ func (s *Store) Treemap(collectionID int, dirPath, colorBy string) TreemapResult
 		n.Other, n.HasChildren = true, false // the "other" bucket is a summary, not zoomable
 		res.Children = append(res.Children, n)
 	}
-	return res
+	return res, nil
 }
 
 // FolderTreeNode is one row of the Archives folder tree: an immediate child
@@ -422,8 +428,11 @@ const folderTreeMaxLimit = 200
 // levelAggregate (immediate children + server-side rollups, never the whole tree) and
 // colors by protection status. Files are not listed individually — the tree's unit is
 // the folder, with counts as rollups.
-func (s *Store) FolderTree(collectionID int, dirPath string, offset, limit int) FolderTreeResult {
-	all, agg, _ := s.levelAggregate(collectionID, dirPath, "protection")
+func (s *Store) FolderTree(collectionID int, dirPath string, offset, limit int) (FolderTreeResult, error) {
+	all, agg, _, err := s.levelAggregate(collectionID, dirPath, "protection")
+	if err != nil {
+		return FolderTreeResult{}, err
+	}
 	// Directories only; a file leaf is not an expandable folder row. Filter in place.
 	dirs := all[:0]
 	for _, a := range all {
@@ -459,7 +468,7 @@ func (s *Store) FolderTree(collectionID int, dirPath string, offset, limit int) 
 			Status: a.worst, HasChildren: a.hasSub,
 		})
 	}
-	return res
+	return res, nil
 }
 
 // treemapCrumbs builds the zoom breadcrumb from the archive root down to P. The
@@ -538,7 +547,7 @@ const exploreStatsMaxRows = 24
 // to dirPath ("" = whole archive). Pure catalog read — never walks the disk, the
 // same contract as Treemap. Largest folders are the immediate children of dirPath
 // (directories), matching what the treemap draws at that level.
-func (s *Store) ExploreStats(collectionID int, dirPath string) ExploreStats {
+func (s *Store) ExploreStats(collectionID int, dirPath string) (ExploreStats, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -566,9 +575,9 @@ func (s *Store) ExploreStats(collectionID int, dirPath string) ExploreStats {
 		a.bytes += bytes
 	}
 
-	for _, f := range s.c.Files {
+	if err := s.eachFileLocked(fileQuery{CollectionID: collectionID}, func(f *File) error {
 		if f.CollectionID != collectionID {
-			continue
+			return nil
 		}
 		root := folderPath[f.FolderID]
 		full := filepath.ToSlash(filepath.Join(root, f.RelPath))
@@ -580,10 +589,10 @@ func (s *Store) ExploreStats(collectionID int, dirPath string) ExploreStats {
 		} else {
 			nFull := normPath(full)
 			if nFull != nP && !strings.HasPrefix(nFull, nP+"/") {
-				continue // not under the zoomed directory
+				return nil // not under the zoomed directory
 			}
 			if len(full) <= len(P)+1 {
-				continue
+				return nil
 			}
 			rest := full[len(P)+1:]
 			if i := strings.IndexByte(rest, '/'); i >= 0 {
@@ -608,12 +617,15 @@ func (s *Store) ExploreStats(collectionID int, dirPath string) ExploreStats {
 			ext = "(none)"
 		}
 		bump(exts, ext, f.SizeBytes)
+		return nil
+	}); err != nil {
+		return ExploreStats{}, err
 	}
 
 	res.LargestFolders = topBuckets(folders, exploreStatsMaxRows)
 	res.Roles = topBuckets(roles, 0)
 	res.Extensions = topBuckets(exts, exploreStatsMaxRows)
-	return res
+	return res, nil
 }
 
 // statAcc accumulates files+bytes for one Explorer breakdown bucket.

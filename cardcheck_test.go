@@ -31,7 +31,7 @@ func TestCardCheck_BackedUpVsNew(t *testing.T) {
 	scanInto(t, app, coll.ID, src)
 
 	beforeSources := len(app.Store.SourceRoots())
-	beforeFiles := len(app.Store.FilesOf(coll.ID))
+	beforeFiles := len(testFiles(t, app.Store.FilesOf(coll.ID)))
 
 	// The card: two frames whose CONTENT is already archived (different names/paths),
 	// plus one genuinely new frame.
@@ -69,7 +69,7 @@ func TestCardCheck_BackedUpVsNew(t *testing.T) {
 	if got := len(app.Store.SourceRoots()); got != beforeSources {
 		t.Errorf("card check registered a source root (%d → %d)", beforeSources, got)
 	}
-	if got := len(app.Store.FilesOf(coll.ID)); got != beforeFiles {
+	if got := len(testFiles(t, app.Store.FilesOf(coll.ID))); got != beforeFiles {
 		t.Errorf("card check mutated the catalog (files %d → %d)", beforeFiles, got)
 	}
 }
@@ -196,7 +196,7 @@ func TestCardCheck_MatchesDriveSnapshot(t *testing.T) {
 	})
 	_ = coll
 
-	idx := app.knownContent()
+	idx := noErr[map[string][]string](t)(app.knownContent())
 	if locs, ok := idx[sha]; !ok || !hasStr(locs, "Drive: OLD-DRIVE-7") {
 		t.Errorf("known-content index missing the snapshot frame: %v (ok=%v)", idx[sha], ok)
 	}

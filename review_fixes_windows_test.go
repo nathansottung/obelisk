@@ -26,6 +26,7 @@ func unattachedDrive(t *testing.T) string {
 // carrying them restores. Only its path is compared with sources whose drive is
 // not attached.
 func TestConfigPaths_UnattachedDriveIsNotRefused(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	app, _ := compatApp(t)
 	q := unattachedDrive(t)
 	for key, val := range map[string]any{

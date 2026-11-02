@@ -12,7 +12,7 @@ import (
 
 func escrowApp(t *testing.T) *App {
 	t.Helper()
-	st, err := OpenStore(t.TempDir())
+	st, err := openTestStore(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}

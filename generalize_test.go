@@ -13,7 +13,7 @@ import (
 
 func TestMusicianProject_RolesCriticalAndRouting(t *testing.T) {
 	dataDir := t.TempDir()
-	store, err := OpenStore(dataDir)
+	store, err := openTestStore(t, dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestMusicianProject_RolesCriticalAndRouting(t *testing.T) {
 		t.Fatal(err)
 	}
 	byRel := map[string]*File{}
-	for _, f := range app.Store.FilesOf(coll.ID) {
+	for _, f := range testFiles(t, app.Store.FilesOf(coll.ID)) {
 		byRel[f.RelPath] = f
 	}
 	if f := byRel["stems/kick.wav"]; f == nil || f.Role != RoleOriginals {

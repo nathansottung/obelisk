@@ -39,7 +39,7 @@ func holdWithoutSharing(t *testing.T, path string) func() {
 func existingCatalog(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	s, err := OpenStore(dir)
+	s, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,6 +56,7 @@ func existingCatalog(t *testing.T) string {
 }
 
 func TestOpenStore_RetriesWhileFileIsBrieflyLocked(t *testing.T) {
+	jsonEngineOnly(t, "the database's own open, fault and retry tests are in catalogdb_open_test.go")
 	for _, name := range []string{"catalog.json", "jobs.json"} {
 		t.Run(name, func(t *testing.T) {
 			dir := existingCatalog(t)
@@ -68,7 +69,7 @@ func TestOpenStore_RetriesWhileFileIsBrieflyLocked(t *testing.T) {
 			defer timer.Stop()
 
 			start := time.Now()
-			s, err := OpenStore(dir)
+			s, err := openTestStore(t, dir)
 			if err != nil {
 				t.Fatalf("open after the lock was released: %v", err)
 			}
@@ -89,6 +90,7 @@ func TestOpenStore_RetriesWhileFileIsBrieflyLocked(t *testing.T) {
 }
 
 func TestOpenStore_FailsWhenLockOutlastsTheLimit(t *testing.T) {
+	jsonEngineOnly(t, "the database's own open, fault and retry tests are in catalogdb_open_test.go")
 	dir := existingCatalog(t)
 	catalog := filepath.Join(dir, "catalog.json")
 	before, err := os.ReadFile(catalog)
@@ -97,7 +99,7 @@ func TestOpenStore_FailsWhenLockOutlastsTheLimit(t *testing.T) {
 	}
 	release := holdWithoutSharing(t, catalog)
 	start := time.Now()
-	_, err = OpenStore(dir)
+	_, err = openTestStore(t, dir)
 	elapsed := time.Since(start)
 	release()
 	if err == nil {

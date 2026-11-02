@@ -58,7 +58,7 @@ func TestScanRecordsBlake3(t *testing.T) {
 	if _, _, err := a.ScanFolder(coll.ID, src, func(float64, string) {}); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
-	files := a.Store.FilesOf(coll.ID)
+	files := testFiles(t, a.Store.FilesOf(coll.ID))
 	if len(files) != 1 {
 		t.Fatalf("expected 1 file, got %d", len(files))
 	}
@@ -82,10 +82,10 @@ func TestBlake3NeverOnMedia(t *testing.T) {
 	coll := a.Store.AddCollection("M")
 	fo := a.Store.AddFolder(coll.ID, "/src")
 	f := a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: "x.dat",
-		SizeBytes: 3, HashAlg: "SHA256", Hash: "aa11", Blake3: "beefb3beef"})
+		SizeBytes: 3, HashAlg: "SHA256", Hash: testHash("aa11"), Blake3: testHash("beefb3beef")})
 	// A package referencing that file, as it would be written to media.
 	c := &Chunk{Name: "PKG-1", CollectionID: coll.ID, HashAlg: "SHA256", TarHash: "t", EncHash: "e",
-		Files: []ChunkFileRef{{FileID: f.ID, RelPath: "x.dat", SizeBytes: 3, Hash: "aa11"}}}
+		Files: []ChunkFileRef{{FileID: f.ID, RelPath: "x.dat", SizeBytes: 3, Hash: testHash("aa11")}}}
 	dir := t.TempDir()
 	if err := writeManifest(dir, c, ""); err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestBlake3NeverOnMedia(t *testing.T) {
 	if strings.Contains(body, "blake3") || strings.Contains(body, "beefb3") {
 		t.Fatalf("BLAKE3 must NEVER appear in an on-medium manifest:\n%s", b)
 	}
-	if !strings.Contains(body, "aa11") {
+	if !strings.Contains(body, testHash("aa11")) {
 		t.Fatal("the on-media SHA-256 should be present in the manifest")
 	}
 }

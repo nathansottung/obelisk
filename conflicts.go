@@ -44,8 +44,11 @@ type ConflictScan struct {
 // DetectConflicts scans an archive's files, classifies collisions, and reconciles
 // true conflicts (classes b & c) into the review queue. Class-(a) second-shooter
 // groups are counted for the report but never queued. Idempotent.
-func (a *App) DetectConflicts(collectionID int) ConflictScan {
-	files := a.Store.FilesOf(collectionID)
+func (a *App) DetectConflicts(collectionID int) (ConflictScan, error) {
+	files, err := collectFiles(a.Store.FilesOf(collectionID))
+	if err != nil {
+		return ConflictScan{}, err
+	}
 
 	// Group by logical identity: EXIF files by filename+capture-time (so a frame that
 	// landed on two drives lines up regardless of folder), the rest by path/name.
@@ -92,7 +95,7 @@ func (a *App) DetectConflicts(collectionID int) ConflictScan {
 	}
 
 	added, open := a.Store.ReconcileConflicts(collectionID, detected)
-	return ConflictScan{New: added, Open: open, TrueConflicts: len(detected), SecondShooter: secondShooter}
+	return ConflictScan{New: added, Open: open, TrueConflicts: len(detected), SecondShooter: secondShooter}, nil
 }
 
 // buildDetected assembles a DetectedConflict from a same-logical-file group: one
@@ -258,42 +261,39 @@ func (s *Store) ResolveConflict(id int, resolution string, canonicalFileID int) 
 		if canonicalFileID == 0 && len(c.FileIDs) > 0 {
 			canonicalFileID = c.FileIDs[0]
 		}
-		var canonical *File
-		for _, f := range s.c.Files {
-			if f.ID == canonicalFileID {
-				canonical = f
-				break
-			}
+		canonical, err := s.fileLocked(canonicalFileID)
+		if err != nil {
+			return err
 		}
 		if canonical == nil {
 			return errString("canonical file not found in this conflict")
 		}
-		remove := map[int]bool{}
+		var remove []int
 		for _, fid := range c.FileIDs {
 			if fid == canonicalFileID {
 				continue
 			}
-			for _, f := range s.c.Files {
-				if f.ID != fid {
-					continue
-				}
-				// Retain the loser's content as an alternate version of the winner.
-				canonical.Versions = append(canonical.Versions, FileVersion{
-					Hash: f.Hash, HashAlg: f.HashAlg, SizeBytes: f.SizeBytes,
-					ModTime: f.ModTime, FirstSeen: f.FirstSeen, SupersededAt: now,
-				})
-				remove[fid] = true
+			f, err := s.fileLocked(fid)
+			if err != nil {
+				return err
 			}
+			if f == nil {
+				continue
+			}
+			// Retain the loser's content as an alternate version of the winner.
+			canonical.Versions = append(canonical.Versions, FileVersion{
+				Hash: f.Hash, HashAlg: f.HashAlg, SizeBytes: f.SizeBytes,
+				ModTime: f.ModTime, FirstSeen: f.FirstSeen, SupersededAt: now,
+			})
+			remove = append(remove, fid)
 		}
 		if len(remove) > 0 {
-			kept := s.c.Files[:0]
-			for _, f := range s.c.Files {
-				if !remove[f.ID] {
-					kept = append(kept, f)
-				}
+			if err := s.putFileLocked(canonical, false); err != nil {
+				return err
 			}
-			s.c.Files = kept
-			s.fileIdx = nil // rebuilt lazily; union rows shifted
+			if _, err := s.deleteFilesLocked(fileQuery{IDs: remove}); err != nil {
+				return err
+			}
 		}
 		c.Resolution, c.Canonical = ResolveCanonical, canonicalFileID
 	default:
@@ -328,13 +328,20 @@ type ConflictView struct {
 
 // ConflictViews returns the review queue (collectionID 0 = all; openOnly filters to
 // unresolved), each conflict enriched with its versions' facts and physical homes.
-func (s *Store) ConflictViews(collectionID int, openOnly bool) []ConflictView {
+func (s *Store) ConflictViews(collectionID int, openOnly bool) ([]ConflictView, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	files := map[int]*File{}
-	for _, f := range s.c.Files {
-		files[f.ID] = f
+	ids := []int{}
+	for _, c := range s.c.Conflicts {
+		ids = append(ids, c.FileIDs...)
+	}
+	if err := s.eachFileLocked(fileQuery{IDs: ids}, func(f *File) error {
+		files[f.ID] = cloneFile(f)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	vols := map[int]*Volume{}
 	for _, v := range s.c.Volumes {
@@ -423,7 +430,7 @@ func (s *Store) ConflictViews(collectionID int, openOnly bool) []ConflictView {
 		}
 		return out[i].ID < out[j].ID
 	})
-	return out
+	return out, nil
 }
 
 // errString is a tiny error helper so this file needs no fmt import.

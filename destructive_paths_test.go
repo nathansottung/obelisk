@@ -103,7 +103,7 @@ func TestDestructive_ArchiveRemoval(t *testing.T) {
 		if _, err := app.ExecuteDestructive(testSession, p.Token, "Delete"); err != nil {
 			t.Fatal(err)
 		}
-		if app.Store.Collection(id) != nil || len(app.Store.FilesOf(id)) != 0 {
+		if app.Store.Collection(id) != nil || len(testFiles(t, app.Store.FilesOf(id))) != 0 {
 			t.Fatal("the archive was not removed")
 		}
 	})
@@ -116,7 +116,7 @@ func TestDestructive_ArchiveRemoval(t *testing.T) {
 		app, id := setup(t)
 		p := prepareForTest(t, app, "archive-remove", params(id))
 		folder := app.Store.FoldersOf(id)[0]
-		app.Store.UpsertFile(File{CollectionID: id, FolderID: folder.ID, RelPath: "c.txt", Hash: "cc", SizeBytes: 1})
+		app.Store.UpsertFile(File{CollectionID: id, FolderID: folder.ID, RelPath: "c.txt", Hash: testHash("cc"), SizeBytes: 1})
 		_, err := app.ExecuteDestructive(testSession, p.Token, "Delete")
 		refusedWith(t, err, 409, "added record")
 		if app.Store.Collection(id) == nil {
@@ -268,10 +268,10 @@ func TestDestructive_EventDeleteListsAllItsFiles(t *testing.T) {
 	ev := app.Store.AddEvent(&Event{Name: "Across archives"}) // no archive of its own
 	params := map[string]any{"kind": "event", "id": float64(ev.ID)}
 	p := prepareForTest(t, app, "record-delete", params)
-	app.Store.AssignFilesToEvent([]int{app.Store.FilesOf(c.ID)[0].ID}, ev.ID)
+	noErr[int](t)(app.Store.AssignFilesToEvent([]int{testFiles(t, app.Store.FilesOf(c.ID))[0].ID}, ev.ID))
 	_, err := app.ExecuteDestructive(testSession, p.Token, "Delete")
 	refusedWith(t, err, 409, "a file assigned after prepare")
-	if app.Store.Event(ev.ID) == nil || len(app.Store.FilesOfEvent(ev.ID)) != 1 {
+	if app.Store.Event(ev.ID) == nil || len(noErr[[]*File](t)(app.Store.FilesOfEvent(ev.ID))) != 1 {
 		t.Fatal("the event was deleted, or its new member unassigned, although the list changed")
 	}
 }

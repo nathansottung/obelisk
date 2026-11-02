@@ -15,7 +15,7 @@ import (
 // folder paths.
 func buildPhotographyArchive(t *testing.T) (*Store, int, *Volume, string, string) {
 	t.Helper()
-	st, err := OpenStore(t.TempDir())
+	st, err := openTestStore(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -55,7 +55,7 @@ func nodeByPath(res ProtectionResult, p string) *ProtectionNode {
 func TestCanonicalPhotographyExample(t *testing.T) {
 	st, cid, volC, shootDir, delDir := buildPhotographyArchive(t)
 
-	res := st.Protection(cid)
+	res := noErr[ProtectionResult](t)(st.Protection(cid))
 	if res.ArchiveProfile == nil || res.ArchiveProfile.ID != DefaultProfileID {
 		t.Fatalf("archive should default to 3-2-1 Standard, got %+v", res.ArchiveProfile)
 	}
@@ -82,7 +82,7 @@ func TestCanonicalPhotographyExample(t *testing.T) {
 	// offsite copy; the Photography file drops to PARTIAL "0/1 offsite".
 	volC.Offsite = false
 	st.UpdateVolume(volC)
-	res = st.Protection(cid)
+	res = noErr[ProtectionResult](t)(st.Protection(cid))
 	n := nodeByPath(res, shootDir)
 	if n == nil || n.Status != StatusPartial {
 		t.Fatalf("after offsite→onsite, shoot1 should be PARTIAL, got %v", n)

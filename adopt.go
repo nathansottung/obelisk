@@ -446,7 +446,10 @@ func (a *App) AdoptFolder(mountPath string, collectionID, volumeID int, progress
 	// Fold into the archive's union (dedup by hash); new = files not seen on any
 	// prior drive, duplicate = already in the union (the same content on another drive).
 	progress(0.85, "folding into union")
-	ids, added := a.Store.UpsertUnionFiles(collectionID, items)
+	ids, added, err := a.Store.UpsertUnionFiles(collectionID, items)
+	if err != nil {
+		return nil, err
+	}
 	dupInUnion := len(items) - added
 
 	// One ref per distinct FileID for THIS drive (dedup identical content within
@@ -480,9 +483,15 @@ func (a *App) AdoptFolder(mountPath string, collectionID, volumeID int, progress
 	// Collision pass: same-logical-file/different-bytes across the union. Class-(a)
 	// second-shooter frames auto-pass (noted); true conflicts (b/c) open a review item.
 	progress(0.96, "checking for content conflicts")
-	scan := a.DetectConflicts(collectionID)
+	scan, err := a.DetectConflicts(collectionID)
+	if err != nil {
+		return nil, err
+	}
 
-	union := a.Store.CollectionFileCount(collectionID)
+	union, _, err := a.Store.FileStats(collectionID)
+	if err != nil {
+		return nil, err
+	}
 	summary := fmt.Sprintf("adopted %d file(s) from %s — %d new to the union, %d already present · union now %d",
 		len(refs), vol.Label, added, dupInUnion, union)
 	if scan.SecondShooter > 0 {

@@ -26,7 +26,7 @@ func TestIntegrityPresetLabels(t *testing.T) {
 }
 
 func TestEffectiveIntegrityArchiveOverride(t *testing.T) {
-	st, err := OpenStore(t.TempDir())
+	st, err := openTestStore(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}

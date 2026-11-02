@@ -14,7 +14,7 @@ import (
 // never flakes on a full CI disk.
 func finalizeApp(t *testing.T) (*App, *Volume, *Chunk, string) {
 	t.Helper()
-	st, err := OpenStore(t.TempDir())
+	st, err := openTestStore(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}

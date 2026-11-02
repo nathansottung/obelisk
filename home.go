@@ -154,7 +154,10 @@ func (a *App) HomeOverview(onlineVolumeIDs map[int]bool) (HomeData, error) {
 	for _, coll := range archives {
 		sset := map[string]bool{}
 		bset := map[string]bool{}
-		for _, f := range a.Store.FilesOf(coll.ID) {
+		for f, err := range a.Store.FilesOf(coll.ID) {
+			if err != nil {
+				return HomeData{}, err
+			}
 			if f.Hash != "" {
 				sset[f.Hash] = true
 				groupedSha[f.Hash] = true
@@ -203,7 +206,10 @@ func (a *App) HomeOverview(onlineVolumeIDs map[int]bool) (HomeData, error) {
 		if hidden[coll.ID] {
 			continue // firm-tier retired: excluded from the headline totals
 		}
-		for _, f := range a.Store.FilesOf(coll.ID) {
+		for f, err := range a.Store.FilesOf(coll.ID) {
+			if err != nil {
+				return HomeData{}, err
+			}
 			addContent(f.Hash, f.SizeBytes)
 		}
 	}
@@ -235,13 +241,17 @@ func (a *App) HomeOverview(onlineVolumeIDs map[int]bool) (HomeData, error) {
 		if retired[coll.ID] {
 			continue // retired archives are hidden as an entity (and their under-protected nags with them)
 		}
-		prot := a.Store.Protection(coll.ID)
+		prot, err := a.Store.Protection(coll.ID)
+		if err != nil {
+			return HomeData{}, err
+		}
 		card := HomeArchiveCard{ID: coll.ID, Name: coll.Name, Sourceless: coll.IsSourceless(),
 			Protection: prot.Summary}
-		for _, f := range a.Store.FilesOf(coll.ID) {
-			card.Files++
-			card.Bytes += f.SizeBytes
+		files, bytes, err := a.Store.FileStats(coll.ID)
+		if err != nil {
+			return HomeData{}, err
 		}
+		card.Files, card.Bytes = files, bytes
 		card.UnderProt = prot.Summary[StatusNotBackedUp] + prot.Summary[StatusPartial] + prot.Summary[StatusOutOfPolicy]
 		card.Protected = prot.Summary[StatusComplete] + prot.Summary[StatusOverComplete]
 		if dr := a.Store.DriftReport(coll.ID); dr != nil {

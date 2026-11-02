@@ -152,7 +152,11 @@ func archiveRemoveTargets(a *App, p map[string]any) ([]destructiveTarget, error)
 			return nil, refuseDestructive(409, "%s", err.Error())
 		}
 	}
-	files, folders, events := a.Store.FilesOf(id), a.Store.FoldersOf(id), a.Store.Events(id)
+	files, err := collectFiles(a.Store.FilesOf(id))
+	if err != nil {
+		return nil, err
+	}
+	folders, events := a.Store.FoldersOf(id), a.Store.Events(id)
 	return []destructiveTarget{
 		recordTarget(fmt.Sprintf("archive %d (%s)", id, c.Name), c, "removed from the catalog"),
 		recordTarget(fmt.Sprintf("%d file record(s) of archive %d", len(files), id), files, "forgotten (the files themselves are not touched)"),
@@ -182,7 +186,11 @@ func recordDeleteTargets(a *App, p map[string]any) ([]destructiveTarget, error) 
 		// Deleting an event clears membership on every file assigned to it, in
 		// any archive (an event need not belong to one), so list exactly those.
 		var members []int
-		for _, f := range a.Store.FilesOfEvent(id) {
+		inEvent, err := a.Store.FilesOfEvent(id)
+		if err != nil {
+			return nil, err
+		}
+		for _, f := range inEvent {
 			members = append(members, f.ID)
 		}
 		sort.Ints(members)
@@ -217,7 +225,9 @@ func runRecordDelete(a *App, p map[string]any) (any, error) {
 	kind, id := paramString(p, "kind"), paramInt(p, "id")
 	switch kind {
 	case "event":
-		a.Store.DeleteEvent(id)
+		if err := a.Store.DeleteEvent(id); err != nil {
+			return nil, err
+		}
 	case "template":
 		a.Store.DeleteTemplate(id)
 	case "plan":

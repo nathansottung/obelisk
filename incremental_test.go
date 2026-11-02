@@ -133,8 +133,8 @@ func TestIncremental_ProtectionBaseExcludesComplete(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Both files now have one verified copy → COMPLETE under single-copy.
-	st := app.Store.FileStatuses(coll.ID)
-	for _, f := range app.Store.FilesOf(coll.ID) {
+	st := noErr[map[int]string](t)(app.Store.FileStatuses(coll.ID))
+	for _, f := range testFiles(t, app.Store.FilesOf(coll.ID)) {
 		if st[f.ID] != StatusComplete {
 			t.Fatalf("%s status = %q, want COMPLETE after one copy under single-copy profile", f.RelPath, st[f.ID])
 		}

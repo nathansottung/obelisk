@@ -124,7 +124,10 @@ func (a *App) StructureExport(collectionID int) (StructureExport, error) {
 	usedEvents := map[string]ExportEventRef{}
 	usedVols := map[string]ExportVolumeRef{}
 	usedLocs := map[string]ExportLocationRef{}
-	for _, f := range a.Store.FilesOf(collectionID) {
+	for f, err := range a.Store.FilesOf(collectionID) {
+		if err != nil {
+			return StructureExport{}, err
+		}
 		ef := ExportFile{Hash: f.Hash, Size: f.SizeBytes, RelPath: f.RelPath, Role: f.Role}
 		if !f.ShotAt.IsZero() {
 			t := f.ShotAt
@@ -378,13 +381,18 @@ func (a *App) ImportStructure(exp StructureExport) (res map[string]any, err erro
 		}
 		items = append(items, uf)
 	}
-	ids, _ := a.Store.UpsertUnionFiles(coll.ID, items)
+	ids, _, err := a.Store.UpsertUnionFiles(coll.ID, items)
+	if err != nil {
+		return nil, err
+	}
 	byHashFileID := map[string]int{}
 	for i, f := range exp.Files {
 		byHashFileID[f.Hash] = ids[i]
 		if f.Event != "" {
 			if eid := evID[f.Event]; eid != 0 {
-				a.Store.AssignFilesToEvent([]int{ids[i]}, eid)
+				if _, err := a.Store.AssignFilesToEvent([]int{ids[i]}, eid); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}

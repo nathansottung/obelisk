@@ -14,7 +14,7 @@ import (
 )
 
 func TestNextBarcode(t *testing.T) {
-	st, err := OpenStore(t.TempDir())
+	st, err := openTestStore(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestDeviceIdentityAndLabel_SystemDisk(t *testing.T) {
 	}
 	t.Logf("system disk resolved: serial=%q model=%q size=%d bus=%q", id.Serial, id.Model, id.SizeBytes, id.Bus)
 
-	st, err := OpenStore(t.TempDir())
+	st, err := openTestStore(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -71,11 +71,8 @@ func TestScanHistory_RecordsEachScanWithRetention(t *testing.T) {
 		t.Errorf("older scan's n.txt hash %q, want the second scan's content", n)
 	}
 	// The catalog holds the records, not the file lists.
-	b, err := os.ReadFile(filepath.Join(app.DataDir, "catalog.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(b), `"volume_scans"`) || strings.Count(string(b), `"n.txt"`) > 1 {
+	b := persistedCatalogText(t, app.DataDir)
+	if !strings.Contains(b, `"volume_scans"`) || strings.Count(b, `"n.txt"`) > 1 {
 		t.Errorf("catalog should hold scan records and only the latest snapshot's files")
 	}
 }

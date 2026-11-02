@@ -18,7 +18,7 @@ import (
 func compatApp(t *testing.T) (*App, string) {
 	t.Helper()
 	dir := t.TempDir()
-	store, err := OpenStore(dir)
+	store, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -48,11 +48,12 @@ func TestRenameCompat_DataDirFallback(t *testing.T) {
 
 // (a) Migrate: COPY (never move) + verify by hash before switching.
 func TestRenameCompat_MigrateCopiesVerifiesAndSwitches(t *testing.T) {
+	jsonEngineOnly(t, "moving a data folder that holds a catalog database comes with slice S8")
 	root := t.TempDir()
 	legacy := filepath.Join(root, ".mnemo")
 	target := filepath.Join(root, ".obelisk")
 	mustMkdir(t, legacy)
-	store, err := OpenStore(legacy) // creates catalog.json
+	store, err := openTestStore(t, legacy) // creates catalog.json
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +178,7 @@ func TestRenameCompat_StructurePlanImportMarkers(t *testing.T) {
 
 	// Legacy structure format imports; a bogus format is refused.
 	legacyExp := StructureExport{Format: structureFormatLegacy, Version: structureExportVersion,
-		Archive: "Legacy Arc", Files: []ExportFile{{Hash: "aa", Size: 1, RelPath: "a.txt"}}}
+		Archive: "Legacy Arc", Files: []ExportFile{{Hash: testHash("aa"), Size: 1, RelPath: "a.txt"}}}
 	if _, err := app.ImportStructure(legacyExp); err != nil {
 		t.Errorf("legacy mnemosyne-structure must import: %v", err)
 	}
@@ -196,6 +197,7 @@ func TestRenameCompat_StructurePlanImportMarkers(t *testing.T) {
 
 // (e) App backups made under the old name verify + restore.
 func TestRenameCompat_AppBackupLegacyFormat(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	app, _ := compatApp(t)
 	dir := t.TempDir()
 	legacyTar := buildLegacyAppBackup(t, app, dir)

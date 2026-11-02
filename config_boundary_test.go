@@ -34,6 +34,17 @@ func configSnapshot(t *testing.T, dir string) map[string]string {
 			out[rel] = "directory"
 			return nil
 		}
+		switch base := filepath.Base(p); {
+		case base == catalogDBName+"-wal" || base == catalogDBName+"-shm":
+			// SQLite's write-ahead log and its shared-memory index come and go as
+			// the database is opened and closed; the data is compared below.
+			return nil
+		case base == catalogDBName:
+			// The database's bytes change when a reader folds its write-ahead log
+			// in; what must not change is the catalog it holds.
+			out[rel] = "catalog " + sha256Hex([]byte(persistedCatalogText(t, filepath.Dir(p))))
+			return nil
+		}
 		b, e := os.ReadFile(p)
 		if e != nil {
 			return e
@@ -373,6 +384,7 @@ func TestConfigBoundary_OptionalToolsUseValidatedSnapshot(t *testing.T) {
 }
 
 func TestConfigBoundary_RestoreUsesCheckedPublisher(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	src := abTestApp(t)
 	bundle, e := src.ExportAppBackup(t.TempDir(), false)
 	if e != nil {

@@ -39,7 +39,7 @@ func makeSnapshotDrive(t *testing.T, app *App, mountPath, serial, label string) 
 
 func TestPlan_ExecuteReverseAcrossRestart(t *testing.T) {
 	dataDir := t.TempDir()
-	store, err := OpenStore(dataDir)
+	store, err := openTestStore(t, dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestPlan_ExecuteReverseAcrossRestart(t *testing.T) {
 	}
 
 	// --- simulate a process restart: reopen the store from the same data dir ---
-	store2, err := OpenStore(dataDir)
+	store2, err := openTestStore(t, dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}

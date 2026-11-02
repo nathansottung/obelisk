@@ -36,7 +36,7 @@ func TestJobLoad_RejectExisting(t *testing.T) {
 				}
 			}()
 			dir := t.TempDir()
-			if _, err := OpenStore(dir); err != nil {
+			if _, err := openTestStore(t, dir); err != nil {
 				t.Fatal(err)
 			}
 			path := filepath.Join(dir, "jobs.json")
@@ -44,7 +44,7 @@ func TestJobLoad_RejectExisting(t *testing.T) {
 				t.Fatal(err)
 			}
 			before := configSnapshot(t, dir)
-			s, err := OpenStore(dir)
+			s, err := openTestStore(t, dir)
 			if err == nil || s != nil {
 				t.Error("rejected job state yielded a usable store")
 				if s != nil {
@@ -66,7 +66,7 @@ func TestJobLoad_ValidAndReconcile(t *testing.T) {
 			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
 				t.Fatal(err)
 			}
-			s, err := OpenStore(dir)
+			s, err := openTestStore(t, dir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -78,13 +78,13 @@ func TestJobLoad_ValidAndReconcile(t *testing.T) {
 			if err != nil || j.ID <= 0 {
 				t.Fatal("valid board cannot create job")
 			}
-			if _, err := OpenStore(dir); err != nil {
+			if _, err := openTestStore(t, dir); err != nil {
 				t.Fatal(err)
 			}
 		})
 	}
 	dir := t.TempDir()
-	s, err := OpenStore(dir)
+	s, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestJobLoad_ValidAndReconcile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "jobs.json"), []byte(raw), 0600); err != nil {
 		t.Fatal(err)
 	}
-	s, err = OpenStore(dir)
+	s, err = openTestStore(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestJobLoad_RefusedReloadCannotSaveStaleBoard(t *testing.T) {
 				}
 			}()
 			dir := t.TempDir()
-			s, err := OpenStore(dir)
+			s, err := openTestStore(t, dir)
 			if err != nil {
 				t.Fatal(err)
 			}

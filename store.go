@@ -1204,7 +1204,18 @@ type Store struct {
 	// reconciliation, but a rejected catalog read returns before loadJobs is reached. The
 	// dataDir MkdirAll precedes the read and is also outside this observer's scope.
 	persistObserver func(op, path string)
-	jobs            struct {
+	// be is the catalog database when the store runs on the SQLite engine
+	// (OBELISK_CATALOG_ENGINE=sqlite, catalogdb_store.go); nil for catalog.json.
+	// Every record still lives in c; each save writes the records that changed.
+	be     catalogBackend
+	closed bool // Close was called; every later save is refused
+	// lostErr is a change the catalog database dropped where no caller could be
+	// told (a commit that failed holding file writes, a file write whose method
+	// returns no error). FlushPending, EndBatch and Close return it, so no job that
+	// changed the catalog reports success after it; a save that lands still
+	// succeeds. It lasts until the store is reopened.
+	lostErr error
+	jobs    struct {
 		mu      sync.Mutex
 		next    int
 		rows    []*Job
@@ -1242,6 +1253,57 @@ func OpenStore(dataDir string) (*Store, error) {
 	return openStore(dataDir, readFileRetrying, nil)
 }
 
+// catalogEngineEnv chooses the catalog engine: unset or "json" keeps catalog.json
+// (the default); "sqlite" uses catalog.db, moving an existing catalog.json into it
+// first. The database engine is being built in slices and is opt-in until its
+// cutover.
+const catalogEngineEnv = "OBELISK_CATALOG_ENGINE"
+
+// catalogEngine returns the engine named by catalogEngineEnv, or an error for a
+// name it does not know.
+func catalogEngine() (string, error) {
+	switch e := os.Getenv(catalogEngineEnv); e {
+	case "", "json":
+		return "json", nil
+	case "sqlite":
+		return "sqlite", nil
+	default:
+		return "", fmt.Errorf("%s=%q is not a catalog engine; use json or sqlite", catalogEngineEnv, e)
+	}
+}
+
+// catalogBackend is the catalog database behind a store on the SQLite engine. Its
+// implementation (catalogdb_store.go) is linked into the full build only.
+type catalogBackend interface {
+	// flush writes every record of c that changed since the last commit, in one
+	// transaction, and commits it. A record the database refuses is reported and
+	// tried again by the next flush; the others commit. A failed commit returns a
+	// *catalogChangesLost: memory is kept and written again next time, but the
+	// transaction's file writes are gone.
+	flush(c *catalog) error
+	close() error
+	// abandon closes the database without writing anything, for a startup that
+	// was refused after the database was opened.
+	abandon()
+
+	// File records live in the database, never in memory (catalogdb_files.go).
+	// Writes join the open transaction, which the next save commits.
+	fileScan(q fileQuery, fn func(*File) error) error
+	filePage(q fileQuery, cur fileCursor, n int) ([]*File, fileCursor, bool, error)
+	fileGet(id int) (*File, error)
+	fileByKey(collectionID, folderID int, relPath string) (*File, error)
+	filePut(f *File, isNew bool) error
+	fileDelete(q fileQuery) (int, error)
+	fileSetEvent(ids []int, eventID int) (int, error)
+	fileClearEvent(eventID int) error
+	fileStats(collectionID int) (int, int64, error)
+}
+
+// openCatalogBackend opens (or creates, or moves catalog.json into) the catalog
+// database in dataDir and returns it with its catalog and, for a database written
+// by a newer schema, why it is read-only. nil in a build without the engine.
+var openCatalogBackend func(dataDir string) (catalogBackend, *catalog, string, error)
+
 // openStore is OpenStore with its two boundaries injected, so a test can drive the
 // REAL decision logic below instead of standing in a mock that already behaves.
 // readFile supplies the catalog and jobs read RESULTS — bytes and error together — that the
@@ -1260,6 +1322,33 @@ func openStore(dataDir string, readFile func(string) ([]byte, error), persistObs
 	s.persistObserver = persistObserver
 	s.jobs.path = filepath.Join(dataDir, "jobs.json")
 	s.c.NextID = map[string]int{}
+	engine, err := catalogEngine()
+	if err != nil {
+		return nil, err
+	}
+	if engine == "sqlite" {
+		if openCatalogBackend == nil {
+			return nil, errors.New("this build of Obelisk has no catalog database engine")
+		}
+		be, c, readOnly, err := openCatalogBackend(dataDir)
+		if err != nil {
+			return nil, err
+		}
+		s.be, s.path, s.c = be, filepath.Join(dataDir, "catalog.db"), *c
+		if s.c.NextID == nil {
+			s.c.NextID = map[string]int{}
+		}
+		if readOnly != "" {
+			s.readOnly, s.readOnlyReason = true, readOnly
+		}
+		opened, err := s.finishOpen(readFile)
+		if err != nil {
+			// A refused startup leaves the database closed, as it found it.
+			be.abandon()
+			return nil, err
+		}
+		return opened, nil
+	}
 	existed := false
 	var raw []byte
 	// Catalog-read classification (OB-001). Three outcomes, deliberately distinct,
@@ -1329,6 +1418,12 @@ func openStore(dataDir string, readFile func(string) ([]byte, error), persistObs
 			s.runMigrations(from)
 		}
 	}
+	return s.finishOpen(readFile)
+}
+
+// finishOpen runs the open-time recovery and seeding both engines share, then
+// loads the job board.
+func (s *Store) finishOpen(readFile func(string) ([]byte, error)) (*Store, error) {
 	// Reboot recovery: a disc caught mid-burn/mid-verify when the process
 	// died is unknowable — the physical disc may be a coaster. Send it back
 	// to PENDING so the operator re-burns on a fresh blank.
@@ -1512,6 +1607,20 @@ func (s *Store) writeCatalog() error {
 	// Stamp the schema version on every write — this is what makes the file
 	// self-describing and lets a future build know how to read it.
 	s.c.SchemaVersion = currentSchemaVersion
+	if s.closed {
+		return errors.New("the catalog is closed")
+	}
+	if s.be != nil {
+		err := s.be.flush(&s.c)
+		if lost := (*catalogChangesLost)(nil); errors.As(err, &lost) && s.lostErr == nil {
+			s.lostErr = err
+		}
+		if err != nil {
+			return err
+		}
+		s.lastSave, s.dirty = time.Now(), false
+		return nil
+	}
 	// Pretty-print small catalogs (human-inspectable with any text editor — the
 	// whole point of the JSON store) but switch to COMPACT JSON once the catalog
 	// gets large: at 1M files the indentation alone is ~90 MB of whitespace, and
@@ -1565,6 +1674,28 @@ func (s *Store) writeCatalog() error {
 	return nil
 }
 
+// UsesDatabase reports whether the store runs on the catalog database engine.
+func (s *Store) UsesDatabase() bool { return s.be != nil }
+
+// Close saves anything not yet written and closes the catalog database. Every
+// later save is refused. A catalog.json store has nothing to close.
+func (s *Store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	var err error
+	if s.be != nil && s.dirty && !s.readOnly {
+		err = s.writeCatalog()
+	}
+	s.closed = true
+	if s.be != nil {
+		err = errors.Join(err, s.be.close())
+	}
+	return errors.Join(err, s.lostErr)
+}
+
 // BeginBatch enters batched-save mode: while active, save() coalesces catalog
 // writes (at most one per batchInterval) instead of writing on every mutation.
 // The App brackets scan / adoption / mirror jobs with BeginBatch/EndBatch.
@@ -1606,10 +1737,12 @@ func (s *Store) ChangedSince(gen uint64) bool {
 func (s *Store) FlushPending() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.dirty {
-		return nil
+	if s.dirty {
+		if err := s.writeCatalog(); err != nil {
+			return err
+		}
 	}
-	return s.writeCatalog()
+	return s.lostErr
 }
 
 // EndBatch leaves batched-save mode and forces the final write if anything is
@@ -1640,10 +1773,12 @@ func (s *Store) EndBatch() error {
 	if s.batchDepth > 0 {
 		s.batchDepth--
 	}
-	if !s.dirty {
-		return nil
+	if s.dirty {
+		if err := s.writeCatalog(); err != nil {
+			return err
+		}
 	}
-	return s.writeCatalog()
+	return s.lostErr
 }
 
 // endBatchInto ends a batched job and folds a failed final catalog write into the
@@ -1836,16 +1971,13 @@ func (s *Store) RemoveCollection(id int) (RemoveCounts, error) {
 		return counts, fmt.Errorf("archive %d not found", id)
 	}
 
-	// Files / folders (the records being forgotten).
-	files := s.c.Files[:0]
-	for _, f := range s.c.Files {
-		if f.CollectionID == id {
-			counts.Files++
-		} else {
-			files = append(files, f)
-		}
+	// Files / folders (the records being forgotten). Packages keep their listings of
+	// these files (see the file_delete_keeps_listings trigger).
+	n, err := s.deleteFilesLocked(fileQuery{CollectionID: id})
+	if err != nil {
+		return counts, err
 	}
-	s.c.Files = files
+	counts.Files = n
 	folders := s.c.Folders[:0]
 	for _, fo := range s.c.Folders {
 		if fo.CollectionID == id {
@@ -1938,7 +2070,6 @@ func (s *Store) RemoveCollection(id int) (RemoveCounts, error) {
 		}
 	}
 	s.c.Collections = colls
-	s.buildFileIndexLocked()
 	if err := s.save(); err != nil {
 		return counts, err
 	}
@@ -2077,68 +2208,6 @@ func (s *Store) AssertOutsideSources(path string) error {
 	return nil
 }
 
-// UpsertFile replaces a prior entry for (collection, folder, rel_path).
-func (s *Store) UpsertFile(f File) *File {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.fileIdx == nil {
-		s.buildFileIndexLocked()
-	}
-	now := time.Now().UTC()
-	key := fileKey(f.CollectionID, f.FolderID, f.RelPath)
-	if e := s.fileIdx[key]; e != nil { // O(1) replace of a prior entry
-		if e.FirstSeen.IsZero() { // backfill legacy rows so history has a start date
-			e.FirstSeen = now
-		}
-		// Content changed → RETAIN the outgoing version instead of discarding it.
-		// The old bytes are still sealed in whatever package(s) hold e.Hash; keeping
-		// the record means the catalog can still point a restore at them.
-		if e.Hash != "" && f.Hash != "" && e.Hash != f.Hash {
-			e.Versions = append(e.Versions, FileVersion{
-				Hash: e.Hash, HashAlg: e.HashAlg, SizeBytes: e.SizeBytes,
-				ModTime: e.ModTime, FirstSeen: e.FirstSeen, SupersededAt: now,
-			})
-			if s.versionsRetained > 0 && len(e.Versions) > s.versionsRetained {
-				// Forget only the OLDEST catalog pointers; the bytes remain on media.
-				e.Versions = append([]FileVersion(nil), e.Versions[len(e.Versions)-s.versionsRetained:]...)
-			}
-			e.FirstSeen = now // the new current version is first seen now
-		}
-		contentChanged := e.Hash != f.Hash
-		e.SizeBytes, e.HashAlg, e.Hash = f.SizeBytes, f.HashAlg, f.Hash
-		switch {
-		case f.Blake3 != "":
-			e.Blake3 = f.Blake3
-		case contentChanged:
-			e.Blake3 = "" // the old BLAKE3 is of the old content: never left to match it
-		}
-		if !f.ModTime.IsZero() {
-			e.ModTime = f.ModTime
-		}
-		// Media metadata is refreshed when re-supplied (a later scan may parse EXIF the
-		// first pass skipped); never cleared. EventID is preserved — membership is the
-		// operator's, not the scanner's, to change.
-		if !f.ShotAt.IsZero() {
-			e.ShotAt = f.ShotAt
-		}
-		if f.Role != "" {
-			e.Role = f.Role
-		}
-		if f.CameraSerial != "" {
-			e.CameraSerial = f.CameraSerial
-		}
-		return e
-	}
-	nf := f
-	nf.ID = s.next("file")
-	if nf.FirstSeen.IsZero() {
-		nf.FirstSeen = now
-	}
-	s.c.Files = append(s.c.Files, &nf)
-	s.fileIdx[key] = &nf
-	return &nf
-}
-
 // unionFile is one loose file being folded into a SOURCELESS archive's union.
 // ShotAt/Role/CameraSerial carry the best-effort EXIF/role captured during the
 // adopt walk, so union files become event-clusterable and routable.
@@ -2156,16 +2225,17 @@ type unionFile struct {
 // reuses that File (so the same content on two drives is ONE union entry with two
 // copies). Returns the File IDs aligned with items, plus how many were NEW to the
 // union (the rest are duplicates already present). One lock, O(files).
-func (s *Store) UpsertUnionFiles(collectionID int, items []unionFile) (ids []int, added int) {
+func (s *Store) UpsertUnionFiles(collectionID int, items []unionFile) (ids []int, added int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	byHash := map[string]*File{}
-	for _, f := range s.c.Files {
-		if f.CollectionID == collectionID && f.Hash != "" {
-			if _, ok := byHash[f.Hash]; !ok {
-				byHash[f.Hash] = f
-			}
+	if err := s.eachFileLocked(fileQuery{CollectionID: collectionID, WithHash: true}, func(f *File) error {
+		if _, ok := byHash[f.Hash]; !ok {
+			byHash[f.Hash] = cloneFile(f)
 		}
+		return nil
+	}); err != nil {
+		return nil, 0, err
 	}
 	now := time.Now().UTC()
 	ids = make([]int, len(items))
@@ -2175,14 +2245,20 @@ func (s *Store) UpsertUnionFiles(collectionID int, items []unionFile) (ids []int
 				ids[i] = e.ID
 				// Backfill EXIF/role onto the shared union entry if this drive's copy
 				// carried metadata the first-seen copy lacked.
+				changed := false
 				if e.ShotAt.IsZero() && !it.ShotAt.IsZero() {
-					e.ShotAt = it.ShotAt
+					e.ShotAt, changed = it.ShotAt, true
 				}
 				if e.Role == "" && it.Role != "" {
-					e.Role = it.Role
+					e.Role, changed = it.Role, true
 				}
 				if e.CameraSerial == "" && it.CameraSerial != "" {
-					e.CameraSerial = it.CameraSerial
+					e.CameraSerial, changed = it.CameraSerial, true
+				}
+				if changed {
+					if err := s.putFileLocked(e, false); err != nil {
+						return nil, 0, err
+					}
 				}
 				continue
 			}
@@ -2190,29 +2266,16 @@ func (s *Store) UpsertUnionFiles(collectionID int, items []unionFile) (ids []int
 		nf := &File{ID: s.next("file"), CollectionID: collectionID, FolderID: 0,
 			RelPath: it.RelPath, SizeBytes: it.Size, HashAlg: "SHA256", Hash: it.Hash, FirstSeen: now,
 			ShotAt: it.ShotAt, Role: it.Role, CameraSerial: it.CameraSerial}
-		s.c.Files = append(s.c.Files, nf)
+		if err := s.putFileLocked(nf, true); err != nil {
+			return nil, 0, err
+		}
 		if it.Hash != "" {
 			byHash[it.Hash] = nf
 		}
 		ids[i] = nf.ID
 		added++
 	}
-	_ = s.save()
-	return ids, added
-}
-
-// CollectionFileCount is the number of catalog file rows in an archive — for a
-// sourceless archive, the size of the deduped union.
-func (s *Store) CollectionFileCount(collectionID int) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	n := 0
-	for _, f := range s.c.Files {
-		if f.CollectionID == collectionID {
-			n++
-		}
-	}
-	return n
+	return ids, added, s.save()
 }
 
 // SetVersionsRetained sets the per-file retained-version cap (0 = unlimited).
@@ -2227,71 +2290,6 @@ func (s *Store) SetVersionsRetained(n int) {
 }
 
 func (s *Store) Flush() { s.mu.Lock(); defer s.mu.Unlock(); _ = s.save() }
-
-// FilesWithVersions returns every file that has retained at least one superseded
-// version (more than one known content version), sorted by path — the input to
-// the Recovery Kit's multi-version note.
-func (s *Store) FilesWithVersions() []*File {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var out []*File
-	for _, f := range s.c.Files {
-		if len(f.Versions) > 0 {
-			out = append(out, f)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].RelPath < out[j].RelPath })
-	return out
-}
-
-func (s *Store) FilesOf(collectionID int) []*File {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var out []*File
-	for _, f := range s.c.Files {
-		if f.CollectionID == collectionID {
-			out = append(out, f)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].RelPath < out[j].RelPath })
-	return out
-}
-
-// AllFiles returns every catalog file (live records), for cross-archive scans like
-// the event magnet. Caller treats elements as read-only unless holding intent.
-func (s *Store) AllFiles() []*File {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]*File, len(s.c.Files))
-	copy(out, s.c.Files)
-	return out
-}
-
-func (s *Store) FileByID(id int) *File {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, f := range s.c.Files {
-		if f.ID == id {
-			return f
-		}
-	}
-	return nil
-}
-
-// ExtTally counts files and bytes per extension for a collection (0 = all),
-// computed under the lock so the format census never copies the whole file list.
-func (s *Store) ExtTally(collectionID int) *extTally {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	t := newExtTally()
-	for _, f := range s.c.Files {
-		if collectionID != 0 && f.CollectionID != collectionID {
-			continue
-		}
-		t.add(f.RelPath, f.SizeBytes)
-	}
-	return t
-}
 
 // SearchQuery bundles the search filters. Empty fields are ignored, so a bare
 // path query behaves exactly as before.
@@ -2310,7 +2308,7 @@ type SearchQuery struct {
 
 // Search answers "which chunk / which medium holds this file?" and the inverse
 // queries — is THIS hash backed up, show me every unprotected .NEF in an archive.
-func (s *Store) Search(qr SearchQuery) []map[string]any {
+func (s *Store) Search(qr SearchQuery) ([]map[string]any, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	q := strings.ToLower(strings.TrimSpace(qr.Text))
@@ -2377,41 +2375,30 @@ func (s *Store) Search(qr SearchQuery) []map[string]any {
 			}
 		}
 	}
+	// The path, hash (a prefix match — a full 64-char hash is an exact match), role,
+	// event and capture-date filters are the query's; on the database engine they
+	// run as SQL. Retirement, extension and protection status are checked here.
+	fq := fileQuery{Text: q, HashPrefix: hash, Role: role, ShotFrom: qr.From, ShotTo: qr.To, Versions: true}
+	if qr.CollectionID > 0 {
+		fq.CollectionID = qr.CollectionID
+	}
+	switch {
+	case qr.EventID > 0:
+		fq.EventID = qr.EventID
+	case qr.EventID == -1: // -1 = only files with no event
+		fq.NoEvent = true
+	}
 	var out []map[string]any
-	for _, f := range s.c.Files {
-		if qr.CollectionID > 0 && f.CollectionID != qr.CollectionID {
-			continue
-		}
+	err := s.eachFileLocked(fq, func(f *File) error {
 		if retiredColl[f.CollectionID] {
-			continue
-		}
-		if q != "" && !strings.Contains(strings.ToLower(f.RelPath), q) {
-			continue
-		}
-		if hash != "" && !strings.HasPrefix(strings.ToLower(f.Hash), hash) {
-			continue // prefix match — a full 64-char hash reduces to an exact match
+			return nil
 		}
 		if ext != "" && !strings.EqualFold(pathExt(f.RelPath), ext) {
-			continue
-		}
-		if role != "" && !strings.EqualFold(f.Role, role) {
-			continue
-		}
-		if qr.EventID > 0 && f.EventID != qr.EventID {
-			continue
-		}
-		if qr.EventID == -1 && f.EventID != 0 { // -1 = only files with no event
-			continue
-		}
-		if !qr.From.IsZero() && (f.ShotAt.IsZero() || f.ShotAt.Before(qr.From)) {
-			continue
-		}
-		if !qr.To.IsZero() && (f.ShotAt.IsZero() || f.ShotAt.After(qr.To)) {
-			continue
+			return nil
 		}
 		pst, pdet, pprof := s.fileProtectionLocked(f, fileCopies, folderPath)
 		if status != "" && pst != status {
-			continue
+			return nil
 		}
 		row := map[string]any{"file_id": f.ID, "rel_path": f.RelPath, "size_bytes": f.SizeBytes, "hash": f.Hash, "ext": pathExt(f.RelPath)}
 		row["protection_status"], row["protection_detail"] = pst, pdet
@@ -2460,10 +2447,11 @@ func (s *Store) Search(qr SearchQuery) []map[string]any {
 		}
 		out = append(out, row)
 		if len(out) >= limit {
-			break
+			return errStopFiles
 		}
-	}
-	return out
+		return nil
+	})
+	return out, err
 }
 
 // ---- chunks -----------------------------------------------------------
@@ -3044,9 +3032,7 @@ func (s *Store) Event(id int) *Event {
 // UpdateEvent persists in-place edits to an event record.
 func (s *Store) UpdateEvent(e *Event) { s.mu.Lock(); defer s.mu.Unlock(); _ = s.save() }
 
-// DeleteEvent removes an event and clears the membership of any files pointing at
-// it (their EventID resets to 0 — unassigned, not deleted).
-func (s *Store) DeleteEvent(id int) {
+func (s *Store) DeleteEvent(id int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := s.c.Events[:0]
@@ -3056,47 +3042,46 @@ func (s *Store) DeleteEvent(id int) {
 		}
 	}
 	s.c.Events = out
-	for _, f := range s.c.Files {
-		if f.EventID == id {
-			f.EventID = 0
+	if s.be != nil {
+		s.dirty = true
+		if err := s.be.fileClearEvent(id); err != nil {
+			return err
+		}
+	} else {
+		for _, f := range s.c.Files {
+			if f.EventID == id {
+				f.EventID = 0
+			}
 		}
 	}
-	_ = s.save()
+	return s.save()
 }
 
 // AssignFilesToEvent sets the EventID on the given files (0 to unassign). Returns
 // how many rows changed. One lock; persists once.
-func (s *Store) AssignFilesToEvent(fileIDs []int, eventID int) int {
+func (s *Store) AssignFilesToEvent(fileIDs []int, eventID int) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	want := map[int]bool{}
-	for _, id := range fileIDs {
-		want[id] = true
-	}
 	n := 0
-	for _, f := range s.c.Files {
-		if want[f.ID] && f.EventID != eventID {
-			f.EventID = eventID
-			n++
+	if s.be != nil {
+		var err error
+		if n, err = s.be.fileSetEvent(fileIDs, eventID); err != nil {
+			return n, err
+		}
+		s.dirty = s.dirty || n > 0
+	} else {
+		want := idSet(fileIDs)
+		for _, f := range s.c.Files {
+			if want[f.ID] && f.EventID != eventID {
+				f.EventID = eventID
+				n++
+			}
 		}
 	}
 	if n > 0 {
-		_ = s.save()
+		return n, s.save()
 	}
-	return n
-}
-
-// FilesOfEvent returns the files whose membership points at an event.
-func (s *Store) FilesOfEvent(eventID int) []*File {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := []*File{}
-	for _, f := range s.c.Files {
-		if f.EventID == eventID {
-			out = append(out, f)
-		}
-	}
-	return out
+	return n, nil
 }
 
 // ---- templates ---------------------------------------------------------

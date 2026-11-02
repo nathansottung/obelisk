@@ -98,7 +98,7 @@ func TestDockScan_UnreadableFoldersMakeItPartial(t *testing.T) {
 	if got, unk := mirrorRefsOn(app, coll.ID, vol.ID), unknownRefsOn(app, coll.ID, vol.ID); len(got) != 1 || len(unk) != 1 || unk[0] != "deep/b.txt" {
 		t.Errorf("after a partial rescan: mirror %v, unknown %v; want a.txt counted and deep/b.txt unknown", got, unk)
 	}
-	if cov := app.archiveCoverage([]int{coll.ID}); cov.CoveredFiles != 1 || cov.Unknown != 1 {
+	if cov := noErr[Coverage](t)(app.archiveCoverage([]int{coll.ID})); cov.CoveredFiles != 1 || cov.Unknown != 1 {
 		t.Errorf("coverage %d covered, %d unknown; want 1 and 1", cov.CoveredFiles, cov.Unknown)
 	}
 	// Still unknown after another scan that cannot read it.
@@ -178,7 +178,7 @@ func TestDockScan_NoFreshMatchesDropsTheOldRecord(t *testing.T) {
 			if got, unk := mirrorRefsOn(app, coll.ID, vol.ID), unknownRefsOn(app, coll.ID, vol.ID); len(got) != 0 || strings.Join(unk, ",") != strings.Join(tc.unknown, ",") {
 				t.Errorf("mirror %v, unknown %v; want nothing counted and unknown %v", got, unk, tc.unknown)
 			}
-			if cov := app.archiveCoverage([]int{coll.ID}); cov.CoveredFiles != 0 || cov.Unknown != len(tc.unknown) {
+			if cov := noErr[Coverage](t)(app.archiveCoverage([]int{coll.ID})); cov.CoveredFiles != 0 || cov.Unknown != len(tc.unknown) {
 				t.Errorf("coverage %d covered, %d unknown; want 0 and %d", cov.CoveredFiles, cov.Unknown, len(tc.unknown))
 			}
 			for _, ev := range c.VerifyEvents[events:] {

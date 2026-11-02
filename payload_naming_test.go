@@ -46,7 +46,7 @@ func nativeTools(t *testing.T) map[string]string {
 func newTestApp(t *testing.T, tools map[string]string) (*App, string) {
 	t.Helper()
 	dataDir := t.TempDir()
-	store, err := OpenStore(dataDir)
+	store, err := openTestStore(t, dataDir)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}

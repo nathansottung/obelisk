@@ -43,7 +43,7 @@ func newIT(t *testing.T) *itServer {
 	t.Helper()
 	tools := nativeTools(t) // t.Skips if tar/gpg/par2 are unavailable
 	dataDir := t.TempDir()
-	store, err := OpenStore(dataDir)
+	store, err := openTestStore(t, dataDir)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -456,7 +456,7 @@ func TestIntegration_Spanning(t *testing.T) {
 
 	// Persistence across a store close/reopen: a fresh Store reads catalog.json
 	// and the segment state survives (OpenStore's recovery keeps VERIFIED segments).
-	reopened, err := OpenStore(s.dataDir)
+	reopened, err := openTestStore(t, s.dataDir)
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}

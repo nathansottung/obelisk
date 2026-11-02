@@ -57,7 +57,7 @@ func TestExportBagConformant(t *testing.T) {
 	writeF("RESTORE.txt", "how to restore")
 	writeF("bagit.txt", "should be skipped") // per-package tag file must NOT nest in data/
 	a.Store.AddChunk(Chunk{CollectionID: coll.ID, Name: "PKG-1", Status: "STAGED", StagedDir: staged, MediaKind: "HDD",
-		Files: []ChunkFileRef{{FileID: 1, RelPath: "a.nef", SizeBytes: 5, Hash: "aa"}}})
+		Files: []ChunkFileRef{{FileID: 1, RelPath: "a.nef", SizeBytes: 5, Hash: testHash("aa")}}})
 
 	out := t.TempDir()
 	res, err := a.ExportBag(coll.ID, out, func(float64, string) {})
@@ -108,7 +108,7 @@ func TestExportPackageBag(t *testing.T) {
 		}
 	}
 	c := a.Store.AddChunk(Chunk{CollectionID: coll.ID, Name: "PKG-9", Status: "STAGED", StagedDir: staged, MediaKind: "HDD",
-		Files: []ChunkFileRef{{FileID: 1, RelPath: "a.nef", SizeBytes: 5, Hash: "aa"}}})
+		Files: []ChunkFileRef{{FileID: 1, RelPath: "a.nef", SizeBytes: 5, Hash: testHash("aa")}}})
 
 	out := t.TempDir()
 	res, err := a.ExportPackageBag(c.ID, out, func(float64, string) {})

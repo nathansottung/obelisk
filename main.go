@@ -20,11 +20,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	qrcode "github.com/skip2/go-qrcode"
@@ -145,6 +147,19 @@ func main() {
 		auth = "ON — Authorization: Bearer <token> required for /api"
 	}
 	log.Printf("Obelisk %s — http://%s  (data: %s · auth: %s)", appVersion, addr, *dataDir, auth)
+	// On an interrupt or termination signal, save what is pending and close the
+	// catalog before exiting.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		sig := <-stop
+		log.Printf("%v: saving the catalog and stopping", sig)
+		if err := app.Shutdown(); err != nil {
+			log.Printf("saving the catalog on shutdown: %v", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}()
 	log.Fatal(http.ListenAndServe(addr, apiGuard(authMiddleware(mux, token))))
 }
 
@@ -965,12 +980,12 @@ func api(mux *http.ServeMux, app *App) {
 		}
 		var out []row
 		for _, c := range app.Store.Collections() {
-			fr := app.Store.FilesOf(c.ID)
-			var b int64
-			for _, x := range fr {
-				b += x.SizeBytes
+			n, b, err := app.Store.FileStats(c.ID)
+			if err != nil {
+				jsonErr(w, 500, err)
+				return
 			}
-			rw := row{Collection: c, Files: len(fr), Bytes: b, Chunks: len(app.Store.Chunks(c.ID))}
+			rw := row{Collection: c, Files: n, Bytes: b, Chunks: len(app.Store.Chunks(c.ID))}
 			if d := app.Store.DriftReport(c.ID); d != nil {
 				info := d.InfoCounts["new"] + d.InfoCounts["modified"] + d.InfoCounts["missing"] + d.InfoCounts["moved"]
 				rw.Drift = map[string]any{"at": d.At, "changes": d.Changes(), "unknown": d.Unknown(), "informational": info}
@@ -1075,7 +1090,12 @@ func api(mux *http.ServeMux, app *App) {
 				}
 			}
 		}
-		jsonOut(w, map[string]any{"name": c.Name, "files": len(app.Store.FilesOf(id)),
+		nFiles, _, err := app.Store.FileStats(id)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
+		jsonOut(w, map[string]any{"name": c.Name, "files": nFiles,
 			"folders": len(app.Store.FoldersOf(id)), "packages": len(chunks), "copies": copies,
 			"volumes": len(vols), "guarded": len(chunks) > 0})
 	})
@@ -1192,10 +1212,13 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("archive not found"))
 			return
 		}
-		files := app.Store.FilesOf(id)
 		count := map[int]int{}
 		var bytes = map[int]int64{}
-		for _, f := range files {
+		for f, err := range app.Store.FilesOf(id) {
+			if err != nil {
+				jsonErr(w, 500, err)
+				return
+			}
 			count[f.FolderID]++
 			bytes[f.FolderID] += f.SizeBytes
 		}
@@ -1408,14 +1431,24 @@ func api(mux *http.ServeMux, app *App) {
 		// a time covers the whole day.
 		sq.From = parseSearchDate(q.Get("from"), false)
 		sq.To = parseSearchDate(q.Get("to"), true)
-		jsonOut(w, app.Store.Search(sq))
+		found, err := app.Store.Search(sq)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
+		jsonOut(w, found)
 	})
 
 	// ---- Events -----------------------------------------------------------
 	// List events (optionally scoped to an archive) with their protection rollup.
 	mux.HandleFunc("GET /api/events", func(w http.ResponseWriter, r *http.Request) {
 		cid, _ := strconv.Atoi(r.URL.Query().Get("collection_id"))
-		jsonOut(w, map[string]any{"events": app.Store.Events(cid), "rollups": app.Store.EventRollups(cid)})
+		rollups, err := app.Store.EventRollups(cid)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
+		jsonOut(w, map[string]any{"events": app.Store.Events(cid), "rollups": rollups})
 	})
 	// Create one event (manual, or a confirmed harvested/clustered proposal).
 	mux.HandleFunc("POST /api/events", func(w http.ResponseWriter, r *http.Request) {
@@ -1433,7 +1466,10 @@ func api(mux *http.ServeMux, app *App) {
 			FolderHint: s(b, "folder_hint"), Source: nonEmpty(s(b, "source"), "MANUAL"),
 		})
 		if ids := intList(b, "file_ids"); len(ids) > 0 { // clustered proposal carries its members
-			app.Store.AssignFilesToEvent(ids, ev.ID)
+			if _, err := app.Store.AssignFilesToEvent(ids, ev.ID); err != nil {
+				jsonErr(w, 500, err)
+				return
+			}
 		}
 		jsonOut(w, ev)
 	})
@@ -1460,7 +1496,10 @@ func api(mux *http.ServeMux, app *App) {
 				Source: nonEmpty(in.Source, "CLUSTERED"),
 			})
 			if len(pe.FileIDs) > 0 {
-				app.Store.AssignFilesToEvent(pe.FileIDs, ev.ID)
+				if _, err := app.Store.AssignFilesToEvent(pe.FileIDs, ev.ID); err != nil {
+					jsonErr(w, 500, err)
+					return
+				}
 			}
 			created = append(created, ev)
 		}
@@ -1474,7 +1513,11 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("collection_id required"))
 			return
 		}
-		props := app.ClusterEvents(cid, int(f(b, "min_files")), int(f(b, "span_days")))
+		props, err := app.ClusterEvents(cid, int(f(b, "min_files")), int(f(b, "span_days")))
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
 		jsonOut(w, map[string]any{"proposed": props, "count": len(props)})
 	})
 	// Event detail: the record, its rollup, and its member files (with locations).
@@ -1484,9 +1527,18 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("event not found"))
 			return
 		}
-		files := app.Store.Search(SearchQuery{EventID: ev.ID, Limit: 100000})
+		files, err := app.Store.Search(SearchQuery{EventID: ev.ID, Limit: 100000})
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
 		var roll *EventRollup
-		for _, rr := range app.Store.EventRollups(ev.CollectionID) {
+		rollups, err := app.Store.EventRollups(ev.CollectionID)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
+		for _, rr := range rollups {
 			if rr.EventID == ev.ID {
 				r2 := rr
 				roll = &r2
@@ -1535,7 +1587,11 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("event not found"))
 			return
 		}
-		groups := app.SuggestForEvent(pathID(r))
+		groups, err := app.SuggestForEvent(pathID(r))
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
 		jsonOut(w, map[string]any{"groups": groups})
 	})
 	// Accept/assign files to an event (file_ids), or unassign (event_id omitted → 0).
@@ -1546,12 +1602,20 @@ func api(mux *http.ServeMux, app *App) {
 			return
 		}
 		b := body(r)
-		n := app.Store.AssignFilesToEvent(intList(b, "file_ids"), ev.ID)
+		n, err := app.Store.AssignFilesToEvent(intList(b, "file_ids"), ev.ID)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
 		jsonOut(w, map[string]any{"assigned": n})
 	})
 	mux.HandleFunc("POST /api/events/{id}/unassign", func(w http.ResponseWriter, r *http.Request) {
 		b := body(r)
-		n := app.Store.AssignFilesToEvent(intList(b, "file_ids"), 0)
+		n, err := app.Store.AssignFilesToEvent(intList(b, "file_ids"), 0)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
 		jsonOut(w, map[string]any{"unassigned": n})
 	})
 
@@ -1615,7 +1679,12 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, err)
 			return
 		}
-		jsonOut(w, app.RoutePreview(&in.Template, in.CollectionID))
+		pv, err := app.RoutePreview(&in.Template, in.CollectionID)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
+		jsonOut(w, pv)
 	})
 
 	// ---- Structure inference ----------------------------------------------
@@ -1644,7 +1713,12 @@ func api(mux *http.ServeMux, app *App) {
 		q := r.URL.Query()
 		cid, _ := strconv.Atoi(q.Get("collection_id"))
 		openOnly := q.Get("open") != "0"
-		jsonOut(w, map[string]any{"conflicts": app.Store.ConflictViews(cid, openOnly),
+		views, err := app.Store.ConflictViews(cid, openOnly)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
+		jsonOut(w, map[string]any{"conflicts": views,
 			"open_total": app.Store.OpenConflictCount(cid)})
 	})
 	// Re-run detection for an archive (usually automatic at ingest; this is a manual
@@ -1655,7 +1729,12 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("collection_id required"))
 			return
 		}
-		jsonOut(w, app.DetectConflicts(cid))
+		scan, err := app.DetectConflicts(cid)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
+		jsonOut(w, scan)
 	})
 	// Record a human decision: {"resolution":"CANONICAL","canonical_file_id":N} keeps
 	// one version and folds the rest into its retained history; {"resolution":
@@ -1753,7 +1832,12 @@ func api(mux *http.ServeMux, app *App) {
 			return
 		}
 		rep, _ := app.PlanPreview(p.ID)
-		out := map[string]any{"plan": p, "report": rep, "unrouted": app.planUnrouted(app.planFiles(p))}
+		pfiles, err := app.planFiles(p)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
+		out := map[string]any{"plan": p, "report": rep, "unrouted": app.planUnrouted(pfiles)}
 		if len(p.Mapping) > 0 {
 			out["coverage"] = app.PlanCoverage(p)
 		}
@@ -1798,7 +1882,12 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("plan not found"))
 			return
 		}
-		jsonOut(w, app.planTree(p, r.URL.Query().Get("path")))
+		tree, err := app.planTree(p, r.URL.Query().Get("path"))
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
+		jsonOut(w, tree)
 	})
 	// Dry-run compile gate: freezes the mapping only if unrouted=0 and no conflicts.
 	mux.HandleFunc("POST /api/plans/{id}/compile", func(w http.ResponseWriter, r *http.Request) {
@@ -1934,7 +2023,12 @@ func api(mux *http.ServeMux, app *App) {
 	})
 	mux.HandleFunc("GET /api/census", func(w http.ResponseWriter, r *http.Request) {
 		cid, _ := strconv.Atoi(r.URL.Query().Get("collection_id"))
-		jsonOut(w, app.FormatCensus(cid))
+		census, err := app.FormatCensus(cid)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
+		jsonOut(w, census)
 	})
 	register(mux, "GET /api/collections/{id}/census", func(w http.ResponseWriter, r *http.Request) {
 		id := pathID(r)
@@ -1942,7 +2036,12 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("archive not found"))
 			return
 		}
-		jsonOut(w, app.FormatCensus(id))
+		census, err := app.FormatCensus(id)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
+		jsonOut(w, census)
 	})
 
 	// treemap — "where is my risk": one zoom level of the size×status treemap,
@@ -1954,7 +2053,12 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("archive not found"))
 			return
 		}
-		jsonOut(w, app.Store.Treemap(id, r.URL.Query().Get("path"), r.URL.Query().Get("color")))
+		tm, err := app.Store.Treemap(id, r.URL.Query().Get("path"), r.URL.Query().Get("color"))
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
+		jsonOut(w, tm)
 	})
 
 	// folder tree — one expanded level of the Archives folder tree: the immediate child
@@ -1970,7 +2074,12 @@ func api(mux *http.ServeMux, app *App) {
 		q := r.URL.Query()
 		offset, _ := strconv.Atoi(q.Get("offset"))
 		limit, _ := strconv.Atoi(q.Get("limit"))
-		jsonOut(w, app.Store.FolderTree(id, q.Get("path"), offset, limit))
+		tree, err := app.Store.FolderTree(id, q.Get("path"), offset, limit)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
+		jsonOut(w, tree)
 	})
 
 	// Explorer info panel — totals + largest folders, role breakdown, and per-extension
@@ -1981,7 +2090,12 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("archive not found"))
 			return
 		}
-		jsonOut(w, app.Store.ExploreStats(id, r.URL.Query().Get("path")))
+		stats, err := app.Store.ExploreStats(id, r.URL.Query().Get("path"))
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
+		jsonOut(w, stats)
 	})
 
 	// BagIt conformant-bag export — institutional handoff. Writes a valid bag
@@ -2227,12 +2341,20 @@ func api(mux *http.ServeMux, app *App) {
 	// located to the package(s)/volume(s) that still hold its bytes.
 	mux.HandleFunc("GET /api/files/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := pathID(r)
-		f := app.Store.FileByID(id)
+		f, err := app.Store.FileByID(id)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
 		if f == nil {
 			jsonErr(w, 404, fmt.Errorf("file %d not found", id))
 			return
 		}
-		versions := app.Store.FileVersions(id)
+		versions, err := app.Store.FileVersions(id)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
 		lines := make([]string, 0, len(versions))
 		for _, v := range versions {
 			lines = append(lines, v.LocatorLine())
@@ -2245,7 +2367,10 @@ func api(mux *http.ServeMux, app *App) {
 	mux.HandleFunc("POST /api/files/{id}/restore", func(w http.ResponseWriter, r *http.Request) {
 		id := pathID(r)
 		b := body(r)
-		if app.Store.FileByID(id) == nil {
+		if f, err := app.Store.FileByID(id); err != nil {
+			jsonErr(w, 500, err)
+			return
+		} else if f == nil {
 			jsonErr(w, 404, fmt.Errorf("file %d not found", id))
 			return
 		}
@@ -2399,7 +2524,11 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 503, cfgErr)
 			return
 		}
-		census := app.FormatCensus(0)
+		census, err := app.FormatCensus(0)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
 		full := app.planEscrow(EscrowFull, cfg.EscrowIncludeReaders, census, cfg)
 		bin := app.planEscrow(EscrowBinariesOnly, cfg.EscrowIncludeReaders, census, cfg)
 		jsonOut(w, map[string]any{
@@ -2416,7 +2545,11 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 503, cfgErr)
 			return
 		}
-		census := app.FormatCensus(0)
+		census, err := app.FormatCensus(0)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
 		resp, jerr := runJob(app, "escrow-fetch", "Fetch escrow cache", func(p func(float64, string)) (map[string]any, error) {
 			return app.FetchEscrowCache(cfg.EscrowIncludeReaders, census, p)
 		})
@@ -2903,9 +3036,9 @@ func api(mux *http.ServeMux, app *App) {
 	})
 
 	// dock — guided, resumable ingest of a stack of legacy drives, one at a time
-	dockView := func(ds *DockSession) map[string]any {
+	dockView := func(ds *DockSession) (map[string]any, error) {
 		if ds == nil {
-			return map[string]any{"session": nil}
+			return map[string]any{"session": nil}, nil
 		}
 		archives := []map[string]any{}
 		for _, id := range ds.ArchiveIDs {
@@ -2913,7 +3046,19 @@ func api(mux *http.ServeMux, app *App) {
 				archives = append(archives, map[string]any{"id": c.ID, "name": c.Name})
 			}
 		}
-		return map[string]any{"session": ds, "archives": archives, "coverage": app.archiveCoverage(ds.ArchiveIDs)}
+		cov, err := app.archiveCoverage(ds.ArchiveIDs)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"session": ds, "archives": archives, "coverage": cov}, nil
+	}
+	dockOut := func(w http.ResponseWriter, ds *DockSession) {
+		view, err := dockView(ds)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
+		jsonOut(w, view)
 	}
 	mux.HandleFunc("POST /api/dock/sessions", func(w http.ResponseWriter, r *http.Request) {
 		ds, err := app.StartDockSession(intList(body(r), "archive_ids"))
@@ -2921,11 +3066,11 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, err)
 			return
 		}
-		jsonOut(w, dockView(ds))
+		dockOut(w, ds)
 	})
 	// The active session a reopened app resumes (Prompt: resumable across days).
 	mux.HandleFunc("GET /api/dock/session", func(w http.ResponseWriter, r *http.Request) {
-		jsonOut(w, dockView(app.Store.ActiveDockSession()))
+		dockOut(w, app.Store.ActiveDockSession())
 	})
 	mux.HandleFunc("GET /api/dock/session/{id}", func(w http.ResponseWriter, r *http.Request) {
 		ds := app.Store.DockSession(pathID(r))
@@ -2933,7 +3078,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("dock session not found"))
 			return
 		}
-		jsonOut(w, dockView(ds))
+		dockOut(w, ds)
 	})
 	// Watcher poll: drives that have appeared since the session started.
 	mux.HandleFunc("GET /api/dock/session/{id}/candidates", func(w http.ResponseWriter, r *http.Request) {
@@ -2964,7 +3109,7 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, err)
 			return
 		}
-		jsonOut(w, dockView(ds))
+		dockOut(w, ds)
 	})
 	mux.HandleFunc("GET /api/dock/session/{id}/report", func(w http.ResponseWriter, r *http.Request) {
 		md, err := app.SessionReportMarkdown(pathID(r))
@@ -3097,7 +3242,11 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("archive not found"))
 			return
 		}
-		res := app.Store.Protection(id)
+		res, err := app.Store.Protection(id)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
 		out := map[string]any{"protection": res, "assignments": app.Store.AssignmentsOf(id)}
 		jsonOut(w, out)
 	})

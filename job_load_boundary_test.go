@@ -19,7 +19,7 @@ func TestJobLoad_ReadFailures(t *testing.T) {
 	for _, cause := range []error{os.ErrPermission, errors.New("synthetic I/O error")} {
 		t.Run(cause.Error(), func(t *testing.T) {
 			dir := t.TempDir()
-			s, err := OpenStore(dir)
+			s, err := openTestStore(t, dir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -48,7 +48,7 @@ func TestJobLoad_ReadFailures(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "jobs.json"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if s, err := OpenStore(dir); s != nil || err == nil {
+	if s, err := openTestStore(t, dir); s != nil || err == nil {
 		t.Fatal("directory obstruction was accepted")
 	}
 	fi, err := os.Stat(filepath.Join(dir, "jobs.json"))
@@ -57,7 +57,7 @@ func TestJobLoad_ReadFailures(t *testing.T) {
 	}
 	// OpenStore still seeds the catalog before reading jobs. This is not a
 	// cross-store rollback claim; the obstruction itself must remain untouched.
-	if _, err := os.Stat(filepath.Join(dir, "catalog.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, catalogFileName())); err != nil {
 		t.Fatal("expected catalog-first startup order changed")
 	}
 }
@@ -125,7 +125,7 @@ func TestJobLoad_LatchBlocksAllPublicationAndWorkers(t *testing.T) {
 
 func TestJobLoad_ReconcileWriteFailureAndCounterLimit(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenStore(dir)
+	s, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,6 +198,7 @@ func jobLoadBundle(t *testing.T, members map[string][]byte) string {
 }
 
 func TestJobLoad_RestoreCaller(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	a := abTestApp(t)
 	if _, err := a.Store.NewJob("fixture", "prior"); err != nil {
 		t.Fatal(err)
@@ -234,6 +235,7 @@ func TestJobLoad_RestoreCaller(t *testing.T) {
 }
 
 func TestJobLoad_MigrationCaller(t *testing.T) {
+	jsonEngineOnly(t, "moving a data folder that holds a catalog database comes with slice S8")
 	a := abTestApp(t)
 	prior := a.Store
 	bad := []byte(`{"rows":[null]}`)
@@ -267,7 +269,7 @@ func TestJobLoad_IdentityAndOptionalCompatibility(t *testing.T) {
 		"invalid-last-field": `{"rows":[{"id":1,"status":"RUNNING"},{"id":2,"created_at":"bad"}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			s, err := OpenStore(t.TempDir())
+			s, err := openTestStore(t, t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -287,7 +289,7 @@ func TestJobLoad_IdentityAndOptionalCompatibility(t *testing.T) {
 	// Optional fields and unknown extensions retain the former reader's policy.
 	// A single historical field-name alias remains unambiguous and supported.
 	raw := []byte(`{"Rows":[{"ID":4,"result":null,"artifacts":null,"future_extension":true}],"future_board":{}}`)
-	s, err := OpenStore(t.TempDir())
+	s, err := openTestStore(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

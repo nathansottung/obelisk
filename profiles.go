@@ -379,7 +379,7 @@ type dirAgg struct {
 // 3-2-1 dimensions, aggregated up the directory tree (folders take the worst
 // status among their descendants). Acquires the store lock and reads the catalog
 // directly, like Search.
-func (s *Store) Protection(collectionID int) ProtectionResult {
+func (s *Store) Protection(collectionID int) (ProtectionResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -430,9 +430,9 @@ func (s *Store) Protection(collectionID int) ProtectionResult {
 		return v
 	}
 
-	for _, f := range s.c.Files {
+	if err := s.eachFileLocked(fileQuery{CollectionID: collectionID}, func(f *File) error {
 		if f.CollectionID != collectionID {
-			continue
+			return nil
 		}
 		root := folderPath[f.FolderID]
 		full := filepath.ToSlash(filepath.Join(root, f.RelPath))
@@ -457,6 +457,9 @@ func (s *Store) Protection(collectionID int) ProtectionResult {
 				ag.example[st] = detail
 			}
 		}
+		return nil
+	}); err != nil {
+		return ProtectionResult{}, err
 	}
 
 	// Emit nodes: every scanned root, everything within two levels of a root, and
@@ -490,7 +493,7 @@ func (s *Store) Protection(collectionID int) ProtectionResult {
 		FolderCounts:   folderCounts,
 		Nodes:          nodes,
 		TotalFiles:     total,
-	}
+	}, nil
 }
 
 // fileDimsForCollection returns per-file protection dims (copies, kinds, offsite,
@@ -536,7 +539,7 @@ func (s *Store) fileDimsForCollection(collectionID int) map[int]fileDims {
 // collection, keyed by file ID — the per-file view behind the "everything not fully
 // protected" incremental base. Same derivation the Protection tree uses, so the two
 // never disagree.
-func (s *Store) FileStatuses(collectionID int) map[int]string {
+func (s *Store) FileStatuses(collectionID int) (map[int]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	vols := map[int]*Volume{}
@@ -571,14 +574,17 @@ func (s *Store) FileStatuses(collectionID int) map[int]string {
 		}
 	}
 	out := map[int]string{}
-	for _, f := range s.c.Files {
+	if err := s.eachFileLocked(fileQuery{CollectionID: collectionID}, func(f *File) error {
 		if f.CollectionID != collectionID {
-			continue
+			return nil
 		}
 		st, _, _ := s.fileProtectionLocked(f, fileCopies, folderPath)
 		out[f.ID] = st
+		return nil
+	}); err != nil {
+		return nil, err
 	}
-	return out
+	return out, nil
 }
 
 // fileProtectionLocked derives the six-status + detail + resolved profile for one
@@ -686,7 +692,7 @@ func (s *Store) replaceProtectionSummary(sum *ProtectionSummary) {
 // RecomputeProtection recomputes every collection's status summary and returns
 // the fresh totals plus the deltas since the last run — the numbers the UI turns
 // into a "N newly PARTIAL, M newly OUT_OF_POLICY" toast. Never silent.
-func (s *Store) RecomputeProtection(progress func(float64, string)) map[string]any {
+func (s *Store) RecomputeProtection(progress func(float64, string)) (map[string]any, error) {
 	cols := s.Collections()
 	prev := map[int]map[string]int{}
 	for _, p := range s.ProtectionSummaries() {
@@ -695,7 +701,10 @@ func (s *Store) RecomputeProtection(progress func(float64, string)) map[string]a
 	totals := map[string]int{}
 	deltas := map[string]int{}
 	for i, c := range cols {
-		res := s.Protection(c.ID)
+		res, err := s.Protection(c.ID)
+		if err != nil {
+			return nil, err
+		}
 		s.replaceProtectionSummary(&ProtectionSummary{CollectionID: c.ID, At: time.Now().UTC(), Files: res.Summary})
 		for st, n := range res.Summary {
 			totals[st] += n
@@ -713,7 +722,7 @@ func (s *Store) RecomputeProtection(progress func(float64, string)) map[string]a
 	if progress != nil {
 		progress(1, "done")
 	}
-	return map[string]any{"totals": totals, "deltas": deltas}
+	return map[string]any{"totals": totals, "deltas": deltas}, nil
 }
 
 // recomputeJob recomputes protection as a visible Job and returns its totals +
@@ -727,17 +736,26 @@ func (a *App) recomputeJob() map[string]any {
 		// state the catalog already holds, so the totals below are still correct and
 		// worth returning — but no job_id is handed back, because there is no recorded
 		// job to look up, and the reason is reported instead (OB-002).
-		res := a.Store.RecomputeProtection(func(float64, string) {})
+		res, err := a.Store.RecomputeProtection(func(float64, string) {})
+		if err != nil {
+			return map[string]any{"error": err.Error(), "job_error": jerr.Error()}
+		}
 		res["job_error"] = jerr.Error()
 		return res
 	}
-	res := a.Store.RecomputeProtection(func(p float64, msg string) {
+	res, rerr := a.Store.RecomputeProtection(func(p float64, msg string) {
 		l := "Recompute protection status"
 		if msg != "" {
 			l += " — " + msg
 		}
 		_ = a.Store.SetJob(j.ID, p, l, "") // progress only: in-memory, never persisted
 	})
+	if rerr != nil {
+		if serr := a.Store.SetJob(j.ID, 1, "Recompute protection status — "+rerr.Error(), "FAILED"); serr != nil {
+			a.noteUnrecordedJob(j.ID, "FAILED", serr)
+		}
+		return map[string]any{"error": rerr.Error(), "job_id": j.ID}
+	}
 	if serr := a.Store.SetJob(j.ID, 1, "Recompute protection status", "COMPLETED"); serr != nil {
 		a.noteUnrecordedJob(j.ID, "COMPLETED", serr)
 		res["job_error"] = serr.Error()

@@ -16,6 +16,7 @@ import (
 )
 
 func TestCatalogCurrentRoundTrip(t *testing.T) {
+	jsonEngineOnly(t, "the move refuses the fixtures' placeholder hashes; catalogdb_migrate_test.go moves corrected copies")
 	dir := t.TempDir()
 	fixture, err := os.ReadFile(filepath.Join("testdata", "catalog_current.json"))
 	if err != nil {
@@ -26,7 +27,7 @@ func TestCatalogCurrentRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s1, err := OpenStore(dir)
+	s1, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -58,7 +59,7 @@ func TestCatalogCurrentRoundTrip(t *testing.T) {
 		t.Errorf("catalog.json changed across load→save — a field may have been lost or reshaped")
 	}
 
-	s2, err := OpenStore(dir)
+	s2, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -85,6 +86,7 @@ func TestCatalogCurrentRoundTrip(t *testing.T) {
 // folds it into a Location, attaches the volume, preserves the legacy offsite read,
 // and backs up the pre-migration bytes.
 func TestCatalogMigrateV1ToV2(t *testing.T) {
+	jsonEngineOnly(t, "the move refuses the fixtures' placeholder hashes; catalogdb_migrate_test.go moves corrected copies")
 	dir := t.TempDir()
 	fixture, err := os.ReadFile(filepath.Join("testdata", "catalog_schema1.json"))
 	if err != nil {
@@ -94,7 +96,7 @@ func TestCatalogMigrateV1ToV2(t *testing.T) {
 	if err := os.WriteFile(catPath, fixture, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	s, err := OpenStore(dir)
+	s, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -125,6 +127,7 @@ func TestCatalogMigrateV1ToV2(t *testing.T) {
 }
 
 func TestCatalogLegacyMigratesAndBacksUp(t *testing.T) {
+	jsonEngineOnly(t, "the move refuses the fixtures' placeholder hashes; catalogdb_migrate_test.go moves corrected copies")
 	dir := t.TempDir()
 	// A pre-versioning catalog: no schema_version field (reads as 0).
 	legacy := []byte(`{"next_id":{"collection":1},"collections":[{"id":1,"name":"Old"}]}`)
@@ -132,7 +135,7 @@ func TestCatalogLegacyMigratesAndBacksUp(t *testing.T) {
 	if err := os.WriteFile(catPath, legacy, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	s, err := OpenStore(dir)
+	s, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -157,13 +160,14 @@ func TestCatalogLegacyMigratesAndBacksUp(t *testing.T) {
 }
 
 func TestCatalogNewerSchemaIsReadOnly(t *testing.T) {
+	jsonEngineOnly(t, "the move refuses the fixtures' placeholder hashes; catalogdb_migrate_test.go moves corrected copies")
 	dir := t.TempDir()
 	newer := []byte(`{"schema_version":999,"collections":[{"id":1,"name":"Future"}]}`)
 	catPath := filepath.Join(dir, "catalog.json")
 	if err := os.WriteFile(catPath, newer, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	s, err := OpenStore(dir)
+	s, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

@@ -18,6 +18,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -261,7 +262,9 @@ func (a *App) VerifyMirrorVolume(volumeID int, mount, level string, progress fun
 	}
 	// A full check or a failed one can change protection; refresh the dashboard tally.
 	if level == VerifyB || !okAll {
-		a.Store.RecomputeProtection(nil)
+		if _, err := a.Store.RecomputeProtection(nil); err != nil {
+			log.Printf("refreshing the protection summary: %v", err) // a cached tally; the next refresh retries
+		}
 	}
 	if progress != nil {
 		progress(1.0, "done")

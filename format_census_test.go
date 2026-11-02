@@ -9,7 +9,7 @@ import (
 
 func censusApp(t *testing.T) *App {
 	t.Helper()
-	st, err := OpenStore(t.TempDir())
+	st, err := openTestStore(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -21,7 +21,7 @@ func TestFormatCensusTiers(t *testing.T) {
 	coll := app.Store.AddCollection("Photos")
 	fo := app.Store.AddFolder(coll.ID, "/src")
 	add := func(rel string, size int64) {
-		app.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: rel, SizeBytes: size, HashAlg: "SHA256", Hash: "x"})
+		app.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: rel, SizeBytes: size, HashAlg: "SHA256", Hash: testHash("x")})
 	}
 	add("a.jpg", 100)
 	add("b.jpg", 100)
@@ -31,7 +31,7 @@ func TestFormatCensusTiers(t *testing.T) {
 	add("f.lrcat", 100)
 	add("g.xyz", 100)
 
-	c := app.FormatCensus(coll.ID)
+	c := noErr[Census](t)(app.FormatCensus(coll.ID))
 	if c.TotalFiles != 7 || c.TotalBytes != 700 {
 		t.Fatalf("totals wrong: %d files, %d bytes", c.TotalFiles, c.TotalBytes)
 	}

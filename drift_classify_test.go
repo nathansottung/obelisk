@@ -21,7 +21,7 @@ func driftSetup(t *testing.T, files map[string]string) (*App, *Collection, strin
 		t.Fatal(err)
 	}
 	var refs []ChunkFileRef
-	for _, f := range app.Store.FilesOf(coll.ID) {
+	for _, f := range testFiles(t, app.Store.FilesOf(coll.ID)) {
 		refs = append(refs, ChunkFileRef{FileID: f.ID, RelPath: f.RelPath, SizeBytes: f.SizeBytes, Hash: f.Hash})
 	}
 	app.Store.AddChunk(Chunk{CollectionID: coll.ID, Name: "PKG-1", Status: "VERIFIED", Files: refs, FileCount: len(refs)})

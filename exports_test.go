@@ -43,7 +43,7 @@ func searchFingerprint(rows []map[string]any) map[string]string {
 func TestExportImport_StructureAndPlanRoundTrip(t *testing.T) {
 	// --- source catalog ---
 	srcDir := t.TempDir()
-	s1, err := OpenStore(srcDir)
+	s1, err := openTestStore(t, srcDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,21 +54,21 @@ func TestExportImport_StructureAndPlanRoundTrip(t *testing.T) {
 	vol := src.Store.AddVolume(Volume{Label: "DRIVE-01", Serial: "S1", Kind: "HDD", LocationID: loc.ID, Location: "Shoe Box #1"})
 	ev := src.Store.AddEvent(&Event{Name: "Smith", EventType: "wedding", Year: 2019, CollectionID: coll.ID})
 	shot := time.Date(2019, 6, 15, 10, 0, 0, 0, time.UTC)
-	ids, _ := src.Store.UpsertUnionFiles(coll.ID, []unionFile{
-		{RelPath: "a.jpg", Hash: "hashA", Size: 100, Role: RoleDeliverables, ShotAt: shot},
-		{RelPath: "shared/s.jpg", Hash: "hashS", Size: 200, Role: RoleOriginals},
+	ids, _, _ := src.Store.UpsertUnionFiles(coll.ID, []unionFile{
+		{RelPath: "a.jpg", Hash: testHash("hashA"), Size: 100, Role: RoleDeliverables, ShotAt: shot},
+		{RelPath: "shared/s.jpg", Hash: testHash("hashS"), Size: 200, Role: RoleOriginals},
 	})
-	src.Store.AssignFilesToEvent([]int{ids[0]}, ev.ID)
+	noErr[int](t)(src.Store.AssignFilesToEvent([]int{ids[0]}, ev.ID))
 	src.upsertMirrorChunk(coll.ID, vol, "X:/", []ChunkFileRef{
-		{FileID: ids[0], RelPath: "a.jpg", SizeBytes: 100, Hash: "hashA"},
-		{FileID: ids[1], RelPath: "shared/s.jpg", SizeBytes: 200, Hash: "hashS"},
+		{FileID: ids[0], RelPath: "a.jpg", SizeBytes: 100, Hash: testHash("hashA")},
+		{FileID: ids[1], RelPath: "shared/s.jpg", SizeBytes: 200, Hash: testHash("hashS")},
 	}, "mirror")
 
 	// A snapshot for the drive + a compiled plan (for the Plan Export).
 	src.Store.PutVolumeSnapshot(&VolumeSnapshot{VolumeID: vol.ID, Serial: "S1", Label: "DRIVE-01",
 		Files: []SnapFile{
-			{RelPath: "a.jpg", Hash: "hashA", SizeBytes: 100, Role: RoleDeliverables},
-			{RelPath: "shared/s.jpg", Hash: "hashS", SizeBytes: 200, Role: RoleOriginals},
+			{RelPath: "a.jpg", Hash: testHash("hashA"), SizeBytes: 100, Role: RoleDeliverables},
+			{RelPath: "shared/s.jpg", Hash: testHash("hashS"), SizeBytes: 200, Role: RoleOriginals},
 		}, TotalFiles: 2})
 	tmpl := src.Store.AddTemplate(&Template{Name: "Move", Routes: map[string]string{
 		RoleDeliverables: "photos/{orig_name}", RoleOriginals: "photos/{orig_name}"}})
@@ -102,7 +102,7 @@ func TestExportImport_StructureAndPlanRoundTrip(t *testing.T) {
 
 	// --- import into a FRESH catalog ---
 	dstDir := t.TempDir()
-	s2, err := OpenStore(dstDir)
+	s2, err := openTestStore(t, dstDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,8 +118,8 @@ func TestExportImport_StructureAndPlanRoundTrip(t *testing.T) {
 	}
 
 	// --- search / locations answers must match ---
-	srcFP := searchFingerprint(src.Store.Search(SearchQuery{CollectionID: coll.ID, Limit: 1000}))
-	dstFP := searchFingerprint(dst.Store.Search(SearchQuery{CollectionID: newCID, Limit: 1000}))
+	srcFP := searchFingerprint(noErr[[]map[string]any](t)(src.Store.Search(SearchQuery{CollectionID: coll.ID, Limit: 1000})))
+	dstFP := searchFingerprint(noErr[[]map[string]any](t)(dst.Store.Search(SearchQuery{CollectionID: newCID, Limit: 1000})))
 	if len(srcFP) != len(dstFP) || len(srcFP) != 2 {
 		t.Fatalf("search sets differ in size: src %d dst %d", len(srcFP), len(dstFP))
 	}
@@ -129,8 +129,8 @@ func TestExportImport_StructureAndPlanRoundTrip(t *testing.T) {
 		}
 	}
 	// Event membership survived (hashA belongs to the Smith event).
-	if !containsSub(dstFP["hashA"], "Smith") {
-		t.Errorf("event membership lost on import: %q", dstFP["hashA"])
+	if !containsSub(dstFP[testHash("hashA")], "Smith") {
+		t.Errorf("event membership lost on import: %q", dstFP[testHash("hashA")])
 	}
 
 	// --- plan answers must match ---
@@ -157,7 +157,7 @@ func TestExportImport_StructureAndPlanRoundTrip(t *testing.T) {
 	}
 
 	// CSV + Markdown render and carry the hashes + the no-content note.
-	if !containsSub(string(StructureCSV(structExp)), "hashA") {
+	if !containsSub(string(StructureCSV(structExp)), testHash("hashA")) {
 		t.Error("CSV render missing hash")
 	}
 	md := StructureMarkdown(structExp)

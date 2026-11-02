@@ -107,7 +107,7 @@ func TestClusterEvents_ChaoticDrive(t *testing.T) {
 	}
 	// EXIF must have flowed onto the archive files during adoption.
 	dated := 0
-	for _, f := range app.Store.FilesOf(coll.ID) {
+	for _, f := range testFiles(t, app.Store.FilesOf(coll.ID)) {
 		if !f.ShotAt.IsZero() {
 			dated++
 		}
@@ -116,7 +116,7 @@ func TestClusterEvents_ChaoticDrive(t *testing.T) {
 		t.Fatalf("expected 25 dated files after adopt, got %d", dated)
 	}
 
-	props := app.ClusterEvents(coll.ID, 12, 3)
+	props := noErr[[]ProposedEvent](t)(app.ClusterEvents(coll.ID, 12, 3))
 	if len(props) != 2 {
 		t.Fatalf("want 2 clustered events (wedding, baptism), got %d: %+v", len(props), props)
 	}
@@ -149,11 +149,11 @@ func TestMagnet_SuggestsStrayIntoHarvestedEvent(t *testing.T) {
 	inRange := time.Date(2019, 6, 15, 15, 30, 0, 0, time.UTC)
 	outRange := time.Date(2021, 3, 1, 9, 0, 0, 0, time.UTC)
 	app.Store.UpsertUnionFiles(coll.ID, []unionFile{
-		{RelPath: "loose/from_camera/DSC900.jpg", Hash: "hash-in", Size: 111, Role: RoleDeliverables, ShotAt: inRange},
-		{RelPath: "loose/other/DSC001.jpg", Hash: "hash-out", Size: 222, Role: RoleDeliverables, ShotAt: outRange},
+		{RelPath: "loose/from_camera/DSC900.jpg", Hash: testHash("hash-in"), Size: 111, Role: RoleDeliverables, ShotAt: inRange},
+		{RelPath: "loose/other/DSC001.jpg", Hash: testHash("hash-out"), Size: 222, Role: RoleDeliverables, ShotAt: outRange},
 	})
 
-	groups := app.SuggestForEvent(ev.ID)
+	groups := noErr[[]SuggestGroup](t)(app.SuggestForEvent(ev.ID))
 	if len(groups) != 1 {
 		t.Fatalf("want 1 suggestion group (the in-range folder), got %d: %+v", len(groups), groups)
 	}
@@ -163,16 +163,16 @@ func TestMagnet_SuggestsStrayIntoHarvestedEvent(t *testing.T) {
 	}
 
 	// Accepting the suggestion sets membership; the stray now belongs to the event.
-	n := app.Store.AssignFilesToEvent(g.FileIDs, ev.ID)
+	n := noErr[int](t)(app.Store.AssignFilesToEvent(g.FileIDs, ev.ID))
 	if n != 1 {
 		t.Fatalf("assign should move 1 file, got %d", n)
 	}
-	members := app.Store.FilesOfEvent(ev.ID)
+	members := noErr[[]*File](t)(app.Store.FilesOfEvent(ev.ID))
 	if len(members) != 1 || members[0].RelPath != "loose/from_camera/DSC900.jpg" {
 		t.Errorf("event membership wrong after accept: %+v", members)
 	}
 	// The out-of-range stray stays unassigned and is no longer suggested.
-	if again := app.SuggestForEvent(ev.ID); len(again) != 0 {
+	if again := noErr[[]SuggestGroup](t)(app.SuggestForEvent(ev.ID)); len(again) != 0 {
 		t.Errorf("no more suggestions expected after accepting the only in-range group, got %+v", again)
 	}
 }

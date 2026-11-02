@@ -26,7 +26,7 @@ func TestConfigReadSafety_SettingsRejectDamagedPrerequisite(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			st, e := OpenStore(dir)
+			st, e := openTestStore(t, dir)
 			if e != nil {
 				t.Fatal("fixture catalog failed")
 			}
@@ -61,7 +61,7 @@ func TestConfigReadSafety_SettingsRejectDamagedPrerequisite(t *testing.T) {
 
 func TestConfigReadSafety_ValidUpdatePreservesFields(t *testing.T) {
 	dir := t.TempDir()
-	st, e := OpenStore(dir)
+	st, e := openTestStore(t, dir)
 	if e != nil {
 		t.Fatal("fixture catalog failed")
 	}

@@ -120,7 +120,7 @@ func TestDestAuth_ExactWhitespaceNames(t *testing.T) {
 				}
 				seen[ref.RelPath] = true
 			}
-			cov := app.archiveCoverage([]int{cid})
+			cov := noErr[Coverage](t)(app.archiveCoverage([]int{cid}))
 			if cov.CoveredFiles != 2 || cov.TotalFiles != 2 || cov.Pct != 100 {
 				t.Fatal(cov)
 			}

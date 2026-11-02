@@ -205,10 +205,14 @@ func (a *App) censusFromTally(t *extTally) Census {
 }
 
 // FormatCensus computes the census for a collection (0 = all archives).
-func (a *App) FormatCensus(collectionID int) Census {
-	c := a.censusFromTally(a.Store.ExtTally(collectionID))
+func (a *App) FormatCensus(collectionID int) (Census, error) {
+	t, err := a.Store.ExtTally(collectionID)
+	if err != nil {
+		return Census{}, err
+	}
+	c := a.censusFromTally(t)
 	c.CollectionID = collectionID
-	return c
+	return c, nil
 }
 
 // censusFromRefs builds a census from a set of catalog file refs — used to
