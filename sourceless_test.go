@@ -98,7 +98,7 @@ func TestSourcelessArchiveUnionAndLocations(t *testing.T) {
 		t.Fatal("shared file not found in the union")
 	}
 
-	dims := st.fileDimsForCollection(arch.ID)
+	dims := noErr[map[int]fileDims](t)(st.fileDimsForCollection(arch.ID))
 	shared := dims[sharedID]
 	if shared.copies != 2 {
 		t.Errorf("shared file should have 2 copies (one per drive), got %d", shared.copies)

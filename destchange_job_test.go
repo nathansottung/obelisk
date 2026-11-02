@@ -121,7 +121,7 @@ func TestDestChange_StopDuringInventoryKeepsRecordsTogether(t *testing.T) {
 				recorded := 0
 				for _, c := range app.Store.Chunks(collID) {
 					if c.Mirror {
-						recorded += len(c.Files)
+						recorded += len(pkgFiles(t, app.Store, c))
 					}
 				}
 				if recorded != 4 {

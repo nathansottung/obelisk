@@ -85,8 +85,8 @@ func TestAdoptFolder_UnreadableReadoptChangesNothing(t *testing.T) {
 		t.Error("a re-adopt that could read no file ran")
 	}
 	c = app.mirrorChunkAt(arch.ID, vol.ID, dir)
-	if len(c.Files) != 1 {
-		t.Errorf("a refused re-adopt changed the copy: %d files", len(c.Files))
+	if n := len(pkgFiles(t, app.Store, c)); n != 1 {
+		t.Errorf("a refused re-adopt changed the copy: %d files", n)
 	}
 	_ = events
 }

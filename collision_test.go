@@ -89,7 +89,7 @@ func TestAdoptFolder_SeparateRecordsPerFolder(t *testing.T) {
 	for _, c := range app.Store.Chunks(arch.ID) {
 		if c.Mirror {
 			n++
-			for _, r := range c.Files {
+			for _, r := range pkgFiles(t, app.Store, c) {
 				got[r.RelPath] = true
 			}
 		}

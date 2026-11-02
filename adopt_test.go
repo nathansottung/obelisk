@@ -137,7 +137,7 @@ func TestIntegration_DeepAdoptEnumeratesContents(t *testing.T) {
 	}
 	// The TOC-derived listing has paths but no source hashes.
 	rels := map[string]bool{}
-	for _, f := range c.Files {
+	for _, f := range pkgFiles(t, s.app.Store, c) {
 		rels[filepath.ToSlash(f.RelPath)] = true
 		if f.Hash != "" {
 			t.Errorf("TOC listing must not fabricate hashes: %s has %s", f.RelPath, f.Hash)

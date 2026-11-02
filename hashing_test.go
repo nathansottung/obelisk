@@ -87,7 +87,7 @@ func TestBlake3NeverOnMedia(t *testing.T) {
 	c := &Chunk{Name: "PKG-1", CollectionID: coll.ID, HashAlg: "SHA256", TarHash: "t", EncHash: "e",
 		Files: []ChunkFileRef{{FileID: f.ID, RelPath: "x.dat", SizeBytes: 3, Hash: testHash("aa11")}}}
 	dir := t.TempDir()
-	if err := writeManifest(dir, c, ""); err != nil {
+	if err := writeManifest(dir, c, c.Files, ""); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "PKG-1.manifest.json"))

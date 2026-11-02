@@ -28,9 +28,9 @@ func mirrorPathsOn(app *App, archiveID, volID int, unknown bool) []string {
 		if !c.Mirror || copyOn(c, volID) == nil {
 			continue
 		}
-		refs := c.Files
+		refs, _ := app.Store.ChunkFiles(c.ID)
 		if unknown {
-			refs = c.UnknownFiles
+			refs, _ = app.Store.ChunkUnknownFiles(c.ID)
 		}
 		for _, r := range refs {
 			out = append(out, r.RelPath)
