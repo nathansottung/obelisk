@@ -766,3 +766,41 @@ func TestCatalogDB_ListingsKeepTheirValuesWhenTheFileChanges(t *testing.T) {
 		t.Errorf("the package's listing changed with its file:\nbefore %+v\nafter  %+v", want, after.Chunks[0].Files)
 	}
 }
+
+// Replacing a file row (INSERT OR REPLACE, the usual upsert) also keeps the
+// listings that share its values: SQLite runs delete triggers for the row a
+// REPLACE removes only with recursive triggers on, which every writer has.
+func TestCatalogDB_ListingsKeepTheirValuesWhenTheFileIsReplaced(t *testing.T) {
+	c := fullCatalog(t)
+	dir := t.TempDir()
+	writeCatalogJSON(t, dir, c)
+	if _, err := migrateCatalogToDB(dir, catalogMigrateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	d, err := openCatalogDB(filepath.Join(dir, catalogDBName), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	before, err := exportCatalogDB(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f0 := c.Files[0]
+	if err := d.Write(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT OR REPLACE INTO file(id, ord, collection_id, folder_id, rel_path, size_bytes,
+			hash_alg, role, camera_serial, event_id) VALUES(?, 0, ?, ?, 'replaced.nef', 1, 'SHA256', '', '', 0)`,
+			f0.ID, f0.CollectionID, f0.FolderID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := exportCatalogDB(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after.Chunks[0].Files, before.Chunks[0].Files) {
+		t.Errorf("replacing the file changed the package's listing:\nbefore %+v\nafter  %+v",
+			before.Chunks[0].Files, after.Chunks[0].Files)
+	}
+}

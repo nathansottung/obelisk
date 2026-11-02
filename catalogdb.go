@@ -60,6 +60,11 @@ const catalogDBSchemaVersion = 1
 // sqliteHeader is the first 16 bytes of every SQLite database file.
 const sqliteHeader = "SQLite format 3\x00"
 
+// catalogDBWriterPragmas are set on every writer connection: full fsync on commit,
+// foreign keys, and recursive triggers, without which SQLite skips the delete
+// triggers of a row that INSERT OR REPLACE removes (see file_delete_keeps_listings).
+var catalogDBWriterPragmas = []string{"foreign_keys(1)", "recursive_triggers(1)", "synchronous(FULL)"}
+
 // catalogDBReaders is the size of the read pool.
 const catalogDBReaders = 4
 
@@ -164,7 +169,7 @@ func openCatalogDB(path string, create bool) (*catalogDB, error) {
 	if d.readOnly {
 		w, err = sql.Open(catalogDBDriver, catalogDBReadOnlyDSN(path, "foreign_keys(1)"))
 	} else {
-		w, err = sql.Open(catalogDBDriver, catalogDBDSN(path, "foreign_keys(1)", "synchronous(FULL)")+"&_txlock=immediate")
+		w, err = sql.Open(catalogDBDriver, catalogDBDSN(path, catalogDBWriterPragmas...)+"&_txlock=immediate")
 	}
 	if err != nil {
 		return nil, err
@@ -206,7 +211,7 @@ func createCatalogDBFile(path string) error {
 			os.Remove(tmp + side)
 		}
 	}
-	w, err := sql.Open(catalogDBDriver, catalogDBDSN(tmp, "foreign_keys(1)", "synchronous(FULL)")+"&_txlock=immediate")
+	w, err := sql.Open(catalogDBDriver, catalogDBDSN(tmp, catalogDBWriterPragmas...)+"&_txlock=immediate")
 	if err != nil {
 		return err
 	}
