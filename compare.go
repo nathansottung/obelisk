@@ -163,7 +163,10 @@ func (a *App) CompareScans(ref CompareRef, otherScanID int) (*CompareRun, error)
 		if coll == nil {
 			return nil, fmt.Errorf("archive %d not found", ref.ArchiveID)
 		}
-		for _, f := range a.Store.FilesOf(coll.ID) {
+		for f, err := range a.Store.FilesOf(coll.ID) {
+			if err != nil {
+				return nil, err
+			}
 			refSide.Files = append(refSide.Files, ClassFile{Path: f.RelPath, Hash: f.Hash, Size: f.SizeBytes})
 		}
 		run.RefArchiveID, run.RefLabel, run.RefComplete = coll.ID, "archive "+coll.Name, true

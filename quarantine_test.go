@@ -21,7 +21,7 @@ import (
 func quarantineScenario(t *testing.T) (*App, string, int) {
 	t.Helper()
 	dataDir := t.TempDir()
-	store, err := OpenStore(dataDir)
+	store, err := openTestStore(t, dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,9 +57,9 @@ func quarantineScenario(t *testing.T) (*App, string, int) {
 	for _, sf := range sfs {
 		items = append(items, unionFile{RelPath: sf.RelPath, Hash: sf.Hash, Size: sf.SizeBytes, Role: RoleOriginals})
 	}
-	ids, _ := app.Store.UpsertUnionFiles(coll.ID, items)
+	ids, _, _ := app.Store.UpsertUnionFiles(coll.ID, items)
 	ev := app.Store.AddEvent(&Event{CollectionID: coll.ID, Name: "Smith Wedding"})
-	app.Store.AssignFilesToEvent(ids, ev.ID)
+	noErr[int](t)(app.Store.AssignFilesToEvent(ids, ev.ID))
 
 	// A plan reorganizes them into a fresh managed destination root, then executes.
 	tmpl := app.Store.AddTemplate(&Template{Name: "Move", Routes: map[string]string{RoleOriginals: "raw/{orig_name}"}})
@@ -74,7 +74,7 @@ func quarantineScenario(t *testing.T) (*App, string, int) {
 
 	// A second, independent verified copy offsite → so quarantine drops 2 → 1.
 	var mrefs []ChunkFileRef
-	for _, f := range app.Store.FilesOf(coll.ID) {
+	for _, f := range testFiles(t, app.Store.FilesOf(coll.ID)) {
 		mrefs = append(mrefs, ChunkFileRef{FileID: f.ID, RelPath: "raw/" + filepath.Base(f.RelPath), SizeBytes: f.SizeBytes, Hash: f.Hash})
 	}
 	v2 := app.Store.AddVolume(Volume{Label: "OFFSITE", Kind: "HDD"})

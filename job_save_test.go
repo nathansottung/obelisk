@@ -4,8 +4,6 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -53,8 +51,7 @@ func TestJob_DeferredSaveIsWrittenBeforeCompleted(t *testing.T) {
 	if j.Status != "COMPLETED" {
 		t.Fatalf("job %q: %s", j.Status, j.Label)
 	}
-	b, err := os.ReadFile(filepath.Join(app.DataDir, "catalog.json"))
-	if err != nil || !strings.Contains(string(b), `"VERIFIED"`) {
+	if !strings.Contains(persistedCatalogText(t, app.DataDir), `"VERIFIED"`) {
 		t.Error("the job reported COMPLETED before its catalog change was written")
 	}
 }

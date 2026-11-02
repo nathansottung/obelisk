@@ -14,7 +14,7 @@ import (
 func newSetupApp(t *testing.T) *App {
 	t.Helper()
 	dir := t.TempDir()
-	store, err := OpenStore(dir)
+	store, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestSetupState_RoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Fresh app over the same data dir = a reload.
-	store, err := OpenStore(app.DataDir)
+	store, err := openTestStore(t, app.DataDir)
 	if err != nil {
 		t.Fatal(err)
 	}

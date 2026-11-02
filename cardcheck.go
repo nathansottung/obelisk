@@ -72,7 +72,7 @@ type CardCheckResult struct {
 
 // knownContent builds an index from every content hash the catalog knows (SHA-256 AND
 // BLAKE3) to a few human labels of where it lives — the whole inventory, in one map.
-func (a *App) knownContent() map[string][]string {
+func (a *App) knownContent() (map[string][]string, error) {
 	idx := map[string][]string{}
 	add := func(hash, loc string) {
 		if hash == "" {
@@ -104,7 +104,10 @@ func (a *App) knownContent() map[string][]string {
 	// Archives — current files and their retained prior versions.
 	for _, coll := range a.Store.Collections() {
 		loc := "Archive: " + coll.Name
-		for _, f := range a.Store.FilesOf(coll.ID) {
+		for f, err := range a.Store.FilesOf(coll.ID) {
+			if err != nil {
+				return nil, err
+			}
 			add(f.Hash, loc)
 			add(f.Blake3, loc)
 			for _, v := range f.Versions {
@@ -157,7 +160,7 @@ func (a *App) knownContent() map[string][]string {
 			add(sf.Blake3, loc)
 		}
 	}
-	return idx
+	return idx, nil
 }
 
 // cardSkipDir hides OS bookkeeping and the tool's own sidecars from a card walk.
@@ -180,7 +183,10 @@ func (a *App) CardCheck(mountPath string, progress func(float64, string)) (*Card
 		return nil, fmt.Errorf("not a readable folder/drive: %s", mountPath)
 	}
 	progress(0.01, "reading inventory")
-	idx := a.knownContent()
+	idx, err := a.knownContent()
+	if err != nil {
+		return nil, err
+	}
 
 	res := &CardCheckResult{MountPath: mountPath}
 	var mu sync.Mutex

@@ -14,7 +14,7 @@ import (
 func newHomeApp(t *testing.T) *App {
 	t.Helper()
 	dir := t.TempDir()
-	store, err := OpenStore(dir)
+	store, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}

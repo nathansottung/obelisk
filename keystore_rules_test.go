@@ -44,6 +44,7 @@ func TestKeystores_RefuseDuplicatesAliasesAndOneDevice(t *testing.T) {
 // restored set would share a device, the current keystore paths are kept and
 // the restore says where the restored files are.
 func TestRestoreAppBackup_DoesNotCollapseKeystores(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	app, dataDir := compatApp(t)
 	k1 := filepath.Join(t.TempDir(), "k1.json")
 	k2 := filepath.Join(t.TempDir(), "k2.json")
@@ -112,6 +113,7 @@ var errUnpluggedForTest = fmt.Errorf("%w for the test keystore", errNoExistingPa
 // two existing keystores on one device are refused when saved, reported in
 // the keystore status, and not adopted by a repeated restore.
 func TestKeystores_ExistingFilesOnOneDeviceAreRefused(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	withRealKeystoreDevices(t)
 	app, dataDir := compatApp(t)
 	a := filepath.Join(t.TempDir(), "k1.json")

@@ -9,7 +9,7 @@ import (
 func removalApp(t *testing.T) *App {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := OpenStore(dir)
+	st, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestRemoveEmptyArchive(t *testing.T) {
 	a := removalApp(t)
 	c := a.Store.AddCollection("Scratch")
 	fo := a.Store.AddFolder(c.ID, "/src")
-	a.Store.UpsertFile(File{CollectionID: c.ID, FolderID: fo.ID, RelPath: "a.txt", SizeBytes: 10, HashAlg: "SHA256", Hash: "h1"})
+	a.Store.UpsertFile(File{CollectionID: c.ID, FolderID: fo.ID, RelPath: "a.txt", SizeBytes: 10, HashAlg: "SHA256", Hash: testHash("h1")})
 
 	if _, err := a.RemoveArchive(c.ID, "wrong name", ""); err == nil {
 		t.Fatal("typed-name guard should refuse a mismatched name")
@@ -71,7 +71,7 @@ func TestRemoveEmptyArchive(t *testing.T) {
 	if a.Store.Collection(c.ID) != nil {
 		t.Fatal("collection should be gone")
 	}
-	if len(a.Store.FilesOf(c.ID)) != 0 {
+	if len(testFiles(t, a.Store.FilesOf(c.ID))) != 0 {
 		t.Fatal("file records should be gone")
 	}
 	// Name is reusable (a fresh archive gets a new id, monotonic).
@@ -88,10 +88,10 @@ func TestRemoveGuardedKeepsVolumes(t *testing.T) {
 	a := removalApp(t)
 	c := a.Store.AddCollection("Client Work")
 	fo := a.Store.AddFolder(c.ID, "/src")
-	a.Store.UpsertFile(File{CollectionID: c.ID, FolderID: fo.ID, RelPath: "a.nef", SizeBytes: 100, HashAlg: "SHA256", Hash: "hh"})
+	a.Store.UpsertFile(File{CollectionID: c.ID, FolderID: fo.ID, RelPath: "a.nef", SizeBytes: 100, HashAlg: "SHA256", Hash: testHash("hh")})
 	vol := a.Store.AddVolume(Volume{Label: "TAPE-01", Kind: "TAPE", Serial: "S1"})
 	ch := a.Store.AddChunk(Chunk{Name: "PKG-1", Status: "VERIFIED", CollectionID: c.ID, MediaKind: "TAPE",
-		FileCount: 1, Files: []ChunkFileRef{{FileID: 1, RelPath: "a.nef", SizeBytes: 100, Hash: "hh"}}})
+		FileCount: 1, Files: []ChunkFileRef{{FileID: 1, RelPath: "a.nef", SizeBytes: 100, Hash: testHash("hh")}}})
 	a.Store.RecordCopy(ch, vol.ID, "T:/PKG-1", true)
 
 	if _, err := a.RemoveArchive(c.ID, "Client Work", ""); err == nil {
@@ -143,7 +143,7 @@ func TestRemoveGuardedKeepsVolumes(t *testing.T) {
 	}
 
 	// Reload from disk: the removal persisted, and the kept records reload cleanly.
-	st2, err := OpenStore(a.DataDir)
+	st2, err := openTestStore(t, a.DataDir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

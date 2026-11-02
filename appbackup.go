@@ -622,8 +622,11 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 		ScanFilesSkipped: sortedKeys(skipScans),
 		SchemaVersion:    man.SchemaVersion, AppVersion: man.AppVersion, Created: man.Created,
 		IncludedKeys: man.IncludesKeys, PreRestoreDir: preDir, HeldSettings: held, KeystoreNote: keystoreNote,
-		Archives: len(ns.Collections()), Files: len(ns.AllFiles()),
-		Volumes: len(ns.Volumes()), Jobs: len(ns.Jobs()),
+		Archives: len(ns.Collections()), Volumes: len(ns.Volumes()), Jobs: len(ns.Jobs()),
+	}
+	var ferr error
+	if res.Files, _, ferr = ns.FileStats(0); ferr != nil {
+		return res, ferr
 	}
 	for _, c := range ns.Collections() {
 		chunks := ns.Chunks(c.ID)

@@ -310,6 +310,7 @@ func faultyReadAt(t *testing.T, catPath string, b []byte, err error) func(string
 // fire at all, so it has its own control in TestPersistObserver_SeesBackupPrune below.
 // Between the two, every operation the observer claims to cover is demonstrated wired.
 func TestPersistObserver_SeesRealMutations(t *testing.T) {
+	jsonEngineOnly(t, "the database's own open, fault and retry tests are in catalogdb_open_test.go")
 	// Catalog write plus daily backup, on a fresh directory.
 	dir := t.TempDir()
 	spy := &persistSpy{}
@@ -410,6 +411,7 @@ func backupSidecars(t *testing.T, dir string) []string {
 //     hard-coded, so a midnight rollover between fixture and mutation (which would add
 //     one backup-create) changes the arithmetic without breaking the test.
 func TestPersistObserver_SeesBackupPrune(t *testing.T) {
+	jsonEngineOnly(t, "the database's own open, fault and retry tests are in catalogdb_open_test.go")
 	dir, _, spy := seedRealCatalog(t)
 
 	// Synthetic sidecars, disposable and distinguishable. Far-past dates so they sort
@@ -494,6 +496,7 @@ func containsString(list []string, want string) bool {
 // usable Store, an error that preserves the cause, zero attempted authority writes, and
 // byte-identical catalog and backup state.
 func TestOpenStore_UnreadableCatalogFailsClosed(t *testing.T) {
+	jsonEngineOnly(t, "the database's own open, fault and retry tests are in catalogdb_open_test.go")
 	cases := []struct {
 		name    string
 		bytes   []byte
@@ -573,6 +576,7 @@ func TestOpenStore_UnreadableCatalogFailsClosed(t *testing.T) {
 // `existed = len(b) > 0` shut so the latent hazard cannot be reintroduced by a later
 // refactor that moves the parse.
 func TestOpenStore_ZeroLengthCatalogIsDamagedNotNew(t *testing.T) {
+	jsonEngineOnly(t, "the database's own open, fault and retry tests are in catalogdb_open_test.go")
 	dir, _, spy := seedRealCatalog(t)
 	catPath := filepath.Join(dir, "catalog.json")
 
@@ -645,6 +649,7 @@ func TestOpenStore_InvalidJSONStillFailsWithDamagedMessage(t *testing.T) {
 // OPEN, read-only — refusing it outright would be a regression of
 // TestCatalogNewerSchemaIsReadOnly and would lock an operator out of viewing their data.
 func TestOpenStore_NewerSchemaStillOpensReadOnly(t *testing.T) {
+	jsonEngineOnly(t, "the database's own open, fault and retry tests are in catalogdb_open_test.go")
 	dir := t.TempDir()
 	catPath := filepath.Join(dir, "catalog.json")
 	newer := []byte(`{"schema_version":999,"collections":[{"id":1,"name":"Future"}]}`)
@@ -678,6 +683,7 @@ func TestOpenStore_NewerSchemaStillOpensReadOnly(t *testing.T) {
 // absent case is the one branch that may still create a catalog, and it must behave
 // exactly as before.
 func TestOpenStore_FreshDirectoryStillInitializes(t *testing.T) {
+	jsonEngineOnly(t, "the database's own open, fault and retry tests are in catalogdb_open_test.go")
 	dir := t.TempDir()
 	st, err := openStore(dir, os.ReadFile, nil)
 	if err != nil {
@@ -694,7 +700,7 @@ func TestOpenStore_FreshDirectoryStillInitializes(t *testing.T) {
 	}
 	// The exported entry point must behave identically.
 	dir2 := t.TempDir()
-	if _, err := OpenStore(dir2); err != nil {
+	if _, err := openTestStore(t, dir2); err != nil {
 		t.Errorf("OpenStore must still initialize a fresh directory: %v", err)
 	}
 }
@@ -703,6 +709,7 @@ func TestOpenStore_FreshDirectoryStillInitializes(t *testing.T) {
 // errors.Is rather than an exact type, so a wrapped or PathError-shaped not-found is
 // still recognized as "absent" and not mistaken for an unreadable catalog.
 func TestOpenStore_NotExistShapesAllInitialize(t *testing.T) {
+	jsonEngineOnly(t, "the database's own open, fault and retry tests are in catalogdb_open_test.go")
 	shapes := map[string]error{
 		"bare sentinel": fs.ErrNotExist,
 		"PathError":     &fs.PathError{Op: "open", Path: "catalog.json", Err: fs.ErrNotExist},
@@ -727,6 +734,7 @@ func TestOpenStore_NotExistShapesAllInitialize(t *testing.T) {
 // existing catalog opens, keeps its contents and ids, and is not rewritten by the act of
 // opening it.
 func TestOpenStore_ExistingCatalogReopensIntact(t *testing.T) {
+	jsonEngineOnly(t, "the database's own open, fault and retry tests are in catalogdb_open_test.go")
 	dir, collID, _ := seedRealCatalog(t)
 	before := snapshotFixture(t, dir)
 

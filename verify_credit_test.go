@@ -70,7 +70,7 @@ func TestVerify_SamePathOnTwoDrivesIsNotDoubleCredited(t *testing.T) {
 // A check is credited to the copy whose drive's recorded serial matches the drive
 // read, and to none when it cannot tell which of two drives it read.
 func TestCreditCopyCheck_Serial(t *testing.T) {
-	st, err := OpenStore(t.TempDir())
+	st, err := openTestStore(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

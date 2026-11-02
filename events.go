@@ -60,7 +60,7 @@ type ProposedEvent struct {
 // ClusterEvents groups a collection's dated files into capture-date bursts and
 // proposes an Event per burst. minFiles/spanDays default when ≤0. Files without an
 // EXIF ShotAt cannot be clustered (there is no date to cluster on) and are skipped.
-func (a *App) ClusterEvents(collectionID, minFiles, spanDays int) []ProposedEvent {
+func (a *App) ClusterEvents(collectionID, minFiles, spanDays int) ([]ProposedEvent, error) {
 	if minFiles <= 0 {
 		minFiles = defaultClusterMinFiles
 	}
@@ -70,7 +70,10 @@ func (a *App) ClusterEvents(collectionID, minFiles, spanDays int) []ProposedEven
 	span := time.Duration(spanDays) * 24 * time.Hour
 
 	dated := []*File{}
-	for _, f := range a.Store.FilesOf(collectionID) {
+	for f, err := range a.Store.FilesOf(collectionID) {
+		if err != nil {
+			return nil, err
+		}
 		if !f.ShotAt.IsZero() && f.EventID == 0 {
 			dated = append(dated, f)
 		}
@@ -101,7 +104,7 @@ func (a *App) ClusterEvents(collectionID, minFiles, spanDays int) []ProposedEven
 		run = append(run, f)
 	}
 	flush(run)
-	return out
+	return out, nil
 }
 
 // proposeFromRun builds a ProposedEvent from a burst of files: name from the most
@@ -139,14 +142,17 @@ type SuggestGroup struct {
 // SuggestForEvent finds still-unassigned files whose EXIF capture date falls in an
 // Event's range and returns them grouped by folder — the Event acting as a magnet.
 // Harvested Events (a date range, no members yet) thus adopt matching strays.
-func (a *App) SuggestForEvent(eventID int) []SuggestGroup {
+func (a *App) SuggestForEvent(eventID int) ([]SuggestGroup, error) {
 	ev := a.Store.Event(eventID)
 	if ev == nil || ev.CaptureStart.IsZero() || ev.CaptureEnd.IsZero() {
-		return nil
+		return nil, nil
 	}
 	lo, hi := ev.CaptureStart, ev.CaptureEnd
 	byFolder := map[string]*SuggestGroup{}
-	for _, f := range a.Store.AllFiles() {
+	for f, err := range a.Store.AllFiles() {
+		if err != nil {
+			return nil, err
+		}
 		if f.EventID != 0 || f.ShotAt.IsZero() {
 			continue
 		}
@@ -179,7 +185,7 @@ func (a *App) SuggestForEvent(eventID int) []SuggestGroup {
 		}
 		return out[i].FolderHint < out[j].FolderHint
 	})
-	return out
+	return out, nil
 }
 
 // eventVocabulary returns the UNION of every template's category vocabulary (deduped,
@@ -265,7 +271,7 @@ type EventRollup struct {
 // EventRollups computes the protection rollup for every event (optionally scoped to
 // a collection). It reuses the six-status per-file model, aggregated by EventID —
 // a new grouping axis parallel to the folder tree. One lock; O(files + chunks).
-func (s *Store) EventRollups(collectionID int) []EventRollup {
+func (s *Store) EventRollups(collectionID int) ([]EventRollup, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -306,12 +312,12 @@ func (s *Store) EventRollups(collectionID int) []EventRollup {
 		example map[string]string
 	}
 	byEvent := map[int]*agg{}
-	for _, f := range s.c.Files {
+	if err := s.eachFileLocked(fileQuery{InEvent: true, CollectionID: collectionID}, func(f *File) error {
 		if f.EventID == 0 {
-			continue
+			return nil
 		}
 		if collectionID != 0 && f.CollectionID != collectionID {
-			continue
+			return nil
 		}
 		st, detail, _ := s.fileProtectionLocked(f, fileCopies, folderPath)
 		a := byEvent[f.EventID]
@@ -325,6 +331,9 @@ func (s *Store) EventRollups(collectionID int) []EventRollup {
 		if _, ok := a.example[st]; !ok {
 			a.example[st] = detail
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	out := []EventRollup{}
@@ -350,5 +359,5 @@ func (s *Store) EventRollups(collectionID int) []EventRollup {
 		}
 		return out[i].Name < out[j].Name
 	})
-	return out
+	return out, nil
 }

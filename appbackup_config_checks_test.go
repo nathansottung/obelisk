@@ -14,6 +14,7 @@ import (
 // source (in the catalog it restores, or the one in use) is refused before
 // anything is restored.
 func TestRestoreAppBackup_RerunsSaveTimeConfigChecks(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	for _, key := range []string{"staging_dir", "auto_export_dir", "escrow_cache_dir"} {
 		t.Run(key, func(t *testing.T) {
 			app, dataDir := compatApp(t)

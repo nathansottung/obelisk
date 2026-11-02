@@ -12,6 +12,7 @@ import (
 // goes in as scans/<name>, and a restore puts them back so the scans load. The
 // pre-restore copy holds the scans that were there before.
 func TestAppBackup_CarriesScanHistory(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	src := dockApp(t)
 	drive := t.TempDir()
 	writeTree(t, drive, map[string]string{"a.txt": "alpha\n"})
@@ -50,6 +51,7 @@ func TestAppBackup_CarriesScanHistory(t *testing.T) {
 // leaves it out (and says so), and a restore that meets one skips it and
 // restores everything else.
 func TestAppBackup_DamagedScanFileIsLeftOut(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	src := dockApp(t)
 	drive := t.TempDir()
 	writeTree(t, drive, map[string]string{"a.txt": "alpha\n"})

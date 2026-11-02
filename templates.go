@@ -133,17 +133,21 @@ type RoutePreview struct {
 // compile while unresolved true conflicts exist in scope, and auto-disambiguates
 // two files that would land on one destination so keep-both/second-shooter files
 // compile to two distinct placements rather than a naming collision.
-func (a *App) RoutePreview(t *Template, collectionID int) RoutePreview {
+func (a *App) RoutePreview(t *Template, collectionID int) (RoutePreview, error) {
 	reg := a.formatRegistry()
 	events := map[int]*Event{}
 	for _, e := range a.Store.Events(0) {
 		events[e.ID] = e
 	}
 	var files []*File
+	var err error
 	if collectionID == 0 {
-		files = a.Store.AllFiles()
+		files, err = collectFiles(a.Store.AllFiles())
 	} else {
-		files = a.Store.FilesOf(collectionID)
+		files, err = collectFiles(a.Store.FilesOf(collectionID))
+	}
+	if err != nil {
+		return RoutePreview{}, err
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].RelPath < files[j].RelPath })
 
@@ -210,7 +214,7 @@ func (a *App) RoutePreview(t *Template, collectionID int) RoutePreview {
 			res.Examples = append(res.Examples, RoutePlacement{FileID: p.fid, Src: p.src, Dest: p.dest, Role: p.role})
 		}
 	}
-	return res
+	return res, nil
 }
 
 // disambiguateDest appends a suffix before the file extension: a/b/DSC1.jpg +

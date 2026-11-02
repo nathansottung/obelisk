@@ -16,7 +16,7 @@ import (
 // fault-injection seam on Store (nil in production, consulted in writeCatalog).
 func TestWriteCatalog_SaveFailurePropagates(t *testing.T) {
 	dir := t.TempDir()
-	st, err := OpenStore(dir)
+	st, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -30,7 +30,7 @@ func TestWriteCatalog_SaveFailurePropagates(t *testing.T) {
 
 	// The failed write must not have persisted the removal: a fresh open still sees it.
 	st.failSave = nil
-	st2, err := OpenStore(dir)
+	st2, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestOpenStore_RecoverySaveFailureIsNonFatal(t *testing.T) {
 	defer func() { openStoreFailSave = nil }()
 
 	dir := t.TempDir()
-	st, err := OpenStore(dir)
+	st, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatalf("recovery-save failure must be non-fatal: OpenStore returned error %v", err)
 	}
@@ -69,7 +69,7 @@ func TestOpenStore_RecoverySaveFailureIsNonFatal(t *testing.T) {
 	st.failSave = nil
 	openStoreFailSave = nil
 	c := st.AddCollection("Post-recovery")
-	st2, err := OpenStore(dir)
+	st2, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

@@ -68,6 +68,11 @@ CREATE TABLE file(
 -- Not unique: a sourceless archive's union of drives (folder 0) keeps two files
 -- at one path when their bytes differ.
 CREATE INDEX file_path ON file(collection_id, folder_id, rel_path);
+-- An archive's files by path, and every file in catalog order: the pages the
+-- store's file iterators read.
+CREATE INDEX file_collection_path ON file(collection_id, rel_path, ord);
+CREATE INDEX file_ord ON file(ord);
+CREATE INDEX file_collection_ord ON file(collection_id, ord);
 CREATE INDEX file_sha256 ON file(sha256);
 CREATE INDEX file_blake3 ON file(blake3);
 CREATE INDEX file_event ON file(event_id) WHERE event_id <> 0;
@@ -114,6 +119,7 @@ CREATE INDEX chunk_file_sha256 ON chunk_file(sha256) WHERE sha256 IS NOT NULL;
 -- from, not the file's new ones. The shared values are written into the listing
 -- first (an empty hash as a zero-length BLOB, which is not NULL).
 CREATE TRIGGER file_update_keeps_listings BEFORE UPDATE OF rel_path, size_bytes, sha256 ON file
+WHEN OLD.rel_path IS NOT NEW.rel_path OR OLD.size_bytes IS NOT NEW.size_bytes OR OLD.sha256 IS NOT NEW.sha256
 BEGIN
 	UPDATE chunk_file SET rel_path = coalesce(rel_path, OLD.rel_path),
 		size_bytes = coalesce(size_bytes, OLD.size_bytes),

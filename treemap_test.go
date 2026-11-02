@@ -9,7 +9,7 @@ import (
 
 func tmApp(t *testing.T) *App {
 	t.Helper()
-	st, err := OpenStore(t.TempDir())
+	st, err := openTestStore(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestTreemapLevelsAndSizes(t *testing.T) {
 	coll := a.Store.AddCollection("Photos")
 	fo := a.Store.AddFolder(coll.ID, "/src")
 	add := func(rel string, size int64) {
-		a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: rel, SizeBytes: size, HashAlg: "SHA256", Hash: rel})
+		a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: rel, SizeBytes: size, HashAlg: "SHA256", Hash: testHash(rel)})
 	}
 	add("trip/a.nef", 100)
 	add("trip/b.nef", 50)
@@ -39,7 +39,7 @@ func TestTreemapLevelsAndSizes(t *testing.T) {
 	add("docs/readme.txt", 5)
 
 	// Archive root → the scanned folder is the sole child, carrying all bytes.
-	root := a.Store.Treemap(coll.ID, "", "")
+	root := noErr[TreemapResult](t)(a.Store.Treemap(coll.ID, "", ""))
 	if root.Size != 180 || root.Files != 4 {
 		t.Fatalf("root totals wrong: %d bytes / %d files", root.Size, root.Files)
 	}
@@ -52,7 +52,7 @@ func TestTreemapLevelsAndSizes(t *testing.T) {
 	}
 
 	// Zoom into /src → trip (dir, 175) and docs (dir, 5).
-	lvl := a.Store.Treemap(coll.ID, src.Path, "")
+	lvl := noErr[TreemapResult](t)(a.Store.Treemap(coll.ID, src.Path, ""))
 	trip := childByName(lvl, "trip")
 	docs := childByName(lvl, "docs")
 	if trip == nil || trip.Size != 175 || !trip.IsDir {
@@ -66,7 +66,7 @@ func TestTreemapLevelsAndSizes(t *testing.T) {
 	}
 
 	// Zoom into trip → files a.nef(100), b.nef(50) and the subdir raw(25).
-	tl := a.Store.Treemap(coll.ID, trip.Path, "")
+	tl := noErr[TreemapResult](t)(a.Store.Treemap(coll.ID, trip.Path, ""))
 	af := childByName(tl, "a.nef")
 	raw := childByName(tl, "raw")
 	if af == nil || af.IsDir || af.Size != 100 {
@@ -82,14 +82,14 @@ func TestTreemapWorstStatusRollupAndDrift(t *testing.T) {
 	coll := a.Store.AddCollection("D")
 	fo := a.Store.AddFolder(coll.ID, "/src")
 	add := func(rel string, size int64) {
-		a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: rel, SizeBytes: size, HashAlg: "SHA256", Hash: rel})
+		a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: rel, SizeBytes: size, HashAlg: "SHA256", Hash: testHash(rel)})
 	}
 	add("trip/a.nef", 100) // MODIFIED
 	add("trip/b.nef", 100) // UNCHANGED (not in report)
 	add("docs/x.txt", 10)  // MISSING
 
 	// No report yet → drift requested but unavailable, falls back to protection.
-	pre := a.Store.Treemap(coll.ID, "", "drift")
+	pre := noErr[TreemapResult](t)(a.Store.Treemap(coll.ID, "", "drift"))
 	if pre.DriftAvailable || pre.ColorBy != "protection" {
 		t.Fatalf("with no report, drift must be unavailable & fall back to protection: %+v", pre.ColorBy)
 	}
@@ -100,7 +100,7 @@ func TestTreemapWorstStatusRollupAndDrift(t *testing.T) {
 			{State: "MISSING", Path: "docs/x.txt"},
 		}})
 
-	res := a.Store.Treemap(coll.ID, "/src", "drift")
+	res := noErr[TreemapResult](t)(a.Store.Treemap(coll.ID, "/src", "drift"))
 	if !res.DriftAvailable || res.ColorBy != "drift" {
 		t.Fatalf("drift should now be available and active: %+v", res)
 	}
@@ -125,12 +125,12 @@ func TestTreemapFoldsSmallChildren(t *testing.T) {
 	coll := a.Store.AddCollection("Big")
 	fo := a.Store.AddFolder(coll.ID, "/src")
 	// One dominant folder + many tiny sibling folders that must fold into "other".
-	a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: "big/whale.bin", SizeBytes: 10_000_000, HashAlg: "SHA256", Hash: "whale"})
+	a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: "big/whale.bin", SizeBytes: 10_000_000, HashAlg: "SHA256", Hash: testHash("whale")})
 	for i := 0; i < 500; i++ {
 		rel := fmt.Sprintf("tiny%03d/f.txt", i)
-		a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: rel, SizeBytes: 10, HashAlg: "SHA256", Hash: rel})
+		a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: rel, SizeBytes: 10, HashAlg: "SHA256", Hash: testHash(rel)})
 	}
-	res := a.Store.Treemap(coll.ID, "/src", "")
+	res := noErr[TreemapResult](t)(a.Store.Treemap(coll.ID, "/src", ""))
 	if len(res.Children) > treemapMaxChildren+1 {
 		t.Fatalf("level should be folded to <= %d + other, got %d", treemapMaxChildren, len(res.Children))
 	}

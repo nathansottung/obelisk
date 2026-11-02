@@ -343,11 +343,7 @@ func TestDestChoice_SavedImmediatelyDuringBatch(t *testing.T) {
 	if _, err := app.Store.ChooseUseAnyway(folder, c.Fingerprint, destUseAnywayWord); err != nil {
 		t.Fatal(err)
 	}
-	b, err := os.ReadFile(filepath.Join(app.DataDir, "catalog.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(b), `"destination_choices"`) {
+	if len(persistedCatalog(t, app.DataDir).DestinationChoices) == 0 {
 		t.Fatal("the choice was not written to disk")
 	}
 }

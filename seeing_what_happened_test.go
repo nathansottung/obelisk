@@ -34,7 +34,7 @@ type swhHarness struct {
 func newSWH(t *testing.T) *swhHarness {
 	t.Helper()
 	dataDir := t.TempDir()
-	store, err := OpenStore(dataDir)
+	store, err := openTestStore(t, dataDir)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestSeeingWhatHappened_ScanArtifactsAndValidation(t *testing.T) {
 	}
 
 	// (2) Before any copy is verified, every file is HASHED (neutral), none VERIFIED.
-	pre := h.app.Store.Treemap(cid, "", "validation")
+	pre := noErr[TreemapResult](t)(h.app.Store.Treemap(cid, "", "validation"))
 	if pre.ColorBy != "validation" {
 		t.Fatalf("treemap color_by = %q, want validation", pre.ColorBy)
 	}
@@ -162,7 +162,7 @@ func TestSeeingWhatHappened_ScanArtifactsAndValidation(t *testing.T) {
 	}
 
 	// Give the files a verified copy: a package covering them, on a volume, verified OK.
-	files := h.app.Store.FilesOf(cid)
+	files := testFiles(t, h.app.Store.FilesOf(cid))
 	if len(files) != 3 {
 		t.Fatalf("expected 3 cataloged files, got %d", len(files))
 	}
@@ -178,7 +178,7 @@ func TestSeeingWhatHappened_ScanArtifactsAndValidation(t *testing.T) {
 	h.app.Store.RecordCopy(ch, vol.ID, "H:/SWH-PKG", true)
 
 	// (3) Now the same files color VERIFIED (green), matching the catalog verify state.
-	post := h.app.Store.Treemap(cid, "", "validation")
+	post := noErr[TreemapResult](t)(h.app.Store.Treemap(cid, "", "validation"))
 	if post.StatusBytes["VERIFIED"] <= 0 {
 		t.Errorf("post-verify: expected VERIFIED bytes > 0, got %v", post.StatusBytes)
 	}
@@ -187,7 +187,7 @@ func TestSeeingWhatHappened_ScanArtifactsAndValidation(t *testing.T) {
 	}
 
 	// (4) Persistence: reopening the store recovers the scan job + its artifacts.
-	store2, err := OpenStore(h.dataDir)
+	store2, err := openTestStore(t, h.dataDir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestSeeingWhatHappened_ScanArtifactsAndValidation(t *testing.T) {
 // silently completed).
 func TestSeeingWhatHappened_InterruptedReconcile(t *testing.T) {
 	dir := t.TempDir()
-	s1, err := OpenStore(dir)
+	s1, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestSeeingWhatHappened_InterruptedReconcile(t *testing.T) {
 		t.Fatalf("AppendJobArtifact: %v", err)
 	}
 
-	s2, err := OpenStore(dir)
+	s2, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

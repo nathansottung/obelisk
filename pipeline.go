@@ -683,7 +683,10 @@ func (a *App) Plan(collectionID int, mediaKind string, targetGB float64, par2 in
 	if coll == nil {
 		return nil, fmt.Errorf("archive %d not found", collectionID)
 	}
-	files := a.Store.FilesOf(collectionID)
+	files, err := collectFiles(a.Store.FilesOf(collectionID))
+	if err != nil {
+		return nil, err
+	}
 	if len(files) == 0 {
 		return nil, fmt.Errorf("archive has no cataloged files — scan a folder first")
 	}

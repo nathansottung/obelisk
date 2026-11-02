@@ -30,8 +30,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -312,7 +310,7 @@ func TestDurableCompletion_I_LaterSuccessfulWriteRecords(t *testing.T) {
 	}
 
 	// (F) Restart reconstructs exactly what is in that file.
-	store2, err := OpenStore(app.DataDir)
+	store2, err := openTestStore(t, app.DataDir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -380,7 +378,7 @@ func TestDurableCompletion_I_RestartWithoutRecoveryPublication(t *testing.T) {
 	id := finishUnrecorded(t, app, "Scan A")
 
 	// Deliberately no further jobs write of any kind before the reopen.
-	store2, err := OpenStore(app.DataDir)
+	store2, err := openTestStore(t, app.DataDir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -447,7 +445,7 @@ func TestDurableCompletion_J_CombinedFailureStaysObservable(t *testing.T) {
 	// otherwise. Read it back from a genuine reopen rather than from memory.
 	app.Store.failSaveJobs = nil
 	app.Store.failSave = nil
-	store2, err := OpenStore(app.DataDir)
+	store2, err := openTestStore(t, app.DataDir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -482,17 +480,7 @@ func TestDurableCompletion_J_UnrecordedSurvivesAConcurrentBatch(t *testing.T) {
 	}
 	// The audit entry was appended in memory and coalesced into the open batch, so it
 	// is not in the file yet. Assert the file, not the in-memory slice.
-	b, rerr := os.ReadFile(filepath.Join(app.DataDir, "catalog.json"))
-	if rerr != nil {
-		t.Fatalf("read catalog.json: %v", rerr)
-	}
-	var cat struct {
-		Audit []Audit `json:"audit"`
-	}
-	if err := json.Unmarshal(b, &cat); err != nil {
-		t.Fatalf("parse catalog.json: %v", err)
-	}
-	for _, a := range cat.Audit {
+	for _, a := range persistedCatalog(t, app.DataDir).Audit {
 		if a.Action == "job-unrecorded" {
 			t.Error("with a batch open the audit save coalesces; an entry in the file here would mean the comment is wrong about which is which")
 		}

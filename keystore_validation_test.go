@@ -26,7 +26,7 @@ type kvFixture struct {
 func newKV(t *testing.T, records ...[]map[string]any) kvFixture {
 	t.Helper()
 	data := t.TempDir()
-	st, err := OpenStore(data)
+	st, err := openTestStore(t, data)
 	if err != nil {
 		t.Fatal(err)
 	}

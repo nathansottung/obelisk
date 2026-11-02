@@ -187,7 +187,7 @@ func TestConfigInitCLI_Lifecycle(t *testing.T) {
 	if _, e := os.Stat(cfgPath); e != nil {
 		t.Fatal("first use did not initialize")
 	}
-	if _, e := os.Stat(filepath.Join(fresh, "catalog.json")); e != nil {
+	if _, e := os.Stat(filepath.Join(fresh, catalogFileName())); e != nil {
 		t.Fatal("first use did not reach catalog startup")
 	}
 	before := configSnapshot(t, fresh)
@@ -234,7 +234,7 @@ func TestConfigInitCLI_Lifecycle(t *testing.T) {
 	if os.Mkdir(existing, 0700) != nil {
 		t.Fatal("fixture failed")
 	}
-	if _, e := OpenStore(existing); e != nil {
+	if _, e := openTestStore(t, existing); e != nil {
 		t.Fatal("catalog fixture failed")
 	}
 	if os.WriteFile(filepath.Join(existing, "synthetic-keystore.json"), []byte(`{"obelisk_keystore":1,"keys":[]}`), 0600) != nil {

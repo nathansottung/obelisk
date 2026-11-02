@@ -141,7 +141,7 @@ func TestJobRestoreMembers_RefusalBeforePublication(t *testing.T) {
 			if err != nil || next.ID != j.ID+1 {
 				t.Fatal("incoming refusal disabled valid original store")
 			}
-			reopened, err := OpenStore(a.DataDir)
+			reopened, err := openTestStore(t, a.DataDir)
 			if err != nil || reopened.Job(70) != nil || reopened.Job(j.ID) == nil || reopened.Job(next.ID) == nil {
 				t.Fatal("later save persisted rejected state")
 			}
@@ -179,6 +179,7 @@ func TestJobRestoreMembers_PreservesExistingRefusal(t *testing.T) {
 }
 
 func TestJobRestoreMembers_NestedKeystoreIsNotJobBoard(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	a := abTestApp(t)
 	if _, err := a.Store.NewJob("fixture", "original"); err != nil {
 		t.Fatal(err)

@@ -340,7 +340,10 @@ func runGUICatalog(args []string, input io.Reader, output io.Writer) error {
 			// Enumerate every validated stored file, including retired collections.
 			// This is deliberately independent of Search's filters and result limit.
 			all := []string{}
-			for _, f := range s.store.c.Files {
+			for f, ferr := range s.store.AllFiles() {
+				if ferr != nil {
+					return ferr
+				}
 				all = append(all, strconv.Itoa(f.ID))
 			}
 			if err = enc.Encode(map[string]any{"ok": true, "ids": all, "complete": true, "count": len(all), "digest": s.digest}); err != nil {
@@ -359,7 +362,10 @@ func runGUICatalog(args []string, input io.Reader, output io.Writer) error {
 			for _, c := range s.store.c.Collections {
 				retired[c.ID] = c.Retired
 			}
-			for _, f := range s.store.c.Files {
+			for f, ferr := range s.store.AllFiles() {
+				if ferr != nil {
+					return ferr
+				}
 				if !retired[f.CollectionID] && f.RelPath == *q.Exact {
 					ids = append(ids, strconv.Itoa(f.ID))
 				}
@@ -369,7 +375,11 @@ func runGUICatalog(args []string, input io.Reader, output io.Writer) error {
 			}
 			continue
 		}
-		for _, r := range s.store.Search(SearchQuery{Text: q.Text, Hash: q.Hash, Limit: 1000}) {
+		found, err := s.store.Search(SearchQuery{Text: q.Text, Hash: q.Hash, Limit: 1000})
+		if err != nil {
+			return err
+		}
+		for _, r := range found {
 			ids = append(ids, strconv.Itoa(r["file_id"].(int)))
 		}
 		if err = enc.Encode(map[string]any{"ok": true, "ids": ids}); err != nil {

@@ -82,14 +82,14 @@ func TestSourcelessArchiveUnionAndLocations(t *testing.T) {
 	}
 
 	// The union IS the truth: 3 distinct files.
-	if n := st.CollectionFileCount(arch.ID); n != 3 {
+	if n, _, _ := st.FileStats(arch.ID); n != 3 {
 		t.Fatalf("union should be 3 distinct files, got %d", n)
 	}
 
 	// Find the shared file's ID (the File whose hash matches "SHARED-CONTENT").
 	sharedHash := sha256Of("SHARED-CONTENT")
 	sharedID := 0
-	for _, f := range st.FilesOf(arch.ID) {
+	for _, f := range testFiles(t, st.FilesOf(arch.ID)) {
 		if f.Hash == sharedHash {
 			sharedID = f.ID
 		}
@@ -117,7 +117,7 @@ func TestSourcelessArchiveUnionAndLocations(t *testing.T) {
 
 	// A unique file lives on one drive only → 1 copy, 1 location, not offsite-covered
 	// unless it happens to be on the offsite drive.
-	for _, f := range st.FilesOf(arch.ID) {
+	for _, f := range testFiles(t, st.FilesOf(arch.ID)) {
 		if f.Hash == sha256Of("ONLY-ON-A") {
 			d := dims[f.ID]
 			if d.copies != 1 || d.locations != 1 || d.offsite != 0 {

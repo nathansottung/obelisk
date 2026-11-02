@@ -14,7 +14,7 @@ import (
 func TestCreditCopyCheck_FailureClearsCreditAtAnyLevel(t *testing.T) {
 	for _, level := range []string{VerifyA, VerifyB, VerifyC} {
 		t.Run(level, func(t *testing.T) {
-			st, err := OpenStore(t.TempDir())
+			st, err := openTestStore(t, t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -36,7 +36,7 @@ func TestCreditCopyCheck_FailureClearsCreditAtAnyLevel(t *testing.T) {
 
 // A passing advisory check never grants credit to a copy that does not have it.
 func TestCreditCopyCheck_AdvisoryPassGrantsNothing(t *testing.T) {
-	st, err := OpenStore(t.TempDir())
+	st, err := openTestStore(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

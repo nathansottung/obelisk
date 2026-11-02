@@ -108,7 +108,7 @@ type PlanFile struct {
 // content hash, each enriched with its planned destination path. For a COMPILED/
 // EXECUTING plan the frozen Mapping is authoritative; for a DRAFT the path is
 // routed live (manual overrides always win).
-func (a *App) planFiles(plan *Plan) []PlanFile {
+func (a *App) planFiles(plan *Plan) ([]PlanFile, error) {
 	frozen := plan.Status == PlanCompiled || plan.Status == PlanExecuting
 
 	// In-scope hashes (empty archive scope = every snapshot file). An optional folder-
@@ -126,7 +126,10 @@ func (a *App) planFiles(plan *Plan) []PlanFile {
 			}
 		}
 		for _, aid := range plan.ArchiveIDs {
-			for _, f := range a.Store.FilesOf(aid) {
+			for f, err := range a.Store.FilesOf(aid) {
+				if err != nil {
+					return nil, err
+				}
 				if f.Hash == "" {
 					continue
 				}
@@ -143,7 +146,10 @@ func (a *App) planFiles(plan *Plan) []PlanFile {
 	// hash → event / role, from archive files (content-addressed metadata).
 	hashEvent := map[string]int{}
 	hashRole := map[string]string{}
-	for _, f := range a.Store.AllFiles() {
+	for f, err := range a.Store.AllFiles() {
+		if err != nil {
+			return nil, err
+		}
 		if f.Hash == "" {
 			continue
 		}
@@ -225,7 +231,7 @@ func (a *App) planFiles(plan *Plan) []PlanFile {
 		}
 		return out[i].RelPath < out[j].RelPath
 	})
-	return out
+	return out, nil
 }
 
 // PlanUnrouted lists the files a plan cannot place — the bucket the operator clears
@@ -253,8 +259,11 @@ func planStatusSeverity(s string) int {
 // built entirely from the mapping, never the disk — colored by satisfied/pending.
 // dirPath "" is the destination root. Unrouted/parked files are excluded (they live
 // in the Unrouted bucket, not the tree).
-func (a *App) planTree(plan *Plan, dirPath string) TreemapResult {
-	files := a.planFiles(plan)
+func (a *App) planTree(plan *Plan, dirPath string) (TreemapResult, error) {
+	files, err := a.planFiles(plan)
+	if err != nil {
+		return TreemapResult{}, err
+	}
 	res := TreemapResult{Name: plan.Name, Path: dirPath, ColorBy: "plan", StatusBytes: map[string]int64{}}
 	P := strings.TrimRight(filepath.ToSlash(dirPath), "/")
 	nP := normPath(P)
@@ -331,7 +340,7 @@ func (a *App) planTree(plan *Plan, dirPath string) TreemapResult {
 		res.Children = append(res.Children, ag.node())
 	}
 	res.Crumbs = snapshotCrumbs(plan.Name, P)
-	return res
+	return res, nil
 }
 
 // ---- overrides (drag) & park -------------------------------------------
@@ -363,7 +372,11 @@ func (a *App) SetOverride(planID int, hash, dest string) error {
 		delete(plan.Overrides, hash)
 	} else {
 		if strings.HasSuffix(dest, "/") { // dropped onto a folder — keep the filename
-			dest += path.Base(planRelForHash(a, plan, hash))
+			rel, err := planRelForHash(a, plan, hash)
+			if err != nil {
+				return err
+			}
+			dest += path.Base(rel)
 		}
 		if _, err := planRel(dest); err != nil {
 			return fmt.Errorf("%q is not a path inside the plan's destination: %w", dest, err)
@@ -391,7 +404,10 @@ func (a *App) MoveFolder(planID int, srcPrefix, dstPrefix string) (int, error) {
 			return 0, fmt.Errorf("%q is not a folder inside the plan's destination: %w", dstPrefix, err)
 		}
 	}
-	files := a.planFiles(plan)
+	files, err := a.planFiles(plan)
+	if err != nil {
+		return 0, err
+	}
 	if plan.Overrides == nil {
 		plan.Overrides = map[string]string{}
 	}
@@ -431,16 +447,20 @@ func (a *App) SetParked(planID int, hash string, parked bool) error {
 	return nil
 }
 
-func planRelForHash(a *App, plan *Plan, hash string) string {
-	for _, f := range a.planFiles(plan) {
+func planRelForHash(a *App, plan *Plan, hash string) (string, error) {
+	files, err := a.planFiles(plan)
+	if err != nil {
+		return "", err
+	}
+	for _, f := range files {
 		if f.Hash == hash {
 			if f.Planned != "" {
-				return f.Planned
+				return f.Planned, nil
 			}
-			return f.RelPath
+			return f.RelPath, nil
 		}
 	}
-	return hash
+	return hash, nil
 }
 
 // ---- compile gate + report ---------------------------------------------
@@ -562,7 +582,11 @@ func (a *App) PlanPreview(planID int) (PlanReport, error) {
 	if plan == nil {
 		return PlanReport{}, fmt.Errorf("plan not found")
 	}
-	return a.planReportFrom(plan, a.planFiles(plan)), nil
+	files, err := a.planFiles(plan)
+	if err != nil {
+		return PlanReport{}, err
+	}
+	return a.planReportFrom(plan, files), nil
 }
 
 // CompilePlan runs the dry-run gate: it compiles only when unrouted == 0 (parked
@@ -578,7 +602,10 @@ func (a *App) CompilePlan(planID int) (PlanReport, error) {
 		plan.Status = PlanDraft
 		plan.Mapping = nil
 	}
-	files := a.planFiles(plan)
+	files, err := a.planFiles(plan)
+	if err != nil {
+		return PlanReport{}, err
+	}
 	rep := a.planReportFrom(plan, files)
 	if !rep.Compilable {
 		a.Store.UpdatePlan(plan)
@@ -902,13 +929,13 @@ func (a *App) ensurePlanDestVolume(plan *Plan) {
 // credits the reorganized destination. Source drives keep their historical copies —
 // nothing is ever removed. Best-effort: with no archive scope there's nothing to
 // credit and it no-ops.
-func (a *App) recordPlanDestCopies(plan *Plan, refs []ChunkFileRef) {
+func (a *App) recordPlanDestCopies(plan *Plan, refs []ChunkFileRef) error {
 	if len(refs) == 0 || plan.DestVolumeID == 0 || len(plan.ArchiveIDs) == 0 {
-		return
+		return nil
 	}
 	vol := a.Store.Volume(plan.DestVolumeID)
 	if vol == nil {
-		return
+		return nil
 	}
 	byHash := map[string]ChunkFileRef{}
 	for _, r := range refs {
@@ -916,7 +943,10 @@ func (a *App) recordPlanDestCopies(plan *Plan, refs []ChunkFileRef) {
 	}
 	for _, aid := range plan.ArchiveIDs {
 		var ar []ChunkFileRef
-		for _, f := range a.Store.FilesOf(aid) {
+		for f, err := range a.Store.FilesOf(aid) {
+			if err != nil {
+				return err
+			}
 			if r, ok := byHash[f.Hash]; ok {
 				ar = append(ar, ChunkFileRef{FileID: f.ID, RelPath: r.RelPath, SizeBytes: r.SizeBytes, Hash: f.Hash})
 			}
@@ -926,6 +956,7 @@ func (a *App) recordPlanDestCopies(plan *Plan, refs []ChunkFileRef) {
 			a.upsertMirrorChunk(aid, vol, plan.DestinationRoot, ar, "mirror")
 		}
 	}
+	return nil
 }
 
 // ---- coverage ----------------------------------------------------------

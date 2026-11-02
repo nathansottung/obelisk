@@ -13,9 +13,10 @@ import (
 // written, rather than failing part-way through.
 func TestMirror_FAT32RefusesOversizeFileUpFront(t *testing.T) {
 	app, collID, _, vol := mirrorSetup(t, "Big", map[string]string{"small.txt": "s", "huge.bin": "h"})
-	for _, f := range app.Store.FilesOf(collID) {
+	for _, f := range testFiles(t, app.Store.FilesOf(collID)) {
 		if f.RelPath == "huge.bin" {
 			f.SizeBytes = 5 << 30 // as cataloged; the fixture need not be 5 GB on disk
+			app.Store.UpsertFile(*f)
 		}
 	}
 	withDestVolume(t, "FAT32", 0)

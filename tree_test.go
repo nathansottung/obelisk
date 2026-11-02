@@ -26,7 +26,7 @@ func TestFolderTreeLevels(t *testing.T) {
 	coll := a.Store.AddCollection("Photos")
 	fo := a.Store.AddFolder(coll.ID, "/src")
 	add := func(rel string, size int64) {
-		a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: rel, SizeBytes: size, HashAlg: "SHA256", Hash: rel})
+		a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: rel, SizeBytes: size, HashAlg: "SHA256", Hash: testHash(rel)})
 	}
 	add("trip/a.nef", 100)
 	add("trip/b.nef", 50)
@@ -34,7 +34,7 @@ func TestFolderTreeLevels(t *testing.T) {
 	add("docs/readme.txt", 5)
 
 	// Archive root → the scanned folder is the sole child folder.
-	root := a.Store.FolderTree(coll.ID, "", 0, 0)
+	root := noErr[FolderTreeResult](t)(a.Store.FolderTree(coll.ID, "", 0, 0))
 	if len(root.Children) != 1 || root.Children[0].Name != "src" {
 		t.Fatalf("root should show the scanned folder 'src', got %+v", root.Children)
 	}
@@ -44,7 +44,7 @@ func TestFolderTreeLevels(t *testing.T) {
 	}
 
 	// Zoom into /src → child FOLDERS docs, trip (name-sorted); no files listed.
-	lvl := a.Store.FolderTree(coll.ID, src.Path, 0, 0)
+	lvl := noErr[FolderTreeResult](t)(a.Store.FolderTree(coll.ID, src.Path, 0, 0))
 	if len(lvl.Children) != 2 {
 		t.Fatalf("expected 2 child folders under /src, got %d: %+v", len(lvl.Children), lvl.Children)
 	}
@@ -57,7 +57,7 @@ func TestFolderTreeLevels(t *testing.T) {
 	}
 
 	// Zoom into /src/trip → only the 'raw' subfolder is a row (a.nef/b.nef are files).
-	deep := a.Store.FolderTree(coll.ID, trip.Path, 0, 0)
+	deep := noErr[FolderTreeResult](t)(a.Store.FolderTree(coll.ID, trip.Path, 0, 0))
 	if len(deep.Children) != 1 || deep.Children[0].Name != "raw" {
 		t.Fatalf("under trip, only 'raw' should be a folder row, got %+v", deep.Children)
 	}
@@ -74,23 +74,23 @@ func TestFolderTreePaginationWindow(t *testing.T) {
 	const n = 450
 	for i := 0; i < n; i++ {
 		a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID,
-			RelPath: fmt.Sprintf("wide/sub-%05d/f.nef", i), SizeBytes: 10, HashAlg: "SHA256", Hash: fmt.Sprintf("h%05d", i)})
+			RelPath: fmt.Sprintf("wide/sub-%05d/f.nef", i), SizeBytes: 10, HashAlg: "SHA256", Hash: testHash(fmt.Sprintf("h%05d", i))})
 	}
-	first := a.Store.FolderTree(coll.ID, "/w/wide", 0, 200)
+	first := noErr[FolderTreeResult](t)(a.Store.FolderTree(coll.ID, "/w/wide", 0, 200))
 	if first.Total != n || len(first.Children) != 200 || !first.Truncated {
 		t.Fatalf("first window wrong: total=%d shown=%d truncated=%v", first.Total, len(first.Children), first.Truncated)
 	}
 	// The default/max cap must hold even when a bigger limit is requested.
-	capped := a.Store.FolderTree(coll.ID, "/w/wide", 0, 100000)
+	capped := noErr[FolderTreeResult](t)(a.Store.FolderTree(coll.ID, "/w/wide", 0, 100000))
 	if len(capped.Children) != folderTreeMaxLimit {
 		t.Fatalf("limit should be capped at %d, got %d", folderTreeMaxLimit, len(capped.Children))
 	}
 	// Next page continues from the offset and is name-sorted contiguous.
-	next := a.Store.FolderTree(coll.ID, "/w/wide", 200, 200)
+	next := noErr[FolderTreeResult](t)(a.Store.FolderTree(coll.ID, "/w/wide", 200, 200))
 	if next.Offset != 200 || len(next.Children) != 200 || !next.Truncated {
 		t.Fatalf("second window wrong: offset=%d shown=%d truncated=%v", next.Offset, len(next.Children), next.Truncated)
 	}
-	last := a.Store.FolderTree(coll.ID, "/w/wide", 400, 200)
+	last := noErr[FolderTreeResult](t)(a.Store.FolderTree(coll.ID, "/w/wide", 400, 200))
 	if len(last.Children) != n-400 || last.Truncated {
 		t.Fatalf("final window wrong: shown=%d truncated=%v", len(last.Children), last.Truncated)
 	}
@@ -122,7 +122,7 @@ func TestTreeExpansionBudget(t *testing.T) {
 	nFiles := envInt("OBELISK_FILES", 200_000)
 	wide := envInt("OBELISK_WIDE", 5_000) // immediate subfolders under the widest folder
 
-	st, err := OpenStore(t.TempDir())
+	st, err := openTestStore(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -153,12 +153,12 @@ func TestTreeExpansionBudget(t *testing.T) {
 	// Warm once (fault in pages), then take the best of a few runs to shed GC noise —
 	// the budget is about the algorithm, not scheduler jitter.
 	widest := "/srv/scale/wide"
-	_ = st.FolderTree(1, widest, 0, 0)
+	_ = noErr[FolderTreeResult](t)(st.FolderTree(1, widest, 0, 0))
 	best := time.Hour
 	var res FolderTreeResult
 	for i := 0; i < 3; i++ {
 		t0 := time.Now()
-		res = st.FolderTree(1, widest, 0, 0)
+		res = noErr[FolderTreeResult](t)(st.FolderTree(1, widest, 0, 0))
 		if d := time.Since(t0); d < best {
 			best = d
 		}

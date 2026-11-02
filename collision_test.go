@@ -97,7 +97,7 @@ func TestAdoptFolder_SeparateRecordsPerFolder(t *testing.T) {
 	if n != 2 || !got["a.jpg"] || !got["b.jpg"] {
 		t.Errorf("%d mirror records with %v; want one per folder, each with its file", n, got)
 	}
-	if cov := app.archiveCoverage([]int{arch.ID}); cov.CoveredFiles != 2 {
+	if cov := noErr[Coverage](t)(app.archiveCoverage([]int{arch.ID})); cov.CoveredFiles != 2 {
 		t.Errorf("coverage %d of 2", cov.CoveredFiles)
 	}
 }
@@ -114,7 +114,7 @@ func TestDock_CopiesNeedAFullHashMatch(t *testing.T) {
 	if _, _, err := app.ScanFolder(coll.ID, src, noProg); err != nil {
 		t.Fatal(err)
 	}
-	f := app.Store.FilesOf(coll.ID)[0]
+	f := testFiles(t, app.Store.FilesOf(coll.ID))[0]
 	_, oldB3, err := hashFileBoth(filepath.Join(src, "a.jpg"))
 	if err != nil || oldB3 == "" {
 		t.Skipf("SKIP (NOT TESTED): no BLAKE3 here (%v)", err)
@@ -122,12 +122,13 @@ func TestDock_CopiesNeedAFullHashMatch(t *testing.T) {
 	// A rescan without fast hashing records the new content's SHA-256 only.
 	v2 := sha256Hex([]byte("version two\n"))
 	app.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: f.FolderID, RelPath: f.RelPath, SizeBytes: 12, HashAlg: "SHA256", Hash: v2})
-	f = app.Store.FilesOf(coll.ID)[0]
+	f = testFiles(t, app.Store.FilesOf(coll.ID))[0]
 	if f.Blake3 == oldB3 {
 		t.Error("the rescan left the old version's BLAKE3 on the file")
 	}
 	// Even with a stale BLAKE3 left on the catalog, the old version is no copy.
 	f.Blake3 = oldB3
+	app.Store.UpsertFile(*f) // through the store, so the catalog holds it
 	drive := t.TempDir()
 	writeTree(t, drive, map[string]string{"a.jpg": "version one\n"})
 	ds, err := app.StartDockSession([]int{coll.ID})
@@ -171,7 +172,7 @@ func TestBackupChanges_CollisionWithEarlierRun(t *testing.T) {
 		t.Errorf("collisions %v, want the second x.jpg", res.Collisions)
 	}
 	assertFileBytes(t, filepath.Join(dest, "x.jpg"), "FIRST")
-	if cov := app.archiveCoverage([]int{coll.ID}); cov.CoveredFiles != 1 {
+	if cov := noErr[Coverage](t)(app.archiveCoverage([]int{coll.ID})); cov.CoveredFiles != 1 {
 		t.Errorf("coverage %d of 2, want only the first file counted", cov.CoveredFiles)
 	}
 }

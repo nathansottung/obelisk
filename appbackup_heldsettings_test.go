@@ -11,6 +11,7 @@ import (
 // burn command, tool paths, par2's extra arguments). The current values stay;
 // the backup's are held and applied only after the typed word "Confirm".
 func TestRestoreAppBackup_HoldsProgramSettings(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	app, _ := compatApp(t)
 	gpg := filepath.Join(t.TempDir(), "gpg.exe")
 	mustWrite(t, gpg, "not really gpg")
@@ -65,6 +66,7 @@ func TestRestoreAppBackup_HoldsProgramSettings(t *testing.T) {
 // burn command from a backup is refused even with the typed word, and can be
 // discarded.
 func TestRestoreAppBackup_HeldSettingsAreChecked(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	app, _ := compatApp(t)
 	cfg := mustConfig(t, app)
 	cfg.BurnCommand = `cmd /c del /q {SRC}`

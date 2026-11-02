@@ -14,7 +14,7 @@ import (
 // Two partitions of one disk share the disk's serial. Each is its own volume,
 // told apart by its partition ID.
 func TestVolumeByIdentity_PartitionsOfOneDisk(t *testing.T) {
-	st, err := OpenStore(t.TempDir())
+	st, err := openTestStore(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestVolumeByIdentity_PartitionsOfOneDisk(t *testing.T) {
 // A check is never credited to a copy on another partition, even at the same
 // path and on the same disk.
 func TestCreditCopyCheck_NeverCrossesPartitions(t *testing.T) {
-	st, err := OpenStore(t.TempDir())
+	st, err := openTestStore(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestCreditCopyCheck_NeverCrossesPartitions(t *testing.T) {
 // read is the copy's partition. The disk serial alone is shared by every
 // partition of the disk.
 func TestCreditCopyCheck_MovedDriveNeedsItsPartition(t *testing.T) {
-	st, err := OpenStore(t.TempDir())
+	st, err := openTestStore(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestPartitionIDForms(t *testing.T) {
 // IDs of different kinds say nothing about each other: a check is credited by
 // its path as if the partition were unknown.
 func TestCreditCopyCheck_OtherKindOfPartitionIDIsUnknown(t *testing.T) {
-	st, err := OpenStore(t.TempDir())
+	st, err := openTestStore(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

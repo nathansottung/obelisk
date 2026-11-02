@@ -507,9 +507,9 @@ func (a *App) QuarantineConsequence(absPath string) (QuarantineConsequence, erro
 	}
 	byLabel := map[string]*grp{}
 	order := []string{}
-	for _, f := range a.Store.c.Files {
+	if err := a.Store.eachFileLocked(fileQuery{WithHash: true}, func(f *File) error {
 		if f.Hash == "" || !hashes[f.Hash] {
-			continue
+			return nil
 		}
 		before := len(hashVols[f.Hash])
 		after := before
@@ -536,6 +536,9 @@ func (a *App) QuarantineConsequence(absPath string) (QuarantineConsequence, erro
 		if res.MinCopiesAfter < 0 || after < res.MinCopiesAfter {
 			res.MinCopiesAfter = after
 		}
+		return nil
+	}); err != nil {
+		return QuarantineConsequence{}, err
 	}
 	sort.Strings(order)
 	for _, label := range order {

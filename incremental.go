@@ -149,7 +149,10 @@ func (a *App) incrementalDelta(collectionID int, folderIDs []int, volumeID int, 
 	var eligible func(f *File) bool
 	switch normBase(base) {
 	case BaseProtection:
-		statuses := a.Store.FileStatuses(collectionID)
+		statuses, err := a.Store.FileStatuses(collectionID)
+		if err != nil {
+			return nil, err
+		}
 		eligible = func(f *File) bool {
 			st := statuses[f.ID]
 			return st != StatusComplete && st != StatusOverComplete
@@ -160,7 +163,10 @@ func (a *App) incrementalDelta(collectionID int, folderIDs []int, volumeID int, 
 	}
 
 	var out []*File
-	for _, f := range a.Store.FilesOf(collectionID) {
+	for f, err := range a.Store.FilesOf(collectionID) {
+		if err != nil {
+			return nil, err
+		}
 		if inScope(f) && eligible(f) {
 			out = append(out, f)
 		}

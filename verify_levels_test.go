@@ -10,7 +10,7 @@ import (
 // (sample) pass over a mirror with a mid-file corruption must NOT detect it and
 // must NOT mark anything COMPLETE, while a level-B (full) pass MUST catch it.
 func TestSampleLevelMissesMiddleCorruption(t *testing.T) {
-	st, err := OpenStore(t.TempDir())
+	st, err := openTestStore(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestSampleLevelMissesMiddleCorruption(t *testing.T) {
 // TestLevelBSatisfiesFullVerify confirms an intact mirror passes level B and the
 // copy becomes B-verified (the only level that qualifies for protection).
 func TestLevelBSatisfiesFullVerify(t *testing.T) {
-	st, _ := OpenStore(t.TempDir())
+	st, _ := openTestStore(t, t.TempDir())
 	app := initializedTestApp(t, &App{DataDir: filepath.Dir(st.path), Store: st})
 	coll := st.AddCollection("Mirrors")
 	vol := st.AddVolume(Volume{Label: "MIR-02", Kind: "HDD"})

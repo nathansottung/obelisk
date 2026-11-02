@@ -65,18 +65,12 @@ func tp(t time.Time) *time.Time {
 // FileVersions returns every known content version of a file — the superseded
 // history (oldest first) then the current version — each located to the
 // package(s) and volume(s) that still hold its bytes.
-func (s *Store) FileVersions(fileID int) []FileVersionView {
+func (s *Store) FileVersions(fileID int) ([]FileVersionView, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var f *File
-	for _, x := range s.c.Files {
-		if x.ID == fileID {
-			f = x
-			break
-		}
-	}
-	if f == nil {
-		return nil
+	f, err := s.fileLocked(fileID)
+	if f == nil || err != nil {
+		return nil, err
 	}
 	vol := map[int]*Volume{}
 	for _, v := range s.c.Volumes {
@@ -136,7 +130,7 @@ func (s *Store) FileVersions(fileID int) []FileVersionView {
 		out[i].Index = i + 1
 		out[i].Version = fmt.Sprintf("v%d", i+1)
 	}
-	return out
+	return out, nil
 }
 
 // chunkVersionVolumes lists the live volumes (non-superseded copies + spanned
@@ -224,39 +218,46 @@ func (v FileVersionView) LocatorLine() string {
 // prior copy lives" pointer shown inline on a drift MODIFIED row (and intended
 // for reuse by any scrub/verify SUSPECT_CORRUPTION surface). Returns "" when the
 // version cannot be located or identified.
-func (a *App) priorVersionLocator(fileID int, priorHash string) string {
+func (a *App) priorVersionLocator(fileID int, priorHash string) (string, error) {
 	if fileID == 0 || priorHash == "" {
-		return ""
+		return "", nil
 	}
-	for _, v := range a.Store.FileVersions(fileID) {
+	views, err := a.Store.FileVersions(fileID)
+	if err != nil {
+		return "", err
+	}
+	for _, v := range views {
 		if strings.EqualFold(v.Hash, priorHash) {
-			return v.LocatorLine()
+			return v.LocatorLine(), nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // retainedVersionsMD renders the Recovery Kit inventory's "files with multiple
 // retained versions" note: each such file, every version, and where its bytes
 // live. Returns "" when no file has more than one version, so the section only
 // appears when it has something to say.
-func (a *App) retainedVersionsMD() string {
-	files := a.Store.FilesWithVersions()
-	if len(files) == 0 {
-		return ""
+func (a *App) retainedVersionsMD() (string, error) {
+	files, err := a.Store.FilesWithVersions()
+	if err != nil || len(files) == 0 {
+		return "", err
 	}
 	var b strings.Builder
 	b.WriteString("\n## Files with multiple retained versions\n\n")
 	b.WriteString(fmt.Sprintf("%d file(s) below have changed since first archived. Obelisk never deleted the old bytes — they stay sealed in whatever package still holds them — so **every listed version remains restorable**. Each line is `vN · date · in PACKAGE on MEDIUM`; restore a specific one with Obelisk (file → version) or by hand from the named package per `RESTORE_RUNBOOK.md`.\n\n", len(files)))
 	for _, f := range files {
-		views := a.Store.FileVersions(f.ID)
+		views, err := a.Store.FileVersions(f.ID)
+		if err != nil {
+			return "", err
+		}
 		b.WriteString("### `" + mdCell(f.RelPath) + "` — " + fmt.Sprintf("%d versions\n\n", len(views)))
 		for _, v := range views {
 			b.WriteString("- " + mdCell(v.LocatorLine()) + "\n")
 		}
 		b.WriteString("\n")
 	}
-	return b.String()
+	return b.String(), nil
 }
 
 // ---- version selection ----------------------------------------------------
@@ -333,7 +334,10 @@ func pickRestorePackage(v FileVersionView) FileVersionPackage {
 // par2→gpg→tar path (RestoreChunk), then hash-verifies the restored bytes against
 // the version's recorded hash.
 func (a *App) RestoreFileVersion(fileID int, sel VersionSelector, sourceDir, outputDir string, progress func(float64, string)) (map[string]any, error) {
-	views := a.Store.FileVersions(fileID)
+	views, err := a.Store.FileVersions(fileID)
+	if err != nil {
+		return nil, err
+	}
 	if len(views) == 0 {
 		return nil, fmt.Errorf("file %d has no known versions", fileID)
 	}

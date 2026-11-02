@@ -198,6 +198,7 @@ func TestAtomicRename_FailureDoesNotConsumeTemporary(t *testing.T) {
 // This is the caller-level half of the guarantee: a safe helper is not enough if the
 // caller cleans up the wrong file afterwards.
 func TestExportAppBackup_FailedPublishPreservesPreviousBundle(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	app, _ := compatApp(t)
 	dir := t.TempDir()
 	tarPath := filepath.Join(dir, "obelisk-appbackup-weekly.tar")
@@ -242,6 +243,7 @@ func TestExportAppBackup_FailedPublishPreservesPreviousBundle(t *testing.T) {
 // keystores during app-state restore, and so is the caller where a destructive
 // fallback would compound OB-001.
 func TestRestoreAppBackup_FailedPublishPreservesExistingFile(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	app, dataDir := compatApp(t)
 	dir := t.TempDir()
 	tarPath := filepath.Join(dir, "obelisk-appbackup-restore.tar")

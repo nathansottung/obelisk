@@ -154,7 +154,7 @@ func TestJobLoadCLI_StartupGate(t *testing.T) {
 		if _, err := (&App{DataDir: dir}).InitializeConfig(); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := OpenStore(dir); err != nil {
+		if _, err := openTestStore(t, dir); err != nil {
 			t.Fatal(err)
 		}
 		path := filepath.Join(dir, "jobs.json")
@@ -174,7 +174,7 @@ func TestJobLoadCLI_StartupGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	run("optional-first-use", dir, true)
-	s, err := OpenStore(dir)
+	s, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestJobLoadCLI_StartupGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	run("valid-reconcile", dir, true)
-	s, err = OpenStore(dir)
+	s, err = openTestStore(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}

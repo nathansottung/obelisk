@@ -204,7 +204,10 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 	var files []*File
 	usedFolders := map[int]bool{}
 	var totalBytes int64
-	for _, f := range a.Store.FilesOf(collectionID) {
+	for f, err := range a.Store.FilesOf(collectionID) {
+		if err != nil {
+			return nil, err
+		}
 		if len(want) > 0 && !want[f.FolderID] {
 			continue
 		}
@@ -336,7 +339,9 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 	if serr == nil {
 		res.Sidecar = sc
 	}
-	res.Coverage = a.archiveCoverage([]int{collectionID})
+	if res.Coverage, err = a.archiveCoverage([]int{collectionID}); err != nil {
+		return res, err
+	}
 	a.Store.Log("mirror", fmt.Sprintf("%s → %s (%s): %d files (%.1f GB), %d changed, %d failed, %d skipped",
 		coll.Name, vol.Label, destDir, res.Mirrored, float64(res.Bytes)/1e9, res.Changed, res.Failed, res.Skipped))
 	progress(1.0, fmt.Sprintf("mirrored %d file(s) to %s", res.Mirrored, vol.Label))

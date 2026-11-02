@@ -41,6 +41,7 @@ func writeKeysForTest(t *testing.T, path string, refs ...string) {
 // use are copied into the pre-restore folder first, so a key that only the
 // current keystore holds is not lost.
 func TestRestoreAppBackup_CopiesKeystoresFirst(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	app, dataDir, ks := keystoreAppForTest(t, "K1")
 	tarPath := filepath.Join(t.TempDir(), "obelisk-appbackup.tar")
 	if _, err := app.exportAppBackupTo(tarPath, true); err != nil {
@@ -68,6 +69,7 @@ func TestRestoreAppBackup_CopiesKeystoresFirst(t *testing.T) {
 // If any current record or keystore cannot be copied into the pre-restore
 // folder, the restore stops before it changes anything.
 func TestRestoreAppBackup_StopsWhenThePreCopyFails(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	app, dataDir, ks := keystoreAppForTest(t, "K1")
 	tarPath := filepath.Join(t.TempDir(), "obelisk-appbackup.tar")
 	if _, err := app.exportAppBackupTo(tarPath, true); err != nil {

@@ -143,11 +143,11 @@ func TestDurableCompletion_A_FinalFlushFailureIsReported(t *testing.T) {
 
 	// And a reopened catalog must not show the scan: the write never landed.
 	app.Store.failSave = nil
-	store2, oerr := OpenStore(app.DataDir)
+	store2, oerr := openTestStore(t, app.DataDir)
 	if oerr != nil {
 		t.Fatalf("reopen: %v", oerr)
 	}
-	if got := len(store2.AllFiles()); got != 0 {
+	if got := len(testFiles(t, store2.AllFiles())); got != 0 {
 		t.Errorf("reopened catalog holds %d file(s); the failed flush must have recorded none", got)
 	}
 }
@@ -293,11 +293,11 @@ func TestDurableCompletion_C_UnrecordedTerminalStateIsQualified(t *testing.T) {
 
 	// The catalog, a separate file, committed and must be left alone.
 	app.Store.failSaveJobs = nil
-	store2, err := OpenStore(app.DataDir)
+	store2, err := openTestStore(t, app.DataDir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	if got := len(store2.AllFiles()); got != 2 {
+	if got := len(testFiles(t, store2.AllFiles())); got != 2 {
 		t.Errorf("the catalog committed and must survive: got %d file(s), want 2", got)
 	}
 	// Restart reconciliation gives the conservative answer, not a fabricated success.
@@ -406,11 +406,11 @@ func TestDurableCompletion_D_FlushFailureSurfacesWithAnotherBatchOpen(t *testing
 // bytes, not about the in-memory Store that just claimed to have written them.
 func reopenFiles(t *testing.T, dataDir string) []*File {
 	t.Helper()
-	s, err := OpenStore(dataDir)
+	s, err := openTestStore(t, dataDir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	return s.AllFiles()
+	return testFiles(t, s.AllFiles())
 }
 
 // ---- E. the all-succeed path still works end to end ------------------------
@@ -464,7 +464,7 @@ func TestDurableCompletion_E_SuccessfulJobIsRecorded(t *testing.T) {
 		t.Errorf("the terminal record must carry the job's artifacts; got %+v", onDisk.Artifacts)
 	}
 	// And a genuine reopen agrees.
-	store2, err := OpenStore(app.DataDir)
+	store2, err := openTestStore(t, app.DataDir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

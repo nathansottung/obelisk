@@ -60,10 +60,11 @@ const catalogDBSchemaVersion = 1
 // sqliteHeader is the first 16 bytes of every SQLite database file.
 const sqliteHeader = "SQLite format 3\x00"
 
-// catalogDBWriterPragmas are set on every writer connection: full fsync on commit,
-// foreign keys, and recursive triggers, without which SQLite skips the delete
-// triggers of a row that INSERT OR REPLACE removes (see file_delete_keeps_listings).
-var catalogDBWriterPragmas = []string{"foreign_keys(1)", "recursive_triggers(1)", "synchronous(FULL)"}
+// catalogDBWriterPragmas are set on every writer connection: a 64 MB page cache
+// (a file write updates several indexes), full fsync on commit, foreign keys, and
+// recursive triggers, without which SQLite skips the delete triggers of a row that
+// INSERT OR REPLACE removes (see file_delete_keeps_listings).
+var catalogDBWriterPragmas = []string{"cache_size(-65536)", "foreign_keys(1)", "recursive_triggers(1)", "synchronous(FULL)"}
 
 // catalogDBReaders is the size of the read pool.
 const catalogDBReaders = 4
@@ -417,6 +418,19 @@ func (d *catalogDB) Close() error {
 	}
 	d.r, d.w = nil, nil
 	return errors.Join(errs...)
+}
+
+// abandon closes the database without folding its -wal in: nothing is written.
+// (When this was the last connection, SQLite may still fold a -wal of committed
+// commits into the file as it closes; the data is the same.)
+func (d *catalogDB) abandon() {
+	if d.r != nil {
+		d.r.Close()
+	}
+	if d.w != nil {
+		d.w.Close()
+	}
+	d.r, d.w = nil, nil
 }
 
 // catalogDBNetworkRefusal is the decision behind checkCatalogDBLocal: kind names

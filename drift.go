@@ -92,7 +92,10 @@ func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress
 	preHash := map[int]string{}
 	fileFolder := map[int]int{}
 	fileRel := map[int]string{}
-	for _, f := range a.Store.FilesOf(collectionID) {
+	for f, err := range a.Store.FilesOf(collectionID) {
+		if err != nil {
+			return nil, err
+		}
 		preHash[f.ID], fileFolder[f.ID], fileRel[f.ID] = f.Hash, f.FolderID, f.RelPath
 	}
 	volm := map[int]*Volume{}
@@ -274,7 +277,11 @@ func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress
 			counts["unchanged"]++
 		case ClassChanged:
 			it := DriftItem{State: "MODIFIED", Path: b.rel, Hash: r.Hash, Chunk: b.chunk, Volumes: b.vols, FileID: b.fileID, PriorHash: b.hash}
-			it.PriorVersion = a.priorVersionLocator(b.fileID, b.hash)
+			loc, lerr := a.priorVersionLocator(b.fileID, b.hash)
+			if lerr != nil {
+				return nil, lerr
+			}
+			it.PriorVersion = loc
 			add(it)
 		case ClassMoved:
 			add(DriftItem{State: "MOVED", Path: relOf(filepath.FromSlash(r.Path)), Hash: r.Hash, MovedFrom: b.rel})

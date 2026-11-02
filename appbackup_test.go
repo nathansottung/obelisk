@@ -19,7 +19,7 @@ import (
 func abTestApp(t *testing.T) *App {
 	t.Helper()
 	dataDir := t.TempDir()
-	store, err := OpenStore(dataDir)
+	store, err := openTestStore(t, dataDir)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -60,7 +60,7 @@ func abPopulate(t *testing.T, app *App) (archives, files, volumes, packages, ver
 	}
 
 	vol := app.Store.AddVolume(Volume{Label: "AB-VOL", Kind: "HDD", Serial: "SERIAL-XYZ-123"})
-	catFiles := app.Store.FilesOf(coll.ID)
+	catFiles := testFiles(t, app.Store.FilesOf(coll.ID))
 	refs := make([]ChunkFileRef, 0, len(catFiles))
 	for _, f := range catFiles {
 		refs = append(refs, ChunkFileRef{FileID: f.ID, RelPath: f.RelPath, SizeBytes: f.SizeBytes, Hash: f.Hash})
@@ -92,7 +92,7 @@ func abPopulate(t *testing.T, app *App) (archives, files, volumes, packages, ver
 	for _, c := range app.Store.Chunks(coll.ID) {
 		ve += len(c.VerifyEvents)
 	}
-	return len(app.Store.Collections()), len(app.Store.AllFiles()),
+	return len(app.Store.Collections()), len(testFiles(t, app.Store.AllFiles())),
 		len(app.Store.Volumes()), len(app.Store.Chunks(coll.ID)), ve, len(app.Store.Jobs())
 }
 
@@ -121,6 +121,7 @@ func memberNames(man appBackupManifest) map[string]bool {
 // into a fresh one, and confirm the recovered counts + verify history + job artifacts
 // match. Also confirms keystores are excluded by default and the auth token is scrubbed.
 func TestAppBackup_ExportRestoreRoundTrip(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	src := abTestApp(t)
 	wantArch, wantFiles, wantVols, wantPkgs, wantVE, wantJobs := abPopulate(t, src)
 
@@ -198,6 +199,7 @@ func TestAppBackup_ExportRestoreRoundTrip(t *testing.T) {
 
 // TestAppBackup_IncludeKeys proves the opt-in includes keystore members.
 func TestAppBackup_IncludeKeys(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	app := abTestApp(t)
 	abPopulate(t, app)
 	dest := t.TempDir()
@@ -223,6 +225,7 @@ func TestAppBackup_IncludeKeys(t *testing.T) {
 // TestAppBackup_TamperedMemberRefused proves a member altered after export fails the
 // import hash check, and the target data dir is left untouched.
 func TestAppBackup_TamperedMemberRefused(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	src := abTestApp(t)
 	abPopulate(t, src)
 	dest := t.TempDir()
@@ -258,11 +261,11 @@ func TestAppBackup_TamperedMemberRefused(t *testing.T) {
 	}
 
 	dst := abTestApp(t)
-	before := len(dst.Store.AllFiles())
+	before := len(testFiles(t, dst.Store.AllFiles()))
 	if _, err := dst.RestoreAppBackup(badTar); err == nil {
 		t.Fatal("restore must REFUSE a tampered member")
 	}
-	if after := len(dst.Store.AllFiles()); after != before {
+	if after := len(testFiles(t, dst.Store.AllFiles())); after != before {
 		t.Errorf("a refused restore must leave the target untouched: files %d → %d", before, after)
 	}
 }
@@ -270,6 +273,7 @@ func TestAppBackup_TamperedMemberRefused(t *testing.T) {
 // TestAppBackup_NewerSchemaRefused proves a bundle from a newer app is refused with
 // the "update the app" message, before touching the data dir.
 func TestAppBackup_NewerSchemaRefused(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	src := abTestApp(t)
 	abPopulate(t, src)
 	dest := t.TempDir()

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -732,7 +733,9 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 			"checked": checked, "bad": bad, "advisory": !levelSatisfiesComplete(level)})
 	}
 	if (level == VerifyB && len(mirrorTargets) > 0) || mirrorFailed {
-		a.Store.RecomputeProtection(nil)
+		if _, err := a.Store.RecomputeProtection(nil); err != nil {
+			log.Printf("refreshing the protection summary: %v", err) // a cached tally; the next refresh retries
+		}
 	}
 	total := len(cands) + len(mirrorTargets)
 	progress(1.0, fmt.Sprintf("verified %d/%d ok", okCount, total))

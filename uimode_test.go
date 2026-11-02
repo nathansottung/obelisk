@@ -9,7 +9,7 @@ import "testing"
 
 func TestUIMode_DefaultAndMergePersist(t *testing.T) {
 	dir := t.TempDir()
-	store, err := OpenStore(dir)
+	store, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}

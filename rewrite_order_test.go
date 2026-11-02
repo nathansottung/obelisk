@@ -61,6 +61,7 @@ func TestRewriteCopy_RefusedLeavesTheCopyCurrent(t *testing.T) {
 // it does not open the folder, so it neither waits on another write to that
 // drive nor fails because the folder now needs a choice.
 func TestAutoExport_DoneForThePeriodTouchesNothing(t *testing.T) {
+	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	app, _ := compatApp(t)
 	dir := t.TempDir()
 	cfg := mustConfig(t, app)

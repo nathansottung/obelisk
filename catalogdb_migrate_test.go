@@ -493,13 +493,14 @@ func TestCatalogMove_MissingJSONGetsItsStubBack(t *testing.T) {
 // The JSON store of this build, and so every build since schema versioning, opens
 // the moved folder read-only and writes nothing to it.
 func TestCatalogMove_StubOpensReadOnlyInTheJSONStore(t *testing.T) {
+	t.Setenv(catalogEngineEnv, "json")
 	dir := t.TempDir()
 	writeCatalogJSON(t, dir, fullCatalog(t))
 	if _, err := migrateCatalogToDB(dir, catalogMigrateOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	stub := fileBytes(t, filepath.Join(dir, "catalog.json"))
-	s, err := OpenStore(dir)
+	s, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,14 +541,14 @@ func TestCatalogDB_ExportJSONIsPortable(t *testing.T) {
 	}
 	other := t.TempDir()
 	os.WriteFile(filepath.Join(other, "catalog.json"), buf.Bytes(), 0o644)
-	s, err := OpenStore(other)
+	s, err := openTestStore(t, other)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ro, why := s.ReadOnly(); ro {
 		t.Fatalf("the export opened read-only: %s", why)
 	}
-	if got := len(s.AllFiles()); got != len(c.Files) {
+	if got := len(testFiles(t, s.AllFiles())); got != len(c.Files) {
 		t.Errorf("the export has %d files, want %d", got, len(c.Files))
 	}
 	var back catalog

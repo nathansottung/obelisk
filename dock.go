@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -277,13 +278,17 @@ func (a *App) IngestDrive(sessionID int, mountPath, serial, label, mode, level s
 		ds.ID, effMode, vol.Label, drive.Matched, drive.Historical, drive.Unreadable))
 
 	progress(1.0, "DONE — safe to eject")
+	cov, err := a.archiveCoverage(ds.ArchiveIDs)
+	if err != nil {
+		return nil, err
+	}
 	out := map[string]any{
 		"volume_id": vol.ID, "serial": vol.Serial, "label": vol.Label, "mode": effMode,
 		"reinserted": reinserted, "matched": drive.Matched, "matched_bytes": drive.MatchedBytes,
 		"historical": drive.Historical, "other": drive.Other, "unreadable": drive.Unreadable,
 		"note": drive.Note, "health": health,
 		"message":  "DONE — safe to eject. Insert the next drive.",
-		"coverage": a.archiveCoverage(ds.ArchiveIDs),
+		"coverage": cov,
 	}
 	// Whether the drive was read in full. Absent on the cheap A/C re-verify, which
 	// does not walk the drive.
@@ -328,13 +333,17 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 	archiveOfFile := map[int]int{}        // fileID -> archiveID
 	histHashes := map[string]bool{}       // previously-packaged versions no longer current
 	for _, aid := range ds.ArchiveIDs {
-		for _, f := range a.Store.FilesOf(aid) {
+		for f, err := range a.Store.FilesOf(aid) {
+			if err != nil {
+				return nil, err
+			}
 			if f.Hash != "" {
 				currentByHash[f.Hash] = append(currentByHash[f.Hash], f)
 			}
 			archiveOfFile[f.ID] = aid
 		}
 	}
+	var backfillErr error // the first failed metadata backfill, reported after the walk
 	for _, c := range a.Store.Chunks(0) {
 		if !containsInt(ds.ArchiveIDs, c.CollectionID) {
 			continue
@@ -381,14 +390,23 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 					}
 					// Backfill media metadata onto the matched archive file if a prior
 					// scan/adopt didn't capture it (e.g. cataloged before this feature).
-					if f.ShotAt.IsZero() && !sf.ShotAt.IsZero() {
-						f.ShotAt = sf.ShotAt
-					}
-					if f.Role == "" && sf.Role != "" {
-						f.Role = sf.Role
-					}
-					if f.CameraSerial == "" && sf.CameraSerial != "" {
-						f.CameraSerial = sf.CameraSerial
+					if f.ShotAt.IsZero() && !sf.ShotAt.IsZero() || f.Role == "" && sf.Role != "" ||
+						f.CameraSerial == "" && sf.CameraSerial != "" {
+						if _, err := a.Store.BackfillFileMedia(f.ID, sf.ShotAt, sf.Role, sf.CameraSerial); err != nil {
+							if backfillErr == nil {
+								backfillErr = err
+							}
+						} else { // keep this copy in step, so the next match does not ask again
+							if f.ShotAt.IsZero() {
+								f.ShotAt = sf.ShotAt
+							}
+							if f.Role == "" {
+								f.Role = sf.Role
+							}
+							if f.CameraSerial == "" {
+								f.CameraSerial = sf.CameraSerial
+							}
+						}
 					}
 				}
 			} else if histHashes[sf.Hash] {
@@ -399,6 +417,9 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 		})
 	if serr != nil {
 		return nil, fmt.Errorf("cannot read the docked drive %s: %s", mountPath, scanReason(serr))
+	}
+	if backfillErr != nil {
+		return nil, fmt.Errorf("recording media details found on the docked drive: %w", backfillErr)
 	}
 
 	snap := a.buildSnapshot(ds, vol, health, snapFiles, unreadable, gaps)
@@ -440,7 +461,10 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 		var unknown []ChunkFileRef
 		if prior := a.mirrorChunkOn(aid, vol.ID); prior != nil && snap.Scan == ScanPartial {
 			current := map[int]string{}
-			for _, f := range a.Store.FilesOf(aid) {
+			for f, err := range a.Store.FilesOf(aid) {
+				if err != nil {
+					return nil, err
+				}
 				current[f.ID] = f.Hash
 			}
 			seen := map[int]bool{}
@@ -689,7 +713,9 @@ func (a *App) dockReverifyAtLevel(ds *DockSession, mountPath string, vol *Volume
 		}
 	}
 	if bad > 0 {
-		a.Store.RecomputeProtection(nil)
+		if _, err := a.Store.RecomputeProtection(nil); err != nil {
+			log.Printf("refreshing the protection summary: %v", err) // a cached tally; the next refresh retries
+		}
 	}
 	note := fmt.Sprintf("re-verified at level %s (advisory — only full/B satisfies protection)", level)
 	if bad > 0 {
@@ -827,7 +853,7 @@ type Coverage struct {
 // archiveCoverage computes, for the selected archives, how many source files now
 // have ≥1 verified copy anywhere (any chunk — packaged or mirror — with a
 // verified copy). A file counts as covered by fileID or by content hash.
-func (a *App) archiveCoverage(archiveIDs []int) Coverage {
+func (a *App) archiveCoverage(archiveIDs []int) (Coverage, error) {
 	coveredIDs := map[int]bool{}
 	coveredHashes := map[string]bool{}
 	unknownIDs := map[int]bool{} // on a drive a partial scan could not read
@@ -854,7 +880,10 @@ func (a *App) archiveCoverage(archiveIDs []int) Coverage {
 			continue
 		}
 		ca := CoverageArchive{ArchiveID: aid, Name: coll.Name}
-		for _, f := range a.Store.FilesOf(aid) {
+		for f, err := range a.Store.FilesOf(aid) {
+			if err != nil {
+				return Coverage{}, err
+			}
 			ca.TotalFiles++
 			ca.TotalBytes += f.SizeBytes
 			if coveredIDs[f.ID] || (f.Hash != "" && coveredHashes[f.Hash]) {
@@ -879,7 +908,7 @@ func (a *App) archiveCoverage(archiveIDs []int) Coverage {
 	if cov.TotalFiles > 0 {
 		cov.Pct = round1(float64(cov.CoveredFiles) / float64(cov.TotalFiles) * 100)
 	}
-	return cov
+	return cov, nil
 }
 
 // ---- session report ----------------------------------------------------
@@ -896,7 +925,10 @@ func (a *App) SessionReportMarkdown(sessionID int) (string, error) {
 	if ds == nil {
 		return "", fmt.Errorf("dock session %d not found", sessionID)
 	}
-	cov := a.archiveCoverage(ds.ArchiveIDs)
+	cov, err := a.archiveCoverage(ds.ArchiveIDs)
+	if err != nil {
+		return "", err
+	}
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("# Dock session %d\n\n", ds.ID))
 	b.WriteString(fmt.Sprintf("Started %s · status **%s** · %d drive(s) processed.\n\n",

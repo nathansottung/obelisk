@@ -92,10 +92,10 @@ func TestPlan_ExecuteRefusesExistingFile(t *testing.T) {
 // refused as a whole, before anything is added to the catalog.
 func TestPlan_ImportRefusesUnconfinedPaths(t *testing.T) {
 	for _, bad := range []ExportPlanFile{
-		{SrcRel: "a.jpg", Hash: "h1", Planned: "../a.jpg"},
-		{SrcRel: "a.jpg", Hash: "h1", Planned: "/a.jpg"},
-		{SrcRel: "a.jpg", Hash: "h1", Planned: `x\..\..\a.jpg`},
-		{SrcRel: "../outside.jpg", Hash: "h1", Planned: "a.jpg"},
+		{SrcRel: "a.jpg", Hash: testHash("h1"), Planned: "../a.jpg"},
+		{SrcRel: "a.jpg", Hash: testHash("h1"), Planned: "/a.jpg"},
+		{SrcRel: "a.jpg", Hash: testHash("h1"), Planned: `x\..\..\a.jpg`},
+		{SrcRel: "../outside.jpg", Hash: testHash("h1"), Planned: "a.jpg"},
 	} {
 		app := dockApp(t)
 		plans, vols := len(app.Store.Plans()), len(app.Store.Volumes())

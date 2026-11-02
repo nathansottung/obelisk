@@ -172,7 +172,7 @@ func TestMirror_ConcurrentMultiVolume(t *testing.T) {
 			t.Errorf("B missing %s", rel)
 		}
 	}
-	if cov := app.archiveCoverage([]int{coll.ID}); cov.Pct != 100 {
+	if cov := noErr[Coverage](t)(app.archiveCoverage([]int{coll.ID})); cov.Pct != 100 {
 		t.Errorf("coverage should be 100%% with mirrors, got %.0f%%", cov.Pct)
 	}
 }

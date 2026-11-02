@@ -37,6 +37,7 @@ func requireUntouched(t *testing.T, victim, name string) {
 // uniquely named file it creates exclusively: whatever already sits at the old
 // fixed staging name is never opened, truncated or published.
 func TestStageFiles_AreUniqueAndExclusive(t *testing.T) {
+	jsonEngineOnly(t, "the catalog database is published by catalogdb.go, not staged as catalog.json")
 	t.Run("catalog", func(t *testing.T) {
 		app, dir := compatApp(t)
 		name := filepath.Join(dir, "catalog.json.tmp")

@@ -117,7 +117,7 @@ func TestBurn_RefusesAFailedPackage(t *testing.T) {
 // another folder of that disk is not credited to the copy by its serial alone,
 // and at the package's own folder only on the copy's partition.
 func TestCreditCopyCheck_SerialNeedsThePackageFolder(t *testing.T) {
-	st, err := OpenStore(t.TempDir())
+	st, err := openTestStore(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

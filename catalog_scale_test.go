@@ -25,7 +25,7 @@ func TestCatalogScale(t *testing.T) {
 	nMirror := envInt("OBELISK_MIRROR", 500_000)
 
 	dir := t.TempDir()
-	st, err := OpenStore(dir)
+	st, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestCatalogScale(t *testing.T) {
 	var m0 runtime.MemStats
 	runtime.ReadMemStats(&m0)
 	tLoad := time.Now()
-	st2, err := OpenStore(dir)
+	st2, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -94,7 +94,11 @@ func TestCatalogScale(t *testing.T) {
 	heapMB := float64(m1.HeapInuse) / 1e6
 
 	// ---- search latency ----
-	searchDur := func(q SearchQuery) time.Duration { t0 := time.Now(); st2.Search(q); return time.Since(t0) }
+	searchDur := func(q SearchQuery) time.Duration {
+		t0 := time.Now()
+		noErr[[]map[string]any](t)(st2.Search(q))
+		return time.Since(t0)
+	}
 	sPath := searchDur(SearchQuery{Text: "file00000042", Limit: 50})
 	sHash := searchDur(SearchQuery{Hash: fakeHash(123)[:12], Limit: 50})
 	sExt := searchDur(SearchQuery{Ext: ".nef", Limit: 50})

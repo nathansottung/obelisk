@@ -10,7 +10,7 @@ import (
 
 func versApp(t *testing.T) *App {
 	t.Helper()
-	st, err := OpenStore(t.TempDir())
+	st, err := openTestStore(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -25,7 +25,7 @@ func TestUpsertFileRetainsVersions(t *testing.T) {
 	fo := a.Store.AddFolder(coll.ID, "/src")
 	up := func(hash string, size int64) *File {
 		return a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: "x.txt",
-			SizeBytes: size, HashAlg: "SHA256", Hash: hash, ModTime: time.Now().UTC()})
+			SizeBytes: size, HashAlg: "SHA256", Hash: testHash(hash), ModTime: time.Now().UTC()})
 	}
 
 	f := up("aaa", 10)
@@ -33,21 +33,21 @@ func TestUpsertFileRetainsVersions(t *testing.T) {
 		t.Fatalf("first insert: want 0 versions and a first_seen, got %d / %v", len(f.Versions), f.FirstSeen)
 	}
 	// Same content again → nothing retained.
-	up("aaa", 10)
+	f = up("aaa", 10)
 	if len(f.Versions) != 0 {
 		t.Fatalf("unchanged rescan should retain nothing, got %d", len(f.Versions))
 	}
 	// Content changes → the OLD version is retained, current advances.
-	up("bbb", 12)
-	if len(f.Versions) != 1 || f.Versions[0].Hash != "aaa" || f.Versions[0].SupersededAt.IsZero() {
+	f = up("bbb", 12)
+	if len(f.Versions) != 1 || f.Versions[0].Hash != testHash("aaa") || f.Versions[0].SupersededAt.IsZero() {
 		t.Fatalf("after change: want 1 retained (aaa, superseded), got %+v", f.Versions)
 	}
-	if f.Hash != "bbb" || f.SizeBytes != 12 {
+	if f.Hash != testHash("bbb") || f.SizeBytes != 12 {
 		t.Fatalf("current should now be bbb/12, got %s/%d", f.Hash, f.SizeBytes)
 	}
 	// A third distinct version → history [aaa, bbb], newest current ccc.
-	up("ccc", 13)
-	if len(f.Versions) != 2 || f.Versions[0].Hash != "aaa" || f.Versions[1].Hash != "bbb" {
+	f = up("ccc", 13)
+	if len(f.Versions) != 2 || f.Versions[0].Hash != testHash("aaa") || f.Versions[1].Hash != testHash("bbb") {
 		t.Fatalf("history should be [aaa,bbb], got %+v", f.Versions)
 	}
 }
@@ -59,15 +59,15 @@ func TestVersionsRetainedCap(t *testing.T) {
 	coll := a.Store.AddCollection("A")
 	fo := a.Store.AddFolder(coll.ID, "/src")
 	up := func(hash string) *File {
-		return a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: "x", HashAlg: "SHA256", Hash: hash})
+		return a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: "x", HashAlg: "SHA256", Hash: testHash(hash)})
 	}
 	up("h1")
 	up("h2")
 	f := up("h3")
-	if len(f.Versions) != 1 || f.Versions[0].Hash != "h2" {
+	if len(f.Versions) != 1 || f.Versions[0].Hash != testHash("h2") {
 		t.Fatalf("cap=1 should keep only the most recent superseded (h2), got %+v", f.Versions)
 	}
-	if f.Hash != "h3" {
+	if f.Hash != testHash("h3") {
 		t.Fatalf("current should be h3, got %s", f.Hash)
 	}
 }
@@ -79,28 +79,28 @@ func TestFileVersionsLocate(t *testing.T) {
 	coll := a.Store.AddCollection("Photos")
 	fo := a.Store.AddFolder(coll.ID, "/src")
 	base := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
-	f := a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: "img.raw", SizeBytes: 100, HashAlg: "SHA256", Hash: "hashA", ModTime: base})
+	f := a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: "img.raw", SizeBytes: 100, HashAlg: "SHA256", Hash: testHash("hashA"), ModTime: base})
 	// force a change to hashB
-	a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: "img.raw", SizeBytes: 120, HashAlg: "SHA256", Hash: "hashB", ModTime: base.AddDate(0, 1, 0)})
+	a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: "img.raw", SizeBytes: 120, HashAlg: "SHA256", Hash: testHash("hashB"), ModTime: base.AddDate(0, 1, 0)})
 
 	vA := a.Store.AddVolume(Volume{Label: "LTO-0007", Kind: "TAPE", Location: "vault"})
 	vB := a.Store.AddVolume(Volume{Label: "LTO-0008", Kind: "TAPE", Location: "vault"})
 	tr := true
 	a.Store.AddChunk(Chunk{CollectionID: coll.ID, Name: "NSP-C0003", Status: "VERIFIED",
-		Files:  []ChunkFileRef{{FileID: f.ID, RelPath: "img.raw", Hash: "hashA"}},
+		Files:  []ChunkFileRef{{FileID: f.ID, RelPath: "img.raw", Hash: testHash("hashA")}},
 		Copies: []Copy{{VolumeID: vA.ID, VerifyOK: &tr}}})
 	a.Store.AddChunk(Chunk{CollectionID: coll.ID, Name: "NSP-C0009", Status: "VERIFIED",
-		Files:  []ChunkFileRef{{FileID: f.ID, RelPath: "img.raw", Hash: "hashB"}},
+		Files:  []ChunkFileRef{{FileID: f.ID, RelPath: "img.raw", Hash: testHash("hashB")}},
 		Copies: []Copy{{VolumeID: vB.ID, VerifyOK: &tr}}})
 
-	vs := a.Store.FileVersions(f.ID)
+	vs := noErr[[]FileVersionView](t)(a.Store.FileVersions(f.ID))
 	if len(vs) != 2 {
 		t.Fatalf("want 2 versions, got %d", len(vs))
 	}
-	if vs[0].Version != "v1" || vs[0].Current || vs[0].Hash != "hashA" {
+	if vs[0].Version != "v1" || vs[0].Current || vs[0].Hash != testHash("hashA") {
 		t.Fatalf("v1 should be the superseded hashA, got %+v", vs[0])
 	}
-	if vs[1].Version != "v2" || !vs[1].Current || vs[1].Hash != "hashB" {
+	if vs[1].Version != "v2" || !vs[1].Current || vs[1].Hash != testHash("hashB") {
 		t.Fatalf("v2 should be the current hashB, got %+v", vs[1])
 	}
 	if len(vs[0].Packages) != 1 || vs[0].Packages[0].Chunk != "NSP-C0003" || vs[0].Packages[0].Volumes[0].Label != "LTO-0007" {
@@ -115,7 +115,7 @@ func TestFileVersionsLocate(t *testing.T) {
 		t.Fatalf("locator line:\n got %q\nwant %q", line, want)
 	}
 	// The reusable prior-version helper finds the right version by hash.
-	if got := a.priorVersionLocator(f.ID, "hashA"); got != line {
+	if got := noErr[string](t)(a.priorVersionLocator(f.ID, testHash("hashA"))); got != line {
 		t.Fatalf("priorVersionLocator(hashA) = %q, want %q", got, line)
 	}
 }
@@ -134,7 +134,7 @@ func TestReconcileModifiedShowsPriorVersion(t *testing.T) {
 	if _, _, err := a.ScanFolder(coll.ID, srcDir, noprog); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
-	files := a.Store.FilesOf(coll.ID)
+	files := testFiles(t, a.Store.FilesOf(coll.ID))
 	if len(files) != 1 {
 		t.Fatalf("expected 1 scanned file, got %d", len(files))
 	}
@@ -172,7 +172,7 @@ func TestReconcileModifiedShowsPriorVersion(t *testing.T) {
 		t.Fatalf("prior version locator should name v1 / package / tape, got %q", mod.PriorVersion)
 	}
 	// And the file now genuinely has a retained version.
-	if len(a.Store.FileByID(f.ID).Versions) != 1 {
+	if len(noErr[*File](t)(a.Store.FileByID(f.ID)).Versions) != 1 {
 		t.Fatalf("reconcile should have retained the prior version")
 	}
 }
@@ -234,14 +234,14 @@ func TestRetainedVersionsMD(t *testing.T) {
 	coll := a.Store.AddCollection("A")
 	fo := a.Store.AddFolder(coll.ID, "/src")
 	// Single-version file → no note.
-	a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: "solo.txt", HashAlg: "SHA256", Hash: "h1"})
-	if md := a.retainedVersionsMD(); md != "" {
+	a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: "solo.txt", HashAlg: "SHA256", Hash: testHash("h1")})
+	if md := noErr[string](t)(a.retainedVersionsMD()); md != "" {
 		t.Fatalf("no multi-version files → empty note, got %q", md)
 	}
 	// Two-version file → note names the path and both versions.
-	a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: "doc.txt", HashAlg: "SHA256", Hash: "a"})
-	a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: "doc.txt", HashAlg: "SHA256", Hash: "b"})
-	md := a.retainedVersionsMD()
+	a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: "doc.txt", HashAlg: "SHA256", Hash: testHash("a")})
+	a.Store.UpsertFile(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: "doc.txt", HashAlg: "SHA256", Hash: testHash("b")})
+	md := noErr[string](t)(a.retainedVersionsMD())
 	if md == "" || !strings.Contains(md, "doc.txt") || !strings.Contains(md, "v1") || !strings.Contains(md, "v2") {
 		t.Fatalf("note should list doc.txt with v1 and v2:\n%s", md)
 	}

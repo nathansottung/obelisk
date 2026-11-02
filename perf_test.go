@@ -90,7 +90,7 @@ func TestPerfMeterThrottleMarker(t *testing.T) {
 // mutex: it must answer promptly WHILE s.mu is held. A future regression that took the
 // catalog lock inside the handler would block here and trip the timeout.
 func TestPerfEndpointFastNoCatalogLock(t *testing.T) {
-	st, err := OpenStore(t.TempDir())
+	st, err := openTestStore(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
