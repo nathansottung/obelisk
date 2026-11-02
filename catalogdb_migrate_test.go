@@ -328,7 +328,7 @@ func TestCatalogMove_RefusesFaults(t *testing.T) {
 	firstFile := `"rel_path":"` + c.Files[0].RelPath + `"`
 	faults := []fault{
 		{name: "dropped file row", damage: flip(`DELETE FROM file WHERE id = (SELECT max(id) FROM file)`),
-			want: "not in the catalog"},
+			want: "file has"},
 		{name: "dropped snapshot file row", damage: flip(`DELETE FROM snap_file WHERE ord = 1`), want: "snap_file has"},
 		{name: "dropped version row", damage: flip(`DELETE FROM file_version WHERE seq = 1`), want: "file_version has"},
 		{name: "dropped copy row", damage: flip(`DELETE FROM copy WHERE ord = 1`), want: "copy has"},
@@ -638,4 +638,131 @@ func TestCatalogDBRoundTrip1M(t *testing.T) {
 		"open the database        %10s\n"+
 		"(building the test catalog took %s)",
 		comma(n), comma(n), float64(len(raw))/1e6, float64(fi.Size())/1e6, round(move), open, round(build))
+}
+
+// A sourceless archive's union of drives keeps two files at the same path when
+// their bytes differ (a camera counter that wrapped): the move keeps both.
+func TestCatalogMove_UnionArchiveSamePathTwice(t *testing.T) {
+	c := fullCatalog(t)
+	coll := c.Collections[0]
+	for i := 0; i < 2; i++ {
+		c.Files = append(c.Files, &File{ID: 900000 + i, CollectionID: coll.ID, FolderID: 0,
+			RelPath: "DCIM/100CANON/IMG_0001.JPG", SizeBytes: int64(1000 + i), HashAlg: "SHA256",
+			Hash: fakeHash(800000 + i)})
+	}
+	c.NextID["file"] = 900002
+	dir := t.TempDir()
+	raw := writeCatalogJSON(t, dir, c)
+	if _, err := migrateCatalogToDB(dir, catalogMigrateOptions{}); err != nil {
+		t.Fatalf("a union archive with one path twice: %v", err)
+	}
+	assertMoved(t, dir, raw)
+}
+
+// A write to catalog.json while the move runs (another Obelisk still open) is
+// never lost: before publishing, the move abandons and keeps the change; after
+// publishing, it refuses to replace catalog.json.
+func TestCatalogMove_RefusesWhenCatalogJSONChangesDuringMove(t *testing.T) {
+	changed := fullCatalog(t)
+	changed.Collections[0].Name = "written while the move ran"
+
+	t.Run("during the import", func(t *testing.T) {
+		dir := t.TempDir()
+		writeCatalogJSON(t, dir, fullCatalog(t))
+		var newer []byte
+		_, err := migrateCatalogToDB(dir, catalogMigrateOptions{afterImport: func(*sql.DB) error {
+			newer = writeCatalogJSON(t, dir, changed)
+			return nil
+		}})
+		if err == nil || !strings.Contains(err.Error(), "changed while") {
+			t.Fatalf("got %v", err)
+		}
+		if !bytes.Equal(fileBytes(t, filepath.Join(dir, "catalog.json")), newer) {
+			t.Fatal("the change to catalog.json was lost")
+		}
+		for _, pattern := range []string{catalogDBName, catalogStagePrefix + "*", catalogPreSQLite + "*"} {
+			if m, _ := filepath.Glob(filepath.Join(dir, pattern)); len(m) != 0 {
+				t.Errorf("an abandoned move left %v", m)
+			}
+		}
+	})
+	t.Run("after publishing", func(t *testing.T) {
+		dir := t.TempDir()
+		writeCatalogJSON(t, dir, fullCatalog(t))
+		var newer []byte
+		_, err := migrateCatalogToDB(dir, catalogMigrateOptions{beforeStub: func() error {
+			newer = writeCatalogJSON(t, dir, changed)
+			return nil
+		}})
+		if err == nil || !strings.Contains(err.Error(), "Refusing to choose") {
+			t.Fatalf("got %v", err)
+		}
+		if !bytes.Equal(fileBytes(t, filepath.Join(dir, "catalog.json")), newer) {
+			t.Fatal("the change to catalog.json was replaced by the stub")
+		}
+	})
+}
+
+// Two moves of one folder at once: the second refuses while the first holds the
+// folder, and nothing of the first is swept away.
+func TestCatalogMove_OneMoveAtATime(t *testing.T) {
+	dir := t.TempDir()
+	raw := writeCatalogJSON(t, dir, fullCatalog(t))
+	var second error
+	if _, err := migrateCatalogToDB(dir, catalogMigrateOptions{afterImport: func(*sql.DB) error {
+		_, second = migrateCatalogToDB(dir, catalogMigrateOptions{})
+		return nil
+	}}); err != nil {
+		t.Fatalf("first move: %v", err)
+	}
+	if second == nil || !strings.Contains(second.Error(), "another") {
+		t.Fatalf("the second move during the first: %v", second)
+	}
+	assertMoved(t, dir, raw)
+	if m, _ := filepath.Glob(filepath.Join(dir, "*lock*")); len(m) != 0 {
+		t.Errorf("the move left its lock behind: %v", m)
+	}
+}
+
+// A package listing that shares its file's path, size and hash keeps them when
+// that file later changes or is removed: the package still holds the old bytes.
+func TestCatalogDB_ListingsKeepTheirValuesWhenTheFileChanges(t *testing.T) {
+	c := fullCatalog(t)
+	dir := t.TempDir()
+	writeCatalogJSON(t, dir, c)
+	if _, err := migrateCatalogToDB(dir, catalogMigrateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	d, err := openCatalogDB(filepath.Join(dir, catalogDBName), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	before, err := exportCatalogDB(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := before.Chunks[0].Files
+	f0, f1 := c.Files[0], c.Files[1]
+	newHash, _ := hashBytes(fakeHash(777777))
+	if err := d.Write(func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`UPDATE file SET sha256 = ?, size_bytes = size_bytes + 1, rel_path = 'moved/' || rel_path
+			WHERE id = ?`, newHash, f0.ID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE file SET sha256 = ? WHERE id = ?`, newHash, f1.ID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`DELETE FROM file WHERE id = ?`, f1.ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := exportCatalogDB(d)
+	if err != nil {
+		t.Fatalf("export after the file changed: %v", err)
+	}
+	if !reflect.DeepEqual(after.Chunks[0].Files, want) {
+		t.Errorf("the package's listing changed with its file:\nbefore %+v\nafter  %+v", want, after.Chunks[0].Files)
+	}
 }

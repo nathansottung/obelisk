@@ -4,8 +4,6 @@ package main
 
 import (
 	"database/sql"
-	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -34,52 +32,6 @@ func holdExclusive(t *testing.T, path string) (release func()) {
 			windows.CloseHandle(h)
 		}
 	}
-}
-
-// copyHeldFile copies a file another connection holds open; SQLite opens its files
-// with read and write sharing, so this works on Windows.
-func copyHeldFile(t *testing.T, from, to string) {
-	t.Helper()
-	in, err := os.Open(from)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer in.Close()
-	out, err := os.Create(to)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		t.Fatal(err)
-	}
-	if err := out.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// crashedCatalogDB leaves a catalog database whose last commit is only in its
-// -wal file, as after a crash or power cut: the next open must replay it.
-func crashedCatalogDB(t *testing.T) string {
-	t.Helper()
-	live := filepath.Join(t.TempDir(), "catalog.db")
-	d, err := openCatalogDB(live, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d.Close()
-	if _, err := d.w.Exec(`PRAGMA wal_autocheckpoint=0`); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Write(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`INSERT INTO meta(key, value) VALUES('only-in-wal', 'yes')`)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	crashed := filepath.Join(t.TempDir(), "catalog.db")
-	copyHeldFile(t, live, crashed)
-	copyHeldFile(t, live+"-wal", crashed+"-wal")
-	return crashed
 }
 
 // A scanner holding the -wal file for a moment does not stop the catalog

@@ -64,6 +64,7 @@ const (
 	catalogDBName      = "catalog.db"
 	catalogStagePrefix = "catalog.db.migrating-"
 	catalogPreSQLite   = "catalog.json.pre-sqlite-v"
+	catalogMoveLock    = "catalog.db.move-lock"
 )
 
 // catalogMigrateOptions are test seams; production passes the zero value.
@@ -71,6 +72,9 @@ type catalogMigrateOptions struct {
 	// afterImport runs on the staging database after the import, before it is
 	// checked, so a test can damage it and prove the check refuses.
 	afterImport func(db *sql.DB) error
+	// beforeStub runs after catalog.db is published, just before catalog.json is
+	// replaced by the stub.
+	beforeStub func() error
 	// stopAt names a step ("imported", "backup", "publish", "stub") at which the
 	// move stops as if the process died there: nothing is cleaned up.
 	stopAt string
@@ -93,6 +97,11 @@ type catalogMigrateResult struct {
 func migrateCatalogToDB(dataDir string, opt catalogMigrateOptions) (catalogMigrateResult, error) {
 	jsonPath := filepath.Join(dataDir, "catalog.json")
 	dbPath := filepath.Join(dataDir, catalogDBName)
+	release, err := lockCatalogMove(dataDir)
+	if err != nil {
+		return catalogMigrateResult{}, err
+	}
+	defer release()
 	sweepCatalogStages(dataDir)
 
 	raw, jsonErr := readFileRetrying(jsonPath)
@@ -167,6 +176,14 @@ func moveCatalog(dataDir string, raw []byte, opt catalogMigrateOptions) (catalog
 	if opt.stopAt == "backup" {
 		return catalogMigrateResult{}, errCatalogMoveStopped
 	}
+	// The import took a while; another Obelisk may have saved since. The database
+	// is only published while catalog.json still holds what was imported.
+	if err := catalogJSONUnchanged(jsonPath, raw); err != nil {
+		removeStage()
+		return catalogMigrateResult{}, fmt.Errorf("catalog.json changed while it was being moved to %s (%v), so the "+
+			"move was abandoned: catalog.json keeps the change and is still the catalog. Close any other copy of "+
+			"Obelisk using this folder and try again", catalogDBName, err)
+	}
 	backup, err := keepCatalogJSON(dataDir, raw, from)
 	if err != nil {
 		removeStage()
@@ -182,9 +199,8 @@ func moveCatalog(dataDir string, raw []byte, opt catalogMigrateOptions) (catalog
 	if opt.stopAt == "stub" {
 		return catalogMigrateResult{}, errCatalogMoveStopped
 	}
-	if err := writeCatalogStub(jsonPath, backup); err != nil {
-		return catalogMigrateResult{}, fmt.Errorf("the catalog moved to %s, but catalog.json could not be replaced "+
-			"by its pointer (%w). Run the move again to finish it", catalogDBName, err)
+	if err := replaceWithStub(dataDir, raw, backup, opt); err != nil {
+		return catalogMigrateResult{}, err
 	}
 	return catalogMigrateResult{Moved: true, Backup: backup, Counts: counts}, nil
 }
@@ -192,7 +208,6 @@ func moveCatalog(dataDir string, raw []byte, opt catalogMigrateOptions) (catalog
 // finishCatalogMove handles a data folder that already has catalog.db: a finished
 // move, or one interrupted after the database was published.
 func finishCatalogMove(dataDir string, raw []byte, jsonMissing, stub bool, opt catalogMigrateOptions) (catalogMigrateResult, error) {
-	jsonPath := filepath.Join(dataDir, "catalog.json")
 	dbPath := filepath.Join(dataDir, catalogDBName)
 	if stub {
 		return catalogMigrateResult{Already: true}, nil
@@ -215,22 +230,88 @@ func finishCatalogMove(dataDir string, raw []byte, jsonMissing, stub bool, opt c
 	backup := ""
 	if !jsonMissing {
 		if sha256Hex(raw) != source {
-			return catalogMigrateResult{}, fmt.Errorf("both %s and a catalog.json that is not the one it was made from "+
-				"are in %s. Refusing to choose between them: catalog.json changed after the move, perhaps written "+
-				"by an older Obelisk. Keep the one you trust and move the other out of the folder", dbPath, dataDir)
+			return catalogMigrateResult{}, errTwoCatalogs(dataDir)
 		}
 		from, _ := strconv.Atoi(fromVersion)
 		if backup, err = keepCatalogJSON(dataDir, raw, from); err != nil {
 			return catalogMigrateResult{}, fmt.Errorf("keeping a copy of catalog.json: %w", err)
 		}
+	} else {
+		raw = nil
 	}
 	if opt.stopAt == "stub" {
 		return catalogMigrateResult{}, errCatalogMoveStopped
 	}
-	if err := writeCatalogStub(jsonPath, backup); err != nil {
-		return catalogMigrateResult{}, fmt.Errorf("replacing catalog.json by its pointer to %s: %w", catalogDBName, err)
+	if err := replaceWithStub(dataDir, raw, backup, opt); err != nil {
+		return catalogMigrateResult{}, err
 	}
 	return catalogMigrateResult{Finished: true, Backup: backup}, nil
+}
+
+// errTwoCatalogs is the refusal when catalog.db and a catalog.json it was not made
+// from are both in the folder.
+func errTwoCatalogs(dataDir string) error {
+	return fmt.Errorf("both %s and a catalog.json that is not the one it was made from are in %s. Refusing to "+
+		"choose between them: catalog.json changed after the move, perhaps written by another copy of Obelisk. "+
+		"Keep the one you trust and move the other out of the folder", catalogDBName, dataDir)
+}
+
+// replaceWithStub replaces catalog.json by the stub, but only while it still holds
+// raw, the catalog that was moved (or, when raw is nil, while it is still absent),
+// so a save by another copy of Obelisk is never overwritten. What is left is the
+// moment between this check and the rename itself.
+func replaceWithStub(dataDir string, raw []byte, backup string, opt catalogMigrateOptions) error {
+	jsonPath := filepath.Join(dataDir, "catalog.json")
+	if opt.beforeStub != nil {
+		if err := opt.beforeStub(); err != nil {
+			return err
+		}
+	}
+	if raw != nil {
+		if err := catalogJSONUnchanged(jsonPath, raw); err != nil {
+			return errTwoCatalogs(dataDir)
+		}
+	} else if _, err := os.Lstat(jsonPath); !errors.Is(err, fs.ErrNotExist) {
+		return errTwoCatalogs(dataDir)
+	}
+	if err := writeCatalogStub(jsonPath, backup); err != nil {
+		return fmt.Errorf("the catalog moved to %s, but catalog.json could not be replaced by its pointer (%w). "+
+			"Run the move again to finish it", catalogDBName, err)
+	}
+	return nil
+}
+
+// catalogJSONUnchanged returns an error unless catalog.json still holds raw.
+func catalogJSONUnchanged(jsonPath string, raw []byte) error {
+	now, err := readFileRetrying(jsonPath)
+	if err != nil {
+		return err
+	}
+	if sha256Hex(now) != sha256Hex(raw) {
+		return errors.New("its contents differ from what was read")
+	}
+	return nil
+}
+
+// lockCatalogMove takes the folder's move lock, so two moves never run at once
+// (one would sweep the other's staging files). The operating system drops the lock
+// if the process dies; the lock file is removed on release.
+func lockCatalogMove(dataDir string) (func(), error) {
+	path := filepath.Join(dataDir, catalogMoveLock)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("cannot lock %s for the move: %w", dataDir, err)
+	}
+	if err := lockFileExclusive(f); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("another copy of Obelisk is moving the catalog in %s right now; try again when it "+
+			"has finished", dataDir)
+	}
+	return func() {
+		unlockFile(f)
+		f.Close()
+		os.Remove(path)
+	}, nil
 }
 
 // readCatalogForMove decodes catalog.json for the move: it must be a catalog this

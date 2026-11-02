@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"database/sql"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -306,18 +307,12 @@ func TestCatalogDB_PermissionDeniedIsRefused(t *testing.T) {
 }
 
 // A database written by a newer schema opens read-only: reads work, every write is
-// refused with the reason, and the file is left as it was.
+// refused with the reason, and the files are left exactly as they were, even
+// with a commit pending in the -wal (closing must not fold it in).
 func TestCatalogDB_NewerVersionIsReadOnly(t *testing.T) {
-	d, path := newCatalogDBForTest(t)
-	if err := d.Write(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`INSERT INTO meta(key, value) VALUES('from', 'newer')`)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	d.Close()
-	setMetaRaw(t, path, "schema_version", "2")
-	before := fileBytes(t, path)
+	path := crashedCatalogDBWith(t, `UPDATE meta SET value='2' WHERE key='schema_version'`,
+		`INSERT INTO meta(key, value) VALUES('from', 'newer')`)
+	before := dirSnapshot(t, filepath.Dir(path))
 
 	d, err := openCatalogDB(path, false)
 	if err != nil {
@@ -344,9 +339,36 @@ func TestCatalogDB_NewerVersionIsReadOnly(t *testing.T) {
 	if err := d.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(before, fileBytes(t, path)) {
-		t.Error("opening a newer database read-only changed the file")
+	if after := dirSnapshotNoShm(t, filepath.Dir(path)); after != dirSnapshotNoShm2(before) {
+		t.Errorf("opening a newer database read-only changed its files:\nbefore %s\nafter  %s", before, after)
 	}
+}
+
+// A refused database with a commit pending in its -wal is left as it was.
+func TestCatalogDB_RefusedDatabaseKeepsItsWAL(t *testing.T) {
+	path := crashedCatalogDBWith(t, `UPDATE meta SET value='someone-else' WHERE key='format'`)
+	before := dirSnapshot(t, filepath.Dir(path))
+	if d, err := openCatalogDB(path, false); err == nil {
+		d.Close()
+		t.Fatal("opened a database of another format")
+	}
+	if after := dirSnapshotNoShm(t, filepath.Dir(path)); after != dirSnapshotNoShm2(before) {
+		t.Errorf("a refused open changed the files:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
+// dirSnapshotNoShm is dirSnapshot without the -shm file: a reader may create that
+// shared-memory index; it holds no catalog data.
+func dirSnapshotNoShm(t *testing.T, dir string) string { return dirSnapshotNoShm2(dirSnapshot(t, dir)) }
+
+func dirSnapshotNoShm2(snap string) string {
+	var keep []string
+	for _, e := range strings.Fields(snap) {
+		if !strings.Contains(e, "-shm:") {
+			keep = append(keep, e)
+		}
+	}
+	return strings.Join(keep, " ")
 }
 
 // A database whose recorded schema or format this build cannot place is refused.
@@ -427,4 +449,130 @@ func dirSnapshot(t *testing.T, dir string) string {
 		b.WriteString(" ")
 	}
 	return b.String()
+}
+
+// copyHeldFile copies a file another connection holds open; SQLite opens its files
+// with read and write sharing, so this works on Windows too.
+func copyHeldFile(t *testing.T, from, to string) {
+	t.Helper()
+	in, err := os.Open(from)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	out, err := os.Create(to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		t.Fatal(err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// crashedCatalogDB leaves a catalog database whose last commit is only in its
+// -wal file, as after a crash or power cut: the next open must replay it.
+func crashedCatalogDB(t *testing.T) string {
+	return crashedCatalogDBWith(t)
+}
+
+// crashedCatalogDBWith is crashedCatalogDB whose last commit, kept only in the
+// -wal, runs stmts after the only-in-wal marker.
+func crashedCatalogDBWith(t *testing.T, stmts ...string) string {
+	t.Helper()
+	live := filepath.Join(t.TempDir(), "catalog.db")
+	d, err := openCatalogDB(live, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.w.Exec(`PRAGMA wal_autocheckpoint=0`); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Write(func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO meta(key, value) VALUES('only-in-wal', 'yes')`); err != nil {
+			return err
+		}
+		for _, s := range stmts {
+			if _, err := tx.Exec(s); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	crashed := filepath.Join(t.TempDir(), "catalog.db")
+	copyHeldFile(t, live, crashed)
+	copyHeldFile(t, live+"-wal", crashed+"-wal")
+	return crashed
+}
+
+// A catalog database that appears at the path while a new one is being made
+// (another process got there first) is never removed or overwritten.
+func TestCatalogDB_CreateNeverRemovesAnotherCatalog(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "catalog.db")
+	other := filepath.Join(t.TempDir(), "other.db")
+	d, err := openCatalogDB(other, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Write(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO meta(key, value) VALUES('owner', 'the other process')`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	d.Close()
+	theirs := fileBytes(t, other)
+	prev := catalogDBBeforeCreate
+	catalogDBBeforeCreate = func(p string) {
+		if p == path {
+			os.WriteFile(path, theirs, 0o644)
+		}
+	}
+	defer func() { catalogDBBeforeCreate = prev }()
+	if d, err := openCatalogDB(path, true); err == nil {
+		d.Close()
+		t.Fatal("create succeeded over a catalog that appeared at the path")
+	} else if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("error: %v", err)
+	}
+	if !bytes.Equal(fileBytes(t, path), theirs) {
+		t.Fatal("the other process's catalog was changed or removed")
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Errorf("a refused create left files behind: %v", entries)
+	}
+}
+
+// A data folder whose name holds a space, #, % and accented letters opens: the
+// read-only connections reach it through an escaped file: URI.
+func TestCatalogDB_FolderNameNeedingEscapes(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "Fotos é #1 100%")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "catalog.db")
+	d, err := openCatalogDB(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Write(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO meta(key, value) VALUES('here', 'yes')`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readMeta(t, d, "here"); got != "yes" {
+		t.Fatalf("read %q through the read pool", got)
+	}
+	d.Close()
+	if names, _ := os.ReadDir(dir); len(names) != 1 {
+		t.Errorf("files in the folder: %v", names)
+	}
 }

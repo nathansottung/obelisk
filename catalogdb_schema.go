@@ -63,9 +63,11 @@ CREATE TABLE file(
 	sha256 BLOB CHECK(sha256 IS NULL OR length(sha256) = 32),
 	blake3 BLOB CHECK(blake3 IS NULL OR length(blake3) = 32),
 	mtime INTEGER, first_seen INTEGER, shot_at INTEGER, role TEXT NOT NULL, camera_serial TEXT NOT NULL,
-	event_id INTEGER NOT NULL,
-	UNIQUE(collection_id, folder_id, rel_path)
+	event_id INTEGER NOT NULL
 ) STRICT;
+-- Not unique: a sourceless archive's union of drives (folder 0) keeps two files
+-- at one path when their bytes differ.
+CREATE INDEX file_path ON file(collection_id, folder_id, rel_path);
 CREATE INDEX file_sha256 ON file(sha256);
 CREATE INDEX file_blake3 ON file(blake3);
 CREATE INDEX file_event ON file(event_id) WHERE event_id <> 0;
@@ -106,6 +108,25 @@ CREATE TABLE chunk_file(
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX chunk_file_file ON chunk_file(file_id);
 CREATE INDEX chunk_file_sha256 ON chunk_file(sha256) WHERE sha256 IS NOT NULL;
+
+-- A listing that shares its file's path, size or hash keeps the values it had
+-- when the file changes or is removed: a package holds the bytes it was built
+-- from, not the file's new ones. The shared values are written into the listing
+-- first (an empty hash as a zero-length BLOB, which is not NULL).
+CREATE TRIGGER file_update_keeps_listings BEFORE UPDATE OF rel_path, size_bytes, sha256 ON file
+BEGIN
+	UPDATE chunk_file SET rel_path = coalesce(rel_path, OLD.rel_path),
+		size_bytes = coalesce(size_bytes, OLD.size_bytes),
+		sha256 = coalesce(sha256, OLD.sha256, zeroblob(0))
+	WHERE file_id = OLD.id AND (rel_path IS NULL OR size_bytes IS NULL OR sha256 IS NULL);
+END;
+CREATE TRIGGER file_delete_keeps_listings BEFORE DELETE ON file
+BEGIN
+	UPDATE chunk_file SET rel_path = coalesce(rel_path, OLD.rel_path),
+		size_bytes = coalesce(size_bytes, OLD.size_bytes),
+		sha256 = coalesce(sha256, OLD.sha256, zeroblob(0))
+	WHERE file_id = OLD.id AND (rel_path IS NULL OR size_bytes IS NULL OR sha256 IS NULL);
+END;
 
 CREATE TABLE copy(
 	chunk_id INTEGER NOT NULL REFERENCES chunk(id) ON DELETE CASCADE, ord INTEGER NOT NULL,

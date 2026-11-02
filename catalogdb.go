@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -62,15 +63,21 @@ const sqliteHeader = "SQLite format 3\x00"
 // catalogDBReaders is the size of the read pool.
 const catalogDBReaders = 4
 
+// catalogDBBeforeCreate is a test seam: nil in production. It runs after the open
+// has found that path does not exist and before a new catalog is made there.
+var catalogDBBeforeCreate func(path string)
+
 // catalogDB is an open catalog database.
 type catalogDB struct {
 	path string
 	// w is the one writer connection (MaxOpenConns 1). Every Write runs on it.
 	w *sql.DB
-	// r is the read pool. Its connections run with query_only, so it cannot write.
+	// r is the read pool. Its connections are opened in SQLite's read-only mode,
+	// so it cannot write, and closing one never folds or removes the -wal.
 	r *sql.DB
 	// readOnly latches when the database was written by a newer schema. Every
-	// Write is refused with readOnlyReason, and the writer runs with query_only.
+	// Write is refused with readOnlyReason, and the writer connection is opened in
+	// SQLite's read-only mode.
 	readOnly       bool
 	readOnlyReason string
 }
@@ -85,6 +92,23 @@ func catalogDBDSN(path string, pragmas ...string) string {
 		q = append(q, "_pragma="+p)
 	}
 	return path + "?" + strings.Join(q, "&")
+}
+
+// catalogDBReadOnlyDSN builds a DSN that opens path with SQLite's own read-only
+// mode (a file: URI with mode=ro). Unlike query_only, such a connection never
+// folds the -wal into the database or removes it when it closes, so a database
+// opened only to look at it is left exactly as it was found.
+func catalogDBReadOnlyDSN(path string, pragmas ...string) string {
+	p := filepath.ToSlash(path)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p // a Windows drive path: file:///C:/...
+	}
+	u := url.URL{Scheme: "file", Path: p}
+	q := []string{"mode=ro", "_pragma=busy_timeout(10000)", "_pragma=query_only(1)"}
+	for _, pr := range pragmas {
+		q = append(q, "_pragma="+pr)
+	}
+	return u.String() + "?" + strings.Join(q, "&")
 }
 
 // openCatalogDB opens the catalog database at path. Only when the file does not
@@ -103,40 +127,45 @@ func openCatalogDB(path string, create bool) (*catalogDB, error) {
 		return nil, err
 	}
 
-	existed := false
 	fi, err := os.Lstat(path)
-	switch {
-	case err == nil:
-		if !fi.Mode().IsRegular() {
-			return nil, fmt.Errorf("%s is not a file, so it is not a catalog database. Refusing to open it", path)
-		}
-		if fi.Size() == 0 {
-			return nil, fmt.Errorf("%s is empty (0 bytes); that is a damaged catalog database, not a new one. "+
-				"Refusing to open it", path)
-		}
-		existed = true
-		if err := checkSQLiteHeader(path); err != nil {
-			return nil, err
-		}
-	case errors.Is(err, fs.ErrNotExist):
+	if errors.Is(err, fs.ErrNotExist) {
 		if !create {
 			return nil, fmt.Errorf("the catalog database %s does not exist", path)
 		}
-	default:
+		if catalogDBBeforeCreate != nil {
+			catalogDBBeforeCreate(path)
+		}
+		// Made whole under another name, then published only if nothing is at
+		// path by then; from here on it is opened like any existing catalog.
+		if err := createCatalogDBFile(path); err != nil {
+			return nil, err
+		}
+		fi, err = os.Lstat(path)
+	}
+	if err != nil {
 		return nil, catalogDBUnreadable(path, err)
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a file, so it is not a catalog database. Refusing to open it", path)
+	}
+	if fi.Size() == 0 {
+		return nil, fmt.Errorf("%s is empty (0 bytes); that is a damaged catalog database, not a new one. "+
+			"Refusing to open it", path)
+	}
+	if err := checkSQLiteHeader(path); err != nil {
+		return nil, err
 	}
 
 	d := &catalogDB{path: path}
-	if existed {
-		if err := d.classifyExisting(); err != nil {
-			return nil, err
-		}
+	if err := d.classifyExisting(); err != nil {
+		return nil, err
 	}
-	writerPragmas := []string{"foreign_keys(1)", "synchronous(FULL)"}
+	var w *sql.DB
 	if d.readOnly {
-		writerPragmas = append(writerPragmas, "query_only(1)")
+		w, err = sql.Open(catalogDBDriver, catalogDBReadOnlyDSN(path, "foreign_keys(1)"))
+	} else {
+		w, err = sql.Open(catalogDBDriver, catalogDBDSN(path, "foreign_keys(1)", "synchronous(FULL)")+"&_txlock=immediate")
 	}
-	w, err := sql.Open(catalogDBDriver, catalogDBDSN(path, writerPragmas...)+"&_txlock=immediate")
 	if err != nil {
 		return nil, err
 	}
@@ -150,17 +179,8 @@ func openCatalogDB(path string, create bool) (*catalogDB, error) {
 			w.Close()
 			return nil, catalogDBUnreadable(path, err)
 		}
-		if !existed {
-			if err := d.createSchema(); err != nil {
-				w.Close()
-				os.Remove(path)
-				os.Remove(path + "-wal")
-				os.Remove(path + "-shm")
-				return nil, fmt.Errorf("creating the catalog database %s: %w", path, err)
-			}
-		}
 	}
-	r, err := sql.Open(catalogDBDriver, catalogDBDSN(path, "foreign_keys(1)", "query_only(1)"))
+	r, err := sql.Open(catalogDBDriver, catalogDBReadOnlyDSN(path, "foreign_keys(1)"))
 	if err != nil {
 		w.Close()
 		return nil, err
@@ -172,6 +192,50 @@ func openCatalogDB(path string, create bool) (*catalogDB, error) {
 		return nil, catalogDBUnreadable(path, err)
 	}
 	return d, nil
+}
+
+// createCatalogDBFile makes a new, empty catalog database at a temporary name
+// beside path (WAL mode, every table), folds it into one file and publishes it as
+// path without replacing anything: if another process put a database at path in
+// the meantime, this one is discarded and theirs is left alone. Only files this
+// call created are ever removed.
+func createCatalogDBFile(path string) error {
+	tmp := path + ".creating-" + randomHex(6)
+	discard := func() {
+		for _, side := range []string{"", "-wal", "-shm", "-journal"} {
+			os.Remove(tmp + side)
+		}
+	}
+	w, err := sql.Open(catalogDBDriver, catalogDBDSN(tmp, "foreign_keys(1)", "synchronous(FULL)")+"&_txlock=immediate")
+	if err != nil {
+		return err
+	}
+	w.SetMaxOpenConns(1)
+	d := &catalogDB{path: tmp, w: w}
+	err = d.enableWAL()
+	if err == nil {
+		err = d.createSchema()
+	}
+	if err == nil {
+		_, err = w.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	}
+	if cerr := w.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		if fi, serr := os.Stat(tmp + "-wal"); serr == nil && fi.Size() > 0 {
+			err = fmt.Errorf("the new database's write-ahead log was not folded in")
+		}
+	}
+	if err == nil {
+		err = publishNoReplace(tmp, path)
+	}
+	if err != nil {
+		discard()
+		return fmt.Errorf("creating the catalog database %s: %w", path, err)
+	}
+	discard() // a staging name left by a hard-link publish
+	return nil
 }
 
 // catalogDBUnreadable is the refusal for a catalog database that exists but cannot
@@ -211,7 +275,7 @@ func checkSQLiteHeader(path string) error {
 // classifyExisting reads the meta table through a connection that cannot write,
 // and decides whether this build may open the database, and whether read-only.
 func (d *catalogDB) classifyExisting() error {
-	probe, err := sql.Open(catalogDBDriver, catalogDBDSN(d.path, "query_only(1)"))
+	probe, err := sql.Open(catalogDBDriver, catalogDBReadOnlyDSN(d.path))
 	if err != nil {
 		return err
 	}
