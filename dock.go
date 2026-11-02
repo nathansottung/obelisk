@@ -509,13 +509,9 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 					}
 				}
 				p.FileCount, p.EncBytes, p.DataBytes = 0, 0, 0
-				if err := a.Store.SetChunkFiles(p, nil); err != nil {
+				if err := a.Store.SetChunkLists(p, nil, &unknown); err != nil {
 					return nil, err
 				}
-				if err := a.Store.SetChunkUnknownFiles(p, unknown); err != nil {
-					return nil, err
-				}
-				a.Store.UpdateChunk(p)
 				a.Store.AppendVerifyEvent(p, VerifyEvent{At: time.Now().UTC(), OK: false, Path: mountPath, Advisory: true,
 					Note: fmt.Sprintf("this scan found none of the archive's files here: %d no longer on the drive, %d unknown (in places it could not read)", gone, len(unknown))})
 			}
@@ -524,11 +520,8 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 		}
 		sort.Slice(refs, func(i, j int) bool { return refs[i].RelPath < refs[j].RelPath })
 		sort.Slice(unknown, func(i, j int) bool { return unknown[i].RelPath < unknown[j].RelPath })
-		c, err := a.upsertMirrorChunk(aid, vol, mountPath, refs, mode)
+		c, err := a.upsertMirrorChunkAt(aid, vol, "", mountPath, refs, mode, &unknown)
 		if err != nil {
-			return nil, err
-		}
-		if err := a.Store.SetChunkUnknownFiles(c, unknown); err != nil {
 			return nil, err
 		}
 		if len(unknown) > 0 {
@@ -761,14 +754,16 @@ func (a *App) dockReverifyAtLevel(ds *DockSession, mountPath string, vol *Volume
 // (archive, volume): the drive's content-matched files, with a verified copy on
 // the volume. Idempotent — a re-ingest updates the same package in place.
 func (a *App) upsertMirrorChunk(archiveID int, vol *Volume, mountPath string, refs []ChunkFileRef, mode string) (*Chunk, error) {
-	return a.upsertMirrorChunkAt(archiveID, vol, "", mountPath, refs, mode)
+	return a.upsertMirrorChunkAt(archiveID, vol, "", mountPath, refs, mode, nil)
 }
 
 // upsertMirrorChunkAt is upsertMirrorChunk for the record of one folder (root,
 // as adopted) on the drive; "" is the record of the whole drive or destination.
 // Each folder keeps its own record, so adopting one folder never replaces
 // another's files.
-func (a *App) upsertMirrorChunkAt(archiveID int, vol *Volume, root, mountPath string, refs []ChunkFileRef, mode string) (*Chunk, error) {
+//
+// unknown, unless nil, replaces the record's unknown files in the same save.
+func (a *App) upsertMirrorChunkAt(archiveID int, vol *Volume, root, mountPath string, refs []ChunkFileRef, mode string, unknown *[]ChunkFileRef) (*Chunk, error) {
 	var sum int64
 	for _, r := range refs {
 		sum += r.SizeBytes
@@ -783,11 +778,11 @@ func (a *App) upsertMirrorChunkAt(archiveID int, vol *Volume, root, mountPath st
 		note = "mirror backup written (copy-then-verified)"
 	}
 	if c := a.mirrorChunkAt(archiveID, vol.ID, root); c != nil {
-		if err := a.Store.SetChunkFiles(c, refs); err != nil {
-			return nil, err
-		}
 		c.FileCount, c.EncBytes, c.DataBytes = len(refs), sum, sum
 		c.WrittenDest, c.VerifiedAt, c.VerifyOK, c.Status = mountPath, &now, &ok, StatusAdoptedVerified
+		if err := a.Store.SetChunkLists(c, refs, unknown); err != nil {
+			return nil, err
+		}
 		a.Store.RecordCopy(c, vol.ID, mountPath, true)
 		a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: true, Path: mountPath, Note: note})
 		a.Store.UpdateChunk(c)
@@ -806,13 +801,20 @@ func (a *App) upsertMirrorChunkAt(archiveID int, vol *Volume, root, mountPath st
 		Name: name, Status: StatusAdoptedVerified,
 		MediaKind: nonEmpty(vol.Kind, "HDD"), EncBytes: sum, DataBytes: sum, FileCount: len(refs),
 		HashAlg: "SHA256", Encrypted: false, Adopted: true, Mirror: true, WrittenDest: mountPath,
-		Files: refs, WrittenAt: &now, VerifiedAt: &now, VerifyOK: &ok})
+		Files: refs, UnknownFiles: derefRefs(unknown), WrittenAt: &now, VerifiedAt: &now, VerifyOK: &ok})
 	if err != nil {
 		return nil, err
 	}
 	a.Store.RecordCopy(c, vol.ID, mountPath, true)
 	a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: true, Path: mountPath, Note: note})
 	return c, nil
+}
+
+func derefRefs(p *[]ChunkFileRef) []ChunkFileRef {
+	if p == nil {
+		return nil
+	}
+	return *p
 }
 
 // chunkListings is a package's Files followed by its UnknownFiles.

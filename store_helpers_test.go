@@ -111,3 +111,13 @@ func pkgFiles(t testing.TB, s *Store, c *Chunk) []ChunkFileRef {
 	}
 	return refs
 }
+
+// AddChunk adds a package for a test, failing loudly when it cannot be recorded
+// (the app itself uses AddChunkErr).
+func (s *Store) AddChunk(c Chunk) *Chunk {
+	nc, err := s.AddChunkErr(c)
+	if err != nil {
+		panic(err)
+	}
+	return nc
+}

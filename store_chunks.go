@@ -34,15 +34,29 @@ func (s *Store) chunkListLocked(ch *Chunk, list int) ([]ChunkFileRef, error) {
 
 // setChunkListLocked replaces a package's listing.
 func (s *Store) setChunkListLocked(ch *Chunk, list int, refs []ChunkFileRef) error {
-	refs = append([]ChunkFileRef(nil), refs...)
+	return s.setChunkListsLocked(ch, map[int][]ChunkFileRef{list: refs})
+}
+
+// setChunkListsLocked replaces the given listings of a package together: on the
+// database engine either all of them are written or none.
+func (s *Store) setChunkListsLocked(ch *Chunk, lists map[int][]ChunkFileRef) error {
+	copied := map[int][]ChunkFileRef{}
+	for list, refs := range lists {
+		if refs != nil {
+			refs = append(make([]ChunkFileRef, 0, len(refs)), refs...) // an empty list stays empty, not nil
+		}
+		copied[list] = refs
+	}
 	s.dirty = true
 	if s.be != nil {
-		return s.be.chunkFilesPut(ch, s.chunkOrdLocked(ch), list, refs)
+		return s.be.chunkFilesPut(ch, s.chunkOrdLocked(ch), copied)
 	}
-	if list == listUnknown {
-		ch.UnknownFiles = refs
-	} else {
-		ch.Files = refs
+	for list, refs := range copied {
+		if list == listUnknown {
+			ch.UnknownFiles = refs
+		} else {
+			ch.Files = refs
+		}
 	}
 	return nil
 }
@@ -131,6 +145,41 @@ func (s *Store) listingsOfFilesLocked(fileIDs []int, fn func(ch *Chunk, ref Chun
 	})
 }
 
+// unlinkedListingsLocked calls fn for every Files listing that names no file
+// (FileID 0, as a package adopted from a medium's manifest lists them) and holds
+// one of hashes.
+func (s *Store) unlinkedListingsLocked(hashes []string, fn func(ch *Chunk, ref ChunkFileRef) error) error {
+	if len(hashes) == 0 {
+		return nil
+	}
+	want := map[string]bool{}
+	for _, h := range hashes {
+		want[h] = true
+	}
+	if s.be == nil {
+		for _, ch := range s.c.Chunks {
+			for _, ref := range ch.Files {
+				if ref.FileID == 0 && want[ref.Hash] {
+					if err := fn(ch, ref); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+	byID := map[int]*Chunk{}
+	for _, ch := range s.c.Chunks {
+		byID[ch.ID] = ch
+	}
+	return s.be.unlinkedListings(hashes, func(chunkID int, ref ChunkFileRef) error {
+		if ch := byID[chunkID]; ch != nil && want[ref.Hash] {
+			return fn(ch, ref)
+		}
+		return nil
+	})
+}
+
 // ChunkFiles returns a copy of a package's file listing.
 func (s *Store) ChunkFiles(chunkID int) ([]ChunkFileRef, error) {
 	return s.chunkList(chunkID, listFiles)
@@ -172,13 +221,28 @@ func (s *Store) SetChunkUnknownFiles(c *Chunk, unknown []ChunkFileRef) error {
 	return s.setChunkList(c, listUnknown, unknown)
 }
 
+// SetChunkLists replaces a package's file listing and, unless unknown is nil,
+// its unknown files, together, with the header as it now is, in one save. Change
+// the header's tallies before calling it, so they are saved with the listings.
+func (s *Store) SetChunkLists(c *Chunk, files []ChunkFileRef, unknown *[]ChunkFileRef) error {
+	lists := map[int][]ChunkFileRef{listFiles: files}
+	if unknown != nil {
+		lists[listUnknown] = *unknown
+	}
+	return s.setChunkLists(c, lists)
+}
+
 func (s *Store) setChunkList(c *Chunk, list int, refs []ChunkFileRef) error {
+	return s.setChunkLists(c, map[int][]ChunkFileRef{list: refs})
+}
+
+func (s *Store) setChunkLists(c *Chunk, lists map[int][]ChunkFileRef) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.chunkLocked(c.ID) != c {
 		return fmt.Errorf("package %d is not in the catalog", c.ID)
 	}
-	if err := s.setChunkListLocked(c, list, refs); err != nil {
+	if err := s.setChunkListsLocked(c, lists); err != nil {
 		return err
 	}
 	return s.save()

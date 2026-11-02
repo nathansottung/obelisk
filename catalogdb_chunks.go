@@ -11,6 +11,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 )
 
@@ -84,10 +85,10 @@ const chunkListingInsert = `INSERT INTO chunk_file(chunk_id, list, ord, file_id,
 		?8
 	FROM (SELECT 1) LEFT JOIN file f ON f.id = ?4`
 
-// chunkFilesPut replaces one listing of a package. The package's header row is
-// written first, so the listing's foreign key holds, and remembered, so a flush
-// that finds the package gone from memory deletes it again.
-func (b *dbBackend) chunkFilesPut(ch *Chunk, ord, list int, refs []ChunkFileRef) error {
+// chunkFilesPut replaces listings of a package, all of them or none. The
+// package's header row is written first, so the listings' foreign key holds, and
+// remembered, so a flush that finds the package gone from memory deletes it again.
+func (b *dbBackend) chunkFilesPut(ch *Chunk, ord int, lists map[int][]ChunkFileRef) error {
 	w, err := b.writer()
 	if err != nil {
 		return err
@@ -100,27 +101,71 @@ func (b *dbBackend) chunkFilesPut(ch *Chunk, ord, list int, refs []ChunkFileRef)
 			b.txKeys = map[string]bool{}
 		}
 		b.txKeys[fmt.Sprintf("chunk:%d", ch.ID)] = true
-		if _, err := tx.Exec(`DELETE FROM chunk_file WHERE chunk_id = ? AND list = ?`, ch.ID, list); err != nil {
-			return err
-		}
 		ins, err := b.stmt(chunkListingInsert)
 		if err != nil {
 			return err
 		}
 		e := &w.e
-		for k, r := range refs {
-			args := []any{ch.ID, list, k, r.FileID, r.RelPath, r.SizeBytes, e.h(r.Hash), e.h(r.SampleHash)}
-			if e.err != nil {
-				err := e.err
-				e.err = nil
-				return fmt.Errorf("package %s file %s: %w", ch.Name, r.RelPath, err)
+		for _, list := range []int{listFiles, listUnknown} {
+			refs, ok := lists[list]
+			if !ok {
+				continue
 			}
-			if _, err := ins.Exec(args...); err != nil {
-				return fmt.Errorf("package %s file %s: %w", ch.Name, r.RelPath, err)
+			if _, err := tx.Exec(`DELETE FROM chunk_file WHERE chunk_id = ? AND list = ?`, ch.ID, list); err != nil {
+				return err
+			}
+			for k, r := range refs {
+				args := []any{ch.ID, list, k, r.FileID, r.RelPath, r.SizeBytes, e.h(r.Hash), e.h(r.SampleHash)}
+				if e.err != nil {
+					err := e.err
+					e.err = nil
+					return fmt.Errorf("package %s file %s: %w", ch.Name, r.RelPath, err)
+				}
+				if _, err := ins.Exec(args...); err != nil {
+					return fmt.Errorf("package %s file %s: %w", ch.Name, r.RelPath, err)
+				}
 			}
 		}
 		return nil
 	})
+}
+
+// unlinkedListings calls fn for every Files listing that names no file (file ID
+// 0) and holds one of hashes. Each hash not in canonical form matches nothing.
+func (b *dbBackend) unlinkedListings(hashes []string, fn func(chunkID int, ref ChunkFileRef) error) error {
+	var valid []string
+	for _, h := range hashes {
+		if _, ok := hashBytes(h); ok {
+			valid = append(valid, h)
+		}
+	}
+	if len(valid) == 0 {
+		return nil
+	}
+	c, err := b.conn()
+	if err != nil {
+		return err
+	}
+	arg, err := json.Marshal(valid)
+	if err != nil {
+		return err
+	}
+	rows, err := c.Query(chunkListingSelect+` WHERE cf.list = 0 AND cf.file_id = 0
+		AND cf.sha256 IN (SELECT unhex(value) FROM json_each(?)) ORDER BY cf.chunk_id, cf.ord`, string(arg))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		chunkID, ref, err := scanListing(rows)
+		if err != nil {
+			return err
+		}
+		if err := fn(chunkID, ref); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 // listingScan calls fn for every Files listing of the packages chunkIDs, or of

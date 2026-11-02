@@ -4,9 +4,12 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -350,5 +353,59 @@ func TestFiles_PathsOnlyScanMatchesTheFullScan(t *testing.T) {
 	}
 	if _, full := scan(fileQuery{CollectionID: coll.ID, Role: RoleOriginals, PathsOnly: true}); !full {
 		t.Fatal("a query filtering on role read only the path columns")
+	}
+}
+
+// A version held only by a package that names no file (adopted from a medium's
+// manifest) is still found by its bytes, on both engines, so it can be restored.
+func TestPackages_VersionsFoundInAdoptedPackages(t *testing.T) {
+	for _, engine := range []string{"json", "sqlite"} {
+		t.Run(engine, func(t *testing.T) {
+			fx := newListingFixture(t, engine)
+			f := fx.files[0]
+			adopted, err := fx.s.AddChunkErr(Chunk{CollectionID: fx.arch.ID, Name: "ADOPTED", Status: StatusAdoptedVerified,
+				Adopted: true, Files: []ChunkFileRef{{FileID: 0, RelPath: "card/one.nef", SizeBytes: f.SizeBytes, Hash: f.Hash},
+					{FileID: 0, RelPath: "card/other.nef", SizeBytes: 1, Hash: testHash("someone else")}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			fx.s.RecordCopy(adopted, fx.vol.ID, "E:/card", true)
+			fx.reopen(t, engine)
+			vs, err := fx.s.FileVersions(f.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cur := vs[len(vs)-1]
+			if len(cur.Packages) != 1 || cur.Packages[0].ChunkID != adopted.ID || cur.RelPath != "card/one.nef" {
+				t.Fatalf("current version located to %+v (path %q), want the adopted package", cur.Packages, cur.RelPath)
+			}
+		})
+	}
+}
+
+// When the catalog cannot record a quarantine after the bytes moved, the entry is
+// still kept, so the move can be undone and the copies credited again.
+func TestQuarantine_FailedCatalogWriteKeepsTheEntry(t *testing.T) {
+	t.Setenv(catalogEngineEnv, "sqlite")
+	app, destRoot, collID := quarantineScenario(t)
+	rawDir := filepath.Join(destRoot, "raw")
+	be := app.Store.be.(*dbBackend)
+	be.failFileWrite = func() error { return errors.New("disk full") }
+	_, err := app.Quarantine(rawDir, "", "duplicate export")
+	be.failFileWrite = nil
+	if err == nil || !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("Quarantine with a failing catalog write = %v, want the error", err)
+	}
+	if len(app.Store.c.Quarantine) != 1 {
+		t.Fatalf("%d quarantine entries recorded, want 1", len(app.Store.c.Quarantine))
+	}
+	if _, err := app.UnQuarantine(app.Store.c.Quarantine[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(rawDir, "a.nef")); err != nil || string(b) != "AAA" {
+		t.Fatalf("bytes not back after un-quarantine: %q, %v", b, err)
+	}
+	if n := destMirrorFileCount(app, collID, destRoot); n != 2 {
+		t.Fatalf("destination copy holds %d files after un-quarantine, want 2", n)
 	}
 }

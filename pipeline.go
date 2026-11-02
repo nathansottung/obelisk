@@ -759,26 +759,34 @@ func (a *App) Plan(collectionID int, mediaKind string, targetGB float64, par2 in
 		sort.Slice(group, func(i, j int) bool { return group[i].RelPath < group[j].RelPath })
 		var batch []ChunkFileRef
 		var size int64
-		flush := func() {
+		flush := func() error {
 			if len(batch) == 0 {
-				return
+				return nil
 			}
 			seq++
-			c := a.Store.AddChunk(Chunk{CollectionID: collectionID, Name: fmt.Sprintf("%s-C%04d", safe, seq),
+			c, err := a.Store.AddChunkErr(Chunk{CollectionID: collectionID, Name: fmt.Sprintf("%s-C%04d", safe, seq),
 				Status: "PLANNED", MediaKind: mediaKind, TargetBytes: target, DataBytes: size,
 				FileCount: len(batch), SrcRoot: folders[fid], HashAlg: "SHA256", Par2: par2,
 				Encrypted: encrypted, Files: append([]ChunkFileRef{}, batch...)})
+			if err != nil {
+				return err
+			}
 			res.Chunks = append(res.Chunks, c)
 			batch, size = nil, 0
+			return nil
 		}
 		for _, f := range group {
 			if len(batch) > 0 && size+f.SizeBytes > payload {
-				flush()
+				if err := flush(); err != nil {
+					return nil, err
+				}
 			}
 			batch = append(batch, ChunkFileRef{FileID: f.ID, RelPath: f.RelPath, SizeBytes: f.SizeBytes, Hash: f.Hash})
 			size += f.SizeBytes
 		}
-		flush()
+		if err := flush(); err != nil {
+			return nil, err
+		}
 	}
 
 	// Spanned chunks: one oversized file each, byte-split across several media
@@ -789,11 +797,14 @@ func (a *App) Plan(collectionID int, mediaKind string, targetGB float64, par2 in
 		seq++
 		est := f.SizeBytes + 4096 // ~tar overhead for a single file
 		segs := planSegments(est, target)
-		c := a.Store.AddChunk(Chunk{CollectionID: collectionID, Name: fmt.Sprintf("%s-C%04d", safe, seq),
+		c, err := a.Store.AddChunkErr(Chunk{CollectionID: collectionID, Name: fmt.Sprintf("%s-C%04d", safe, seq),
 			Status: "PLANNED", MediaKind: mediaKind, TargetBytes: target, DataBytes: f.SizeBytes,
 			FileCount: 1, SrcRoot: folders[f.FolderID], HashAlg: "SHA256", Par2: par2,
 			Encrypted: encrypted, Spanned: true, Segments: segs,
 			Files: []ChunkFileRef{{FileID: f.ID, RelPath: f.RelPath, SizeBytes: f.SizeBytes, Hash: f.Hash}}})
+		if err != nil {
+			return nil, err
+		}
 		res.Chunks = append(res.Chunks, c)
 		res.Spanned = append(res.Spanned, map[string]any{"chunk": c.Name, "rel_path": f.RelPath,
 			"size_bytes": f.SizeBytes, "media_required": len(segs)})

@@ -343,7 +343,10 @@ func (a *App) AdoptMedia(mountPath string, collectionID, volumeID int, deep bool
 		ok := true
 		c.WrittenAt, c.VerifiedAt, c.VerifyOK = &now, &now, &ok
 
-		nc := a.Store.AddChunk(c)
+		nc, err := a.Store.AddChunkErr(c)
+		if err != nil {
+			return nil, err
+		}
 		a.Store.RecordCopy(nc, volumeID, cand.dir, true)
 		a.Store.AppendVerifyEvent(nc, VerifyEvent{At: now, OK: true, Path: cand.payloadPath, Note: "adopt: payload hashed"})
 		seen[h] = nc.Name // dedupe identical candidates within this same run
@@ -480,11 +483,8 @@ func (a *App) AdoptFolder(mountPath string, collectionID, volumeID int, progress
 			}
 		}
 	}
-	c, err := a.upsertMirrorChunkAt(collectionID, vol, mountPath, mountPath, refs, "mirror-adopt")
+	_, err = a.upsertMirrorChunkAt(collectionID, vol, mountPath, mountPath, refs, "mirror-adopt", &unknown)
 	if err != nil {
-		return nil, err
-	}
-	if err := a.Store.SetChunkUnknownFiles(c, unknown); err != nil {
 		return nil, err
 	}
 

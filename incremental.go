@@ -533,11 +533,11 @@ func (a *App) mergeMirrorRefs(archiveID int, vol *Volume, destDir string, deltaR
 			sum += r.SizeBytes
 		}
 		sort.Slice(refs, func(i, j int) bool { return refs[i].RelPath < refs[j].RelPath })
-		if err := a.Store.SetChunkFiles(c, refs); err != nil {
-			return err
-		}
 		c.FileCount, c.EncBytes, c.DataBytes = len(refs), sum, sum
 		c.WrittenDest, c.VerifiedAt, c.VerifyOK, c.Status = destDir, &now, &ok, StatusAdoptedVerified
+		if err := a.Store.SetChunkLists(c, refs, nil); err != nil {
+			return err
+		}
 		a.Store.RecordCopy(c, vol.ID, destDir, true)
 		a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: true, Path: destDir, Note: "incremental mirror backup"})
 		a.Store.UpdateChunk(c)
@@ -595,35 +595,46 @@ func (a *App) planDeltaPackages(coll *Collection, files []*File, vol *Volume, pr
 		sort.Slice(group, func(i, j int) bool { return group[i].RelPath < group[j].RelPath })
 		var batch []ChunkFileRef
 		var size int64
-		flush := func() {
+		flush := func() error {
 			if len(batch) == 0 {
-				return
+				return nil
 			}
 			seq++
-			c := a.Store.AddChunk(Chunk{CollectionID: coll.ID, Name: fmt.Sprintf("%s-INC%04d", safe, seq),
+			c, err := a.Store.AddChunkErr(Chunk{CollectionID: coll.ID, Name: fmt.Sprintf("%s-INC%04d", safe, seq),
 				Status: "PLANNED", MediaKind: mediaKind, TargetBytes: target, DataBytes: size,
 				FileCount: len(batch), SrcRoot: folders[fid], HashAlg: "SHA256", Par2: par2,
 				Files: append([]ChunkFileRef{}, batch...)})
+			if err != nil {
+				return err
+			}
 			out = append(out, c)
 			batch, size = nil, 0
+			return nil
 		}
 		for _, f := range group {
 			if len(batch) > 0 && size+f.SizeBytes > payload {
-				flush()
+				if err := flush(); err != nil {
+					return nil, err
+				}
 			}
 			batch = append(batch, ChunkFileRef{FileID: f.ID, RelPath: f.RelPath, SizeBytes: f.SizeBytes, Hash: f.Hash})
 			size += f.SizeBytes
 		}
-		flush()
+		if err := flush(); err != nil {
+			return nil, err
+		}
 	}
 	sort.Slice(big, func(i, j int) bool { return big[i].RelPath < big[j].RelPath })
 	for _, f := range big {
 		seq++
 		segs := planSegments(f.SizeBytes+4096, target)
-		c := a.Store.AddChunk(Chunk{CollectionID: coll.ID, Name: fmt.Sprintf("%s-INC%04d", safe, seq),
+		c, err := a.Store.AddChunkErr(Chunk{CollectionID: coll.ID, Name: fmt.Sprintf("%s-INC%04d", safe, seq),
 			Status: "PLANNED", MediaKind: mediaKind, TargetBytes: target, DataBytes: f.SizeBytes,
 			FileCount: 1, SrcRoot: folders[f.FolderID], HashAlg: "SHA256", Par2: par2, Spanned: true, Segments: segs,
 			Files: []ChunkFileRef{{FileID: f.ID, RelPath: f.RelPath, SizeBytes: f.SizeBytes, Hash: f.Hash}}})
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, c)
 	}
 	_ = cfg

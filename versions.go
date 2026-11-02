@@ -85,19 +85,42 @@ func (s *Store) FileVersions(fileID int) ([]FileVersionView, error) {
 		rel string
 	}
 	byHash := map[string][]hit{}
-	// Only this file's own listings: another file with identical content holds
-	// the same bytes, but same-file matches are the ones offered.
-	if err := s.listingsOfFilesLocked([]int{fileID}, func(ch *Chunk, cf ChunkFileRef) error {
+	// This file's own listings, and listings that name no file (a package adopted
+	// from a medium's manifest) holding one of its versions' bytes. Another file
+	// with identical content is not offered. Hits keep catalog order.
+	type ordered struct {
+		ord  int
+		hash string
+		h    hit
+	}
+	var found []ordered
+	ordOf := map[int]int{}
+	for i, ch := range s.chunksLocked() {
+		ordOf[ch.ID] = i
+	}
+	take := func(ch *Chunk, cf ChunkFileRef) error {
 		if ch.Status == "FAILED" || cf.Hash == "" {
 			return nil
 		}
-		byHash[cf.Hash] = append(byHash[cf.Hash], hit{
+		found = append(found, ordered{ordOf[ch.ID], cf.Hash, hit{
 			pkg: FileVersionPackage{ChunkID: ch.ID, Chunk: ch.Name, Status: ch.Status, Volumes: chunkVersionVolumes(ch, vol)},
 			rel: cf.RelPath,
-		})
+		}})
 		return nil
-	}); err != nil {
+	}
+	if err := s.listingsOfFilesLocked([]int{fileID}, take); err != nil {
 		return nil, err
+	}
+	hashes := []string{f.Hash}
+	for _, v := range f.Versions {
+		hashes = append(hashes, v.Hash)
+	}
+	if err := s.unlinkedListingsLocked(hashes, take); err != nil {
+		return nil, err
+	}
+	sort.SliceStable(found, func(i, j int) bool { return found[i].ord < found[j].ord })
+	for _, o := range found {
+		byHash[o.hash] = append(byHash[o.hash], o.h)
 	}
 
 	build := func(hash, alg string, size int64, mtime, firstSeen time.Time, superseded *time.Time, current bool) FileVersionView {

@@ -1300,8 +1300,9 @@ type catalogBackend interface {
 
 	// Package listings live in the database, never in memory (catalogdb_chunks.go).
 	chunkFiles(chunkID, list int) ([]ChunkFileRef, error)
-	chunkFilesPut(ch *Chunk, ord, list int, refs []ChunkFileRef) error
+	chunkFilesPut(ch *Chunk, ord int, lists map[int][]ChunkFileRef) error
 	listingScan(chunkIDs, fileIDs []int, idsOnly bool, fn func(chunkID int, ref ChunkFileRef) error) error
+	unlinkedListings(hashes []string, fn func(chunkID int, ref ChunkFileRef) error) error
 }
 
 // openCatalogBackend opens (or creates, or moves catalog.json into) the catalog
@@ -2446,11 +2447,6 @@ func (s *Store) Search(qr SearchQuery) ([]map[string]any, error) {
 
 // ---- chunks -----------------------------------------------------------
 
-func (s *Store) AddChunk(c Chunk) *Chunk {
-	nc, _ := s.AddChunkErr(c)
-	return nc
-}
-
 // AddChunkErr adds a package with its listings and saves. A failure to record
 // the listings is returned; the package is not added.
 func (s *Store) AddChunkErr(c Chunk) (*Chunk, error) {
@@ -2461,14 +2457,14 @@ func (s *Store) AddChunkErr(c Chunk) (*Chunk, error) {
 	nc.CreatedAt = time.Now().UTC()
 	nc.Files, nc.UnknownFiles = nil, nil
 	s.c.Chunks = append(s.c.Chunks, &nc)
+	lists := map[int][]ChunkFileRef{}
 	for list, refs := range [][]ChunkFileRef{c.Files, c.UnknownFiles} {
-		if len(refs) == 0 {
-			if s.be == nil && list == listFiles {
-				nc.Files = refs // keep an empty, non-nil list as given
-			}
-			continue
+		if len(refs) > 0 || (refs != nil && s.be == nil) { // JSON keeps an empty, non-nil list as given
+			lists[list] = refs
 		}
-		if err := s.setChunkListLocked(&nc, list, refs); err != nil {
+	}
+	if len(lists) > 0 {
+		if err := s.setChunkListsLocked(&nc, lists); err != nil {
 			s.c.Chunks = s.c.Chunks[:len(s.c.Chunks)-1]
 			return nil, err
 		}

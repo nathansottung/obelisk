@@ -650,7 +650,7 @@ func TestCatalogEngineScale1M(t *testing.T) {
 		if err := pprof.StartCPUProfile(pf); err != nil {
 			t.Fatal(err)
 		}
-		defer func() { pprof.StopCPUProfile(); pf.Close() }()
+		defer pf.Close()
 	}
 	t0 = time.Now()
 	prot, err := s.Protection(coll.ID)

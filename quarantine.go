@@ -651,13 +651,12 @@ func (a *App) Quarantine(absPath, by, reason string) (*QuarantineEntry, error) {
 	// Pull the affected catalog copies out of protection accounting (bytes are still
 	// safe in _deleted; they simply no longer live where the copy record says).
 	a.Store.mu.Lock()
+	// The entry is recorded whatever happens next: the bytes are in _deleted, and
+	// un-quarantining them needs it. Restoring refs a failed removal left in place
+	// is harmless (they are re-added only where missing).
 	refs, _, err := a.Store.quarantineRefsLocked(destVol, rel, info.IsDir())
 	if err == nil {
 		err = a.Store.removeRefsLocked(refs)
-	}
-	if err != nil {
-		a.Store.mu.Unlock()
-		return nil, fmt.Errorf("%s was moved to quarantine, but its copies could not be taken out of the catalog: %w", rel, err)
 	}
 	e := &QuarantineEntry{
 		ID: a.Store.next("quarantine"), Root: filepath.ToSlash(root), OriginalRel: rel,
@@ -666,8 +665,13 @@ func (a *App) Quarantine(absPath, by, reason string) (*QuarantineEntry, error) {
 		Status: QuarantineActive, Refs: refs,
 	}
 	a.Store.c.Quarantine = append(a.Store.c.Quarantine, e)
-	_ = a.Store.save()
+	if serr := a.Store.save(); err == nil {
+		err = serr
+	}
 	a.Store.mu.Unlock()
+	if err != nil {
+		return nil, fmt.Errorf("%s was moved to quarantine and can be put back, but its copies could not all be taken out of the catalog: %w", rel, err)
+	}
 
 	a.Store.Log("quarantine", fmt.Sprintf("quarantined %s (%d file(s), %s) under %s by %s%s",
 		rel, fileCount, humanBytesQ(size), root, e.By, reasonSuffix(reason)))
@@ -714,15 +718,19 @@ func (a *App) UnQuarantine(id int) (*QuarantineEntry, error) {
 	// Best-effort tidy of now-empty staging folders (never _deleted itself).
 	pruneEmptyStaging(rootReal, path.Dir(path.Join(QuarantineDir, e.OriginalRel)))
 
+	// The bytes are back, so the entry is marked restored whatever happens next;
+	// copies that cannot be re-credited now are credited again by a scan of the drive.
 	a.Store.mu.Lock()
-	if err := a.Store.restoreRefsLocked(e.Refs); err != nil {
-		a.Store.mu.Unlock()
-		return nil, fmt.Errorf("%s was moved back, but its copies could not be returned to the catalog: %w", e.OriginalRel, err)
-	}
+	err = a.Store.restoreRefsLocked(e.Refs)
 	now := time.Now().UTC()
 	e.Status, e.RestoredAt = QuarantineRestored, &now
-	_ = a.Store.save()
+	if serr := a.Store.save(); err == nil {
+		err = serr
+	}
 	a.Store.mu.Unlock()
+	if err != nil {
+		return nil, fmt.Errorf("%s was moved back, but its copies could not all be returned to the catalog (a scan of the drive credits them again): %w", e.OriginalRel, err)
+	}
 
 	a.Store.Log("quarantine", fmt.Sprintf("un-quarantined %s under %s", e.OriginalRel, e.Root))
 	return e, nil
@@ -760,10 +768,10 @@ func (s *Store) removeRefsLocked(refs []QuarantinedRef) error {
 			kept = append(kept, cf)
 			sum += cf.SizeBytes
 		}
-		ch.FileCount, ch.DataBytes, ch.EncBytes = len(kept), sum, sum
 		if err := s.setChunkListLocked(ch, listFiles, kept); err != nil {
 			return err
 		}
+		ch.FileCount, ch.DataBytes, ch.EncBytes = len(kept), sum, sum
 	}
 	return nil
 }
@@ -801,10 +809,10 @@ func (s *Store) restoreRefsLocked(refs []QuarantinedRef) error {
 		for _, cf := range files {
 			sum += cf.SizeBytes
 		}
-		ch.FileCount, ch.DataBytes, ch.EncBytes = len(files), sum, sum
 		if err := s.setChunkListLocked(ch, listFiles, files); err != nil {
 			return err
 		}
+		ch.FileCount, ch.DataBytes, ch.EncBytes = len(files), sum, sum
 	}
 	return nil
 }
