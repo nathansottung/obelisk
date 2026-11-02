@@ -52,6 +52,17 @@ jobs:
       - name: go build
         run: go build ./...
 
+      # Every release target builds pure Go (CGO off), with the full build and the
+      # launcher-only build, so a dependency that needs CGO or lacks a target fails
+      # here rather than at release time.
+      - name: cross-build release targets (CGO off)
+        run: |
+          for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
+            echo "  -> ${target}"
+            CGO_ENABLED=0 GOOS="${target%/*}" GOARCH="${target#*/}" go build -o /dev/null .
+            CGO_ENABLED=0 GOOS="${target%/*}" GOARCH="${target#*/}" go build -tags guionly -o /dev/null .
+          done
+
       - name: go test
         run: go test ./... -v
 

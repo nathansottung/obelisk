@@ -700,6 +700,14 @@ Small, pure-Go, CGO-free libraries — each earns its place against the
   across drives and platforms (`classify.go`). The same accented name can be
   stored as one code point or as a letter plus an accent (macOS writes the second),
   and the standard library has no normalization tables.
+- **`modernc.org/sqlite`** — the SQLite catalog engine (`catalogdb*.go`), for
+  catalogs of millions of files where one JSON file is too slow to load and too
+  costly to rewrite on every change. It is SQLite's C source transpiled to Go,
+  so the binary stays static with no CGO; it brings its own C runtime
+  (`modernc.org/libc`) and a few small helpers. It is linked into the full build
+  only: the launcher-only (`guionly`) build never contains it, which
+  `TestGUIOnlyBinary` checks. Until the cutover, `catalog.json` remains the live
+  catalog and nothing reads or writes a database.
 
 Everything else — tar, gpg, par2 — is an **external tool** shelled out to, on
 purpose (see the custody chain and Recovery Kit): the restore story must not
