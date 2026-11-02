@@ -219,3 +219,88 @@ func TestApp_ShutdownSavesAndCloses(t *testing.T) {
 		t.Fatal("the store is still open after shutdown")
 	}
 }
+
+// A time Go cannot write as RFC 3339 (a year past 9999 or before 0, which a
+// damaged file system can report) is refused, as the JSON engine refuses it, and
+// never leaves the catalog database unreadable.
+func TestCatalogEngine_YearsBeyondRFC3339AreRefused(t *testing.T) {
+	dir := t.TempDir()
+	s := openEngineStore(t, "sqlite", dir)
+	coll := s.AddCollection("A")
+	fo := s.AddFolder(coll.ID, "/src")
+	for _, year := range []int{10000, -5} {
+		_, err := s.UpsertFileErr(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: fmt.Sprint(year), HashAlg: "SHA256",
+			Hash: testHash("y"), ModTime: time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)})
+		if err == nil {
+			t.Errorf("a file dated %d was accepted", year)
+		}
+	}
+	far := time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
+	ch := s.AddChunk(Chunk{CollectionID: coll.ID, Name: "PKG", Status: "PLANNED"})
+	ch.WrittenAt = &far
+	if err := s.UpdateChunkErr(ch); err == nil {
+		t.Error("a package written in 10000 was saved")
+	}
+	ch.WrittenAt = nil
+	if err := s.UpdateChunkErr(ch); err != nil {
+		t.Fatalf("after the bad time was removed: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s = openEngineStore(t, "sqlite", dir)
+	if n, _, err := s.FileStats(coll.ID); err != nil || n != 0 {
+		t.Fatalf("after reopening: %d files, %v", n, err)
+	}
+}
+
+// After a commit that lost file writes, saves that land still succeed (so no
+// caller rolls back a change the database holds), while FlushPending, EndBatch
+// and Close keep reporting the loss.
+func TestCatalogEngine_LostChangesDoNotFailSavesThatLand(t *testing.T) {
+	dir := t.TempDir()
+	s := openEngineStore(t, "sqlite", dir)
+	coll := s.AddCollection("A")
+	fo := s.AddFolder(coll.ID, "/src")
+	ch := s.AddChunk(Chunk{CollectionID: coll.ID, Name: "PKG", Status: "PLANNED"})
+	be := s.be.(*dbBackend)
+	s.batchInterval = time.Hour
+	s.Flush()
+	s.BeginBatch()
+	if _, err := s.UpsertFileErr(File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: "x", HashAlg: "SHA256",
+		Hash: testHash("x")}); err != nil {
+		t.Fatal(err)
+	}
+	be.failCommit = func() error { return errors.New("database is locked") }
+	_ = s.EndBatch()
+	be.failCommit = nil
+	if err := s.AppendVerifyEventErr(ch, VerifyEvent{At: time.Now().UTC(), OK: true, Note: "after"}); err != nil {
+		t.Fatalf("a save that landed reported failure: %v", err)
+	}
+	if got := persistedCatalog(t, dir); len(got.Chunks) != 1 || len(got.Chunks[0].VerifyEvents) != 1 {
+		t.Fatalf("the verify event is not in the database: %+v", got.Chunks)
+	}
+	if err := s.FlushPending(); err == nil || !strings.Contains(err.Error(), "lost") {
+		t.Errorf("FlushPending: %v", err)
+	}
+	if err := s.Close(); err == nil || !strings.Contains(err.Error(), "lost") {
+		t.Errorf("Close: %v", err)
+	}
+}
+
+// A commit that fails while holding only in-memory records loses nothing: they
+// are written again, and nothing is reported as lost.
+func TestCatalogEngine_FailedCommitWithoutFileWritesLosesNothing(t *testing.T) {
+	dir := t.TempDir()
+	s := openEngineStore(t, "sqlite", dir)
+	be := s.be.(*dbBackend)
+	be.failCommit = func() error { return errors.New("database is locked") }
+	c := s.AddCollection("kept in memory")
+	be.failCommit = nil
+	if err := s.FlushPending(); err != nil {
+		t.Fatalf("nothing was lost, yet: %v", err)
+	}
+	if got := persistedCatalog(t, dir); len(got.Collections) != 1 || got.Collections[0].ID != c.ID {
+		t.Fatalf("the record was not written again: %+v", got.Collections)
+	}
+}

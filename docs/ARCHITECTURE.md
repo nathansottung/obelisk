@@ -440,9 +440,11 @@ catalog until the cutover slice. Until then the database engine is opt-in:
   batch are coalesced as for `catalog.json`, so a batch commits about every 3 s.
   Each record and each file write is its own savepoint: one the database refuses
   is reported and tried again by the next save, and the rest commit. A failed
-  commit keeps every record in memory to be written again, but the file writes it
-  held are lost, so from then on every save reports it until the store is
-  reopened. App backup, restore and data-folder moves refuse on this engine until
+  commit keeps every record in memory to be written again; when it held file
+  writes, those are lost, and from then on `FlushPending`, `EndBatch` and `Close`
+  report it until the store is reopened, so no job that changed the catalog
+  reports success. A time is refused only when RFC 3339 cannot write its year
+  (past 9999 or before 0), as `catalog.json` refuses it. App backup, restore and data-folder moves refuse on this engine until
   they carry `catalog.db` (S8), and the server closes the store on an interrupt
   or termination signal.
 - **S4 — files** (`store_files.go`, `catalogdb_files.go`). File records live

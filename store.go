@@ -1210,9 +1210,10 @@ type Store struct {
 	be     catalogBackend
 	closed bool // Close was called; every later save is refused
 	// lostErr is a change the catalog database dropped where no caller could be
-	// told (a failed commit, a file write whose method returns no error). Every
-	// later save, FlushPending and EndBatch return it, so no job reports success
-	// after it. It lasts until the store is reopened.
+	// told (a commit that failed holding file writes, a file write whose method
+	// returns no error). FlushPending, EndBatch and Close return it, so no job that
+	// changed the catalog reports success after it; a save that lands still
+	// succeeds. It lasts until the store is reopened.
 	lostErr error
 	jobs    struct {
 		mu      sync.Mutex
@@ -1618,7 +1619,7 @@ func (s *Store) writeCatalog() error {
 			return err
 		}
 		s.lastSave, s.dirty = time.Now(), false
-		return s.lostErr
+		return nil
 	}
 	// Pretty-print small catalogs (human-inspectable with any text editor — the
 	// whole point of the JSON store) but switch to COMPACT JSON once the catalog
@@ -1692,7 +1693,7 @@ func (s *Store) Close() error {
 	if s.be != nil {
 		err = errors.Join(err, s.be.close())
 	}
-	return err
+	return errors.Join(err, s.lostErr)
 }
 
 // BeginBatch enters batched-save mode: while active, save() coalesces catalog
@@ -1736,10 +1737,12 @@ func (s *Store) ChangedSince(gen uint64) bool {
 func (s *Store) FlushPending() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.dirty {
-		return s.lostErr
+	if s.dirty {
+		if err := s.writeCatalog(); err != nil {
+			return err
+		}
 	}
-	return s.writeCatalog()
+	return s.lostErr
 }
 
 // EndBatch leaves batched-save mode and forces the final write if anything is
@@ -1770,10 +1773,12 @@ func (s *Store) EndBatch() error {
 	if s.batchDepth > 0 {
 		s.batchDepth--
 	}
-	if !s.dirty {
-		return s.lostErr
+	if s.dirty {
+		if err := s.writeCatalog(); err != nil {
+			return err
+		}
 	}
-	return s.writeCatalog()
+	return s.lostErr
 }
 
 // endBatchInto ends a batched job and folds a failed final catalog write into the

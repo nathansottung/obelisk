@@ -35,13 +35,18 @@ func (e *dbEnc) fail(format string, a ...any) {
 }
 
 // t stores a time as UTC Unix nanoseconds when it fits, and otherwise as its exact
-// RFC 3339 text in UTC; the zero time is NULL.
+// RFC 3339 text in UTC; the zero time is NULL. A year RFC 3339 cannot write (past
+// 9999 or before 0) is refused, as catalog.json refuses it.
 func (e *dbEnc) t(t time.Time) any {
 	if t.IsZero() {
 		return nil
 	}
 	if ns := t.UnixNano(); ns != catalogDBZeroTime && time.Unix(0, ns).Equal(t) {
 		return ns
+	}
+	if y := t.UTC().Year(); y < 0 || y > 9999 {
+		e.fail("the time %s is outside the years 0 to 9999 a catalog can hold", t.UTC().Format(time.RFC3339Nano))
+		return nil
 	}
 	return t.UTC().Format(time.RFC3339Nano)
 }

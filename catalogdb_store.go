@@ -27,13 +27,14 @@ func init() { openCatalogBackend = openDBBackend }
 
 // dbBackend is an open catalog database with the hashes of what it last committed.
 type dbBackend struct {
-	d      *catalogDB
-	tx     *sql.Tx              // the open write transaction, if any
-	txw    *rowWriter           // the open transaction's row writer (prepared inserts)
-	txStmt map[string]*sql.Stmt // statements prepared on the open transaction
-	dbStmt map[string]*sql.Stmt // statements prepared on the writer connection
-	hashes map[string]string    // unit key → hash, as last committed
-	closed bool
+	d       *catalogDB
+	tx      *sql.Tx              // the open write transaction, if any
+	txFiles bool                 // the open transaction holds file writes
+	txw     *rowWriter           // the open transaction's row writer (prepared inserts)
+	txStmt  map[string]*sql.Stmt // statements prepared on the open transaction
+	dbStmt  map[string]*sql.Stmt // statements prepared on the writer connection
+	hashes  map[string]string    // unit key → hash, as last committed
+	closed  bool
 	// lastWritten and lastRemoved count the records the last flush wrote and
 	// removed, for tests.
 	lastWritten, lastRemoved int
@@ -116,7 +117,7 @@ func (b *dbBackend) begin() (*sql.Tx, error) {
 
 // endTx forgets the transaction's prepared statements; the transaction closes them.
 func (b *dbBackend) endTx() {
-	b.tx, b.txw, b.txStmt = nil, nil, nil
+	b.tx, b.txw, b.txStmt, b.txFiles = nil, nil, nil, false
 }
 
 // writer is the open transaction's row writer, made once per transaction so each
@@ -221,6 +222,7 @@ func (b *dbBackend) flush(c *catalog) error {
 		}
 	}
 	b.lastWritten, b.lastRemoved = len(changed)-len(unitErrs), len(removed)
+	hadFiles := b.txFiles
 	b.endTx()
 	commit := tx.Commit
 	if b.failCommit != nil {
@@ -230,15 +232,13 @@ func (b *dbBackend) flush(c *catalog) error {
 	}
 	if err := commit(); err != nil {
 		tx.Rollback()
-		// Memory keeps every record; the hashes go back to what the database holds,
+		// The hashes still describe the last commit, and memory keeps every record,
 		// so the next save writes them again. File writes in the transaction cannot
-		// be replayed from memory: they are lost, and the store says so from now on.
-		if committed, rerr := loadCatalogWithoutFiles(b.d); rerr == nil {
-			b.hashes = catalogUnitHashes(committed)
-		} else {
-			b.hashes = map[string]string{}
+		// be replayed from memory: when there were any, they are lost.
+		if hadFiles {
+			return &catalogChangesLost{err: err}
 		}
-		return &catalogChangesLost{err: err}
+		return fmt.Errorf("saving the catalog database: %w", err)
 	}
 	b.hashes = next
 	return errors.Join(unitErrs...)

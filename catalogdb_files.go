@@ -443,6 +443,7 @@ func (b *dbBackend) atomic(fn func(tx *sql.Tx) error) error {
 			return err
 		}
 	}
+	b.txFiles = true
 	return savepoint(tx, "file_write", func() error { return fn(tx) })
 }
 
