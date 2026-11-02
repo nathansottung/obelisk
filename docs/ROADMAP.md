@@ -68,7 +68,7 @@ archive that can damage its sources or say "verified" when it isn't.
     engine switch and the whole suite on both engines: merged
     ([#18](https://github.com/nathansottung/obelisk/pull/18)).
   - S5 packages: header, copies, segments and verify events written through, listings only in
-    their table and read when asked for, every access through Store methods: in review
+    their table and read when asked for, every access through Store methods: merged
     ([#19](https://github.com/nathansottung/obelisk/pull/19)).
   - S6 drives, scans and plans.
   - S7 audit log and jobs in the same transaction.
