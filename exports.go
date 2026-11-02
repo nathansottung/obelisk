@@ -112,7 +112,10 @@ func (a *App) StructureExport(collectionID int) (StructureExport, error) {
 		ObeliskVersion: appVersion, Note: exportNoContentNote}
 
 	// Physical locations per file (serial + path + location name + last verified).
-	fileLoc := a.fileExportLocations()
+	fileLoc, err := a.fileExportLocations()
+	if err != nil {
+		return StructureExport{}, err
+	}
 	// Planned path per hash from any compiled/executing plan.
 	plannedByHash := a.plannedPathsByHash()
 	// Event lookup.
@@ -171,7 +174,7 @@ func (a *App) StructureExport(collectionID int) (StructureExport, error) {
 
 // fileExportLocations maps each fileID to its known physical homes (deduped by
 // serial+path), drawn from every non-FAILED chunk's current copies.
-func (a *App) fileExportLocations() map[int][]ExportLocation {
+func (a *App) fileExportLocations() (map[int][]ExportLocation, error) {
 	vols := map[int]*Volume{}
 	for _, v := range a.Store.Volumes() {
 		vols[v.ID] = v
@@ -181,6 +184,10 @@ func (a *App) fileExportLocations() map[int][]ExportLocation {
 	for _, ch := range a.Store.Chunks(0) {
 		if ch.Status == "FAILED" {
 			continue
+		}
+		listed, err := a.Store.ChunkFiles(ch.ID)
+		if err != nil {
+			return nil, err
 		}
 		for _, cp := range ch.Copies {
 			if cp.Superseded {
@@ -192,7 +199,7 @@ func (a *App) fileExportLocations() map[int][]ExportLocation {
 				base.VolumeSerial, base.VolumeLabel = v.Serial, v.Label
 				base.Location = a.volumeLocationName(v.ID)
 			}
-			for _, ref := range ch.Files {
+			for _, ref := range listed {
 				l := base
 				l.Path = ref.RelPath
 				key := l.VolumeSerial + "|" + l.VolumeLabel + "|" + l.Path
@@ -207,7 +214,7 @@ func (a *App) fileExportLocations() map[int][]ExportLocation {
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
 // plannedPathsByHash returns hash → planned path across every compiled/executing
@@ -424,7 +431,9 @@ func (a *App) ImportStructure(exp StructureExport) (res map[string]any, err erro
 	}
 	for _, vr := range byVol {
 		sort.Slice(vr.refs, func(i, j int) bool { return vr.refs[i].RelPath < vr.refs[j].RelPath })
-		a.upsertMirrorChunk(coll.ID, vr.vol, "(imported)", vr.refs, "mirror")
+		if _, err := a.upsertMirrorChunk(coll.ID, vr.vol, "(imported)", vr.refs, "mirror"); err != nil {
+			return nil, err
+		}
 	}
 
 	a.Store.Log("export", fmt.Sprintf("imported structure %q: %d file(s), %d event(s), %d volume(s)",

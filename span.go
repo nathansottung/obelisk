@@ -82,7 +82,7 @@ func par2SetSize(dir string, c *Chunk) int64 {
 // finalizeSegments computes the definitive segment plan once the real payload
 // size and par2 set size are known (called from BuildChunk). The par2 volumes
 // ride on the last data tape if they fit, otherwise they get their own tape.
-func (a *App) finalizeSegments(c *Chunk, work string) {
+func (a *App) finalizeSegments(c *Chunk, work string) error {
 	segs := planSegments(c.EncBytes, c.TargetBytes)
 	par2Total := par2SetSize(work, c)
 	last := segs[len(segs)-1]
@@ -90,7 +90,7 @@ func (a *App) finalizeSegments(c *Chunk, work string) {
 	if last.Bytes+par2Total+sidecarReserve > c.TargetBytes {
 		segs = append(segs, Segment{Index: len(segs) + 1, Bytes: par2Total, Status: "PENDING", Par2: true})
 	}
-	c.Segments = segs
+	return a.Store.SetChunkSegments(c, segs)
 }
 
 // dataSegmentCount returns how many segments carry payload bytes (excludes a
@@ -150,8 +150,10 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 	if volumeID <= 0 {
 		volumeID = a.Store.EnsureUnregistered().ID
 	}
-	seg := &c.Segments[segIdx]
+	// The segment is changed here and saved through the store (putSeg).
+	seg := c.Segments[segIdx]
 	seg.VolumeID = volumeID
+	putSeg := func() error { return a.Store.UpdateSegment(c, segIdx, func(s *Segment) { *s = seg }) }
 	N := len(c.Segments)
 	payload := payloadPathIn(c.StagedDir, c)
 	if payload == "" {
@@ -168,10 +170,10 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 		return nil, err
 	}
 	destChunk := out.Join(c.Name)
-	set := func(status string) { seg.Status, seg.Dest = status, destDir; a.Store.UpdateChunk(c) }
+	set := func(status string) { seg.Status, seg.Dest = status, destDir; _ = putSeg() }
 	fail := func(err error) (map[string]any, error) {
 		seg.Status, seg.Dest = "FAILED", destDir
-		a.Store.UpdateChunk(c)
+		_ = putSeg()
 		a.Store.AppendVerifyEvent(c, VerifyEvent{At: time.Now().UTC(), OK: false, Path: destChunk, Note: fmt.Sprintf("span segment %d/%d: %v", seg.Index, N, err)})
 		return nil, err
 	}
@@ -240,6 +242,9 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 
 	now := time.Now().UTC()
 	seg.Status, seg.Dest = "VERIFIED", destDir
+	if err := putSeg(); err != nil {
+		return nil, err
+	}
 	// Awareness: this segment's tape may have been written with drive-level AES on.
 	a.noteTapeDriveEncryption(volumeID, cfg)
 	a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: true, Path: destChunk, Note: fmt.Sprintf("span segment %d/%d read-back verified", seg.Index, N)})

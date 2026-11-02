@@ -114,7 +114,11 @@ func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress
 			continue
 		}
 		vols := chunkVolumes(c, volm)
-		for _, cf := range c.Files {
+		listed, err := a.Store.ChunkFiles(c.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, cf := range listed {
 			// Adopted packages carry file listings with no source-folder linkage
 			// (no File record, so FileID 0 → empty folder path). They describe
 			// contents ON media, not files on disk, so they take no part in the

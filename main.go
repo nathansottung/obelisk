@@ -2154,10 +2154,14 @@ func api(mux *http.ServeMux, app *App) {
 	})
 	register(mux, "GET /api/chunks", func(w http.ResponseWriter, r *http.Request) {
 		cid, _ := strconv.Atoi(r.URL.Query().Get("collection_id"))
-		jsonOut(w, app.Store.Chunks(cid))
+		jsonOut(w, app.Store.PackageHeaders(cid))
 	})
 	register(mux, "GET /api/chunks/{id}", func(w http.ResponseWriter, r *http.Request) {
-		c := app.Store.Chunk(pathID(r))
+		c, err := app.Store.PackageRecord(pathID(r))
+		if err != nil {
+			jsonErr(w, 503, err)
+			return
+		}
 		if c == nil {
 			jsonErr(w, 404, fmt.Errorf("package not found"))
 			return
@@ -2771,8 +2775,13 @@ func api(mux *http.ServeMux, app *App) {
 			if !on {
 				continue
 			}
-			files := make([]string, 0, len(c.Files))
-			for _, cf := range c.Files {
+			listed, err := app.Store.ChunkFiles(c.ID)
+			if err != nil {
+				jsonErr(w, 503, err)
+				return
+			}
+			files := make([]string, 0, len(listed))
+			for _, cf := range listed {
 				files = append(files, cf.RelPath)
 			}
 			row["files"] = files

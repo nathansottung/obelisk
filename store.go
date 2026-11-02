@@ -1297,6 +1297,11 @@ type catalogBackend interface {
 	fileSetEvent(ids []int, eventID int) (int, error)
 	fileClearEvent(eventID int) error
 	fileStats(collectionID int) (int, int64, error)
+
+	// Package listings live in the database, never in memory (catalogdb_chunks.go).
+	chunkFiles(chunkID, list int) ([]ChunkFileRef, error)
+	chunkFilesPut(ch *Chunk, ord, list int, refs []ChunkFileRef) error
+	listingScan(chunkIDs, fileIDs []int, idsOnly bool, fn func(chunkID int, ref ChunkFileRef) error) error
 }
 
 // openCatalogBackend opens (or creates, or moves catalog.json into) the catalog
@@ -2327,11 +2332,12 @@ func (s *Store) Search(qr SearchQuery) ([]map[string]any, error) {
 	for _, e := range s.c.Events {
 		eventName[e.ID] = e.Name
 	}
-	loc := map[int]*Chunk{} // fileID -> chunk
-	for _, ch := range s.c.Chunks {
-		for _, cf := range ch.Files {
-			loc[cf.FileID] = ch
-		}
+	loc := map[int]*Chunk{} // fileID -> the last package that lists it
+	if err := s.eachListingLocked(func(*Chunk) bool { return true }, true, func(ch *Chunk, ref ChunkFileRef) error {
+		loc[ref.FileID] = ch
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	vol := map[int]*Volume{}
 	for _, v := range s.c.Volumes {
@@ -2340,25 +2346,9 @@ func (s *Store) Search(qr SearchQuery) ([]map[string]any, error) {
 	locs := s.locationsMapLocked()
 	// Per-file protection status (the six-status model) so search speaks the same
 	// language as the dashboard and protection tree.
-	fileCopies := map[int]map[string]physCopy{}
-	for _, ch := range s.c.Chunks {
-		if ch.Status == "FAILED" {
-			continue
-		}
-		pcs := chunkPhysCopies(ch, vol, locs)
-		if len(pcs) == 0 {
-			continue
-		}
-		for _, cf := range ch.Files {
-			m := fileCopies[cf.FileID]
-			if m == nil {
-				m = map[string]physCopy{}
-				fileCopies[cf.FileID] = m
-			}
-			for sig, pc := range pcs {
-				m[sig] = pc
-			}
-		}
+	fileCopies, err := s.fileCopiesLocked(vol, locs, func(*Chunk) bool { return true })
+	if err != nil {
+		return nil, err
 	}
 	folderPath := map[int]string{}
 	for _, fo := range s.c.Folders {
@@ -2389,7 +2379,7 @@ func (s *Store) Search(qr SearchQuery) ([]map[string]any, error) {
 		fq.NoEvent = true
 	}
 	var out []map[string]any
-	err := s.eachFileLocked(fq, func(f *File) error {
+	err = s.eachFileLocked(fq, func(f *File) error {
 		if retiredColl[f.CollectionID] {
 			return nil
 		}
@@ -2457,14 +2447,33 @@ func (s *Store) Search(qr SearchQuery) ([]map[string]any, error) {
 // ---- chunks -----------------------------------------------------------
 
 func (s *Store) AddChunk(c Chunk) *Chunk {
+	nc, _ := s.AddChunkErr(c)
+	return nc
+}
+
+// AddChunkErr adds a package with its listings and saves. A failure to record
+// the listings is returned; the package is not added.
+func (s *Store) AddChunkErr(c Chunk) (*Chunk, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	nc := c
 	nc.ID = s.next("chunk")
 	nc.CreatedAt = time.Now().UTC()
+	nc.Files, nc.UnknownFiles = nil, nil
 	s.c.Chunks = append(s.c.Chunks, &nc)
-	_ = s.save()
-	return &nc
+	for list, refs := range [][]ChunkFileRef{c.Files, c.UnknownFiles} {
+		if len(refs) == 0 {
+			if s.be == nil && list == listFiles {
+				nc.Files = refs // keep an empty, non-nil list as given
+			}
+			continue
+		}
+		if err := s.setChunkListLocked(&nc, list, refs); err != nil {
+			s.c.Chunks = s.c.Chunks[:len(s.c.Chunks)-1]
+			return nil, err
+		}
+	}
+	return &nc, s.save()
 }
 
 func (s *Store) Chunk(id int) *Chunk {
@@ -2493,18 +2502,16 @@ func (s *Store) Chunks(collectionID int) []*Chunk {
 // ChunkedFileHashes maps fileID -> the hash recorded when it was chunked (from
 // ChunkFileRef). A file whose current hash still matches is genuinely backed up;
 // a mismatch means the on-disk version changed and needs re-chunking.
-func (s *Store) ChunkedFileHashes(collectionID int) map[int]string {
+func (s *Store) ChunkedFileHashes(collectionID int) (map[int]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m := map[int]string{}
-	for _, c := range s.c.Chunks {
-		if c.CollectionID == collectionID && c.Status != "FAILED" {
-			for _, cf := range c.Files {
-				m[cf.FileID] = cf.Hash // later (newer) chunk wins for a re-chunked file
-			}
-		}
-	}
-	return m
+	err := s.eachListingLocked(func(c *Chunk) bool { return c.CollectionID == collectionID && c.Status != "FAILED" }, false,
+		func(_ *Chunk, ref ChunkFileRef) error {
+			m[ref.FileID] = ref.Hash // later (newer) chunk wins for a re-chunked file
+			return nil
+		})
+	return m, err
 }
 
 // ReplaceDriftReport stores r as the latest report for its collection.
@@ -2538,18 +2545,16 @@ func (s *Store) DriftReports() []*DriftReport {
 	return append([]*DriftReport{}, s.c.Drift...)
 }
 
-func (s *Store) ChunkedFileIDs(collectionID int) map[int]bool {
+func (s *Store) ChunkedFileIDs(collectionID int) (map[int]bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m := map[int]bool{}
-	for _, c := range s.c.Chunks {
-		if c.CollectionID == collectionID && c.Status != "FAILED" {
-			for _, cf := range c.Files {
-				m[cf.FileID] = true
-			}
-		}
-	}
-	return m
+	err := s.eachListingLocked(func(c *Chunk) bool { return c.CollectionID == collectionID && c.Status != "FAILED" }, true,
+		func(_ *Chunk, ref ChunkFileRef) error {
+			m[ref.FileID] = true
+			return nil
+		})
+	return m, err
 }
 
 // UpdateChunkErr persists the caller's in-memory edits to c and returns any save

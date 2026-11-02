@@ -350,7 +350,8 @@ func (s *Store) ConflictViews(collectionID int, openOnly bool) ([]ConflictView, 
 	locs := s.locationsMapLocked()
 	// fileID → distinct "DRIVE (Location)" strings from every non-FAILED copy.
 	fileLoc := map[int]map[string]bool{}
-	for _, ch := range s.c.Chunks {
+	homesOf := map[int][]string{}
+	for _, ch := range s.chunksLocked() {
 		if ch.Status == "FAILED" {
 			continue
 		}
@@ -379,19 +380,22 @@ func (s *Store) ConflictViews(collectionID int, openOnly bool) ([]ConflictView, 
 			}
 			homes = append(homes, label)
 		}
-		if len(homes) == 0 {
-			continue
+		if len(homes) > 0 {
+			homesOf[ch.ID] = homes
 		}
-		for _, cf := range ch.Files {
-			m := fileLoc[cf.FileID]
-			if m == nil {
-				m = map[string]bool{}
-				fileLoc[cf.FileID] = m
-			}
-			for _, h := range homes {
-				m[h] = true
-			}
+	}
+	if err := s.eachListingLocked(func(ch *Chunk) bool { return homesOf[ch.ID] != nil }, true, func(ch *Chunk, cf ChunkFileRef) error {
+		m := fileLoc[cf.FileID]
+		if m == nil {
+			m = map[string]bool{}
+			fileLoc[cf.FileID] = m
 		}
+		for _, h := range homesOf[ch.ID] {
+			m[h] = true
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	out := []ConflictView{}

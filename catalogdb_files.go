@@ -168,9 +168,32 @@ func (b *dbBackend) filePage(q fileQuery, cur fileCursor, n int) ([]*File, fileC
 		where += ` AND ord > ?`
 		args = append(args, cur.ord)
 	}
-	rows, err := c.Query(`SELECT `+fileColumns+` FROM file WHERE `+where+` ORDER BY `+order+` LIMIT ?`, append(args, n)...)
+	narrow := q.pathsOnly()
+	cols := fileColumns
+	if narrow {
+		cols = `id, collection_id, folder_id, rel_path, ord`
+	}
+	rows, err := c.Query(`SELECT `+cols+` FROM file WHERE `+where+` ORDER BY `+order+` LIMIT ?`, append(args, n)...)
 	if err != nil {
 		return nil, cur, false, err
+	}
+	if narrow {
+		var out []*File
+		for rows.Next() {
+			f := &File{}
+			var ord int64
+			if err := rows.Scan(&f.ID, &f.CollectionID, &f.FolderID, &f.RelPath, &ord); err != nil {
+				rows.Close()
+				return nil, cur, false, err
+			}
+			cur = fileCursor{set: true, relPath: f.RelPath, ord: ord}
+			out = append(out, f)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, cur, false, err
+		}
+		return out, cur, len(out) == n, nil
 	}
 	ids := idSet(q.IDs)
 	// Versions load after the page is read, and the SQL decides WithVersions exactly.

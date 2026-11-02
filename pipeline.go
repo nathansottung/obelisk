@@ -705,7 +705,10 @@ func (a *App) Plan(collectionID int, mediaKind string, targetGB float64, par2 in
 	// A file is "already backed up" only if it's chunked AND its current hash
 	// still matches the chunked hash. A changed-hash file counts as unchunked so
 	// this Plan re-backs-up the new version naturally (older chunk stays historical).
-	backedHash := a.Store.ChunkedFileHashes(collectionID)
+	backedHash, err := a.Store.ChunkedFileHashes(collectionID)
+	if err != nil {
+		return nil, err
+	}
 	folders := map[int]string{}
 	for _, f := range a.Store.FoldersOf(collectionID) {
 		folders[f.ID] = f.Path
@@ -1114,7 +1117,11 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	// stream-verify each member as it extracts, and the tree that comes out is
 	// unchanged: this is one added description file at the tar root, never a restructure.
 	manifestPath := filepath.Join(work, bagPayloadManifestName)
-	if err := os.WriteFile(manifestPath, []byte(bagPayloadManifest(c.Files)), 0o644); err != nil {
+	listed, err := a.Store.ChunkFiles(c.ID)
+	if err != nil {
+		return fail(err)
+	}
+	if err := os.WriteFile(manifestPath, []byte(bagPayloadManifest(listed)), 0o644); err != nil {
 		return fail(err)
 	}
 
@@ -1123,7 +1130,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	// SOURCE READ-ONLY: the source files are only read; the tar is written only to
 	// tarPath in the (validated) staging dir. The manifest leads the archive, then
 	// each catalogued file under its catalogued name (see tarpkg.go).
-	if err := writePackageTar(tarPath, manifestPath, c.SrcRoot, c.Files); err != nil {
+	if err := writePackageTar(tarPath, manifestPath, c.SrcRoot, listed); err != nil {
 		return fail(fmt.Errorf("writing the package tar: %w", err))
 	}
 	finish("tar", t, 0.28)
@@ -1143,14 +1150,14 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	// skips it; contents stay unproven.
 	if doContents {
 		t = time.Now()
-		if err := verifyTarContents(tarPath, c.Files); err != nil {
+		if err := verifyTarContents(tarPath, listed); err != nil {
 			return fail(err)
 		}
 		finish("stage_verify", t, 0.40)
 		bv.Contents = true
 		now := time.Now().UTC()
 		a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: true, Path: tarPath,
-			Note: fmt.Sprintf("stage_verify: %d member(s) byte-exact vs catalog source hashes", len(c.Files))})
+			Note: fmt.Sprintf("stage_verify: %d member(s) byte-exact vs catalog source hashes", len(listed))})
 	}
 
 	var fpr string
@@ -1229,7 +1236,9 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	if c.Spanned {
 		// Finalize the segment plan against the real payload + par2 size now
 		// that both exist, so the manifest/RESTORE.txt written below match.
-		a.finalizeSegments(c, work)
+		if err := a.finalizeSegments(c, work); err != nil {
+			return fail(err)
+		}
 	}
 
 	progress(0.92, "manifest")
@@ -1237,7 +1246,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	// leak off a lost tape. The staged plaintext manifest stays for local use;
 	// medium-write paths skip it and ship the .gpg instead.
 	c.PrivateManifest = cfg.PrivateMedia && c.Encrypted
-	if err := writeManifest(work, c, fpr); err != nil {
+	if err := writeManifest(work, c, listed, fpr); err != nil {
 		return fail(err)
 	}
 	if c.PrivateManifest {
@@ -1264,7 +1273,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	// description layer, not needed to restore — so a write failure does NOT fail the
 	// build, but it must not be swallowed: log it and record it on the package so the
 	// build's job result surfaces an "incomplete BagIt tags" warning to the operator.
-	if err := writeBagItTags(work, c); err != nil {
+	if err := writeBagItTags(work, c, listed); err != nil {
 		a.Store.Log("build", c.Name+": "+err.Error())
 		c.BuildWarnings = append(c.BuildWarnings, "BagIt tag files incomplete: "+err.Error())
 	}
@@ -1382,7 +1391,7 @@ func findPayload(dir string, c *Chunk) string {
 	return payloadPathIn(filepath.Join(dir, c.Name), c)
 }
 
-func writeManifest(dir string, c *Chunk, keyFpr string) error {
+func writeManifest(dir string, c *Chunk, files []ChunkFileRef, keyFpr string) error {
 	m := map[string]any{
 		"obelisk_package": 1, "schema_version": currentSchemaVersion, "obelisk_version": appVersion,
 		"name": c.Name, "created_utc": time.Now().UTC().Format(time.RFC3339),
@@ -1396,7 +1405,7 @@ func writeManifest(dir string, c *Chunk, keyFpr string) error {
 		// encrypted:false the payload is the plain tar (payload_file = <name>.tar),
 		// so `sha256sum <payload_file>` still matches this value.
 		"ciphertext_hash": c.EncHash, "ciphertext_bytes": c.EncBytes,
-		"par2_redundancy_percent": c.Par2, "files": c.Files,
+		"par2_redundancy_percent": c.Par2, "files": files,
 	}
 	// build_verified attests, on the medium itself, that this package was proven
 	// to contain the source (contents) and to decrypt back to the verified tar

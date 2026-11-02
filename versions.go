@@ -85,27 +85,19 @@ func (s *Store) FileVersions(fileID int) ([]FileVersionView, error) {
 		rel string
 	}
 	byHash := map[string][]hit{}
-	for _, ch := range s.c.Chunks {
-		if ch.Status == "FAILED" {
-			continue
+	// Only this file's own listings: another file with identical content holds
+	// the same bytes, but same-file matches are the ones offered.
+	if err := s.listingsOfFilesLocked([]int{fileID}, func(ch *Chunk, cf ChunkFileRef) error {
+		if ch.Status == "FAILED" || cf.Hash == "" {
+			return nil
 		}
-		for _, cf := range ch.Files {
-			if cf.Hash == "" {
-				continue
-			}
-			if cf.FileID != fileID && cf.FileID != 0 {
-				// A different file with identical content still holds these bytes —
-				// content-addressed, so it is a legitimate restore source. But prefer
-				// same-file matches; include others only when FileID matches or is 0.
-				if cf.FileID != fileID {
-					continue
-				}
-			}
-			byHash[cf.Hash] = append(byHash[cf.Hash], hit{
-				pkg: FileVersionPackage{ChunkID: ch.ID, Chunk: ch.Name, Status: ch.Status, Volumes: chunkVersionVolumes(ch, vol)},
-				rel: cf.RelPath,
-			})
-		}
+		byHash[cf.Hash] = append(byHash[cf.Hash], hit{
+			pkg: FileVersionPackage{ChunkID: ch.ID, Chunk: ch.Name, Status: ch.Status, Volumes: chunkVersionVolumes(ch, vol)},
+			rel: cf.RelPath,
+		})
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	build := func(hash, alg string, size int64, mtime, firstSeen time.Time, superseded *time.Time, current bool) FileVersionView {

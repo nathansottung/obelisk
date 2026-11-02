@@ -470,15 +470,23 @@ func (a *App) AdoptFolder(mountPath string, collectionID, volumeID int, progress
 	// unknown (not counted as copies), as the dock does.
 	var unknown []ChunkFileRef
 	if prior := a.mirrorChunkAt(collectionID, vol.ID, mountPath); prior != nil && snap.Scan == ScanPartial {
-		for _, r := range append(append([]ChunkFileRef(nil), prior.Files...), prior.UnknownFiles...) {
+		priorRefs, err := a.chunkListings(prior)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range priorRefs {
 			if !seen[r.FileID] && !snap.Known(r.RelPath) && !containsRef(unknown, r.FileID) {
 				unknown = append(unknown, r)
 			}
 		}
 	}
-	c := a.upsertMirrorChunkAt(collectionID, vol, mountPath, mountPath, refs, "mirror-adopt")
-	c.UnknownFiles = unknown
-	a.Store.UpdateChunk(c)
+	c, err := a.upsertMirrorChunkAt(collectionID, vol, mountPath, mountPath, refs, "mirror-adopt")
+	if err != nil {
+		return nil, err
+	}
+	if err := a.Store.SetChunkUnknownFiles(c, unknown); err != nil {
+		return nil, err
+	}
 
 	// Collision pass: same-logical-file/different-bytes across the union. Class-(a)
 	// second-shooter frames auto-pass (noted); true conflicts (b/c) open a review item.

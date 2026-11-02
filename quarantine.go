@@ -379,51 +379,49 @@ type QuarantineConsequence struct {
 // hashVolumesLocked maps content hash -> set of volume IDs that hold a VERIFIED,
 // non-superseded copy of it — the same "qualifying copy" notion protection uses.
 // Caller holds s.mu.
-func (s *Store) hashVolumesLocked() map[string]map[int]bool {
+func (s *Store) hashVolumesLocked() (map[string]map[int]bool, error) {
 	out := map[string]map[int]bool{}
-	for _, ch := range s.c.Chunks {
+	volsOf := map[int][]int{}
+	for _, ch := range s.chunksLocked() {
 		if ch.Status == "FAILED" {
 			continue
 		}
-		var vols []int
 		for _, cp := range ch.Copies {
 			if cp.Superseded || cp.VerifyOK == nil || !*cp.VerifyOK {
 				continue
 			}
-			vols = append(vols, cp.VolumeID)
-		}
-		if len(vols) == 0 {
-			continue
-		}
-		for _, cf := range ch.Files {
-			if cf.Hash == "" {
-				continue
-			}
-			set := out[cf.Hash]
-			if set == nil {
-				set = map[int]bool{}
-				out[cf.Hash] = set
-			}
-			for _, v := range vols {
-				set[v] = true
-			}
+			volsOf[ch.ID] = append(volsOf[ch.ID], cp.VolumeID)
 		}
 	}
-	return out
+	err := s.eachListingLocked(func(ch *Chunk) bool { return len(volsOf[ch.ID]) > 0 }, false, func(ch *Chunk, cf ChunkFileRef) error {
+		if cf.Hash == "" {
+			return nil
+		}
+		set := out[cf.Hash]
+		if set == nil {
+			set = map[int]bool{}
+			out[cf.Hash] = set
+		}
+		for _, v := range volsOf[ch.ID] {
+			set[v] = true
+		}
+		return nil
+	})
+	return out, err
 }
 
 // quarantineRefsLocked finds the catalog copies on destVolumeID whose planned rel
 // path falls under relPrefix (a file: exact match; a folder: prefix at a segment
 // boundary). Returns the removed-ref descriptors and the set of affected hashes.
 // Caller holds s.mu.
-func (s *Store) quarantineRefsLocked(destVolumeID int, relPrefix string, isDir bool) ([]QuarantinedRef, map[string]bool) {
+func (s *Store) quarantineRefsLocked(destVolumeID int, relPrefix string, isDir bool) ([]QuarantinedRef, map[string]bool, error) {
 	relPrefix = strings.Trim(filepath.ToSlash(relPrefix), "/")
 	var refs []QuarantinedRef
 	hashes := map[string]bool{}
 	if destVolumeID == 0 {
-		return refs, hashes
+		return refs, hashes, nil
 	}
-	for _, ch := range s.c.Chunks {
+	for _, ch := range s.chunksLocked() {
 		if !ch.Mirror {
 			continue
 		}
@@ -437,7 +435,11 @@ func (s *Store) quarantineRefsLocked(destVolumeID int, relPrefix string, isDir b
 		if !onVol {
 			continue
 		}
-		for _, cf := range ch.Files {
+		files, err := s.chunkListLocked(ch, listFiles)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, cf := range files {
 			r := strings.Trim(filepath.ToSlash(cf.RelPath), "/")
 			match := r == relPrefix
 			if isDir {
@@ -452,7 +454,7 @@ func (s *Store) quarantineRefsLocked(destVolumeID int, relPrefix string, isDir b
 			}
 		}
 	}
-	return refs, hashes
+	return refs, hashes, nil
 }
 
 // QuarantineConsequence computes the protection impact of quarantining absPath,
@@ -489,11 +491,17 @@ func (a *App) QuarantineConsequence(absPath string) (QuarantineConsequence, erro
 
 	a.Store.mu.Lock()
 	defer a.Store.mu.Unlock()
-	_, hashes := a.Store.quarantineRefsLocked(destVol, rel, info.IsDir())
+	_, hashes, err := a.Store.quarantineRefsLocked(destVol, rel, info.IsDir())
+	if err != nil {
+		return res, err
+	}
 	if len(hashes) == 0 {
 		return res, nil // bytes-only move — nothing cataloged is affected
 	}
-	hashVols := a.Store.hashVolumesLocked()
+	hashVols, err := a.Store.hashVolumesLocked()
+	if err != nil {
+		return res, err
+	}
 
 	// Group affected files by Event name + Role, tracking the min copies before/after.
 	events := map[int]string{}
@@ -643,8 +651,14 @@ func (a *App) Quarantine(absPath, by, reason string) (*QuarantineEntry, error) {
 	// Pull the affected catalog copies out of protection accounting (bytes are still
 	// safe in _deleted; they simply no longer live where the copy record says).
 	a.Store.mu.Lock()
-	refs, _ := a.Store.quarantineRefsLocked(destVol, rel, info.IsDir())
-	a.Store.removeRefsLocked(refs)
+	refs, _, err := a.Store.quarantineRefsLocked(destVol, rel, info.IsDir())
+	if err == nil {
+		err = a.Store.removeRefsLocked(refs)
+	}
+	if err != nil {
+		a.Store.mu.Unlock()
+		return nil, fmt.Errorf("%s was moved to quarantine, but its copies could not be taken out of the catalog: %w", rel, err)
+	}
 	e := &QuarantineEntry{
 		ID: a.Store.next("quarantine"), Root: filepath.ToSlash(root), OriginalRel: rel,
 		IsDir: info.IsDir(), SizeBytes: size, FileCount: fileCount,
@@ -701,7 +715,10 @@ func (a *App) UnQuarantine(id int) (*QuarantineEntry, error) {
 	pruneEmptyStaging(rootReal, path.Dir(path.Join(QuarantineDir, e.OriginalRel)))
 
 	a.Store.mu.Lock()
-	a.Store.restoreRefsLocked(e.Refs)
+	if err := a.Store.restoreRefsLocked(e.Refs); err != nil {
+		a.Store.mu.Unlock()
+		return nil, fmt.Errorf("%s was moved back, but its copies could not be returned to the catalog: %w", e.OriginalRel, err)
+	}
 	now := time.Now().UTC()
 	e.Status, e.RestoredAt = QuarantineRestored, &now
 	_ = a.Store.save()
@@ -715,7 +732,7 @@ func (a *App) UnQuarantine(id int) (*QuarantineEntry, error) {
 // package tallies, so protection stops counting the quarantined copy. Caller holds
 // s.mu. The bytes still exist (in _deleted) — only the "it lives HERE" record is
 // pulled; nothing about other volumes' copies changes.
-func (s *Store) removeRefsLocked(refs []QuarantinedRef) {
+func (s *Store) removeRefsLocked(refs []QuarantinedRef) error {
 	byChunk := map[int]map[string]bool{}
 	for _, r := range refs {
 		m := byChunk[r.ChunkID]
@@ -725,54 +742,71 @@ func (s *Store) removeRefsLocked(refs []QuarantinedRef) {
 		}
 		m[r.Ref.RelPath] = true
 	}
-	for _, ch := range s.c.Chunks {
+	for _, ch := range s.chunksLocked() {
 		drop := byChunk[ch.ID]
 		if drop == nil {
 			continue
 		}
-		kept := ch.Files[:0:0]
+		files, err := s.chunkListLocked(ch, listFiles)
+		if err != nil {
+			return err
+		}
+		var kept []ChunkFileRef
 		var sum int64
-		for _, cf := range ch.Files {
+		for _, cf := range files {
 			if drop[cf.RelPath] {
 				continue
 			}
 			kept = append(kept, cf)
 			sum += cf.SizeBytes
 		}
-		ch.Files, ch.FileCount, ch.DataBytes, ch.EncBytes = kept, len(kept), sum, sum
+		ch.FileCount, ch.DataBytes, ch.EncBytes = len(kept), sum, sum
+		if err := s.setChunkListLocked(ch, listFiles, kept); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // restoreRefsLocked re-adds previously removed refs to their mirror packages (deduped
 // by rel path) and refreshes the tallies. Caller holds s.mu. A package that has since
 // vanished is skipped — the reverse move still succeeds; the copy simply isn't
 // re-credited (a later scan re-adopts it).
-func (s *Store) restoreRefsLocked(refs []QuarantinedRef) {
+func (s *Store) restoreRefsLocked(refs []QuarantinedRef) error {
 	byChunk := map[int][]ChunkFileRef{}
 	for _, r := range refs {
 		byChunk[r.ChunkID] = append(byChunk[r.ChunkID], r.Ref)
 	}
-	for _, ch := range s.c.Chunks {
+	for _, ch := range s.chunksLocked() {
 		add := byChunk[ch.ID]
 		if len(add) == 0 {
 			continue
 		}
+		listed, err := s.chunkListLocked(ch, listFiles)
+		if err != nil {
+			return err
+		}
+		files := append([]ChunkFileRef(nil), listed...)
 		have := map[string]bool{}
-		for _, cf := range ch.Files {
+		for _, cf := range files {
 			have[cf.RelPath] = true
 		}
 		for _, cf := range add {
 			if !have[cf.RelPath] {
-				ch.Files = append(ch.Files, cf)
+				files = append(files, cf)
 				have[cf.RelPath] = true
 			}
 		}
 		var sum int64
-		for _, cf := range ch.Files {
+		for _, cf := range files {
 			sum += cf.SizeBytes
 		}
-		ch.FileCount, ch.DataBytes, ch.EncBytes = len(ch.Files), sum, sum
+		ch.FileCount, ch.DataBytes, ch.EncBytes = len(files), sum, sum
+		if err := s.setChunkListLocked(ch, listFiles, files); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // ---- listing, view, reconcile -----------------------------------------

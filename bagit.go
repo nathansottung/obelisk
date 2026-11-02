@@ -170,9 +170,9 @@ func sha256Hex(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToStri
 // Best-effort and never fatal to a build — these are a legibility layer, not part
 // of the custody chain. manifest-sha256.txt lists the SOURCE files the package
 // preserves (as data/<relpath>), matching what the conformant export materializes.
-func writeBagItTags(dir string, c *Chunk) error {
-	oxB, oxN := bagOxum(c.Files)
-	manifest := bagPayloadManifest(c.Files)
+func writeBagItTags(dir string, c *Chunk, files []ChunkFileRef) error {
+	oxB, oxN := bagOxum(files)
+	manifest := bagPayloadManifest(files)
 	info := bagInfo(c, oxB, oxN, false)
 	tags := map[string]string{
 		"bagit.txt":            bagItDeclaration,

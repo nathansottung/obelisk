@@ -953,7 +953,9 @@ func (a *App) recordPlanDestCopies(plan *Plan, refs []ChunkFileRef) error {
 		}
 		if len(ar) > 0 {
 			sort.Slice(ar, func(i, j int) bool { return ar[i].RelPath < ar[j].RelPath })
-			a.upsertMirrorChunk(aid, vol, plan.DestinationRoot, ar, "mirror")
+			if _, err := a.upsertMirrorChunk(aid, vol, plan.DestinationRoot, ar, "mirror"); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

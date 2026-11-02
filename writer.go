@@ -700,7 +700,11 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 	mirrorFailed := false
 	for j, c := range mirrorTargets {
 		progress(float64(len(cands)+j)/float64(len(cands)+len(mirrorTargets)), "verify mirror "+c.Name)
-		ok, checked, bad, firstBad := verifyMirrorChunk(c, destDir, level)
+		listed, err := a.Store.ChunkFiles(c.ID)
+		if err != nil {
+			return nil, err
+		}
+		ok, checked, bad, firstBad := verifyMirrorChunk(listed, destDir, level)
 		now := time.Now().UTC()
 		note := fmt.Sprintf("campaign mirror (%s): %d/%d ok", levelTag(level), checked-bad, checked)
 		if !ok {

@@ -28,13 +28,17 @@ func init() { openCatalogBackend = openDBBackend }
 // dbBackend is an open catalog database with the hashes of what it last committed.
 type dbBackend struct {
 	d       *catalogDB
-	tx      *sql.Tx              // the open write transaction, if any
-	txFiles bool                 // the open transaction holds file writes
-	txw     *rowWriter           // the open transaction's row writer (prepared inserts)
-	txStmt  map[string]*sql.Stmt // statements prepared on the open transaction
-	dbStmt  map[string]*sql.Stmt // statements prepared on the writer connection
-	hashes  map[string]string    // unit key → hash, as last committed
-	closed  bool
+	tx      *sql.Tx // the open write transaction, if any
+	txFiles bool    // the open transaction holds file writes
+	// txKeys are units written in the open transaction ahead of a flush (a
+	// package's header before its listings): a flush that no longer finds them in
+	// memory deletes them.
+	txKeys map[string]bool
+	txw    *rowWriter           // the open transaction's row writer (prepared inserts)
+	txStmt map[string]*sql.Stmt // statements prepared on the open transaction
+	dbStmt map[string]*sql.Stmt // statements prepared on the writer connection
+	hashes map[string]string    // unit key → hash, as last committed
+	closed bool
 	// lastWritten and lastRemoved count the records the last flush wrote and
 	// removed, for tests.
 	lastWritten, lastRemoved int
@@ -117,7 +121,7 @@ func (b *dbBackend) begin() (*sql.Tx, error) {
 
 // endTx forgets the transaction's prepared statements; the transaction closes them.
 func (b *dbBackend) endTx() {
-	b.tx, b.txw, b.txStmt, b.txFiles = nil, nil, nil, false
+	b.tx, b.txw, b.txStmt, b.txFiles, b.txKeys = nil, nil, nil, false, nil
 }
 
 // writer is the open transaction's row writer, made once per transaction so each
@@ -189,6 +193,11 @@ func (b *dbBackend) flush(c *catalog) error {
 			removed = append(removed, k)
 		}
 	}
+	for k := range b.txKeys {
+		if _, ok := next[k]; !ok && b.hashes[k] == "" {
+			removed = append(removed, k)
+		}
+	}
 	if len(changed) == 0 && len(removed) == 0 && b.tx == nil {
 		return nil
 	}
@@ -208,8 +217,10 @@ func (b *dbBackend) flush(c *catalog) error {
 	}
 	for _, u := range changed {
 		if err := savepoint(tx, "unit", func() error {
-			if err := deleteCatalogUnit(tx, u.key); err != nil {
-				return err
+			if !u.inPlace {
+				if err := deleteCatalogUnit(tx, u.key); err != nil {
+					return err
+				}
 			}
 			return u.write(w)
 		}); err != nil {

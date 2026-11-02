@@ -165,8 +165,8 @@ func verifyFileAtLevel(path string, wantSize int64, wantHash, wantSample, level 
 // against the catalog at the given level, returning the tally and the first bad
 // file. Path-addressable: correct for native mirrors (and legacy mirror drives
 // that hold the source tree at its rel paths).
-func verifyMirrorChunk(c *Chunk, base, level string) (ok bool, checked, bad int, firstBad string) {
-	for _, ref := range c.Files {
+func verifyMirrorChunk(files []ChunkFileRef, base, level string) (ok bool, checked, bad int, firstBad string) {
+	for _, ref := range files {
 		p := filepath.Join(base, filepath.FromSlash(ref.RelPath))
 		good, _ := verifyFileAtLevel(p, ref.SizeBytes, ref.Hash, ref.SampleHash, level)
 		checked++
@@ -237,7 +237,11 @@ func (a *App) VerifyMirrorVolume(volumeID int, mount, level string, progress fun
 		if progress != nil {
 			progress(float64(ti)/float64(len(targets)), "verify "+t.c.Name)
 		}
-		ok, checked, bad, firstBad := verifyMirrorChunk(t.c, t.base, level)
+		listed, err := a.Store.ChunkFiles(t.c.ID)
+		if err != nil {
+			return nil, err
+		}
+		ok, checked, bad, firstBad := verifyMirrorChunk(listed, t.base, level)
 		if !ok {
 			okAll = false
 		}

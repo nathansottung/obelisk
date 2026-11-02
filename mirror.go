@@ -328,7 +328,9 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 	// drift and coverage treat them as real copies (Prompt 23 records).
 	if len(refs) > 0 {
 		sort.Slice(refs, func(i, j int) bool { return refs[i].RelPath < refs[j].RelPath })
-		a.upsertMirrorChunk(collectionID, vol, destDir, refs, "mirror")
+		if _, err := a.upsertMirrorChunk(collectionID, vol, destDir, refs, "mirror"); err != nil {
+			return nil, err
+		}
 	}
 
 	progress(0.96, "refreshing volume inventory sidecar")
@@ -589,8 +591,12 @@ func (a *App) writeVolumeInventoryTo(dest *DestRoot, vol *Volume) (string, error
 		if !on {
 			continue
 		}
-		files := make([]invFile, 0, len(c.Files))
-		for _, ref := range c.Files {
+		listed, err := a.Store.ChunkFiles(c.ID)
+		if err != nil {
+			return "", err
+		}
+		files := make([]invFile, 0, len(listed))
+		for _, ref := range listed {
 			files = append(files, invFile{RelPath: ref.RelPath, Hash: ref.Hash, Size: ref.SizeBytes})
 			totalBytes += ref.SizeBytes
 			tally.add(ref.RelPath, ref.SizeBytes)

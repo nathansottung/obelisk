@@ -280,8 +280,12 @@ func (a *App) writeFinalizeSidecar(mountPath string, v *Volume, as finalizeAsses
 				lv = cp.LastVerifiedAt
 			}
 		}
-		files := make([]string, 0, len(c.Files))
-		for _, cf := range c.Files {
+		listed, err := a.Store.ChunkFiles(c.ID)
+		if err != nil {
+			return "", err
+		}
+		files := make([]string, 0, len(listed))
+		for _, cf := range listed {
 			files = append(files, cf.RelPath)
 			tally.add(cf.RelPath, cf.SizeBytes)
 		}
