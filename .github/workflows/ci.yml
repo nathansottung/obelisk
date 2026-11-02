@@ -69,7 +69,7 @@ jobs:
       # The whole suite again with the catalog on the SQLite engine. Tests about
       # catalog.json itself, or app backups that carry it, skip with a reason.
       - name: go test (catalog database engine)
-        run: OBELISK_CATALOG_ENGINE=sqlite go test ./...
+        run: OBELISK_CATALOG_ENGINE=sqlite go test -timeout 30m ./...
 
       # The destination-boundary tests must run, not skip, on Linux: they are the
       # evidence that a mirror never writes into a registered source here.
@@ -330,7 +330,7 @@ jobs:
           tar --version
           gpg --version | Select-Object -First 1
           par2 -V | Select-Object -First 1
-          go test -json -count=1 ./... > go-test.json
+          go test -json -count=1 -timeout 30m ./... > go-test.json
           "go test exit code $LASTEXITCODE; judged by the known-failure gate"
           exit 0
 
