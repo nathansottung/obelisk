@@ -74,7 +74,9 @@ archive that can damage its sources or say "verified" when it isn't.
     their tables and read when asked for, comparisons in their own table, scan lists
     read file by file for comparisons and the cross-drive lists, every access
     through Store methods: merged ([#20](https://github.com/nathansottung/obelisk/pull/20)).
-  - S7 audit log and jobs in the same transaction.
+  - S7 audit log and jobs: the audit log only in its table, and the job board in the catalog
+    database, a job's end committed in the same transaction as its pending changes: merged
+    ([#22](https://github.com/nathansottung/obelisk/pull/22)).
   - S8 backups: `VACUUM INTO`, 7 daily and 4 weekly copies with a size cap, plus app backup
     and restore.
   - S9 cutover: the move runs on open.
