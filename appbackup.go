@@ -9,7 +9,9 @@ package main
 // What travels: the catalog (files, hashes, volumes, locations, copies, packages,
 // segments, events, plans, conflicts, version histories, drift/scrub reports, dock
 // sessions, profiles, templates), config, the persisted job history with artifacts,
-// and any user format-registry overrides. Keystores are SECRETS the user may keep on
+// the drive scan file lists and comparison results, and any user format-registry
+// overrides. On the catalog database engine the catalog and its job history are one
+// member, catalog.db (catalogdb_backup.go). Keystores are SECRETS the user may keep on
 // separate devices; they are EXCLUDED by default and only ride along on explicit
 // opt-in.
 //

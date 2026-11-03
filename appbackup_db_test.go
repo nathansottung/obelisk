@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -315,6 +316,8 @@ func TestAppBackupDB_ADamagedDatabaseIsRefusedBeforeAnyChange(t *testing.T) {
 			}
 			return b
 		},
+		// Every record still reads; only integrity_check sees the index is wrong.
+		"an index without its entries": func(b []byte) []byte { return emptyAnIndex(t, b) },
 		"not a database": func([]byte) []byte { return []byte("not a database at all, just text") },
 		"empty":          func([]byte) []byte { return nil },
 	} {
@@ -386,8 +389,10 @@ func setDBMetaInBytes(t *testing.T, db []byte, key, value string) []byte {
 }
 
 // An old write-ahead log never meets the restored database: one left beside
-// catalog.db when the store closed is removed before the swap, so SQLite cannot
-// replay the replaced catalog's pages into the restored one.
+// catalog.db when the store closed is folded into the old database or removed
+// before the swap, so SQLite cannot replay the replaced catalog's pages into the
+// restored one. A database whose header says WAL would read such a log as its own
+// the moment it opened.
 func TestAppBackupDB_AnOldWALNeverMeetsTheRestoredDatabase(t *testing.T) {
 	src := dbTestApp(t)
 	abPopulate(t, src)
@@ -395,37 +400,46 @@ func TestAppBackupDB_AnOldWALNeverMeetsTheRestoredDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dst := dbTestApp(t)
-	// A real log of the catalog being replaced, with pages of its own.
-	holdBatch(dst.Store)
-	for i := 0; i < 50; i++ {
-		dst.Store.AddCollection("Old " + strings.Repeat("x", i))
-	}
-	if err := dst.Store.FlushPending(); err != nil {
-		t.Fatal(err)
-	}
-	wal, err := os.ReadFile(filepath.Join(dst.DataDir, catalogDBName+"-wal"))
-	if err != nil || len(wal) == 0 {
-		t.Fatalf("no write-ahead log to copy (%d bytes, %v)", len(wal), err)
-	}
-	prev := restoreAfterClose
-	restoreAfterClose = func(dataDir string) {
-		if err := os.WriteFile(filepath.Join(dataDir, catalogDBName+"-wal"), wal, 0o644); err != nil {
-			t.Error(err)
-		}
-	}
-	t.Cleanup(func() { restoreAfterClose = prev })
-	if _, err := dst.RestoreAppBackup(exp.TarPath); err != nil {
-		t.Fatalf("restore: %v", err)
-	}
-	if got := collectionNames(dst.Store); strings.Join(got, ",") != "Backup Me" {
-		t.Fatalf("after the restore the catalog holds %v: the old log was replayed into it", got)
-	}
-	if err := dst.Store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if got := collectionNames(openEngineStore(t, "sqlite", dst.DataDir)); strings.Join(got, ",") != "Backup Me" {
-		t.Fatalf("reopened, the catalog holds %v", got)
+	walHeader := rewriteBackup(t, exp.TarPath, func(m map[string][]byte) {
+		db := append([]byte(nil), m["catalog.db"]...)
+		db[18], db[19] = 2, 2 // the file format versions that mean WAL
+		m["catalog.db"] = db
+	})
+	for name, bundle := range map[string]string{"as exported": exp.TarPath, "a database in WAL mode": walHeader} {
+		t.Run(name, func(t *testing.T) {
+			dst := dbTestApp(t)
+			// A real log of the catalog being replaced, with pages of its own.
+			holdBatch(dst.Store)
+			for i := 0; i < 50; i++ {
+				dst.Store.AddCollection("Old " + strings.Repeat("x", i))
+			}
+			if err := dst.Store.FlushPending(); err != nil {
+				t.Fatal(err)
+			}
+			wal, err := os.ReadFile(filepath.Join(dst.DataDir, catalogDBName+"-wal"))
+			if err != nil || len(wal) == 0 {
+				t.Fatalf("no write-ahead log to copy (%d bytes, %v)", len(wal), err)
+			}
+			prev := restoreAfterClose
+			restoreAfterClose = func(dataDir string) {
+				if err := os.WriteFile(filepath.Join(dataDir, catalogDBName+"-wal"), wal, 0o644); err != nil {
+					t.Error(err)
+				}
+			}
+			t.Cleanup(func() { restoreAfterClose = prev })
+			if _, err := dst.RestoreAppBackup(bundle); err != nil {
+				t.Fatalf("restore: %v", err)
+			}
+			if got := collectionNames(dst.Store); strings.Join(got, ",") != "Backup Me" {
+				t.Fatalf("after the restore the catalog holds %v: the old log was replayed into it", got)
+			}
+			if err := dst.Store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if got := collectionNames(openEngineStore(t, "sqlite", dst.DataDir)); strings.Join(got, ",") != "Backup Me" {
+				t.Fatalf("reopened, the catalog holds %v", got)
+			}
+		})
 	}
 }
 
@@ -707,4 +721,169 @@ func TestAppBackup_EachRestoreHasItsOwnPreRestoreFolder(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(res.PreRestoreDir, "config.json")); err != nil {
 		t.Fatalf("the restore's own pre-restore copy: %v", err)
 	}
+}
+
+// appendUnlisted returns a copy of tarPath with a member the manifest does not list
+// added at the end, without a sidecar.
+func appendUnlisted(t *testing.T, tarPath, name string, data []byte) string {
+	t.Helper()
+	members, err := readTarMembers(tarPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for n := range members {
+		if n != "MANIFEST.json" {
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names)
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	write := func(n string, b []byte) {
+		if err := tw.WriteHeader(&tar.Header{Name: n, Mode: 0o644, Size: int64(len(b))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("MANIFEST.json", members["MANIFEST.json"])
+	for _, n := range names {
+		write(n, members[n])
+	}
+	write(name, data)
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(t.TempDir(), "unlisted.tar")
+	if err := os.WriteFile(p, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// Only members the manifest lists, with their hashes checked, are used: a
+// catalog.db added to an older backup without being listed is not restored, and
+// the backup's listed catalog.json is.
+func TestAppBackupDB_AMemberTheManifestDoesNotListIsNotUsed(t *testing.T) {
+	other := dbTestApp(t)
+	other.Store.AddCollection("Unlisted")
+	stray, _, err := other.Store.snapshotDBBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(catalogEngineEnv, "json")
+	src := abTestApp(t)
+	abPopulate(t, src)
+	exp, err := src.ExportAppBackup(t.TempDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := appendUnlisted(t, exp.TarPath, "catalog.db", stray)
+	dst := dbTestApp(t)
+	if _, err := dst.RestoreAppBackup(bundle); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if got := collectionNames(dst.Store); strings.Join(got, ",") != "Backup Me" {
+		t.Fatalf("after the restore the catalog holds %v, want the listed catalog's [Backup Me]", got)
+	}
+}
+
+// A backup's database whose board was never marked moved in never takes in the
+// data folder's jobs.json: its board is the one it carries.
+func TestAppBackupDB_ARestoredDatabaseNeverTakesInTheLocalJobsJSON(t *testing.T) {
+	src := dbTestApp(t)
+	abPopulate(t, src)
+	exp, err := src.ExportAppBackup(t.TempDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	members, _ := readTarMembers(exp.TarPath)
+	unmarked := deleteDBMetaInBytes(t, members["catalog.db"], metaJobMoved)
+	bundle := rewriteBackup(t, exp.TarPath, func(m map[string][]byte) { m["catalog.db"] = unmarked })
+	dst := dbTestApp(t)
+	local := `{"next":77,"rows":[{"id":77,"kind":"scan","label":"local only","status":"COMPLETED"}]}`
+	if err := os.WriteFile(filepath.Join(dst.DataDir, "jobs.json"), []byte(local), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dst.RestoreAppBackup(bundle); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	for _, j := range dst.Store.Jobs() {
+		if j.ID == 77 {
+			t.Fatalf("the restored board took in the data folder's jobs.json: %+v", j)
+		}
+	}
+	if n := len(dst.Store.Jobs()); n != 1 {
+		t.Fatalf("restored board has %d jobs, want the backup's 1", n)
+	}
+}
+
+// deleteDBMetaInBytes returns a copy of the database db without a meta value.
+func deleteDBMetaInBytes(t *testing.T, db []byte, key string) []byte {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "edit.db")
+	if err := os.WriteFile(p, db, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d, err := sql.Open(catalogDBDriver, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`DELETE FROM meta WHERE key=?`, key); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// emptyAnIndex returns a copy of the database db in which one index of the file
+// table has no entries: the table reads whole, and only integrity_check finds it.
+func emptyAnIndex(t *testing.T, db []byte) []byte {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "index.db")
+	if err := os.WriteFile(p, db, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d, err := sql.Open(catalogDBDriver, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.SetMaxOpenConns(1)
+	var name string
+	if err := d.QueryRow(`SELECT name FROM sqlite_schema WHERE type='index' AND tbl_name='file' AND sql IS NOT NULL ORDER BY name LIMIT 1`).Scan(&name); err != nil {
+		t.Fatal(err)
+	}
+	var root int
+	// An empty index of a table of its own lends its pages: an index b-tree with no
+	// entries.
+	for _, q := range []string{`CREATE TABLE zz_empty(x)`, `CREATE INDEX zz_empty_x ON zz_empty(x)`} {
+		if _, err := d.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.QueryRow(`SELECT rootpage FROM sqlite_schema WHERE name='zz_empty_x'`).Scan(&root); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{`PRAGMA writable_schema=ON`, `UPDATE sqlite_schema SET rootpage=` + strconv.Itoa(root) + ` WHERE name='` + name + `'`,
+		`DELETE FROM sqlite_schema WHERE name='zz_empty_x'`} {
+		if _, err := d.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
