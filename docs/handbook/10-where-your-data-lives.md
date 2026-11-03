@@ -19,7 +19,7 @@ Some words you'll see:
 
 | Place | What it is |
 | --- | --- |
-| **The catalog** | The brain: every hash, drive, and plan. It holds no file content, but losing it loses what the tool knows — so back it up. It lives in your data folder as `catalog.json`, and the tool keeps **daily backups automatically** next to it (`catalog.json.bak-YYYYMMDD`, newest 14 kept). |
+| **The catalog** | The brain: every hash, drive, and plan. It holds no file content, but losing it loses what the tool knows — so back it up. It lives in your data folder as `catalog.json`, and the tool keeps **daily backups automatically** next to it (`catalog.json.bak-YYYYMMDD`, newest 14 kept). With the catalog database (`catalog.db`), the daily backups are `catalog.db.bak-YYYYMMDD`: the last 7 days and one for each of the 4 weeks before, each a whole database you can put back as `catalog.db`. |
 | **Settings** | Your configuration, as plain readable JSON (`config.json` in the data folder). |
 | **Keystores** | Your encryption keys. The app **refuses to run encryption without two**, on different devices. Secrets live only here; the catalog stores fingerprints, never the key itself. |
 | **Staging** | A temporary workspace while building packages, **emptied as packages complete**. It can't live inside a folder you back up. |

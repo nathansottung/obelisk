@@ -118,6 +118,10 @@ re-scanning. The same is true the next time you insert each tape or drive.
   offered as a re-verify, not a re-adopt.
 - **I want my old records back.** They were saved to the `pre-restore-…` folder in the
   data directory before the restore. Nothing was deleted.
+- **"Another program still has the catalog database open."** With the catalog
+  database, a restore never replaces it while something else is using it. Close any
+  other copy of Obelisk (or a tool reading `catalog.db`) and restore again. Nothing
+  was changed.
 
 ## Screenshots to capture
 
