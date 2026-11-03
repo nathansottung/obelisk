@@ -201,7 +201,12 @@ func jobLoadBundle(t *testing.T, members map[string][]byte) string {
 func TestJobLoad_RestoreCaller(t *testing.T) {
 	skipWithDatabaseJobs(t)
 	a := abTestApp(t)
-	if _, err := a.Store.NewJob("fixture", "prior"); err != nil {
+	j, err := a.Store.NewJob("fixture", "prior")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Past history: a restore waits for running jobs.
+	if err := a.Store.SetJob(j.ID, 1, "", "COMPLETED"); err != nil {
 		t.Fatal(err)
 	}
 	bad := []byte(`{"rows":[null]}`)

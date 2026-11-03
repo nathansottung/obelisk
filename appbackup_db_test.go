@@ -26,7 +26,9 @@ func dbTestApp(t *testing.T) *App {
 	return abTestApp(t)
 }
 
-// dirNames lists every name under dir, for a test that nothing changed.
+// dirNames lists every name under dir, for a test that nothing changed. The daily
+// backups of the catalog database are left out: a commit makes them, in the
+// background, not the operation under test.
 func dirNames(t *testing.T, dir string) []string {
 	t.Helper()
 	var out []string
@@ -35,6 +37,9 @@ func dirNames(t *testing.T, dir string) []string {
 			return err
 		}
 		rel, _ := filepath.Rel(dir, p)
+		if strings.HasPrefix(rel, catalogDBBackupPrefix) {
+			return nil
+		}
 		out = append(out, filepath.ToSlash(rel))
 		return nil
 	})
@@ -432,6 +437,9 @@ func TestAppBackupDB_AnOldWALNeverMeetsTheRestoredDatabase(t *testing.T) {
 			}
 			if got := collectionNames(dst.Store); strings.Join(got, ",") != "Backup Me" {
 				t.Fatalf("after the restore the catalog holds %v: the old log was replayed into it", got)
+			}
+			if got := leftStages(t, dst.DataDir); len(got) > 0 {
+				t.Errorf("the restore left %v in the data folder", got)
 			}
 			if err := dst.Store.Close(); err != nil {
 				t.Fatal(err)
@@ -886,4 +894,72 @@ func emptyAnIndex(t *testing.T, db []byte) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// A restore never runs while a job is running: the job's work would go to a store
+// the restore closes or replaces. It is refused before anything changes, and the
+// job can still record its end.
+func TestAppBackup_ARestoreIsRefusedWhileAJobRuns(t *testing.T) {
+	src := abTestApp(t)
+	exp, err := src.ExportAppBackup(t.TempDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := abTestApp(t)
+	j, err := dst.Store.NewJob("write", "Write a package")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := dirNames(t, dst.DataDir)
+	if _, err := dst.RestoreAppBackup(exp.TarPath); err == nil || !strings.Contains(err.Error(), "running") {
+		t.Fatalf("restore = %v, want a refusal while a job runs", err)
+	}
+	if got := dirNames(t, dst.DataDir); !reflect.DeepEqual(got, before) {
+		t.Fatalf("the refused restore changed the data folder:\n%v\nwas\n%v", got, before)
+	}
+	if err := dst.Store.SetJob(j.ID, 1, "", "COMPLETED"); err != nil {
+		t.Fatalf("the running job could not record its end: %v", err)
+	}
+	if _, err := dst.RestoreAppBackup(exp.TarPath); err != nil {
+		t.Fatalf("restore once no job runs: %v", err)
+	}
+}
+
+// A data folder move never runs while a job is running.
+func TestMigrateDataDir_IsRefusedWhileAJobRuns(t *testing.T) {
+	t.Setenv(catalogEngineEnv, "sqlite")
+	legacy := t.TempDir()
+	target := filepath.Join(t.TempDir(), "new-home")
+	s, err := openTestStore(t, legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := initializedTestApp(t, &App{DataDir: legacy, Store: s})
+	if _, err := app.Store.NewJob("write", "Write a package"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.migrateDataDir(legacy, target); err == nil || !strings.Contains(err.Error(), "running") {
+		t.Fatalf("move = %v, want a refusal while a job runs", err)
+	}
+	if app.Store != s || app.DataDir != legacy {
+		t.Fatal("the refused move switched the app")
+	}
+}
+
+// A copy never removes a file it did not make: one already at its destination is
+// left as it is.
+func TestVacuumCopy_NeverRemovesAnExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	s := openEngineStore(t, "sqlite", dir)
+	s.AddCollection("A")
+	dest := filepath.Join(t.TempDir(), "catalog.db")
+	if err := os.WriteFile(dest, []byte("theirs"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := vacuumCopy(filepath.Join(dir, catalogDBName), dest); err == nil {
+		t.Fatal("copied over an existing file")
+	}
+	if b, _ := os.ReadFile(dest); string(b) != "theirs" {
+		t.Fatalf("the existing file was changed or removed (%q)", b)
+	}
 }

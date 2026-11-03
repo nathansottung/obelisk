@@ -70,6 +70,7 @@ func TestDBBackup_TheFirstCommitOfADayWritesACompleteCopy(t *testing.T) {
 	s := openEngineStore(t, "sqlite", dir)
 	*clock = time.Date(2026, 11, 3, 10, 0, 0, 0, time.Local)
 	s.AddCollection("Kept")
+	s.waitBackups()
 	if got := backupNames(t, dir); len(got) != 1 || got[0] != "catalog.db.bak-20261103" {
 		t.Fatalf("backups = %v, want catalog.db.bak-20261103", got)
 	}
@@ -91,6 +92,7 @@ func TestDBBackup_OnePerDay(t *testing.T) {
 	s := openEngineStore(t, "sqlite", dir)
 	*clock = time.Date(2026, 11, 3, 10, 0, 0, 0, time.Local)
 	s.AddCollection("First")
+	s.waitBackups()
 	s.AddCollection("Second")
 	bak := filepath.Join(dir, "catalog.db.bak-20261103")
 	if got := collectionNames(openBackupCopy(t, bak)); strings.Join(got, ",") != "First" {
@@ -98,6 +100,7 @@ func TestDBBackup_OnePerDay(t *testing.T) {
 	}
 	*clock = clock.Add(24 * time.Hour)
 	s.AddCollection("Third")
+	s.waitBackups()
 	next := filepath.Join(dir, "catalog.db.bak-20261104")
 	if got := collectionNames(openBackupCopy(t, next)); strings.Join(got, ",") != "First,Second,Third" {
 		t.Fatalf("the next day's backup holds %v", got)
@@ -122,6 +125,7 @@ func TestDBBackup_ADatabaseThatFailsQuickCheckIsNotCopied(t *testing.T) {
 	}
 	s.mu.Unlock()
 	s.AddCollection("Kept")
+	s.waitBackups()
 	if err := s.FlushPending(); err != nil {
 		t.Fatalf("a backup that could not be made failed the save: %v", err)
 	}
@@ -150,6 +154,7 @@ func TestDBBackup_ACopyThatFailsItsCheckIsNotPublished(t *testing.T) {
 	}
 	s.mu.Unlock()
 	s.AddCollection("Kept")
+	s.waitBackups()
 	if got := backupNames(t, dir); strings.Join(got, ",") != strings.Join(old, ",") {
 		t.Fatalf("backups = %v, want the older ones untouched and no new one", got)
 	}
@@ -167,6 +172,7 @@ func TestDBBackup_AnExistingBackupIsNeverReplaced(t *testing.T) {
 	s := openEngineStore(t, "sqlite", dir)
 	*clock = time.Date(2026, 11, 3, 10, 0, 0, 0, time.Local)
 	s.AddCollection("Kept")
+	s.waitBackups()
 	if b, _ := os.ReadFile(bak); string(b) != "theirs" {
 		t.Fatalf("the existing backup was replaced (%d bytes)", len(b))
 	}
@@ -207,6 +213,7 @@ func TestDBBackup_KeepsSevenDailyAndFourWeekly(t *testing.T) {
 	s := openEngineStore(t, "sqlite", dir)
 	*clock = time.Date(2026, 11, 3, 10, 0, 0, 0, time.Local)
 	s.AddCollection("Kept")
+	s.waitBackups()
 	want := []string{
 		// the four weeks before the dailies: weeks 40 to 43, the newest of each
 		"catalog.db.bak-20261004", "catalog.db.bak-20261011", "catalog.db.bak-20261018", "catalog.db.bak-20261025",
@@ -235,6 +242,7 @@ func TestDBBackup_TheSizeCapDropsTheOldestFirst(t *testing.T) {
 	*clock = time.Date(2026, 11, 3, 10, 0, 0, 0, time.Local)
 	catalogDBBackupCap = 3 << 20 // today's small copy and the two days before it
 	s.AddCollection("Kept")
+	s.waitBackups()
 	want := "catalog.db.bak-20261101,catalog.db.bak-20261102,catalog.db.bak-20261103"
 	if got := backupNames(t, dir); strings.Join(got, ",") != want {
 		t.Fatalf("backups = %v, want %s", got, want)
@@ -244,6 +252,7 @@ func TestDBBackup_TheSizeCapDropsTheOldestFirst(t *testing.T) {
 	catalogDBBackupCap = 1
 	*clock = time.Date(2026, 11, 4, 10, 0, 0, 0, time.Local)
 	s.AddCollection("More")
+	s.waitBackups()
 	if got := backupNames(t, dir); strings.Join(got, ",") != "catalog.db.bak-20261104" {
 		t.Fatalf("backups = %v, want only the newest", got)
 	}
@@ -268,6 +277,7 @@ func TestDBBackup_OldStagesAreSwept(t *testing.T) {
 	s := openEngineStore(t, "sqlite", dir)
 	*clock = time.Date(2026, 11, 3, 10, 0, 0, 0, time.Local)
 	s.AddCollection("Kept")
+	s.waitBackups()
 	if _, err := os.Stat(oldStage); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("an old stage was left (err=%v)", err)
 	}
@@ -283,4 +293,46 @@ func persistedStore(t *testing.T, s *Store, dir string) *Store {
 		t.Fatal(err)
 	}
 	return openEngineStore(t, "sqlite", dir)
+}
+
+// The daily backup runs without holding the store: the catalog answers while a
+// backup is being made.
+func TestDBBackup_TheStoreAnswersWhileABackupIsMade(t *testing.T) {
+	dir := t.TempDir()
+	clock := setBackupClock(t, time.Time{})
+	s := openEngineStore(t, "sqlite", dir)
+	*clock = time.Date(2026, 11, 3, 10, 0, 0, 0, time.Local)
+	started, release := make(chan struct{}), make(chan struct{})
+	s.mu.Lock()
+	s.be.(*dbBackend).failBackupCheck = func(what string) error {
+		if what == "database" {
+			close(started)
+			<-release
+		}
+		return nil
+	}
+	s.mu.Unlock()
+	s.AddCollection("Kept")
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no backup started")
+	}
+	answered := make(chan struct{})
+	go func() {
+		s.AddCollection("While it runs")
+		s.Collections()
+		close(answered)
+	}()
+	select {
+	case <-answered:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("the store was held while the backup was made")
+	}
+	close(release)
+	s.waitBackups()
+	if got := backupNames(t, dir); len(got) != 1 {
+		t.Fatalf("backups = %v", got)
+	}
 }
