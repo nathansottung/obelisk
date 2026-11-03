@@ -16,6 +16,7 @@ import (
 )
 
 func TestJobLoad_ReadFailures(t *testing.T) {
+	skipWithDatabaseJobs(t)
 	for _, cause := range []error{os.ErrPermission, errors.New("synthetic I/O error")} {
 		t.Run(cause.Error(), func(t *testing.T) {
 			dir := t.TempDir()

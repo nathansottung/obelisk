@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A mirror verify at an overriding mount checks only the drive's own record; a
@@ -70,8 +71,19 @@ func TestVerify_MovedDriveCreditedBySerial(t *testing.T) {
 func TestJob_FailsOnlyForItsOwnUnsavedChange(t *testing.T) {
 	app, cid := dcApp(t)
 	c := app.Store.AddChunk(Chunk{CollectionID: cid, Name: "JOB-OWN", Status: "STAGED"})
-	app.Store.failSave = func() error { return fmt.Errorf("disk full (injected)") }
-	app.Store.UpdateChunk(c) // an earlier change whose save failed; the disk still fails
+	if app.Store.UsesDatabase() {
+		// An earlier change the database refuses, still unsaved. (A disk that fails
+		// every write would stop the job being recorded at all: the board is in the
+		// catalog database.)
+		app.Store.mu.Lock()
+		app.Store.c.Snapshots = append(app.Store.c.Snapshots, &VolumeSnapshot{VolumeID: 7,
+			CapturedAt: time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)})
+		_ = app.Store.save()
+		app.Store.mu.Unlock()
+	} else {
+		app.Store.failSave = func() error { return fmt.Errorf("disk full (injected)") }
+		app.Store.UpdateChunk(c) // an earlier change whose save failed; the disk still fails
+	}
 	resp, _ := runJob(app, "verify", "probe", func(p func(float64, string)) (map[string]any, error) {
 		return map[string]any{"ok": true}, nil // touches nothing
 	})
@@ -79,6 +91,11 @@ func TestJob_FailsOnlyForItsOwnUnsavedChange(t *testing.T) {
 	app.Store.failSave = nil
 	if j0.Status != "COMPLETED" {
 		t.Errorf("a job that changed nothing: %s %s", j0.Status, j0.Label)
+	}
+	if app.Store.UsesDatabase() {
+		// A read-only catalog database keeps its board in jobs.json; that case is
+		// TestJobs_ReadOnlyDatabaseKeepsJobsInJobsJSON.
+		return
 	}
 
 	app.Store.readOnly, app.Store.readOnlyReason = true, "a newer Obelisk wrote this catalog"

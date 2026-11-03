@@ -67,10 +67,14 @@ func dcApp(t *testing.T) (*App, int) {
 	return app, coll.ID
 }
 
-// readJobsFile reads the jobs.json sidecar as it exists ON DISK. The point of most of
-// these assertions is the difference between this and Store.Jobs().
+// readJobsFile reads the job board as it exists ON DISK: the jobs.json sidecar, or
+// on the database engine the job table as committed. The point of most of these
+// assertions is the difference between this and Store.Jobs().
 func readJobsFile(t *testing.T, dataDir string) []*Job {
 	t.Helper()
+	if engine, _ := catalogEngine(); engine == "sqlite" {
+		return readCommittedJobs(t, filepath.Join(dataDir, catalogDBName))
+	}
 	b, err := os.ReadFile(filepath.Join(dataDir, "jobs.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -157,9 +161,14 @@ func TestDurableCompletion_A_FinalFlushFailureIsReported(t *testing.T) {
 func TestDurableCompletion_A_FailedFlushJobIsNotCompleted(t *testing.T) {
 	app, cid := dcApp(t)
 	src := dcSource(t)
-	app.Store.failSave = func() error { return fmt.Errorf("disk full (injected)") }
 
+	// The fault is armed once the job is recorded: on the database engine the job
+	// board is in the catalog database, so a catalog that cannot be written could
+	// not record the job either, and no work would start.
 	resp, jerr := runJob(app, "scan", "Scan "+src, func(p func(float64, string)) (map[string]any, error) {
+		app.Store.mu.Lock()
+		app.Store.failSave = func() error { return fmt.Errorf("disk full (injected)") }
+		app.Store.mu.Unlock()
 		n, _, err := app.ScanFolder(cid, src, p)
 		return map[string]any{"files": n}, err
 	})

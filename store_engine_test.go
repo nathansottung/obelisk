@@ -93,9 +93,13 @@ func TestCatalogEngine_SaveWritesOnlyChangedRows(t *testing.T) {
 	if err := s.SetCollectionRetired(colls[20].ID, true, false); err != nil {
 		t.Fatal(err)
 	}
-	// The archive and the audit entry that records the retirement.
-	if be.lastWritten != 2 || be.lastRemoved != 0 {
-		t.Errorf("retiring one archive wrote %d records and removed %d; want 2 and 0", be.lastWritten, be.lastRemoved)
+	// The archive; the audit entry that records the retirement is appended, not a
+	// record compared on each save.
+	if be.lastWritten != 1 || be.lastRemoved != 0 {
+		t.Errorf("retiring one archive wrote %d records and removed %d; want 1 and 0", be.lastWritten, be.lastRemoved)
+	}
+	if la := s.LastAudit(); la == nil || la.Action != "retire" {
+		t.Errorf("last audit entry = %+v, want the retirement", la)
 	}
 }
 
