@@ -73,7 +73,7 @@ archive that can damage its sources or say "verified" when it isn't.
   - S6 drives, scans and plans: snapshot files, plan entries and drift items only in
     their tables and read when asked for, comparisons in their own table, scan lists
     read file by file for comparisons and the cross-drive lists, every access
-    through Store methods.
+    through Store methods: merged ([#20](https://github.com/nathansottung/obelisk/pull/20)).
   - S7 audit log and jobs in the same transaction.
   - S8 backups: `VACUUM INTO`, 7 daily and 4 weekly copies with a size cap, plus app backup
     and restore.
