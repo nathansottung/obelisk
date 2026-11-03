@@ -318,8 +318,8 @@ func TestAppBackupDB_ADamagedDatabaseIsRefusedBeforeAnyChange(t *testing.T) {
 		},
 		// Every record still reads; only integrity_check sees the index is wrong.
 		"an index without its entries": func(b []byte) []byte { return emptyAnIndex(t, b) },
-		"not a database": func([]byte) []byte { return []byte("not a database at all, just text") },
-		"empty":          func([]byte) []byte { return nil },
+		"not a database":               func([]byte) []byte { return []byte("not a database at all, just text") },
+		"empty":                        func([]byte) []byte { return nil },
 	} {
 		t.Run(name, func(t *testing.T) {
 			bad := rewriteBackup(t, exp.TarPath, func(m map[string][]byte) { m["catalog.db"] = edit(m["catalog.db"]) })
