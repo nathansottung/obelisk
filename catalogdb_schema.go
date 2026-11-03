@@ -239,6 +239,9 @@ CREATE TABLE audit(
 ) STRICT;
 CREATE INDEX audit_at ON audit(at);
 
+-- The job board: one row per job, kept whole as JSON (catalogdb_jobs.go).
+CREATE TABLE job(id INTEGER PRIMARY KEY, doc TEXT NOT NULL) STRICT;
+
 CREATE TABLE plan(
 	id INTEGER PRIMARY KEY AUTOINCREMENT, ord INTEGER NOT NULL, name TEXT NOT NULL, archive_ids TEXT,
 	scope_prefix TEXT NOT NULL, template_id INTEGER NOT NULL, destination_root TEXT NOT NULL,

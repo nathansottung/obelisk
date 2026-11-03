@@ -1222,6 +1222,13 @@ type Store struct {
 		loaded  bool   // a validated or successfully published sidecar has existed
 		loadErr error  // refused reload: blocks every later jobs publication
 		path    string // jobs.json sidecar (persists the board across restarts)
+		// On the database engine (store_jobs.go): each job's row as last committed,
+		// the next ID as last committed, and whether jobs.json's board has still to
+		// be marked moved.
+		inDB       bool // the board is in the catalog database, set on open
+		stored     map[int]string
+		storedNext int
+		moving     bool
 	}
 }
 
@@ -1314,6 +1321,18 @@ type catalogBackend interface {
 	planPut(p *Plan, ord int, ch PlanChange) error
 	driftPut(r *DriftReport, ord int, items []DriftItem) error
 	driftItems(collectionID int) ([]DriftItem, error)
+
+	// commit is flush that also writes, in the same transaction, the job rows and
+	// meta values jobs returns once it knows whether every record was written
+	// (catalogdb_jobs.go). unitErr is the records the database refused; commitErr
+	// means nothing was saved.
+	commit(c *catalog, jobs func(unitErr error) ([]storedJob, map[string]string, error)) (unitErr, commitErr error)
+	// jobsLoad reads the committed job board and its meta values.
+	jobsLoad() ([]storedJob, map[string]string, error)
+	// The audit log lives in the database, never in memory: auditAdd queues an
+	// entry for the next commit, and lastAudit reads the newest.
+	auditAdd(a Audit)
+	lastAudit() (*Audit, error)
 }
 
 // openCatalogBackend opens (or creates, or moves catalog.json into) the catalog
@@ -1358,6 +1377,9 @@ func openStore(dataDir string, readFile func(string) ([]byte, error), persistObs
 		if readOnly != "" {
 			s.readOnly, s.readOnlyReason = true, readOnly
 		}
+		// A database a newer version wrote is read-only, and its board stays in
+		// jobs.json, which this version can still write.
+		s.jobs.inDB = !s.readOnly
 		opened, err := s.finishOpen(readFile)
 		if err != nil {
 			// A refused startup leaves the database closed, as it found it.
@@ -1514,7 +1536,11 @@ func (s *Store) finishOpen(readFile func(string) ([]byte, error)) (*Store, error
 	// up and visible with its partial artifacts rather than silently lost. The work
 	// itself isn't auto-resumed; resumable ops (burn, span) are re-triggered by the
 	// operator, and the chunk-status recovery above already reset mid-flight builds.
-	if err := s.loadJobsFrom(readFile); err != nil {
+	load := s.loadJobsFrom
+	if s.jobsInDB() {
+		load = s.loadJobsDB
+	}
+	if err := load(readFile); err != nil {
 		return nil, fmt.Errorf("open job board: %w", err)
 	}
 	return s, nil
@@ -1607,6 +1633,23 @@ func (s *Store) save() error {
 }
 
 func (s *Store) writeCatalog() error {
+	if err := s.writeGateLocked(); err != nil {
+		return err
+	}
+	if s.be != nil {
+		unitErr, commitErr := s.commitDBLocked(nil)
+		if commitErr != nil {
+			return commitErr
+		}
+		return unitErr
+	}
+	return s.writeCatalogJSON()
+}
+
+// writeGateLocked is what every catalog write checks first, on either engine: it
+// reports the attempt, then refuses a write a test fault, a read-only catalog or a
+// closed store forbids. Caller holds s.mu.
+func (s *Store) writeGateLocked() error {
 	// Record the ATTEMPT first — ahead of the fault seam and the read-only gate below,
 	// either of which would otherwise return early and hide it from an observer.
 	s.notePersist("catalog-write", s.path)
@@ -1627,17 +1670,27 @@ func (s *Store) writeCatalog() error {
 	if s.closed {
 		return errors.New("the catalog is closed")
 	}
-	if s.be != nil {
-		err := s.be.flush(&s.c)
-		if lost := (*catalogChangesLost)(nil); errors.As(err, &lost) && s.lostErr == nil {
-			s.lostErr = err
-		}
-		if err != nil {
-			return err
-		}
-		s.lastSave, s.dirty = time.Now(), false
-		return nil
+	return nil
+}
+
+// commitDBLocked commits the catalog database's pending changes, with the job rows
+// jobs returns when it is not nil (see catalogBackend.commit). A commit that saved
+// everything leaves the catalog clean. Caller holds s.mu and has passed
+// writeGateLocked.
+func (s *Store) commitDBLocked(jobs func(unitErr error) ([]storedJob, map[string]string, error)) (unitErr, commitErr error) {
+	unitErr, commitErr = s.be.commit(&s.c, jobs)
+	if lost := (*catalogChangesLost)(nil); errors.As(commitErr, &lost) && s.lostErr == nil {
+		s.lostErr = commitErr
 	}
+	if commitErr == nil && unitErr == nil {
+		s.lastSave, s.dirty = time.Now(), false
+	}
+	return unitErr, commitErr
+}
+
+// writeCatalogJSON writes catalog.json whole. Caller holds s.mu and has passed
+// writeGateLocked.
+func (s *Store) writeCatalogJSON() error {
 	// Pretty-print small catalogs (human-inspectable with any text editor — the
 	// whole point of the JSON store) but switch to COMPACT JSON once the catalog
 	// gets large: at 1M files the indentation alone is ~90 MB of whitespace, and
@@ -1857,8 +1910,20 @@ func (s *Store) next(kind string) int {
 func (s *Store) Log(action, detail string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.c.Audit = append(s.c.Audit, Audit{At: time.Now().UTC(), Action: action, Detail: detail})
+	s.auditLocked(action, detail)
 	_ = s.save()
+}
+
+// auditLocked adds an audit entry, which the next save writes: on the database
+// engine it is queued for the next commit and the log stays in its table. Caller
+// holds s.mu and saves.
+func (s *Store) auditLocked(action, detail string) {
+	a := Audit{At: time.Now().UTC(), Action: action, Detail: detail}
+	if s.be != nil {
+		s.be.auditAdd(a)
+		return
+	}
+	s.c.Audit = append(s.c.Audit, a)
 }
 
 // LastAudit returns the most recent audit-log entry (nil if the log is empty) —
@@ -1866,6 +1931,13 @@ func (s *Store) Log(action, detail string) {
 func (s *Store) LastAudit() *Audit {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.be != nil {
+		a, err := s.be.lastAudit()
+		if err != nil {
+			log.Printf("reading the last audit entry: %v", err)
+		}
+		return a
+	}
 	if len(s.c.Audit) == 0 {
 		return nil
 	}
@@ -1957,8 +2029,7 @@ func (s *Store) SetCollectionRetired(id int, retired, hidden bool) error {
 			} else if hidden {
 				tier = "hide its numbers"
 			}
-			s.c.Audit = append(s.c.Audit, Audit{At: time.Now().UTC(), Action: action,
-				Detail: fmt.Sprintf("%s (id %d) — %s; files on disk untouched", c.Name, id, tier)})
+			s.auditLocked(action, fmt.Sprintf("%s (id %d) — %s; files on disk untouched", c.Name, id, tier))
 			return s.save()
 		}
 	}
@@ -3649,6 +3720,10 @@ func (s *Store) KeyMetas() []*KeyMeta {
 func (s *Store) saveJobs() error {
 	if s.jobs.loadErr != nil {
 		return fmt.Errorf("job board unavailable after refused load: %w", s.jobs.loadErr)
+	}
+	if s.jobsInDB() {
+		_, err := s.commitJobsLocked(nil)
+		return err
 	}
 	if s.jobs.path == "" {
 		return nil

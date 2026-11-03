@@ -1297,17 +1297,21 @@ func exportCatalogTables(tx *sql.Tx, withFiles bool) (*catalog, error) {
 	}); err != nil {
 		return nil, err
 	}
-	if err := q("audit", `SELECT at, action, detail FROM audit ORDER BY id`, func(r *sql.Rows) error {
-		var a Audit
-		var at nint
-		if err := r.Scan(&at, &a.Action, &a.Detail); err != nil {
-			return err
+	// The store reads the audit log from its table (lastAudit); only the export
+	// and the move's check read it whole.
+	if withFiles {
+		if err := q("audit", `SELECT at, action, detail FROM audit ORDER BY id`, func(r *sql.Rows) error {
+			var a Audit
+			var at nint
+			if err := r.Scan(&at, &a.Action, &a.Detail); err != nil {
+				return err
+			}
+			a.At = tget(at)
+			c.Audit = append(c.Audit, a)
+			return nil
+		}); err != nil {
+			return nil, err
 		}
-		a.At = tget(at)
-		c.Audit = append(c.Audit, a)
-		return nil
-	}); err != nil {
-		return nil, err
 	}
 	plans := map[int]*Plan{}
 	if err := q("plan", `SELECT id, name, archive_ids, scope_prefix, template_id, destination_root, status,

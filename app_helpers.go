@@ -65,7 +65,8 @@ func progBytes(done, total int64, human string) string {
 }
 
 // noteUnrecordedJob REPORTS the one case the job board cannot report through itself:
-// the work reached a terminal state but the sidecar write failed.
+// the work reached a terminal state but the board's write failed (the jobs.json
+// sidecar, or on the catalog database the commit that holds the job's end).
 //
 // It does not set the job's state. FinishJob already published the terminal snapshot
 // and its not-recorded qualification together, under one hold of s.jobs.mu, before it
