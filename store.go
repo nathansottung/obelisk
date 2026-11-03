@@ -1393,6 +1393,7 @@ func openStore(dataDir string, readFile func(string) ([]byte, error), persistObs
 		opened, err := s.finishOpen(readFile)
 		if err != nil {
 			// A refused startup leaves the database closed, as it found it.
+			s.waitBackups() // a commit of the open may have started the day's backup
 			be.abandon()
 			return nil, err
 		}

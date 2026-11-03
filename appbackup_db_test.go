@@ -526,6 +526,7 @@ func TestAppBackupDB_AFailedPreRestoreCopyChangesNothing(t *testing.T) {
 	}
 	dst := dbTestApp(t)
 	dst.Store.AddCollection("Old one")
+	dst.Store.waitBackups() // the day's backup reads the seam set next
 	dst.Store.mu.Lock()
 	dst.Store.be.(*dbBackend).failVacuum = func() error { return errors.New("no space for the copy") }
 	dst.Store.mu.Unlock()
