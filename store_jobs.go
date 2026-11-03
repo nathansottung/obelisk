@@ -60,8 +60,9 @@ func decodeStoredJob(id int, doc string) (*Job, error) {
 
 // CompleteJob publishes the successful end of job id. When the job changed the
 // catalog (a save was asked for after gen and a change is not saved yet), its
-// changes must be saved before the job may say COMPLETED: if they cannot be, the
-// job is published FAILED with the reason, and saveErr is that reason. recordErr
+// changes must be saved before the job may say COMPLETED: if they cannot be, or a
+// change was lost while it ran (maybe its own), the job is published FAILED with
+// the reason, and saveErr is that reason. recordErr
 // is the error of writing the job's own record; the job then also says it is not
 // recorded. label is the job's label without progress text.
 //
@@ -72,6 +73,14 @@ func decodeStoredJob(id int, doc string) (*Job, error) {
 func (s *Store) CompleteJob(id int, gen uint64, label string, arts []Artifact, res map[string]any) (saveErr, recordErr error) {
 	if s.jobsInDB() {
 		return s.completeJobDB(id, gen, label, arts, res)
+	}
+	s.mu.Lock()
+	lost := s.lostSinceLocked(gen)
+	s.mu.Unlock()
+	if lost != nil {
+		// A change was lost while the job ran, maybe its own.
+		saveErr = workNotRecorded(lost)
+		return saveErr, s.FinishJob(id, -1, label+" — ERROR: "+storedErrorText(saveErr.Error()), "FAILED", nil, nil)
 	}
 	if s.ChangedSince(gen) {
 		if ro, why := s.ReadOnly(); ro {
@@ -114,11 +123,15 @@ func (s *Store) completeJobDB(id int, gen uint64, label string, arts []Artifact,
 	decided := false
 	decide := func(unitErr error) {
 		decided = true
+		// A change lost while the job ran may be its own, so it fails the job even
+		// when nothing of the job is left to commit.
+		cause := s.lostSinceLocked(gen)
 		if changed {
-			if cause := errors.Join(unitErr, s.lostErr); cause != nil {
-				fail(cause)
-				return
-			}
+			cause = errors.Join(unitErr, s.lostErr)
+		}
+		if cause != nil {
+			fail(cause)
+			return
 		}
 		row.Progress, row.Status = 1, "COMPLETED"
 		if len(arts) > 0 {

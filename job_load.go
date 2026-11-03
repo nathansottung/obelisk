@@ -106,6 +106,9 @@ func (s *Store) loadJobs() error { return s.loadJobsFrom(readFileRetrying) }
 // without adopting or reconciling rows: workers may still own the old board. This does
 // not make restore a cross-file transaction or coordinate external writers.
 func (s *Store) checkJobsAfterFailedReopen() {
+	if s.jobsInDB() {
+		return // the board is in the catalog database, not jobs.json
+	}
 	s.jobs.mu.Lock()
 	defer s.jobs.mu.Unlock()
 	_, exists, err := readJobBoard(s.jobs.path, readFileRetrying)

@@ -1215,6 +1215,7 @@ type Store struct {
 	// changed the catalog reports success after it; a save that lands still
 	// succeeds. It lasts until the store is reopened.
 	lostErr error
+	lostGen uint64 // saveGen when a change was last lost
 	jobs    struct {
 		mu      sync.Mutex
 		next    int
@@ -1614,6 +1615,33 @@ func (s *Store) backupBeforeMigrate(raw []byte, from int) {
 // writes instead of thousands (each of which marshals the whole catalog — O(n)
 // per write, O(n·writes) total). EndBatch forces the final write. Callers hold
 // s.mu. Crash-safety is preserved: see BeginBatch.
+// changedLocked records a catalog change that the next save writes, without
+// saving now (a file written into the open transaction, say). It counts like a
+// save asked for, so a job that made only such changes still sees that it changed
+// the catalog (SaveGen, ChangedSince). Caller holds s.mu.
+func (s *Store) changedLocked() {
+	s.dirty = true
+	s.saveGen++
+}
+
+// noteLostLocked keeps a change that was lost where no caller could be told (see
+// lostErr), and when: a job that started before it may have lost its own changes.
+// Caller holds s.mu.
+func (s *Store) noteLostLocked(err error) {
+	if s.lostErr == nil {
+		s.lostErr = err
+	}
+	s.lostGen = s.saveGen
+}
+
+// lostSinceLocked is lostErr when a change was lost after gen. Caller holds s.mu.
+func (s *Store) lostSinceLocked(gen uint64) error {
+	if s.lostErr != nil && s.lostGen > gen {
+		return s.lostErr
+	}
+	return nil
+}
+
 func (s *Store) save() error {
 	// The catalog has an unsaved change until a write succeeds (writeCatalog
 	// clears this), so a failed or put-off save is still known about at the end
@@ -1679,8 +1707,8 @@ func (s *Store) writeGateLocked() error {
 // writeGateLocked.
 func (s *Store) commitDBLocked(jobs func(unitErr error) ([]storedJob, map[string]string, error)) (unitErr, commitErr error) {
 	unitErr, commitErr = s.be.commit(&s.c, jobs)
-	if lost := (*catalogChangesLost)(nil); errors.As(commitErr, &lost) && s.lostErr == nil {
-		s.lostErr = commitErr
+	if lost := (*catalogChangesLost)(nil); errors.As(commitErr, &lost) {
+		s.noteLostLocked(commitErr)
 	}
 	if commitErr == nil && unitErr == nil {
 		s.lastSave, s.dirty = time.Now(), false
@@ -2991,7 +3019,7 @@ func (s *Store) DeleteEvent(id int) error {
 	}
 	s.c.Events = out
 	if s.be != nil {
-		s.dirty = true
+		s.changedLocked()
 		if err := s.be.fileClearEvent(id); err != nil {
 			return err
 		}

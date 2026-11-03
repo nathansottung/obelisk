@@ -47,7 +47,7 @@ func (s *Store) setChunkListsLocked(ch *Chunk, lists map[int][]ChunkFileRef) err
 		}
 		copied[list] = refs
 	}
-	s.dirty = true
+	s.changedLocked()
 	if s.be != nil {
 		return s.be.chunkFilesPut(ch, s.chunkOrdLocked(ch), copied)
 	}

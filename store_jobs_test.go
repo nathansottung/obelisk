@@ -433,6 +433,202 @@ func TestJobs_TheMoveReconcilesTheBoard(t *testing.T) {
 	}
 }
 
+// fileJobFixture opens a store with an archive and folder, starts a job and returns
+// the generation it started at.
+func fileJobFixture(t *testing.T, engine, dir string) (*Store, *Job, uint64, File) {
+	t.Helper()
+	s := openEngineStore(t, engine, dir)
+	coll := s.AddCollection("A")
+	fo := s.AddFolder(coll.ID, "/photos")
+	j, err := s.NewJob("scan", "Scan A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := File{CollectionID: coll.ID, FolderID: fo.ID, RelPath: "a.nef", SizeBytes: 5, HashAlg: "SHA256",
+		Hash: testHash("a.nef"), ModTime: time.Date(2025, 5, 1, 0, 0, 0, 0, time.UTC)}
+	return s, j, s.SaveGen(), f
+}
+
+// A job whose file writes were lost by a commit made while it ran (another job's,
+// or its own artifact) is not COMPLETED.
+func TestJobs_LostFileWritesFailTheJob(t *testing.T) {
+	s, j, gen, f := fileJobFixture(t, "sqlite", t.TempDir())
+	defer s.Close()
+	be := s.be.(*dbBackend)
+	if _, err := s.UpsertFileErr(f); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	be.failCommit = func() error { return errors.New("disk full") }
+	s.mu.Unlock()
+	if err := s.AppendJobArtifact(j.ID, Artifact{Kind: "file", Label: "a.nef"}); err == nil {
+		t.Fatal("setup: the commit did not fail")
+	}
+	s.mu.Lock()
+	be.failCommit = nil
+	s.mu.Unlock()
+	saveErr, _ := s.CompleteJob(j.ID, gen, "Scan A", nil, nil)
+	if saveErr == nil {
+		t.Error("CompleteJob reported success for file writes that were lost")
+	}
+	if got := s.Job(j.ID); got.Status == "COMPLETED" {
+		t.Errorf("job = %s %q, want FAILED", got.Status, got.Label)
+	}
+	if c := dbJobs(t, s)[j.ID]; c != nil && c.Status == "COMPLETED" {
+		t.Error("the job is recorded COMPLETED for lost file writes")
+	}
+}
+
+// A change lost while a job ran fails it even when a later save has left nothing
+// unsaved by its end: the lost change may have been the job's.
+func TestJobs_AChangeLostWhileTheJobRanFailsIt(t *testing.T) {
+	t.Run("sqlite lost file writes", func(t *testing.T) {
+		s, j, gen, f := fileJobFixture(t, "sqlite", t.TempDir())
+		defer s.Close()
+		be := s.be.(*dbBackend)
+		if _, err := s.UpsertFileErr(f); err != nil {
+			t.Fatal(err)
+		}
+		s.mu.Lock()
+		be.failCommit = func() error { return errors.New("disk full") }
+		s.mu.Unlock()
+		s.Log("test", "a save whose commit fails")
+		s.mu.Lock()
+		be.failCommit = nil
+		s.mu.Unlock()
+		if err := s.FlushPending(); err == nil {
+			t.Fatal("setup: the lost change was not reported")
+		}
+		if s.ChangedSince(gen) {
+			t.Fatal("setup: the catalog still has an unsaved change")
+		}
+		if saveErr, _ := s.CompleteJob(j.ID, gen, "Scan A", nil, nil); saveErr == nil {
+			t.Error("CompleteJob reported success after the job's file writes were lost")
+		}
+		if got := s.Job(j.ID); got.Status == "COMPLETED" {
+			t.Errorf("job = %s, want FAILED", got.Status)
+		}
+	})
+	for _, engine := range bothEngines {
+		t.Run(engine+" a noted loss", func(t *testing.T) {
+			s, j, gen, _ := fileJobFixture(t, engine, t.TempDir())
+			defer s.Close()
+			s.mu.Lock()
+			s.changedLocked()
+			s.noteLostLocked(errors.New("a change could not be recorded"))
+			s.mu.Unlock()
+			_ = s.FlushPending()
+			saveErr, _ := s.CompleteJob(j.ID, gen, "Scan A", nil, nil)
+			if saveErr == nil {
+				t.Error("CompleteJob reported success after a change was lost while the job ran")
+			}
+			if got := s.Job(j.ID); got.Status == "COMPLETED" {
+				t.Errorf("job = %s, want FAILED", got.Status)
+			}
+		})
+		t.Run(engine+" a loss before the job", func(t *testing.T) {
+			s := openEngineStore(t, engine, t.TempDir())
+			defer s.Close()
+			s.mu.Lock()
+			s.changedLocked()
+			s.noteLostLocked(errors.New("a change could not be recorded"))
+			s.mu.Unlock()
+			_ = s.FlushPending()
+			j, err := s.NewJob("check", "Check")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if saveErr, _ := s.CompleteJob(j.ID, s.SaveGen(), "Check", nil, nil); saveErr != nil {
+				t.Errorf("a loss before the job failed it: %v", saveErr)
+			}
+		})
+	}
+}
+
+// A job that only wrote files and whose final commit fails is FAILED, not
+// COMPLETED: its writes are lost with the commit.
+func TestJobs_FileOnlyJobFailsWhenItsFinalCommitFails(t *testing.T) {
+	s, j, gen, f := fileJobFixture(t, "sqlite", t.TempDir())
+	defer s.Close()
+	be := s.be.(*dbBackend)
+	if _, err := s.UpsertFileErr(f); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	be.failCommit = func() error { return errors.New("disk full") }
+	s.mu.Unlock()
+	saveErr, recErr := s.CompleteJob(j.ID, gen, "Scan A", nil, nil)
+	s.mu.Lock()
+	be.failCommit = nil
+	s.mu.Unlock()
+	if saveErr == nil || recErr == nil {
+		t.Errorf("CompleteJob = %v, %v; want the work and the record reported unsaved", saveErr, recErr)
+	}
+	if got := s.Job(j.ID); got.Status == "COMPLETED" || !got.Unrecorded {
+		t.Errorf("job = %s unrecorded=%v, want FAILED and not recorded", got.Status, got.Unrecorded)
+	}
+}
+
+// On catalog.json a job that only wrote files has them saved before it is
+// COMPLETED.
+func TestJobs_FileOnlyJobIsSavedBeforeCompletedOnJSON(t *testing.T) {
+	dir := t.TempDir()
+	s, j, gen, f := fileJobFixture(t, "json", dir)
+	if _, err := s.UpsertFileErr(f); err != nil {
+		t.Fatal(err)
+	}
+	if saveErr, recErr := s.CompleteJob(j.ID, gen, "Scan A", nil, nil); saveErr != nil || recErr != nil {
+		t.Fatalf("CompleteJob = %v, %v", saveErr, recErr)
+	}
+	if !strings.Contains(persistedCatalogText(t, dir), `"a.nef"`) {
+		t.Error("the job was COMPLETED before its file was saved")
+	}
+}
+
+// A damaged job row or next ID in the database stops the open, as a damaged
+// jobs.json does.
+func TestJobs_ADamagedBoardInTheDatabaseIsRefused(t *testing.T) {
+	for name, stmt := range map[string]string{
+		"row":     `INSERT INTO job(id, doc) VALUES(5, 'not json')`,
+		"next ID": `INSERT INTO meta(key, value) VALUES('job_next', 'x') ON CONFLICT(key) DO UPDATE SET value = 'x'`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			s := openEngineStore(t, "sqlite", dir)
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			d, err := openCatalogDB(filepath.Join(dir, catalogDBName), false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := d.Write(func(tx *sql.Tx) error { _, err := tx.Exec(stmt); return err }); err != nil {
+				t.Fatal(err)
+			}
+			d.Close()
+			t.Setenv(catalogEngineEnv, "sqlite")
+			if s, err := openTestStore(t, dir); err == nil {
+				s.Close()
+				t.Fatal("a damaged job board opened")
+			}
+		})
+	}
+}
+
+// A failed restore or data-folder move checks jobs.json only when the board is
+// there: on the database engine it leaves the board usable.
+func TestJobs_AFailedReopenCheckLeavesTheDatabaseBoard(t *testing.T) {
+	s := openEngineStore(t, "sqlite", t.TempDir())
+	defer s.Close()
+	if _, err := s.NewJob("scan", "A"); err != nil {
+		t.Fatal(err)
+	}
+	s.checkJobsAfterFailedReopen()
+	if _, err := s.NewJob("scan", "B"); err != nil {
+		t.Errorf("NewJob after the check: %v", err)
+	}
+}
+
 // The board's next ID is kept when it is past every job, as jobs.json's can be.
 func TestJobs_TheNextIDIsKept(t *testing.T) {
 	dir := t.TempDir()
@@ -657,11 +853,13 @@ func TestJobs_NoJobReportsSuccessForUnsavedWork(t *testing.T) {
 			app, _ := newTestApp(t, map[string]string{})
 			s := app.Store
 			resp, err := runJob(app, "test", "Change the catalog", func(func(float64, string)) (map[string]any, error) {
+				s.mu.Lock()
 				if engine == "sqlite" {
 					s.be.(*dbBackend).failCommit = func() error { return errors.New("disk full") }
 				} else {
 					s.failSave = func() error { return errors.New("disk full") }
 				}
+				s.mu.Unlock()
 				s.AddCollection("A")
 				return map[string]any{}, nil
 			})
@@ -670,11 +868,13 @@ func TestJobs_NoJobReportsSuccessForUnsavedWork(t *testing.T) {
 			}
 			id := resp["job_id"].(int)
 			got := waitTerminalJob(t, s, id)
+			s.mu.Lock()
 			if engine == "sqlite" {
 				s.be.(*dbBackend).failCommit = nil
 			} else {
 				s.failSave = nil
 			}
+			s.mu.Unlock()
 			if got.Status == "COMPLETED" {
 				t.Errorf("the job reports COMPLETED for work that was not saved: %+v", got)
 			}

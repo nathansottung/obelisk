@@ -504,8 +504,10 @@ catalog until the cutover slice. Until then the database engine is opt-in:
   write of the board is a commit of the catalog too: the job rows that changed go
   in the same transaction as every catalog change not yet committed. A job that
   succeeded is COMPLETED only in a commit that also saves all of its changes; when
-  one of them is refused, or a change was lost earlier, the job is recorded FAILED
-  instead. When the commit itself fails nothing of it is saved: the job says FAILED
+  one of them is refused, or a change was lost while it ran (maybe its own, such
+  as file writes another commit's failure took with it), the job is recorded
+  FAILED instead. Every change counts, including a file written straight into the
+  open transaction, on both engines. When the commit itself fails nothing of it is saved: the job says FAILED
   (COMPLETED when it changed nothing) and not recorded, and the changes stay in
   memory for the next commit. A batch's `EndBatch` still commits on its own, as a
   batch does every few seconds, so a crash before the job's end leaves the changes
