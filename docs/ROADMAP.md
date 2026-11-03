@@ -78,7 +78,8 @@ archive that can damage its sources or say "verified" when it isn't.
     database, a job's end committed in the same transaction as its pending changes: merged
     ([#22](https://github.com/nathansottung/obelisk/pull/22)).
   - S8 backups: `VACUUM INTO`, 7 daily and 4 weekly copies with a size cap, plus app backup
-    and restore.
+    and restore carrying `catalog.db`: merged
+    ([#23](https://github.com/nathansottung/obelisk/pull/23)).
   - S9 cutover: the move runs on open.
   - S10 proof at 3 million files.
 - **Done when:** an existing data folder upgrades on open with every record proven equal, the

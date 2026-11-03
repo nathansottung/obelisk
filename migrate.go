@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // legacyAndTargetDataDirs returns the pre-rename (~/.mnemo) and current (~/.obelisk)
@@ -40,7 +41,31 @@ func (a *App) LegacyDataDirMigrationAvailable() bool {
 	if legacy == "" || target == "" {
 		return false
 	}
-	return sameDir(a.DataDir, legacy) && !fileExists(filepath.Join(target, "catalog.json"))
+	return sameDir(a.DataDir, legacy) && !targetHoldsCatalog(target)
+}
+
+// targetHoldsCatalog reports whether dir already holds a catalog, on either engine.
+func targetHoldsCatalog(dir string) bool {
+	return fileExists(filepath.Join(dir, "catalog.json")) || fileExists(filepath.Join(dir, "catalog.db"))
+}
+
+// liveDatabaseFile reports whether rel (relative to the data folder) is the catalog
+// database, one of its side files, or a copy of it still being written. A data
+// folder move copies the database as one consistent snapshot instead.
+func liveDatabaseFile(rel string) bool {
+	if filepath.Dir(rel) != "." {
+		return false
+	}
+	switch rel {
+	case "catalog.db", "catalog.db-wal", "catalog.db-shm", "catalog.db-journal", "catalog.db.move-lock":
+		return true
+	}
+	for _, stage := range []string{".stage-", ".restore-", ".export-", ".creating-", ".migrating-"} {
+		if strings.HasPrefix(rel, "catalog.db") && strings.Contains(rel, stage) {
+			return true
+		}
+	}
+	return false
 }
 
 // MigrateLegacyDataDir COPIES the running (legacy ~/.mnemo) data directory into
@@ -59,17 +84,20 @@ func (a *App) MigrateLegacyDataDir() (map[string]any, error) {
 // migrateDataDir is the testable core of MigrateLegacyDataDir with explicit source
 // and destination directories.
 func (a *App) migrateDataDir(legacy, target string) (map[string]any, error) {
-	if a.Store.UsesDatabase() {
-		return nil, errAppBackupNoDatabase
+	if running := a.Store.RunningJobs(); len(running) > 0 {
+		return nil, errJobsRunning("moving the data folder", running)
 	}
 	if !sameDir(a.DataDir, legacy) {
 		return nil, fmt.Errorf("nothing to migrate: the app is not running from the legacy %s directory. Nothing was changed", legacy)
 	}
-	if fileExists(filepath.Join(target, "catalog.json")) {
+	if targetHoldsCatalog(target) {
 		return nil, fmt.Errorf("%s already holds a catalog. Refusing to overwrite it; move it aside first if you meant to replace it", target)
 	}
 
-	// Copy every regular file under legacy into target, verifying each by hash.
+	// Copy every regular file under legacy into target, verifying each by hash. On
+	// the database engine the catalog database is not copied file by file (its -wal
+	// would make a copy of a moment that never was): it is snapshot whole below.
+	useDB := a.Store.UsesDatabase()
 	var copied, bytes int64
 	err := filepath.WalkDir(legacy, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -85,6 +113,9 @@ func (a *App) migrateDataDir(legacy, target string) (map[string]any, error) {
 		}
 		if !d.Type().IsRegular() {
 			return nil // skip symlinks / sockets / devices
+		}
+		if useDB && liveDatabaseFile(rel) {
+			return nil // copied below, as one consistent snapshot
 		}
 		if err := copyFile(path, dst); err != nil {
 			return fmt.Errorf("copying %s: %w", rel, err)
@@ -111,11 +142,27 @@ func (a *App) migrateDataDir(legacy, target string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if useDB {
+		// Every change the store holds is committed first, the copy is checked, and
+		// the store is closed with nothing let in between: no change can reach the
+		// original folder after the copy. From here the app switches to the copy.
+		if err := a.Store.closeWithCopy("moving the data folder", filepath.Join(target, "catalog.db")); err != nil {
+			err = fmt.Errorf("copying the catalog database: %w. Your original records under %s are untouched", err, legacy)
+			return nil, a.reopenAfterRefusal(err)
+		}
+		copied++
+		if fi, e := os.Stat(filepath.Join(target, "catalog.db")); e == nil {
+			bytes += fi.Size()
+		}
+	}
 
 	// Everything copied and verified — switch the running app to the new home by
 	// reopening the store there. The catalog and job board now come from ~/.obelisk.
 	ns, err := OpenStore(target)
 	if err != nil {
+		if useDB {
+			return nil, a.reopenAfterRefusal(fmt.Errorf("your records copied and verified, but opening the catalog at %s failed: %w. The app keeps using %s", target, err, legacy))
+		}
 		a.Store.checkJobsAfterFailedReopen()
 		return nil, fmt.Errorf("your records copied and verified, but reopening the catalog at %s failed: %w. Resolve the rejected state before retrying", target, err)
 	}

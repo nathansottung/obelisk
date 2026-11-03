@@ -74,7 +74,6 @@ func orderedJobRestoreBundle(t *testing.T, rows []rawMember, duplicateManifest b
 }
 
 func TestJobRestoreMembers_RefusalBeforePublication(t *testing.T) {
-	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	good := []byte(`{"next":70,"rows":[{"id":70,"status":"FAILED","label":"incoming"}]}`)
 	bad := []byte(`{"rows":[null]}`)
 	type fixture struct {
@@ -180,9 +179,13 @@ func TestJobRestoreMembers_PreservesExistingRefusal(t *testing.T) {
 }
 
 func TestJobRestoreMembers_NestedKeystoreIsNotJobBoard(t *testing.T) {
-	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	a := abTestApp(t)
-	if _, err := a.Store.NewJob("fixture", "original"); err != nil {
+	j, err := a.Store.NewJob("fixture", "original")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Past history: a restore waits for running jobs.
+	if err := a.Store.SetJob(j.ID, 1, "", "COMPLETED"); err != nil {
 		t.Fatal(err)
 	}
 	// A supported keystore basename may itself be jobs.json. It lives in the

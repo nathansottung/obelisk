@@ -212,7 +212,6 @@ func TestRecoveryKit_OutputDecidedByRealLocation(t *testing.T) {
 // really is, and a bundle file already there (a hard link to another file) is
 // replaced as a name.
 func TestAppBackupExport_FolderDecidedByRealLocation(t *testing.T) {
-	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	app, _ := compatApp(t)
 	_, link, untouched := sourceBehindLink(t, app)
 	_, err := app.ExportAppBackup(link, false)

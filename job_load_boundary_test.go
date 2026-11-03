@@ -199,9 +199,14 @@ func jobLoadBundle(t *testing.T, members map[string][]byte) string {
 }
 
 func TestJobLoad_RestoreCaller(t *testing.T) {
-	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
+	skipWithDatabaseJobs(t)
 	a := abTestApp(t)
-	if _, err := a.Store.NewJob("fixture", "prior"); err != nil {
+	j, err := a.Store.NewJob("fixture", "prior")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Past history: a restore waits for running jobs.
+	if err := a.Store.SetJob(j.ID, 1, "", "COMPLETED"); err != nil {
 		t.Fatal(err)
 	}
 	bad := []byte(`{"rows":[null]}`)
@@ -236,7 +241,7 @@ func TestJobLoad_RestoreCaller(t *testing.T) {
 }
 
 func TestJobLoad_MigrationCaller(t *testing.T) {
-	jsonEngineOnly(t, "moving a data folder that holds a catalog database comes with slice S8")
+	skipWithDatabaseJobs(t)
 	a := abTestApp(t)
 	prior := a.Store
 	bad := []byte(`{"rows":[null]}`)

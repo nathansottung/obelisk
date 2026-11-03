@@ -1158,6 +1158,9 @@ type Store struct {
 	path    string
 	c       catalog
 	lastBak string // YYYYMMDD of the most recent daily backup written
+	// backups is the daily backup of the catalog database being made, if any: it
+	// runs without the store's lock, and closing the database waits for it.
+	backups sync.WaitGroup
 	// readOnly latches when catalog.json was written by a NEWER schema than this
 	// build understands. Every write is then refused (silently dropping fields the
 	// newer app added would be data loss); reads/viewing still work. See OpenStore.
@@ -1334,6 +1337,12 @@ type catalogBackend interface {
 	// entry for the next commit, and lastAudit reads the newest.
 	auditAdd(a Audit)
 	lastAudit() (*Audit, error)
+
+	// Copies of the database (catalogdb_backup.go). snapshot writes a checked copy
+	// of the last commit to dest and returns its schema version; dailyBackup writes
+	// the day's backup beside the database and prunes the older ones.
+	snapshot(dest string) (int, error)
+	dailyBackup(now time.Time) error
 }
 
 // openCatalogBackend opens (or creates, or moves catalog.json into) the catalog
@@ -1384,6 +1393,7 @@ func openStore(dataDir string, readFile func(string) ([]byte, error), persistObs
 		opened, err := s.finishOpen(readFile)
 		if err != nil {
 			// A refused startup leaves the database closed, as it found it.
+			s.waitBackups() // a commit of the open may have started the day's backup
 			be.abandon()
 			return nil, err
 		}
@@ -1712,6 +1722,7 @@ func (s *Store) commitDBLocked(jobs func(unitErr error) ([]storedJob, map[string
 	}
 	if commitErr == nil && unitErr == nil {
 		s.lastSave, s.dirty = time.Now(), false
+		s.dailyBackupDBLocked()
 	}
 	return unitErr, commitErr
 }
@@ -1789,6 +1800,7 @@ func (s *Store) Close() error {
 	}
 	s.closed = true
 	if s.be != nil {
+		s.backups.Wait()
 		err = errors.Join(err, s.be.close())
 	}
 	return errors.Join(err, s.lostErr)

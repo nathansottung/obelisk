@@ -45,7 +45,6 @@ func secretFilesForTest(t *testing.T) map[string]string {
 // ACL that grants only the current user and inherits nothing; elsewhere, mode
 // 0600.
 func TestSecretFiles_AreOwnerOnly(t *testing.T) {
-	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	for what, p := range secretFilesForTest(t) {
 		if runtime.GOOS == "windows" {
 			if err := ownerOnlyACLForTest(p); err != nil {

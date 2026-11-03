@@ -146,23 +146,6 @@ func TestCatalogEngine_FailedCommitIsReportedAndMemoryKept(t *testing.T) {
 	}
 }
 
-// App backup, restore and moving the data folder do not yet know the catalog
-// database: on that engine they refuse instead of carrying the wrong file.
-func TestCatalogEngine_BackupAndMoveRefuseOnTheDatabase(t *testing.T) {
-	dir := t.TempDir()
-	s := openEngineStore(t, "sqlite", dir)
-	app := &App{DataDir: dir, Store: s}
-	if _, err := app.ExportAppBackup(t.TempDir(), false); err == nil || !strings.Contains(err.Error(), "catalog database") {
-		t.Errorf("app backup export: %v", err)
-	}
-	if _, err := app.RestoreAppBackup("missing.tar"); err == nil || !strings.Contains(err.Error(), "catalog database") {
-		t.Errorf("app backup restore: %v", err)
-	}
-	if _, err := app.migrateDataDir(t.TempDir(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "catalog database") {
-		t.Errorf("data folder move: %v", err)
-	}
-}
-
 // Lists of file IDs larger than SQLite's limit on statement parameters work.
 func TestCatalogEngine_ManyFileIDs(t *testing.T) {
 	s := openEngineStore(t, "sqlite", t.TempDir())

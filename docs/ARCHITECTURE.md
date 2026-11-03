@@ -444,8 +444,7 @@ catalog until the cutover slice. Until then the database engine is opt-in:
   writes, those are lost, and from then on `FlushPending`, `EndBatch` and `Close`
   report it until the store is reopened, so no job that changed the catalog
   reports success. A time is refused only when RFC 3339 cannot write its year
-  (past 9999 or before 0), as `catalog.json` refuses it. App backup, restore and data-folder moves refuse on this engine until
-  they carry `catalog.db` (S8), and the server closes the store on an interrupt
+  (past 9999 or before 0), as `catalog.json` refuses it. The server closes the store on an interrupt
   or termination signal.
 - **S4 — files** (`store_files.go`, `catalogdb_files.go`). File records live
   only in the `file` and `file_version` tables on the database engine. `FilesOf`
@@ -512,6 +511,36 @@ catalog until the cutover slice. Until then the database engine is opt-in:
   memory for the next commit. A batch's `EndBatch` still commits on its own, as a
   batch does every few seconds, so a crash before the job's end leaves the changes
   saved and the job INTERRUPTED, never a COMPLETED job without its changes.
+- **S8 — backups** (`catalogdb_backup.go`, `store_backup.go`, `appbackup.go`).
+  Every copy of the database is made with `VACUUM INTO` on a read-only connection
+  of its own: one consistent picture of the last commit, written as a single file
+  (no `-wal`) that opens on its own, synced and checked before it is used. The
+  first commit of each day writes `catalog.db.bak-YYYYMMDD` beside the database:
+  the database must pass `quick_check` first (a damaged one is not copied, and no
+  backup is pruned for it); the copy is made under a stage name, passes
+  `quick_check` itself, and is renamed to the day's name without replacing
+  anything. The newest 7 days are kept, then the newest of each of the 4 ISO weeks
+  before them, within a size cap (16 GiB; past it the oldest go first, and the
+  newest always stays). A backup never fails a save. An app backup on this engine
+  carries `catalog.db`, a snapshot that includes every change not yet committed,
+  with the job board inside it, instead of `catalog.json` and `jobs.json`; on both
+  engines it also carries each comparison's results file (`compares/`), on the
+  same terms as the scan file lists. A restore checks the backup's database whole
+  (`integrity_check`, and a newer schema is refused) under a stage name beside the
+  catalog before anything changes; an older backup's `catalog.json` and job board
+  go through the S2 importer in a folder of their own instead, and the data
+  folder's `catalog.json` stays the stub. Then the store saves every pending
+  change (one that cannot be saved stops the restore), and, with no change let in
+  between, copies the database into `pre-restore-…/catalog.db` and closes. The
+  old database is taken out of WAL mode, which SQLite allows only with every other
+  connection gone and which folds in and removes its `-wal` and `-shm`; any side
+  file still there is removed, and one held open (on Windows) refuses the swap, so
+  an old log never meets the restored database. The stage replaces `catalog.db` in
+  one rename. A refusal before the rename opens the catalog again, unchanged. The
+  `catalog.json` engine refuses a backup that carries `catalog.db`, and a backup
+  with both catalogs, or `jobs.json` beside `catalog.db`, is refused. A data folder
+  move copies the database as a snapshot, not file by file, and closes the
+  original. Each restore makes a `pre-restore-…` folder of its own.
 
 Measured on the Windows dev box (SSD): a million files each listed in one
 package move from a 647 MB `catalog.json` to a 382 MB `catalog.db` in under two

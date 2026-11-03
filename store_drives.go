@@ -547,3 +547,27 @@ func (s *Store) DriftReportWithItems(collectionID int) (*DriftReport, error) {
 	out.Items = items
 	return out, nil
 }
+
+// compareFileLists maps each comparison record's results file to its recorded
+// SHA-256, for the names this app writes.
+func (s *Store) compareFileLists() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := s.c.compareFileSums()
+	for name := range out {
+		if !validCompareFileName(name) {
+			delete(out, name)
+		}
+	}
+	return out
+}
+
+// compareFileSums maps each comparison record's results file, as recorded, to its
+// recorded SHA-256 (for a catalog read from an app backup, too).
+func (c *catalog) compareFileSums() map[string]string {
+	out := make(map[string]string, len(c.CompareRuns))
+	for _, r := range c.CompareRuns {
+		out[r.ResultFile] = r.ResultSHA256
+	}
+	return out
+}
