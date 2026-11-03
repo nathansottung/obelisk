@@ -83,7 +83,7 @@ func TestPlan_ExecuteRefusesExistingFile(t *testing.T) {
 	assertFileBytes(t, filepath.Join(destRoot, "photos", "a.jpg"), "SOMEONE ELSE'S")
 	assertFileBytes(t, filepath.Join(destRoot, "photos", "b.jpg"), "BBB")
 	ha, _ := hashFileHex(filepath.Join(mount, "a.jpg"))
-	if app.Store.Plan(plan.ID).Satisfied[ha] {
+	if testPlanMaps(t, app.Store, plan.ID).Satisfied[ha] {
 		t.Fatal("the refused file's content was marked as placed")
 	}
 }
@@ -126,9 +126,10 @@ func TestPlan_ExecuteCreditsAFilePlacedButNotRecorded(t *testing.T) {
 	// As if the run stopped before a.jpg was recorded.
 	ha, _ := hashFileHex(filepath.Join(mount, "a.jpg"))
 	p := app.Store.Plan(plan.ID)
-	delete(p.Satisfied, ha)
 	p.Status, p.ClosedAt = PlanExecuting, nil
-	app.Store.UpdatePlan(p)
+	if err := app.Store.ChangePlan(p, PlanChange{Satisfied: map[string]bool{ha: false}}); err != nil {
+		t.Fatal(err)
+	}
 
 	r, err := app.ExecutePlanFromDrive(plan.ID, mount, "RESUME", func(float64, string) {})
 	if err != nil {

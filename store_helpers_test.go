@@ -121,3 +121,32 @@ func (s *Store) AddChunk(c Chunk) *Chunk {
 	}
 	return nc
 }
+
+// testPlanMaps reads a plan's maps, failing the test on an error.
+func testPlanMaps(t testing.TB, s *Store, planID int) *PlanMaps {
+	t.Helper()
+	m, err := s.PlanMaps(planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// testSnapFiles reads a drive snapshot's files, failing the test on an error.
+func testSnapFiles(t testing.TB, s *Store, volumeID int) []SnapFile {
+	t.Helper()
+	files, err := s.SnapshotFileList(volumeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
+}
+
+// AddPlan is AddPlanErr for tests, which panics on an error.
+func (s *Store) AddPlan(p *Plan) *Plan {
+	np, err := s.AddPlanErr(p)
+	if err != nil {
+		panic(err)
+	}
+	return np
+}

@@ -144,11 +144,11 @@ func TestCatalogEngine_WriteErrorsPropagate(t *testing.T) {
 	s.BeginBatch()
 	s.mu.Lock()
 	s.c.Snapshots = append(s.c.Snapshots, &VolumeSnapshot{VolumeID: 7,
-		Files: []SnapFile{{RelPath: "a.nef", Hash: "not-a-hash"}}})
+		CapturedAt: time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)})
 	err := s.save()
 	s.mu.Unlock()
 	err = errors.Join(err, s.EndBatch())
-	if err == nil || !strings.Contains(err.Error(), "hexadecimal") {
+	if err == nil || !strings.Contains(err.Error(), "outside the years 0 to 9999") {
 		t.Fatalf("save and EndBatch: %v", err)
 	}
 	if err := s.FlushPending(); err == nil {

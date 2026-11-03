@@ -22,10 +22,15 @@ import (
 // engines behind it. The GUI preview reader and inventory writer build their own
 // catalog documents (never the store's) and are listed separately.
 var storeFiles = map[string]bool{
-	"store.go": true, "store_files.go": true, "store_chunks.go": true,
+	"store.go": true, "store_files.go": true, "store_chunks.go": true, "store_drives.go": true, "store_plans.go": true,
 	"catalogdb_rows.go": true, "catalogdb_migrate.go": true, "catalogdb_store.go": true,
-	"catalogdb_files.go": true, "catalogdb_chunks.go": true,
+	"catalogdb_files.go": true, "catalogdb_chunks.go": true, "catalogdb_drives.go": true,
 }
+
+// snapshotBuilders build a new drive snapshot from a scan, so they set and read
+// its files before handing it to the store. No other code reads a snapshot's
+// files as a field.
+var snapshotBuilders = map[string]bool{"buildSnapshot": true, "recordScan": true}
 
 var catalogDocumentFiles = map[string]bool{"gui_catalog.go": true, "gui_inventory.go": true, "gui_inventory_scope.go": true}
 
@@ -117,14 +122,19 @@ func rootSelectors(e ast.Expr) []*ast.SelectorExpr {
 }
 
 // Every reach into the catalog's own records goes through the store: no code
-// outside it reads the store's file or package lists, reads a package's file
-// listings, or changes a package's copies, segments or verify events, so on the
-// database engine (where listings and files are not in memory) nothing is missed.
+// outside it reads the store's lists of files, packages, drive snapshots, scans,
+// comparisons, plans or drift reports, reads a package's listings, a snapshot's
+// files, a plan's maps or a drift report's items, or changes a package's copies,
+// segments or verify events, so on the database engine (where those lists are
+// not in memory) nothing is missed.
 func TestPackages_OnlyTheStoreTouchesCatalogRecords(t *testing.T) {
 	fset, files, info := typeCheckPackage(t)
 	never := map[string]bool{ // read or written only by the store
 		"catalog.Files": true, "catalog.Chunks": true,
 		"Chunk.Files": true, "Chunk.UnknownFiles": true,
+		"catalog.Snapshots": true, "catalog.Scans": true, "catalog.CompareRuns": true, "catalog.Plans": true,
+		"catalog.Drift": true, "VolumeSnapshot.Files": true, "DriftReport.Items": true,
+		"Plan.Overrides": true, "Plan.Parked": true, "Plan.Mapping": true, "Plan.Satisfied": true,
 	}
 	changedOnlyByStore := map[string]bool{"Chunk.Copies": true, "Chunk.Segments": true, "Chunk.VerifyEvents": true}
 	var bad []string
@@ -158,7 +168,11 @@ func TestPackages_OnlyTheStoreTouchesCatalogRecords(t *testing.T) {
 			}
 			return true
 		})
+		fn := ""
 		ast.Inspect(f, func(n ast.Node) bool {
+			if d, ok := n.(*ast.FuncDecl); ok {
+				fn = d.Name.Name
+			}
 			sel, ok := n.(*ast.SelectorExpr)
 			if !ok {
 				return true
@@ -166,6 +180,7 @@ func TestPackages_OnlyTheStoreTouchesCatalogRecords(t *testing.T) {
 			typ, field := fieldOf(info, sel)
 			key := typ + "." + field
 			switch {
+			case key == "VolumeSnapshot.Files" && snapshotBuilders[fn]:
 			case never[key] && !(catalogDocumentFiles[name] && typ == "catalog") && !(catalogDocumentFiles[name] && typ == "Chunk"):
 				report(sel, "reaches "+key+" directly; use a Store method")
 			case changedOnlyByStore[key] && writes[sel]:

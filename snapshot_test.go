@@ -63,7 +63,7 @@ func TestDriveSnapshot_OfflineBrowseMirrorAndLocationVerdict(t *testing.T) {
 		t.Fatalf("snapshot 1 should record all %d files, got %+v", len(files), snap1)
 	}
 	roleOf := map[string]string{}
-	for _, f := range snap1.Files {
+	for _, f := range testSnapFiles(t, app.Store, vol1.ID) {
 		roleOf[f.RelPath] = f.Role
 	}
 	if roleOf["shoot/DSC0001.nef"] != RoleOriginals {
@@ -86,7 +86,7 @@ func TestDriveSnapshot_OfflineBrowseMirrorAndLocationVerdict(t *testing.T) {
 	if _, err := os.Stat(drive1); !os.IsNotExist(err) {
 		t.Fatal("precondition: drive1 should be gone")
 	}
-	root := snapshotTreemap(snap1, "") // no disk access — snapshot only
+	root := noErr[TreemapResult](t)(snapshotTreemap(snap1, app.Store.SnapshotFiles(vol1.ID), "")) // no disk access — snapshot only
 	var names []string
 	for _, c := range root.Children {
 		names = append(names, c.Name)
@@ -95,7 +95,7 @@ func TestDriveSnapshot_OfflineBrowseMirrorAndLocationVerdict(t *testing.T) {
 		t.Errorf("offline treemap root should list shoot/ and catalog/, got %v", names)
 	}
 	// Zoom into shoot/ — its files must be enumerable with the drive unplugged.
-	shoot := snapshotTreemap(snap1, "shoot")
+	shoot := noErr[TreemapResult](t)(snapshotTreemap(snap1, app.Store.SnapshotFiles(vol1.ID), "shoot"))
 	if shoot.Files != 4 {
 		t.Errorf("shoot/ should hold 4 files from the snapshot, got %d", shoot.Files)
 	}
@@ -108,7 +108,7 @@ func TestDriveSnapshot_OfflineBrowseMirrorAndLocationVerdict(t *testing.T) {
 	if err := app.Store.SetVolumeLocation(vol2.ID, shoe.ID); err != nil {
 		t.Fatal(err)
 	}
-	rep := app.driveReport(app.Store.VolumeSnapshot(vol2.ID))
+	rep := noErr[DriveReport](t)(app.driveReport(app.Store.VolumeSnapshot(vol2.ID)))
 	if rep.DuplicateOf == nil || rep.DuplicateOf.Label != "DRIVE-01" {
 		t.Fatalf("drive 2 should report drive 1 as its top duplicate, got %+v", rep.DuplicateOf)
 	}
@@ -134,7 +134,7 @@ func TestDriveSnapshot_OfflineBrowseMirrorAndLocationVerdict(t *testing.T) {
 	if err := app.Store.SetVolumeLocation(vol2.ID, house.ID); err != nil {
 		t.Fatal(err)
 	}
-	rep2 := app.driveReport(app.Store.VolumeSnapshot(vol2.ID))
+	rep2 := noErr[DriveReport](t)(app.driveReport(app.Store.VolumeSnapshot(vol2.ID)))
 	if rep2.Mirror == nil || rep2.Mirror.SameLocation || rep2.Mirror.AtRisk {
 		t.Errorf("mirrors in different locations must NOT be at-risk, got %+v", rep2.Mirror)
 	}
