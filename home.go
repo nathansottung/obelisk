@@ -108,6 +108,10 @@ type HomeData struct {
 // HomeOverview computes the whole Home picture from the catalog. onlineVolumeIDs is
 // the set of volumes connected RIGHT NOW (may be nil in tests / when not probed).
 func (a *App) HomeOverview(onlineVolumeIDs map[int]bool) (HomeData, error) {
+	return retrySnapshotRead(func() (HomeData, error) { return a.homeOverviewOnce(onlineVolumeIDs) })
+}
+
+func (a *App) homeOverviewOnce(onlineVolumeIDs map[int]bool) (HomeData, error) {
 	cfg, cfgErr := a.LoadConfig()
 	if cfgErr != nil {
 		return HomeData{}, cfgErr

@@ -2920,7 +2920,13 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("no snapshot for this volume — dock-ingest the drive first"))
 			return
 		}
-		res, err := snapshotTreemap(snap, app.Store.SnapshotFiles(v.ID), r.URL.Query().Get("path"))
+		res, err := retrySnapshotRead(func() (TreemapResult, error) {
+			cur := app.Store.VolumeSnapshot(v.ID) // the header of the scan whose files are read
+			if cur == nil {
+				cur = snap
+			}
+			return snapshotTreemap(cur, app.Store.SnapshotFiles(v.ID), r.URL.Query().Get("path"))
+		})
 		if err != nil {
 			jsonErr(w, 500, err)
 			return

@@ -16,9 +16,29 @@ package main
 // checks it.
 
 import (
+	"errors"
 	"fmt"
 	"iter"
 )
+
+// errSnapshotChanged is the error SnapshotFiles ends with when the snapshot it is
+// reading is replaced (the drive scanned again) between two pages.
+var errSnapshotChanged = errors.New("changed while it was being read")
+
+// retrySnapshotRead runs read, and runs it again from the start (three tries in
+// all) while it fails only because a drive snapshot it was reading was replaced.
+// read must keep nothing from a try that fails. Views that only read use it, so a
+// drive scanned while one is shown does not fail the view.
+func retrySnapshotRead[T any](read func() (T, error)) (T, error) {
+	var v T
+	var err error
+	for try := 0; try < 3; try++ {
+		if v, err = read(); !errors.Is(err, errSnapshotChanged) {
+			return v, err
+		}
+	}
+	return v, err
+}
 
 // snapFilePageSize is how many snapshot files SnapshotFiles reads per page (a
 // variable so tests can read in small pages).
@@ -157,7 +177,7 @@ func (s *Store) SnapshotFiles(volumeID int) iter.Seq2[SnapFile, error] {
 			if cur == nil || cur != started {
 				s.mu.Unlock()
 				if started != nil {
-					yield(SnapFile{}, fmt.Errorf("the snapshot of volume %d changed while it was being read; read it again", volumeID))
+					yield(SnapFile{}, fmt.Errorf("the snapshot of volume %d %w; read it again", volumeID, errSnapshotChanged))
 				}
 				return
 			}
@@ -439,23 +459,24 @@ func headerOfDrift(r *DriftReport) *DriftReport {
 func (s *Store) ReplaceDriftReport(r *DriftReport) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := s.c.Drift[:0]
+	// A new slice, put in place only once the report is written: a write the
+	// database refuses leaves the previous report.
+	out := make([]*DriftReport, 0, len(s.c.Drift)+1)
 	for _, d := range s.c.Drift {
 		if d.CollectionID != r.CollectionID {
 			out = append(out, d)
 		}
 	}
-	s.c.Drift = out
 	rec := headerOfDrift(r)
 	if s.be != nil {
 		s.dirty = true
-		if err := s.be.driftPut(rec, len(s.c.Drift), r.Items); err != nil {
+		if err := s.be.driftPut(rec, len(out), r.Items); err != nil {
 			return err
 		}
 	} else if r.Items != nil {
 		rec.Items = append(make([]DriftItem, 0, len(r.Items)), r.Items...)
 	}
-	s.c.Drift = append(s.c.Drift, rec)
+	s.c.Drift = append(out, rec)
 	return s.save()
 }
 

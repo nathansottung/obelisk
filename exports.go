@@ -491,6 +491,10 @@ const planExportVersion = 1
 // serial, the files that drive can supply with their hashes, source paths, planned
 // destinations, and whether each is already satisfied.
 func (a *App) PlanExport(planID int) (PlanExport, error) {
+	return retrySnapshotRead(func() (PlanExport, error) { return a.planExportOnce(planID) })
+}
+
+func (a *App) planExportOnce(planID int) (PlanExport, error) {
 	plan := a.Store.Plan(planID)
 	if plan == nil {
 		return PlanExport{}, fmt.Errorf("plan not found")

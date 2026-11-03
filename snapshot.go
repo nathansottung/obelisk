@@ -147,7 +147,19 @@ func (a *App) driveFiles(volumeID int) ([]driveFile, error) {
 
 // driveReport builds the per-drive ingest report for a stored snapshot, comparing
 // it against every OTHER drive's snapshot in the catalog.
+// Each try reads the snapshot's header again, so a retry never pairs an old
+// header with a new scan's files.
 func (a *App) driveReport(snap *VolumeSnapshot) (DriveReport, error) {
+	return retrySnapshotRead(func() (DriveReport, error) {
+		cur := a.Store.VolumeSnapshot(snap.VolumeID)
+		if cur == nil {
+			return DriveReport{}, fmt.Errorf("volume %d has no snapshot", snap.VolumeID)
+		}
+		return a.driveReportOnce(cur)
+	})
+}
+
+func (a *App) driveReportOnce(snap *VolumeSnapshot) (DriveReport, error) {
 	rep := DriveReport{VolumeID: snap.VolumeID, Label: snap.Label,
 		TotalFiles: snap.TotalFiles, TotalBytes: snap.TotalBytes, Unreadable: snap.Unreadable}
 	if !snap.CapturedAt.IsZero() {

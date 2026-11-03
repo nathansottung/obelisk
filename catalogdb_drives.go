@@ -155,7 +155,11 @@ func (b *dbBackend) planPut(p *Plan, ord int, ch PlanChange) error {
 			return nil
 		}
 		for h, dest := range ch.Mapping {
-			if err := set("mapped", h, dest); err != nil {
+			var v any
+			if dest != "" {
+				v = dest
+			}
+			if err := set("mapped", h, v); err != nil {
 				return err
 			}
 		}

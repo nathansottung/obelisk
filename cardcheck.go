@@ -73,6 +73,10 @@ type CardCheckResult struct {
 // knownContent builds an index from every content hash the catalog knows (SHA-256 AND
 // BLAKE3) to a few human labels of where it lives — the whole inventory, in one map.
 func (a *App) knownContent() (map[string][]string, error) {
+	return retrySnapshotRead(a.knownContentOnce)
+}
+
+func (a *App) knownContentOnce() (map[string][]string, error) {
 	idx := map[string][]string{}
 	add := func(hash, loc string) {
 		if hash == "" {

@@ -233,6 +233,31 @@ func checkPlanHashes(name string, ch PlanChange) error {
 	return nil
 }
 
+// EditPlan changes a plan's maps with ch and, when edit is not nil, its header as
+// edit changes the stored header, together and under the store lock. A long job
+// uses it instead of ChangePlan, so a header change made meanwhile (a close, a
+// new scope) is kept rather than overwritten by the job's older copy. It returns
+// a copy of the header as saved.
+func (s *Store) EditPlan(id int, ch PlanChange, edit func(p *Plan)) (*Plan, error) {
+	if err := checkPlanHashes(fmt.Sprint(id), ch); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, _ := s.planLocked(id)
+	if rec == nil {
+		return nil, fmt.Errorf("plan %d not found", id)
+	}
+	hdr := headerOfPlan(rec)
+	if edit != nil {
+		edit(hdr)
+	}
+	if err := s.changePlanLocked(hdr, ch); err != nil {
+		return nil, err
+	}
+	return headerOfPlan(hdr), nil
+}
+
 // UpdatePlan saves p's header (everything but its maps).
 func (s *Store) UpdatePlan(p *Plan) error { return s.ChangePlan(p, PlanChange{}) }
 
@@ -243,11 +268,20 @@ func (s *Store) ChangePlan(p *Plan, ch PlanChange) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.changePlanLocked(p, ch)
+}
+
+func (s *Store) changePlanLocked(p *Plan, ch PlanChange) error {
 	rec, ord := s.planLocked(p.ID)
 	if rec == nil {
 		return fmt.Errorf("plan %d not found", p.ID)
 	}
 	hdr := headerOfPlan(p)
+	// A plan's destination volume, once made, stays: a caller holding a copy
+	// taken before a run made it does not take it away.
+	if hdr.DestVolumeID == 0 {
+		hdr.DestVolumeID = rec.DestVolumeID
+	}
 	if s.be != nil {
 		s.dirty = true
 		if err := s.be.planPut(hdr, ord, ch); err != nil {

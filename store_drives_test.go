@@ -525,3 +525,138 @@ func TestDrives_ResultsUnchangedBetweenEngines(t *testing.T) {
 		t.Fatalf("the scenario compares nothing interesting: %v", c)
 	}
 }
+
+// A drift report the database refuses leaves the previous report in place, in
+// memory and after reopening.
+func TestDrift_FailedReplaceKeepsTheOldReport(t *testing.T) {
+	t.Setenv(catalogEngineEnv, "sqlite")
+	dir := t.TempDir()
+	s := openEngineStore(t, "sqlite", dir)
+	coll := s.AddCollection("A")
+	if err := s.ReplaceDriftReport(&DriftReport{At: time.Now().UTC(), CollectionID: coll.ID, Counts: map[string]int{"new": 3},
+		Items: []DriftItem{{State: "NEW", Path: "a"}}}); err != nil {
+		t.Fatal(err)
+	}
+	b := s.be.(*dbBackend)
+	b.failFileWrite = func() error { return fmt.Errorf("disk full") }
+	err := s.ReplaceDriftReport(&DriftReport{At: time.Now().UTC(), CollectionID: coll.ID, Counts: map[string]int{"new": 1}})
+	b.failFileWrite = nil
+	if err == nil {
+		t.Fatal("a refused drift report was reported saved")
+	}
+	if d := s.DriftReport(coll.ID); d == nil || d.Counts["new"] != 3 {
+		t.Fatalf("after the failure the report is %+v, want the old one", d)
+	}
+	s.Log("test", "another save")
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s = openEngineStore(t, "sqlite", dir)
+	if d := s.DriftReport(coll.ID); d == nil || d.Counts["new"] != 3 || len(noErr[[]DriftItem](t)(s.DriftItems(coll.ID))) != 1 {
+		t.Fatalf("after reopening the report is %+v, want the old one with its item", d)
+	}
+}
+
+// A plan run saves its destination volume and its executing status before it
+// copies anything, and a plan closed while it runs stays closed.
+func TestPlans_RunKeepsHeaderChangesMadeMeanwhile(t *testing.T) {
+	for _, engine := range bothEngines {
+		t.Run(engine, func(t *testing.T) {
+			t.Setenv(catalogEngineEnv, engine)
+			app := dockApp(t)
+			destRoot := createdForTest(t, app, filepath.Join(t.TempDir(), "dest"))
+			mount := t.TempDir()
+			plan := compiledPlanForTest(t, app, mount, "RUN", map[string]string{"a.jpg": "AAA", "b.jpg": "BBB"},
+				map[string]string{"a.jpg": "photos/a.jpg", "b.jpg": "photos/b.jpg"}, destRoot)
+			// A file on another drive, so this run does not finish the plan itself.
+			m := testPlanMaps(t, app.Store, plan.ID)
+			m.Mapping[fakeHash(1)] = "photos/elsewhere.jpg"
+			if err := app.Store.ChangePlan(plan, PlanChange{Mapping: m.Mapping}); err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			_, err := app.ExecutePlanFromDrive(plan.ID, mount, "RUN", func(float64, string) {
+				calls++
+				if calls != 1 {
+					return
+				}
+				var saved *Plan
+				for _, p := range persistedCatalog(t, app.DataDir).Plans {
+					if p.ID == plan.ID {
+						saved = p
+					}
+				}
+				if saved == nil || saved.DestVolumeID == 0 || saved.Status != PlanExecuting {
+					t.Errorf("before the first copy the saved plan is %+v, want its destination volume and executing", saved)
+				}
+				if _, err := app.ClosePlan(plan.ID); err != nil {
+					t.Error(err)
+				}
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if calls < 1 {
+				t.Fatalf("progress called %d times", calls)
+			}
+			if p := app.Store.Plan(plan.ID); p.Status != PlanClosed || p.ClosedAt == nil {
+				t.Fatalf("after the run the plan is %s (closed at %v); the close made during it was lost", p.Status, p.ClosedAt)
+			}
+		})
+	}
+}
+
+// A plan saved from a copy taken before a run made the plan's destination volume
+// keeps that volume, so the next run does not make another.
+func TestPlans_StaleCopyKeepsTheDestinationVolume(t *testing.T) {
+	for _, engine := range bothEngines {
+		t.Run(engine, func(t *testing.T) {
+			s := openEngineStore(t, engine, t.TempDir())
+			p := s.AddPlan(&Plan{Name: "P", DestinationRoot: "D:/dest", Status: PlanCompiled})
+			compile := s.Plan(p.ID) // taken before the run
+			if _, err := s.EditPlan(p.ID, PlanChange{}, func(h *Plan) { h.DestVolumeID, h.Status = 42, PlanExecuting }); err != nil {
+				t.Fatal(err)
+			}
+			compile.Name = "Renamed"
+			if err := s.UpdatePlan(compile); err != nil {
+				t.Fatal(err)
+			}
+			if got := s.Plan(p.ID); got.DestVolumeID != 42 || got.Name != "Renamed" {
+				t.Fatalf("after saving the older copy: %+v, want destination volume 42 kept", got)
+			}
+		})
+	}
+}
+
+// A read-only view reading a drive's snapshot starts again when the drive is
+// scanned again meanwhile, instead of failing.
+func TestDrives_ViewsRetryWhenASnapshotIsReplaced(t *testing.T) {
+	for _, engine := range bothEngines {
+		t.Run(engine, func(t *testing.T) {
+			s := openEngineStore(t, engine, t.TempDir())
+			vol := s.AddVolume(Volume{Label: "D", Kind: "HDD"})
+			if err := s.PutVolumeSnapshot(testDrive(vol.ID, 2*snapFilePageSize+1, 0)); err != nil {
+				t.Fatal(err)
+			}
+			tries := 0
+			n, err := retrySnapshotRead(func() (int, error) {
+				tries++
+				n := 0
+				for _, err := range s.SnapshotFiles(vol.ID) {
+					if err != nil {
+						return 0, err
+					}
+					if n++; n == 10 && tries == 1 {
+						if err := s.PutVolumeSnapshot(testDrive(vol.ID, 10, 1)); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				return n, nil
+			})
+			if err != nil || n != 10 || tries != 2 {
+				t.Fatalf("read %d files in %d tries, error %v; want the new 10 on the second try", n, tries, err)
+			}
+		})
+	}
+}

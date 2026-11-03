@@ -61,7 +61,7 @@ func (a *App) planFiles(plan *Plan) ([]PlanFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	return a.planFilesWith(plan, m)
+	return retrySnapshotRead(func() ([]PlanFile, error) { return a.planFilesWith(plan, m) })
 }
 
 // planFilesWith is planFiles with the plan's maps already read.
@@ -648,7 +648,7 @@ func (a *App) AdoptDestination(planID int, progress func(float64, string)) (map[
 			present++
 		}
 	})
-	if err := a.Store.ChangePlan(plan, PlanChange{Satisfied: newly}); err != nil {
+	if _, err := a.Store.EditPlan(plan.ID, PlanChange{Satisfied: newly}, nil); err != nil {
 		return nil, err
 	}
 	a.Store.Log("plan", fmt.Sprintf("plan %q: adopted %d already-present destination file(s)", plan.Name, present))
@@ -743,17 +743,27 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 	res.Notes = dest.Notes()
 	logDestinationNotes(a.Store, "plan", dest)
 	a.ensurePlanDestVolume(plan)
+	// The run's start is saved before anything is copied: the destination volume,
+	// so a run that stops here does not make another, and the executing status.
+	// The run changes only these fields of the stored header, so a change made
+	// while it runs (a close, a new scope) is kept.
+	destVol := plan.DestVolumeID
+	if plan, err = a.Store.EditPlan(plan.ID, PlanChange{}, func(p *Plan) {
+		p.DestVolumeID = destVol
+		if p.Status == PlanCompiled {
+			p.Status = PlanExecuting
+		}
+	}); err != nil {
+		return nil, err
+	}
 	a.Store.BeginBatch()
 	defer endBatchInto(a.Store, &err)
-	if plan.Status == PlanCompiled {
-		plan.Status = PlanExecuting
-	}
 	// The hashes this run marks satisfied, saved every few copies and at the end.
 	newly := map[string]bool{}
-	persist := func() error {
-		err := a.Store.ChangePlan(plan, PlanChange{Satisfied: newly})
+	persist := func(edit func(p *Plan)) error {
+		p, err := a.Store.EditPlan(plan.ID, PlanChange{Satisfied: newly}, edit)
 		if err == nil {
-			newly = map[string]bool{}
+			plan, newly = p, map[string]bool{}
 		}
 		return err
 	}
@@ -762,7 +772,7 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 	th := &throttler{bps: cfg.ThrottleMbps * 1e6, start: time.Now()}
 	var refs []ChunkFileRef
 	// Deterministic order so resume is stable and progress reads sensibly.
-	work, err := a.Store.SnapshotFileList(vol.ID)
+	work, err := retrySnapshotRead(func() ([]SnapFile, error) { return a.Store.SnapshotFileList(vol.ID) })
 	if err != nil {
 		return nil, err
 	}
@@ -827,7 +837,7 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 				for _, r := range refs {
 					undo[r.Hash] = false
 				}
-				if err := a.Store.ChangePlan(plan, PlanChange{Satisfied: undo}); err != nil {
+				if _, err := a.Store.EditPlan(plan.ID, PlanChange{Satisfied: undo}, nil); err != nil {
 					return nil, errors.Join(stop, err)
 				}
 				return nil, stop
@@ -840,18 +850,23 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 		res.Bytes += n
 		refs = append(refs, ChunkFileRef{RelPath: rel, SizeBytes: n, Hash: sf.Hash})
 		if res.Copied%25 == 0 {
-			if err := persist(); err != nil { // periodic persist → resumable mid-drive
+			if err := persist(nil); err != nil { // periodic persist → resumable mid-drive
 				return nil, err
 			}
 		}
 	}
 
 	a.recordPlanDestCopies(plan, refs)
+	var finish func(p *Plan)
 	if cov, _ := a.planCoverageWith(m); cov.Pct >= 100 {
 		now := time.Now().UTC()
-		plan.Status, plan.ClosedAt = PlanClosed, &now
+		finish = func(p *Plan) {
+			if p.Status == PlanExecuting {
+				p.Status, p.ClosedAt = PlanClosed, &now
+			}
+		}
 	}
-	if err := persist(); err != nil {
+	if err := persist(finish); err != nil {
 		return nil, err
 	}
 	if res.Coverage, err = a.PlanCoverage(plan); err != nil {
@@ -960,7 +975,7 @@ func (a *App) PlanCoverage(plan *Plan) (PlanCoverage, error) {
 	if err != nil {
 		return PlanCoverage{}, err
 	}
-	return a.planCoverageWith(m)
+	return retrySnapshotRead(func() (PlanCoverage, error) { return a.planCoverageWith(m) })
 }
 
 // planCoverageWith is PlanCoverage with the plan's maps already read.
@@ -1034,6 +1049,10 @@ type PlanWorkItem struct {
 // unsatisfied work for — the hook the dock uses to offer execution when the drive
 // with pending work is inserted.
 func (a *App) plansPendingForVolume(volumeID int) ([]PlanWorkItem, error) {
+	return retrySnapshotRead(func() ([]PlanWorkItem, error) { return a.plansPendingOnce(volumeID) })
+}
+
+func (a *App) plansPendingOnce(volumeID int) ([]PlanWorkItem, error) {
 	if a.Store.VolumeSnapshot(volumeID) == nil {
 		return nil, nil
 	}
