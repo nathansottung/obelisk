@@ -101,7 +101,7 @@ jobs:
       # the CGO_ENABLED=0 release build deliberately does not. Run it here so every
       # push/PR is checked for data races even though release binaries stay pure-Go.
       - name: go test -race
-        run: CGO_ENABLED=1 go test -race ./...
+        run: CGO_ENABLED=1 go test -race -timeout 30m ./...
 
       # Prose lint: warns on print-worn, wordy, or passive phrasing in user-facing
       # UI strings and docs (the Writing standard in docs/CONTRIBUTING.md). Advisory

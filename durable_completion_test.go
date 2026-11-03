@@ -146,7 +146,7 @@ func TestDurableCompletion_A_FinalFlushFailureIsReported(t *testing.T) {
 	}
 
 	// And a reopened catalog must not show the scan: the write never landed.
-	app.Store.failSave = nil
+	clearFailSave(app.Store)
 	store2, oerr := openTestStore(t, app.DataDir)
 	if oerr != nil {
 		t.Fatalf("reopen: %v", oerr)
@@ -229,7 +229,7 @@ func TestDurableCompletion_B_BothCausesSurvive(t *testing.T) {
 
 	// Positive control: a clean flush must not invent an error, and must not disturb
 	// an operation error that is already there.
-	app.Store.failSave = nil
+	clearFailSave(app.Store)
 	app.Store.BeginBatch()
 	app.Store.AddFolder(cid, t.TempDir())
 	var clean error

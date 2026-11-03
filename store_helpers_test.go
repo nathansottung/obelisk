@@ -153,3 +153,11 @@ func (s *Store) AddPlan(p *Plan) *Plan {
 	}
 	return np
 }
+
+// clearFailSave removes the save fault seam under the store's lock: a job's
+// goroutine can still be saving (its end, a log entry) when the test clears it.
+func clearFailSave(s *Store) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failSave = nil
+}

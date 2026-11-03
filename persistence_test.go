@@ -29,7 +29,7 @@ func TestWriteCatalog_SaveFailurePropagates(t *testing.T) {
 	}
 
 	// The failed write must not have persisted the removal: a fresh open still sees it.
-	st.failSave = nil
+	clearFailSave(st)
 	st2, err := openTestStore(t, dir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
@@ -66,7 +66,7 @@ func TestOpenStore_RecoverySaveFailureIsNonFatal(t *testing.T) {
 
 	// The returned Store is genuinely usable: clear the fault and a normal mutation persists
 	// and survives a reopen.
-	st.failSave = nil
+	clearFailSave(st)
 	openStoreFailSave = nil
 	c := st.AddCollection("Post-recovery")
 	st2, err := openTestStore(t, dir)

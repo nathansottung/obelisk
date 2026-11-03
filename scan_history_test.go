@@ -114,7 +114,7 @@ func TestScanHistory_FailedSaveFailsTheIngest(t *testing.T) {
 	snapAt := app.Store.VolumeSnapshot(vol.ID).CapturedAt
 	app.Store.failSave = func() error { return errors.New("disk full") }
 	_, err = app.IngestDrive(ds.ID, drive, "SER-F", "DF", "", "", false, noProg)
-	app.Store.failSave = nil
+	clearFailSave(app.Store)
 	if err == nil || !strings.Contains(err.Error(), "saving the scan record") {
 		t.Errorf("an ingest whose scan record could not be saved: %v, want that failure named", err)
 	}

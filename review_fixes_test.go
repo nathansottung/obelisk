@@ -88,7 +88,7 @@ func TestJob_FailsOnlyForItsOwnUnsavedChange(t *testing.T) {
 		return map[string]any{"ok": true}, nil // touches nothing
 	})
 	j0 := waitTerminalJob(t, app.Store, resp["job_id"].(int))
-	app.Store.failSave = nil
+	clearFailSave(app.Store)
 	if j0.Status != "COMPLETED" {
 		t.Errorf("a job that changed nothing: %s %s", j0.Status, j0.Label)
 	}
