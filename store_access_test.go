@@ -25,6 +25,7 @@ var storeFiles = map[string]bool{
 	"store.go": true, "store_files.go": true, "store_chunks.go": true, "store_drives.go": true, "store_plans.go": true,
 	"catalogdb_rows.go": true, "catalogdb_migrate.go": true, "catalogdb_store.go": true,
 	"catalogdb_files.go": true, "catalogdb_chunks.go": true, "catalogdb_drives.go": true,
+	"store_jobs.go": true, "catalogdb_jobs.go": true,
 }
 
 // snapshotBuilders build a new drive snapshot from a scan, so they set and read
@@ -123,7 +124,7 @@ func rootSelectors(e ast.Expr) []*ast.SelectorExpr {
 
 // Every reach into the catalog's own records goes through the store: no code
 // outside it reads the store's lists of files, packages, drive snapshots, scans,
-// comparisons, plans or drift reports, reads a package's listings, a snapshot's
+// comparisons, plans, drift reports or audit entries, reads a package's listings, a snapshot's
 // files, a plan's maps or a drift report's items, or changes a package's copies,
 // segments or verify events, so on the database engine (where those lists are
 // not in memory) nothing is missed.
@@ -133,7 +134,7 @@ func TestPackages_OnlyTheStoreTouchesCatalogRecords(t *testing.T) {
 		"catalog.Files": true, "catalog.Chunks": true,
 		"Chunk.Files": true, "Chunk.UnknownFiles": true,
 		"catalog.Snapshots": true, "catalog.Scans": true, "catalog.CompareRuns": true, "catalog.Plans": true,
-		"catalog.Drift": true, "VolumeSnapshot.Files": true, "DriftReport.Items": true,
+		"catalog.Drift": true, "VolumeSnapshot.Files": true, "DriftReport.Items": true, "catalog.Audit": true,
 		"Plan.Overrides": true, "Plan.Parked": true, "Plan.Mapping": true, "Plan.Satisfied": true,
 	}
 	changedOnlyByStore := map[string]bool{"Chunk.Copies": true, "Chunk.Segments": true, "Chunk.VerifyEvents": true}

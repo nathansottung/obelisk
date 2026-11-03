@@ -38,6 +38,9 @@ type dbBackend struct {
 	txStmt map[string]*sql.Stmt // statements prepared on the open transaction
 	dbStmt map[string]*sql.Stmt // statements prepared on the writer connection
 	hashes map[string]string    // unit key → hash, as last committed
+	// audit holds the audit entries added since the last commit, which writes them.
+	// The log itself is only in the audit table.
+	audit  []Audit
 	closed bool
 	// lastWritten and lastRemoved count the records the last flush wrote and
 	// removed, for tests.
@@ -79,7 +82,13 @@ func openDBBackend(dataDir string) (catalogBackend, *catalog, string, error) {
 		d.Close()
 		return nil, nil, "", fmt.Errorf("reading the catalog database %s: %w", dbPath, err)
 	}
-	_, why := d.ReadOnly()
+	ro, why := d.ReadOnly()
+	if !ro {
+		if err := ensureJobTable(d); err != nil {
+			d.Close()
+			return nil, nil, "", fmt.Errorf("adding the job table to %s: %w", dbPath, err)
+		}
+	}
 	return &dbBackend{d: d, hashes: catalogUnitHashes(c)}, c, why, nil
 }
 
@@ -172,15 +181,31 @@ func (b *dbBackend) stmt(query string) (*sql.Stmt, error) {
 }
 
 func (b *dbBackend) flush(c *catalog) error {
+	unitErr, commitErr := b.commit(c, nil)
+	if commitErr != nil {
+		return commitErr
+	}
+	return unitErr
+}
+
+// commit writes the records of c that changed since the last commit and the audit
+// entries added since, and commits them in one transaction. Each record is its own
+// savepoint: one the database refuses keeps its old hash, so the next commit tries
+// it again, and is reported in unitErr while the others commit. jobs, when not
+// nil, is called in the same transaction once every record is written, with
+// unitErr, and returns the job rows and meta values to write with them; an error
+// from it, or a job row that cannot be written, fails the whole commit. commitErr is the commit's own
+// error: nothing in the transaction was saved.
+func (b *dbBackend) commit(c *catalog, jobs func(unitErr error) ([]storedJob, map[string]string, error)) (unitErr, commitErr error) {
 	if b.closed {
-		return errCatalogClosed
+		return nil, errCatalogClosed
 	}
 	units := catalogUnits(c, false)
 	next := make(map[string]string, len(units))
 	var changed []catalogUnit
 	for _, u := range units {
 		if _, dup := next[u.key]; dup {
-			return fmt.Errorf("the catalog holds two records named %s; neither was saved", u.key)
+			return nil, fmt.Errorf("the catalog holds two records named %s; neither was saved", u.key)
 		}
 		next[u.key] = u.hash
 		if b.hashes[u.key] != u.hash {
@@ -198,12 +223,12 @@ func (b *dbBackend) flush(c *catalog) error {
 			removed = append(removed, k)
 		}
 	}
-	if len(changed) == 0 && len(removed) == 0 && b.tx == nil {
-		return nil
+	if len(changed) == 0 && len(removed) == 0 && b.tx == nil && len(b.audit) == 0 && jobs == nil {
+		return nil, nil
 	}
 	w, err := b.writer()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	tx := b.tx
 	// Each record is its own savepoint: one the database refuses is reported and
@@ -233,10 +258,27 @@ func (b *dbBackend) flush(c *catalog) error {
 		}
 	}
 	b.lastWritten, b.lastRemoved = len(changed)-len(unitErrs), len(removed)
+	audited := len(b.audit)
+	if audited > 0 {
+		if err := savepoint(tx, "audit", func() error { return b.writeAudit(tx) }); err != nil {
+			unitErrs = append(unitErrs, err)
+			audited = 0
+		}
+	}
 	hadFiles := b.txFiles
+	var jobErr error
+	if jobs != nil {
+		rows, meta, err := jobs(errors.Join(unitErrs...))
+		if jobErr = err; err == nil {
+			jobErr = writeJobRows(tx, rows, meta)
+		}
+	}
 	b.endTx()
 	commit := tx.Commit
-	if b.failCommit != nil {
+	if jobErr != nil {
+		commit = func() error { tx.Rollback(); return jobErr }
+	}
+	if b.failCommit != nil && jobErr == nil {
 		if ferr := b.failCommit(); ferr != nil {
 			commit = func() error { tx.Rollback(); return ferr }
 		}
@@ -247,12 +289,13 @@ func (b *dbBackend) flush(c *catalog) error {
 		// so the next save writes them again. File writes in the transaction cannot
 		// be replayed from memory: when there were any, they are lost.
 		if hadFiles {
-			return &catalogChangesLost{err: err}
+			return nil, &catalogChangesLost{err: err}
 		}
-		return fmt.Errorf("saving the catalog database: %w", err)
+		return nil, fmt.Errorf("saving the catalog database: %w", err)
 	}
 	b.hashes = next
-	return errors.Join(unitErrs...)
+	b.audit = b.audit[audited:]
+	return errors.Join(unitErrs...), nil
 }
 
 func (b *dbBackend) close() error {

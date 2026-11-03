@@ -121,7 +121,7 @@ func (s *Store) PutVolumeSnapshot(snap *VolumeSnapshot) error {
 	rec := headerOfSnapshot(snap)
 	_, ord := s.snapshotLocked(snap.VolumeID)
 	if s.be != nil {
-		s.dirty = true
+		s.changedLocked()
 		if err := s.be.snapshotPut(rec, ord, snap.Files); err != nil {
 			return err
 		}
@@ -469,7 +469,7 @@ func (s *Store) ReplaceDriftReport(r *DriftReport) error {
 	}
 	rec := headerOfDrift(r)
 	if s.be != nil {
-		s.dirty = true
+		s.changedLocked()
 		if err := s.be.driftPut(rec, len(out), r.Items); err != nil {
 			return err
 		}

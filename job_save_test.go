@@ -14,8 +14,12 @@ import (
 func TestJob_UnsavedCatalogChangeFailsTheJob(t *testing.T) {
 	app, cid := dcApp(t)
 	c := app.Store.AddChunk(Chunk{CollectionID: cid, Name: "JOB-SAVE", Status: "STAGED"})
-	app.Store.failSave = func() error { return fmt.Errorf("disk full (injected)") }
 	resp, jerr := runJob(app, "write", "probe", func(p func(float64, string)) (map[string]any, error) {
+		// Armed once the job is recorded: on the database engine the board is in the
+		// catalog database, which this fault stops writing.
+		app.Store.mu.Lock()
+		app.Store.failSave = func() error { return fmt.Errorf("disk full (injected)") }
+		app.Store.mu.Unlock()
 		c.Status = "VERIFIED"
 		app.Store.UpdateChunk(c) // swallows the save error
 		return map[string]any{"ok": true}, nil

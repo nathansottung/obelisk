@@ -150,10 +150,10 @@ func (s *Store) fileLocked(id int) (*File, error) {
 // otherwise in place of the record with its ID.
 func (s *Store) putFileLocked(f *File, isNew bool) error {
 	if s.be != nil {
-		s.dirty = true // the open transaction holds a change the next save commits
+		s.changedLocked() // the open transaction holds a change the next save commits
 		return s.be.filePut(f, isNew)
 	}
-	s.dirty = true
+	s.changedLocked()
 	nf := cloneFile(f)
 	if isNew {
 		s.c.Files = append(s.c.Files, nf)
@@ -176,10 +176,10 @@ func (s *Store) putFileLocked(f *File, isNew bool) error {
 // how many there were.
 func (s *Store) deleteFilesLocked(q fileQuery) (int, error) {
 	if s.be != nil {
-		s.dirty = true
+		s.changedLocked()
 		return s.be.fileDelete(q)
 	}
-	s.dirty = true
+	s.changedLocked()
 	ids := idSet(q.IDs)
 	kept, n := s.c.Files[:0], 0
 	for _, f := range s.c.Files {
@@ -377,9 +377,8 @@ func (s *Store) UpsertFile(f File) *File {
 	nf, err := s.UpsertFileErr(f)
 	if err != nil {
 		s.mu.Lock()
-		if s.lostErr == nil {
-			s.lostErr = fmt.Errorf("a file change could not be recorded: %w", err)
-		}
+		s.changedLocked()
+		s.noteLostLocked(fmt.Errorf("a file change could not be recorded: %w", err))
 		s.mu.Unlock()
 	}
 	return nf
@@ -403,7 +402,7 @@ func (s *Store) UpsertFileErr(f File) (*File, error) {
 			if reflect.DeepEqual(before, e) { // a rescan of an unchanged file writes nothing
 				return s.handOut(e), nil
 			}
-			s.dirty = true
+			s.changedLocked()
 			if err := s.be.filePut(e, false); err != nil {
 				return nil, err
 			}
@@ -414,7 +413,7 @@ func (s *Store) UpsertFileErr(f File) (*File, error) {
 		if nf.FirstSeen.IsZero() {
 			nf.FirstSeen = now
 		}
-		s.dirty = true
+		s.changedLocked()
 		if err := s.be.filePut(&nf, true); err != nil {
 			s.c.NextID["file"]--
 			return nil, err
@@ -425,7 +424,7 @@ func (s *Store) UpsertFileErr(f File) (*File, error) {
 		s.buildFileIndexLocked()
 	}
 	key := fileKey(f.CollectionID, f.FolderID, f.RelPath)
-	s.dirty = true                     // a file change is a catalog change: EndBatch and FlushPending write it
+	s.changedLocked()                  // a file change is a catalog change: EndBatch and FlushPending write it
 	if e := s.fileIdx[key]; e != nil { // O(1) replace of a prior entry
 		mergeFileUpsert(e, f, now, s.versionsRetained)
 		return s.handOut(cloneFile(e)), nil

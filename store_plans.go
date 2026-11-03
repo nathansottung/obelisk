@@ -155,7 +155,7 @@ func (s *Store) AddPlanErr(p *Plan) (*Plan, error) {
 		rec.Status = PlanDraft
 	}
 	if s.be != nil {
-		s.dirty = true
+		s.changedLocked()
 		if err := s.be.planPut(rec, len(s.c.Plans), ch); err != nil {
 			return nil, err
 		}
@@ -283,7 +283,7 @@ func (s *Store) changePlanLocked(p *Plan, ch PlanChange) error {
 		hdr.DestVolumeID = rec.DestVolumeID
 	}
 	if s.be != nil {
-		s.dirty = true
+		s.changedLocked()
 		if err := s.be.planPut(hdr, ord, ch); err != nil {
 			return err
 		}

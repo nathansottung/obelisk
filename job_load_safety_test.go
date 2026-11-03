@@ -14,6 +14,7 @@ import (
 // These tests also compile on the exact published parent. They exercise the real
 // OpenStore and publication paths, not a replacement loader.
 func TestJobLoad_RejectExisting(t *testing.T) {
+	skipWithDatabaseJobs(t)
 	cases := map[string]string{
 		"empty": "", "truncated": `{"rows":[`, "null-board": `null`,
 		"array-board": `[]`, "wrong-rows": `{"rows":{}}`,
@@ -59,6 +60,7 @@ func TestJobLoad_RejectExisting(t *testing.T) {
 }
 
 func TestJobLoad_ValidAndReconcile(t *testing.T) {
+	skipWithDatabaseJobs(t)
 	for _, raw := range []string{`{}`, `{"next":0,"rows":null}`, `{"rows":[]}`, `{"Next":7,"Rows":[]}`} {
 		t.Run(raw, func(t *testing.T) {
 			dir := t.TempDir()

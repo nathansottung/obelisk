@@ -545,12 +545,15 @@ func (s started) write(m map[string]any, err error) {
 //     the same lock hold, so it is never presented as durable COMPLETED history —
 //     not even for the instant between the write failing and this goroutine noticing.
 //
-// The catalog and jobs.json remain two separate files and this does not make them
-// one transaction: fn's own catalog changes are committed by its EndBatch before it
-// returns, and the job record is written afterwards. When the catalog commit
-// succeeds and the job record does not, the data stays and only the bookkeeping is
-// reported as missing — nothing successfully written is rolled back to make the two
-// files agree.
+// On catalog.json the catalog and jobs.json are two files and this does not make
+// them one transaction: the job record is written after the catalog. When the
+// catalog write succeeds and the job record does not, the data stays and only the
+// bookkeeping is reported as missing. On the catalog database the job board is in
+// the database, and the job's end is committed in the same transaction as every
+// catalog change not yet committed (CompleteJob), so the two are saved together or
+// not at all. Either way, a batch's EndBatch inside fn commits on its own first,
+// like the commits a batch makes every few seconds: a crash between the two leaves
+// the changes saved and the job INTERRUPTED, never a COMPLETED job without them.
 func runJob(app *App, kind, label string, fn func(progress func(float64, string)) (map[string]any, error)) (map[string]any, error) {
 	j, jerr := app.Store.NewJob(kind, label)
 	if jerr != nil {
@@ -607,22 +610,6 @@ func runJob(app *App, kind, label string, fn func(progress func(float64, string)
 		gen := app.Store.SaveGen()
 		res, err := fn(prog)
 		app.Store.SetJobTelemetry(j.ID, 0, 0, 0, 0, 0, 0)
-		// Work that succeeded is recorded only once its catalog changes are on disk:
-		// a save that failed inside the work (some Store methods do not return
-		// the error) or one put off by another job's batch is written now, and a
-		// failure here fails the job. Only the job's own changes count: an earlier
-		// failure it did not add to does not fail it. On a read-only catalog (an
-		// older app reading a newer one) nothing can be recorded, and the job says so.
-		if err == nil && app.Store.ChangedSince(gen) {
-			if ro, why := app.Store.ReadOnly(); ro {
-				if res == nil {
-					res = map[string]any{}
-				}
-				res["catalog_not_recorded"] = "the catalog is read-only (" + why + "), so this job's changes to it were not recorded"
-			} else if ferr := app.Store.FlushPending(); ferr != nil {
-				err = fmt.Errorf("the work finished but the catalog could not be saved, so it is NOT recorded: %w", ferr)
-			}
-		}
 		if err != nil {
 			// fn's error already carries any final catalog-flush failure, folded in by
 			// endBatchInto, so a job whose work succeeded but whose catalog write did
@@ -632,13 +619,26 @@ func runJob(app *App, kind, label string, fn func(progress func(float64, string)
 			}
 			return
 		}
+		// Work that succeeded is recorded only once its catalog changes are saved: a
+		// save that failed inside the work (some Store methods do not return the
+		// error) or one put off by another job's batch is written with the job's
+		// completion, and when it cannot be the job is FAILED (CompleteJob). Only the
+		// job's own changes count: an earlier failure it did not add to does not fail
+		// it. On a read-only catalog (an older app reading a newer one) nothing can be
+		// recorded, and the job says so.
+		//
 		// A job may report its structured artifacts under the "artifacts" key of its
 		// result (the show-the-artifact rule, made structural). They are published
-		// WITH the terminal status, not after it, so jobs.json never holds a completed
+		// WITH the terminal status, not after it, so the board never holds a completed
 		// job whose outputs are missing.
 		arts, _ := res["artifacts"].([]Artifact)
-		if serr := app.Store.FinishJob(j.ID, 1, "", "COMPLETED", arts, res); serr != nil {
-			app.noteUnrecordedJob(j.ID, "COMPLETED", serr)
+		saveErr, serr := app.Store.CompleteJob(j.ID, gen, label, arts, res)
+		if serr != nil {
+			status := "COMPLETED"
+			if saveErr != nil {
+				status = "FAILED"
+			}
+			app.noteUnrecordedJob(j.ID, status, serr)
 		}
 	}()
 	return map[string]any{"job_id": j.ID, "status": "RUNNING", "label": label}, nil

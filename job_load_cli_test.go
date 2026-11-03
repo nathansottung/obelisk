@@ -18,6 +18,7 @@ import (
 )
 
 func TestJobLoadCLI_StartupGate(t *testing.T) {
+	skipWithDatabaseJobs(t)
 	oldAccel := hashAccelOn.Load()
 	defer setHashAccel(oldAccel)
 	root := t.TempDir()
