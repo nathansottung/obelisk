@@ -87,6 +87,7 @@ func init() {
 			return fmt.Sprintf("Restore the app's records from %s", paramString(p, "tar_path"))
 		},
 		targets: appBackupRestoreTargets,
+		swaps:   true,
 		run: func(a *App, p map[string]any) (any, error) {
 			res, err := a.RestoreAppBackup(paramString(p, "tar_path"))
 			if err != nil {

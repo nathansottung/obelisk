@@ -146,6 +146,9 @@ func (s *Store) AddPlanErr(p *Plan) (*Plan, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.heldLocked(); err != nil {
+		return nil, err
+	}
 	rec := headerOfPlan(p)
 	rec.ID = s.next("plan")
 	if rec.CreatedAt.IsZero() {
@@ -272,6 +275,9 @@ func (s *Store) ChangePlan(p *Plan, ch PlanChange) error {
 }
 
 func (s *Store) changePlanLocked(p *Plan, ch PlanChange) error {
+	if err := s.heldLocked(); err != nil {
+		return err
+	}
 	rec, ord := s.planLocked(p.ID)
 	if rec == nil {
 		return fmt.Errorf("plan %d not found", p.ID)

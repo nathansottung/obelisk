@@ -149,6 +149,9 @@ func (s *Store) fileLocked(id int) (*File, error) {
 // putFileLocked stores f whole (its versions too): a new record when isNew,
 // otherwise in place of the record with its ID.
 func (s *Store) putFileLocked(f *File, isNew bool) error {
+	if err := s.heldLocked(); err != nil {
+		return err
+	}
 	if s.be != nil {
 		s.changedLocked() // the open transaction holds a change the next save commits
 		return s.be.filePut(f, isNew)
@@ -175,6 +178,9 @@ func (s *Store) putFileLocked(f *File, isNew bool) error {
 // deleteFilesLocked removes the files q selects (by IDs or archive) and returns
 // how many there were.
 func (s *Store) deleteFilesLocked(q fileQuery) (int, error) {
+	if err := s.heldLocked(); err != nil {
+		return 0, err
+	}
 	if s.be != nil {
 		s.changedLocked()
 		return s.be.fileDelete(q)
@@ -389,6 +395,9 @@ func (s *Store) UpsertFile(f File) *File {
 func (s *Store) UpsertFileErr(f File) (*File, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.heldLocked(); err != nil {
+		return nil, err
+	}
 	s.releaseFile(f.ID)
 	now := time.Now().UTC()
 	if s.be != nil {

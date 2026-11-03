@@ -1212,6 +1212,9 @@ type Store struct {
 	// Every record still lives in c; each save writes the records that changed.
 	be     catalogBackend
 	closed bool // Close was called; every later save is refused
+	// held names the restore or data folder move that holds the catalog
+	// (holdEdits): while it is set no job starts and no edit is saved.
+	held string
 	// lostErr is a change the catalog database dropped where no caller could be
 	// told (a commit that failed holding file writes, a file write whose method
 	// returns no error). FlushPending, EndBatch and Close return it, so no job that
@@ -1658,6 +1661,9 @@ func (s *Store) save() error {
 	// of a job (see FlushPending).
 	s.dirty = true
 	s.saveGen++
+	if err := s.heldLocked(); err != nil {
+		return err
+	}
 	if s.batchDepth > 0 {
 		iv := s.batchInterval
 		if iv <= 0 {
@@ -3023,6 +3029,9 @@ func (s *Store) UpdateEvent(e *Event) { s.mu.Lock(); defer s.mu.Unlock(); _ = s.
 func (s *Store) DeleteEvent(id int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.heldLocked(); err != nil {
+		return err
+	}
 	out := s.c.Events[:0]
 	for _, e := range s.c.Events {
 		if e.ID != id {
@@ -3050,6 +3059,9 @@ func (s *Store) DeleteEvent(id int) error {
 func (s *Store) AssignFilesToEvent(fileIDs []int, eventID int) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.heldLocked(); err != nil {
+		return 0, err
+	}
 	n := 0
 	if s.be != nil {
 		var err error
@@ -3850,6 +3862,12 @@ func (s *Store) NewJob(kind, label string) (*Job, error) {
 	}
 	if s.jobs.next == int(^uint(0)>>1) {
 		return nil, fmt.Errorf("job identity counter exhausted; no work was started")
+	}
+	s.mu.Lock()
+	herr := s.heldLocked()
+	s.mu.Unlock()
+	if herr != nil {
+		return nil, fmt.Errorf("no work was started: %w", herr)
 	}
 	s.jobs.next++
 	j := &Job{ID: s.jobs.next, Kind: kind, Label: label, Status: "RUNNING", CreatedAt: time.Now().UTC()}

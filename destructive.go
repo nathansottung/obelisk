@@ -73,6 +73,9 @@ type destructiveOp struct {
 	targets func(a *App, p map[string]any) ([]destructiveTarget, error)
 	// run performs the action and returns the response body.
 	run func(a *App, p map[string]any) (any, error)
+	// swaps marks the action that replaces the catalog (a restore): it takes the
+	// swap gate itself. Every other action enters it (swapgate.go).
+	swaps bool
 }
 
 // destructiveOps is the registry of gated actions, filled in per action.
@@ -200,6 +203,13 @@ func (a *App) ExecuteDestructive(session, token, confirm string) (any, error) {
 		return nil, refuseDestructive(403, "this confirmation belongs to another browser session; prepare the action again here")
 	}
 	d := destructiveOps[t.op]
+	if !d.swaps {
+		leave, err := a.enterCatalog()
+		if err != nil {
+			return nil, refuseDestructive(409, "%s", err.Error())
+		}
+		defer leave()
+	}
 	if confirm != d.word {
 		return nil, refuseDestructive(400, "type %q exactly to confirm; nothing was changed. Prepare the action again", d.word)
 	}

@@ -160,7 +160,7 @@ func main() {
 		}
 		os.Exit(0)
 	}()
-	log.Fatal(http.ListenAndServe(addr, apiGuard(authMiddleware(mux, token))))
+	log.Fatal(http.ListenAndServe(addr, apiGuard(authMiddleware(app.swapGate(mux), token))))
 }
 
 // isLocalhostAddr reports whether addr binds only the loopback interface, so it

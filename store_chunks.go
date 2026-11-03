@@ -40,6 +40,9 @@ func (s *Store) setChunkListLocked(ch *Chunk, list int, refs []ChunkFileRef) err
 // setChunkListsLocked replaces the given listings of a package together: on the
 // database engine either all of them are written or none.
 func (s *Store) setChunkListsLocked(ch *Chunk, lists map[int][]ChunkFileRef) error {
+	if err := s.heldLocked(); err != nil {
+		return err
+	}
 	copied := map[int][]ChunkFileRef{}
 	for list, refs := range lists {
 		if refs != nil {

@@ -139,19 +139,66 @@ func (s *Store) closeWithCopy(what, dest string) error {
 	return nil
 }
 
-// savePending saves every pending change, on either engine, for a restore that
-// is about to copy the records. A change lost earlier is not counted against it:
-// it is already gone.
-func (s *Store) savePending() error {
+// errCatalogHeld is what an edit or a job start gets while a restore or a data
+// folder move holds the catalog (errors.Is matches the *heldError it comes as).
+var errCatalogHeld = errors.New("the catalog is held")
+
+// heldError names what holds the catalog.
+type heldError struct{ what string }
+
+func (e *heldError) Error() string {
+	return fmt.Sprintf("the catalog takes no changes while %s runs, so nothing was changed. Try again when it has finished", e.what)
+}
+
+func (e *heldError) Is(target error) bool { return target == errCatalogHeld }
+
+// heldLocked refuses an edit while the catalog is held. Caller holds s.mu.
+func (s *Store) heldLocked() error {
+	if s.held != "" {
+		return &heldError{s.held}
+	}
+	return nil
+}
+
+// holdEdits holds the catalog for what (a restore or a data folder move): it is
+// refused while a job runs, saves every pending change (one that cannot be saved
+// refuses the hold), and from then on no job starts and no edit is saved, on
+// either engine, until release is called. The holder's own copy and close
+// (closeWithCopy) still work. A change lost earlier is not counted against it: it
+// is already gone. A store that a restore or move has replaced is never released.
+func (s *Store) holdEdits(what string) (release func(), err error) {
+	s.jobs.mu.Lock()
+	defer s.jobs.mu.Unlock()
+	if running := s.runningJobsLocked(); len(running) > 0 {
+		return nil, errJobsRunning(what, running)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return errors.New("the catalog is closed")
+		return nil, errors.New("the catalog is closed")
+	}
+	if err := s.heldLocked(); err != nil {
+		return nil, err
 	}
 	if s.dirty && !s.readOnly {
-		return s.writeCatalog()
+		if err := s.writeCatalog(); err != nil {
+			return nil, fmt.Errorf("the catalog has changes that could not be saved: %w", err)
+		}
 	}
-	return nil
+	s.held = what
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.held = ""
+	}, nil
+}
+
+// setHeld changes what a hold says holds the catalog: a restore that stopped
+// partway keeps the old store held for good.
+func (s *Store) setHeld(what string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.held = what
 }
 
 // isClosed reports whether the store has been closed.

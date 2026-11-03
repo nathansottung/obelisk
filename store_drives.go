@@ -118,6 +118,9 @@ func (s *Store) PutVolumeSnapshot(snap *VolumeSnapshot) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.heldLocked(); err != nil {
+		return err
+	}
 	rec := headerOfSnapshot(snap)
 	_, ord := s.snapshotLocked(snap.VolumeID)
 	if s.be != nil {
@@ -459,6 +462,9 @@ func headerOfDrift(r *DriftReport) *DriftReport {
 func (s *Store) ReplaceDriftReport(r *DriftReport) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.heldLocked(); err != nil {
+		return err
+	}
 	// A new slice, put in place only once the report is written: a write the
 	// database refuses leaves the previous report.
 	out := make([]*DriftReport, 0, len(s.c.Drift)+1)
