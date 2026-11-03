@@ -108,13 +108,13 @@ func (s *Store) ManagedRoots() []managedRoot {
 	defer s.mu.Unlock()
 	seen := map[string]int{} // normRoot -> index into out
 	var out []managedRoot
-	for _, p := range s.c.Plans {
+	for _, p := range s.plansLocked() {
 		root := strings.TrimSpace(p.DestinationRoot)
 		if root == "" {
 			continue
 		}
-		populated := p.DestVolumeID != 0 || len(p.Satisfied) > 0 ||
-			p.Status == PlanExecuting || p.Status == PlanClosed
+		populated := p.DestVolumeID != 0 || p.Status == PlanExecuting || p.Status == PlanClosed ||
+			s.planHasSatisfiedLocked(p)
 		if !populated {
 			continue
 		}

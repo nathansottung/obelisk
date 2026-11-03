@@ -139,15 +139,16 @@ func TestExportImport_StructureAndPlanRoundTrip(t *testing.T) {
 	if np == nil || np.Status != PlanCompiled {
 		t.Fatalf("imported plan should be compiled, got %+v", np)
 	}
-	if len(np.Mapping) != len(plan.Mapping) {
-		t.Errorf("plan mapping size differs: src %d dst %d", len(plan.Mapping), len(np.Mapping))
+	srcMaps, dstMaps := testPlanMaps(t, src.Store, plan.ID), testPlanMaps(t, dst.Store, np.ID)
+	if len(dstMaps.Mapping) != len(srcMaps.Mapping) || len(srcMaps.Mapping) == 0 {
+		t.Errorf("plan mapping size differs: src %d dst %d", len(srcMaps.Mapping), len(dstMaps.Mapping))
 	}
-	for h, dest := range plan.Mapping {
-		if np.Mapping[h] != dest {
-			t.Errorf("plan mapping for %s: src %q dst %q", h, dest, np.Mapping[h])
+	for h, dest := range srcMaps.Mapping {
+		if dstMaps.Mapping[h] != dest {
+			t.Errorf("plan mapping for %s: src %q dst %q", h, dest, dstMaps.Mapping[h])
 		}
 	}
-	srcCov, dstCov := src.PlanCoverage(plan), dst.PlanCoverage(np)
+	srcCov, dstCov := noErr[PlanCoverage](t)(src.PlanCoverage(plan)), noErr[PlanCoverage](t)(dst.PlanCoverage(np))
 	if srcCov.Total != dstCov.Total || srcCov.Pct != dstCov.Pct {
 		t.Errorf("plan coverage differs: src %+v dst %+v", srcCov, dstCov)
 	}

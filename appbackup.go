@@ -801,9 +801,7 @@ func checkBackupScanFiles(man appBackupManifest, members map[string][]byte) (map
 		if err := decodeCatalogJSON(catBytes, &c); err != nil {
 			return nil, fmt.Errorf("the backup's catalog is damaged: %w", err)
 		}
-		for _, r := range c.Scans {
-			want[r.FileList] = r.FileListSHA256
-		}
+		want = c.scanListSums()
 	}
 	skip := map[string]bool{}
 	for _, m := range man.Members {

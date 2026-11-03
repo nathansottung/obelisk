@@ -9,9 +9,11 @@ package main
 // package, copy or count.
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -79,39 +81,20 @@ func validCompareFileName(name string) bool {
 		strings.HasSuffix(name, compareFileSuffix) && !strings.ContainsAny(name, "/\\:")
 }
 
-// scanSide is a scan's files as one side of a comparison, with what the scan
-// could not read.
-func scanSide(list *ScanFileList) ClassSide {
-	gaps := &VolumeSnapshot{UnreadableFolders: list.UnreadableFolders, UnreadableFiles: list.UnreadableFiles, SkippedFolders: list.SkippedFolders}
-	side := ClassSide{Known: gaps.Known}
-	for _, f := range list.Files {
+// scanSide reads a scan's files as one side of a comparison, with what the scan
+// could not read. Only each file's path, hash and size are kept.
+func (a *App) scanSide(rec *ScanRecord) (ClassSide, error) {
+	var side ClassSide
+	list, err := a.StreamScanFiles(rec, func(f SnapFile) error {
 		side.Files = append(side.Files, ClassFile{Path: f.RelPath, Hash: f.Hash, Size: f.SizeBytes})
+		return nil
+	})
+	if err != nil {
+		return ClassSide{}, err
 	}
-	return side
-}
-
-// latestCompleteScan is the drive's newest complete scan of the whole drive, or
-// nil. A folder adopt's scan (Root set) covers one folder, not the drive.
-func (s *Store) latestCompleteScan(volumeID int) *ScanRecord {
-	for _, r := range s.ScanRecords(volumeID) {
-		if r.Scan == ScanComplete && r.Root == "" {
-			return r
-		}
-	}
-	return nil
-}
-
-// scanByID finds a scan record by its ID.
-func (s *Store) scanByID(id int) *ScanRecord {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, r := range s.c.Scans {
-		if r.ID == id {
-			c := *r
-			return &c
-		}
-	}
-	return nil
+	gaps := &VolumeSnapshot{UnreadableFolders: list.UnreadableFolders, UnreadableFiles: list.UnreadableFiles, SkippedFolders: list.SkippedFolders}
+	side.Known = gaps.Known
+	return side, nil
 }
 
 // scanCovers says what a scan covers, for messages.
@@ -184,18 +167,18 @@ func (a *App) CompareScans(ref CompareRef, otherScanID int) (*CompareRun, error)
 		if rec.Root != otherRec.Root {
 			return nil, fmt.Errorf("scan %d is of %s and scan %d of %s; compare scans of the same folder, or of whole drives", rec.ID, scanCovers(rec), otherRec.ID, scanCovers(otherRec))
 		}
-		list, err := a.LoadScanFiles(rec)
-		if err != nil {
+		var err error
+		if refSide, err = a.scanSide(rec); err != nil {
 			return nil, err
 		}
-		refSide = scanSide(list)
 		run.RefScanID, run.RefVolumeID, run.RefLabel, run.RefComplete, run.RefRoot = rec.ID, rec.VolumeID, scanLabel(a, rec), rec.Scan == ScanComplete, rec.Root
 	}
-	otherList, err := a.LoadScanFiles(otherRec)
+	otherSide, err := a.scanSide(otherRec)
 	if err != nil {
 		return nil, err
 	}
-	cls := Classify(refSide, scanSide(otherList), HostPathRules())
+	cls := Classify(refSide, otherSide, HostPathRules())
+	refSide, otherSide = ClassSide{}, ClassSide{}
 	run.Counts, run.Total = cls.Counts, len(cls.Results)
 	if err := a.saveCompareRun(run, cls.Results); err != nil {
 		return nil, err
@@ -204,17 +187,56 @@ func (a *App) CompareScans(ref CompareRef, otherScanID int) (*CompareRun, error)
 	return run, nil
 }
 
+// writeCompareResults writes a compareResultFile of results to w, compressed, one
+// result at a time, so the document is never held whole.
+func writeCompareResults(w io.Writer, results []ClassResult) error {
+	bw := bufio.NewWriterSize(w, 1<<16)
+	zw := gzip.NewWriter(bw)
+	head, err := json.Marshal(compareFileFormat)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(zw, `{"format":%s,"version":1,"results":`, head); err != nil {
+		return err
+	}
+	if results == nil {
+		_, err = io.WriteString(zw, "null")
+	} else {
+		_, err = io.WriteString(zw, "[")
+		for i := range results {
+			if err != nil {
+				break
+			}
+			var b []byte
+			if b, err = json.Marshal(&results[i]); err != nil {
+				break
+			}
+			if i > 0 {
+				if _, err = io.WriteString(zw, ","); err != nil {
+					break
+				}
+			}
+			_, err = zw.Write(b)
+		}
+		if err == nil {
+			_, err = io.WriteString(zw, "]")
+		}
+	}
+	if err == nil {
+		_, err = io.WriteString(zw, "}\n")
+	}
+	if err == nil {
+		err = zw.Close()
+	}
+	if err == nil {
+		err = bw.Flush()
+	}
+	return err
+}
+
 // saveCompareRun writes the results file, then the record (to disk at once),
 // then removes the result files of runs beyond the cap.
 func (a *App) saveCompareRun(run *CompareRun, results []ClassResult) error {
-	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
-	if err := json.NewEncoder(zw).Encode(compareResultFile{Format: compareFileFormat, Version: 1, Results: results}); err != nil {
-		return err
-	}
-	if err := zw.Close(); err != nil {
-		return err
-	}
 	tok := make([]byte, 6)
 	if _, err := rand.Read(tok); err != nil {
 		return err
@@ -225,15 +247,28 @@ func (a *App) saveCompareRun(run *CompareRun, results []ClassResult) error {
 		return fmt.Errorf("saving the comparison: %w", err)
 	}
 	final := filepath.Join(dir, name)
-	tmp, err := writeStage(final, buf.Bytes(), 0o600)
+	stage, err := createStage(final, 0o600)
 	if err != nil {
+		return fmt.Errorf("saving the comparison: %w", err)
+	}
+	tmp := stage.Name()
+	sum := sha256.New()
+	err = writeCompareResults(io.MultiWriter(stage, sum), results)
+	if err == nil {
+		err = stage.Sync()
+	}
+	if cerr := stage.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
 		return fmt.Errorf("saving the comparison: %w", err)
 	}
 	if err := renameReplacing(tmp, final); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("saving the comparison: %w", err)
 	}
-	run.ResultFile, run.ResultSHA256 = name, sha256Hex(buf.Bytes())
+	run.ResultFile, run.ResultSHA256 = name, hex.EncodeToString(sum.Sum(nil))
 	dropped, err := a.Store.AddCompareRun(run, compareRunsRetained)
 	if err != nil {
 		_ = os.Remove(final)
@@ -271,84 +306,4 @@ func (a *App) LoadCompareResults(run *CompareRun) ([]ClassResult, error) {
 		return nil, fmt.Errorf("comparison %d's result file is not a comparison", run.ID)
 	}
 	return f.Results, nil
-}
-
-// ---- store ----------------------------------------------------------------
-
-// SetReference marks the reference (nil clears it) and saves.
-func (s *Store) SetReference(m *ReferenceMark) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.c.Reference = m
-	return s.save()
-}
-
-// Reference is the marked reference, or nil.
-func (s *Store) Reference() *ReferenceMark {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.c.Reference == nil {
-		return nil
-	}
-	m := *s.c.Reference
-	return &m
-}
-
-// AddCompareRun records a run, giving it its ID, and drops the oldest runs
-// beyond keep. The catalog is written to disk at once; on failure nothing
-// changes. It returns the dropped runs, whose result files the caller removes.
-func (s *Store) AddCompareRun(run *CompareRun, keep int) ([]*CompareRun, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	prev := append([]*CompareRun(nil), s.c.CompareRuns...)
-	prevID := s.c.NextID["compare"]
-	run.ID = s.next("compare")
-	s.c.CompareRuns = append(s.c.CompareRuns, run)
-	var dropped []*CompareRun
-	if n := len(s.c.CompareRuns) - keep; n > 0 {
-		dropped = append(dropped, s.c.CompareRuns[:n]...)
-		s.c.CompareRuns = append([]*CompareRun(nil), s.c.CompareRuns[n:]...)
-	}
-	if err := s.writeCatalog(); err != nil {
-		s.c.CompareRuns, s.c.NextID["compare"] = prev, prevID
-		return nil, err
-	}
-	return dropped, nil
-}
-
-// CompareRuns returns copies of the saved runs, newest first.
-func (s *Store) CompareRuns() []*CompareRun {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]*CompareRun, 0, len(s.c.CompareRuns))
-	for i := len(s.c.CompareRuns) - 1; i >= 0; i-- {
-		c := *s.c.CompareRuns[i]
-		out = append(out, &c)
-	}
-	return out
-}
-
-// CompareRun returns a saved run by ID, or nil.
-func (s *Store) CompareRun(id int) *CompareRun {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, r := range s.c.CompareRuns {
-		if r.ID == id {
-			c := *r
-			return &c
-		}
-	}
-	return nil
-}
-
-// AllScanRecords returns copies of every scan record, newest first.
-func (s *Store) AllScanRecords() []*ScanRecord {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]*ScanRecord, 0, len(s.c.Scans))
-	for i := len(s.c.Scans) - 1; i >= 0; i-- {
-		c := *s.c.Scans[i]
-		out = append(out, &c)
-	}
-	return out
 }

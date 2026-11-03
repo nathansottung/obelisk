@@ -73,6 +73,10 @@ type CardCheckResult struct {
 // knownContent builds an index from every content hash the catalog knows (SHA-256 AND
 // BLAKE3) to a few human labels of where it lives — the whole inventory, in one map.
 func (a *App) knownContent() (map[string][]string, error) {
+	return retrySnapshotRead(a.knownContentOnce)
+}
+
+func (a *App) knownContentOnce() (map[string][]string, error) {
 	idx := map[string][]string{}
 	add := func(hash, loc string) {
 		if hash == "" {
@@ -159,7 +163,10 @@ func (a *App) knownContent() (map[string][]string, error) {
 	// Offline snapshots — every drive you've inventoried ("adopted").
 	for _, snap := range a.Store.VolumeSnapshots() {
 		loc := "Drive: " + nonEmpty(snap.Label, fmt.Sprintf("vol#%d", snap.VolumeID))
-		for _, sf := range snap.Files {
+		for sf, err := range a.Store.SnapshotFiles(snap.VolumeID) {
+			if err != nil {
+				return nil, err
+			}
 			add(sf.Hash, loc)
 			add(sf.Blake3, loc)
 		}

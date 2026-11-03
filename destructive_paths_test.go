@@ -160,7 +160,9 @@ func TestDestructive_RecordDeletes(t *testing.T) {
 			func(app *App, id any) {
 				pl := app.Store.Plan(int(id.(float64)))
 				pl.Name = "Renamed"
-				app.Store.UpdatePlan(pl)
+				if err := app.Store.UpdatePlan(pl); err != nil {
+					panic(err)
+				}
 			}},
 		{"profile", "/api/profiles/%v", "DELETE",
 			func(app *App) any { return app.Store.AddProfile(Profile{Name: "Custom", RequiredCopies: 2}).ID },

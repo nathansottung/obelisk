@@ -200,16 +200,17 @@ func (s *Store) levelAggregate(collectionID int, dirPath, colorBy string) ([]*tr
 
 	// Drift overlay (by rel path) if a reconcile report exists and it was asked for.
 	driftByRel := map[string]string{}
-	for _, d := range s.c.Drift {
-		if d.CollectionID == collectionID {
-			res.DriftAvailable = true
-			for _, it := range d.Items {
-				driftByRel[normPath(it.Path)] = it.State
-			}
-			break
+	res.DriftAvailable = s.driftLocked(collectionID) != nil
+	useDrift := strings.EqualFold(colorBy, "drift") && res.DriftAvailable
+	if useDrift {
+		items, err := s.driftItemsLocked(collectionID)
+		if err != nil {
+			return nil, TreemapResult{}, nil, err
+		}
+		for _, it := range items {
+			driftByRel[normPath(it.Path)] = it.State
 		}
 	}
-	useDrift := strings.EqualFold(colorBy, "drift") && res.DriftAvailable
 	useValidation := strings.EqualFold(colorBy, "validation")
 	if useDrift {
 		res.ColorBy = "drift"

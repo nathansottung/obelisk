@@ -328,7 +328,10 @@ func (a *App) ReconcileCollection(collectionID int, scopePrefix string, progress
 	rep := &DriftReport{At: time.Now().UTC(), CollectionID: collectionID,
 		Counts: counts, InfoCounts: info, ByExt: byExt, Items: items, Unread: unreadShown}
 	if persist {
-		a.Store.ReplaceDriftReport(rep) // whole-archive run drives the Archives drift badge
+		// A whole-archive run drives the Archives drift badge.
+		if err := a.Store.ReplaceDriftReport(rep); err != nil {
+			return nil, fmt.Errorf("saving the reconcile report: %w", err)
+		}
 		a.Store.Log("reconcile", fmt.Sprintf("archive %d: %d change(s), %d informational", collectionID, rep.Changes(), infoTotal))
 	} else {
 		a.Store.Log("reconcile", fmt.Sprintf("archive %d (scope %s): %d change(s), %d informational — scoped, badge untouched", collectionID, scopePrefix, rep.Changes(), infoTotal))

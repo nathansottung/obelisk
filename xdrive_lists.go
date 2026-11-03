@@ -73,14 +73,12 @@ func (a *App) CrossDriveLists(volumeID int) (*CrossDriveLists, error) {
 			out.LeftOut = append(out.LeftOut, CrossDriveLeftOut{VolumeID: vid, Label: label, Reason: "no complete scan of the whole drive"})
 			continue
 		}
-		list, err := a.LoadScanFiles(rec)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", label, err)
-		}
 		out.Scans = append(out.Scans, CrossDriveScan{VolumeID: vid, Label: label, ScanID: rec.ID, At: rec.At})
-		for _, f := range list.Files {
+		// The list is read file by file; a list that fails to read fails the whole
+		// result, so nothing half-read is kept.
+		if _, err := a.StreamScanFiles(rec, func(f SnapFile) error {
 			if f.Hash == "" {
-				continue
+				return nil
 			}
 			e := byHash[f.Hash]
 			if e == nil {
@@ -90,6 +88,9 @@ func (a *App) CrossDriveLists(volumeID int) (*CrossDriveLists, error) {
 			}
 			e.Places = append(e.Places, CrossDrivePlace{VolumeID: vid, Label: label, Path: f.RelPath})
 			onDrive[f.Hash][vid] = true
+			return nil
+		}); err != nil {
+			return nil, fmt.Errorf("%s: %w", label, err)
 		}
 	}
 	for h, e := range byHash {

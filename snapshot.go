@@ -18,6 +18,7 @@ package main
 
 import (
 	"fmt"
+	"iter"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -115,9 +116,50 @@ func (snap *VolumeSnapshot) Known(rel string) bool {
 	return !under(snap.UnreadableFolders) && !under(snap.SkippedFolders) && !under(snap.UnreadableFiles)
 }
 
+// driveFile is what the drive report needs of one snapshot file: its folder,
+// content hash and size.
+type driveFile struct {
+	dir, hash string
+	size      int64
+}
+
+// driveFiles reads a drive's snapshot files as driveFiles, one string per folder.
+func (a *App) driveFiles(volumeID int) ([]driveFile, error) {
+	dirs := map[string]string{}
+	var out []driveFile
+	for f, err := range a.Store.SnapshotFiles(volumeID) {
+		if err != nil {
+			return nil, err
+		}
+		dir := filepath.ToSlash(filepath.Dir(f.RelPath))
+		if dir == "." {
+			dir = "(root)"
+		}
+		if d, ok := dirs[dir]; ok {
+			dir = d
+		} else {
+			dirs[dir] = dir
+		}
+		out = append(out, driveFile{dir: dir, hash: f.Hash, size: f.SizeBytes})
+	}
+	return out, nil
+}
+
 // driveReport builds the per-drive ingest report for a stored snapshot, comparing
 // it against every OTHER drive's snapshot in the catalog.
-func (a *App) driveReport(snap *VolumeSnapshot) DriveReport {
+// Each try reads the snapshot's header again, so a retry never pairs an old
+// header with a new scan's files.
+func (a *App) driveReport(snap *VolumeSnapshot) (DriveReport, error) {
+	return retrySnapshotRead(func() (DriveReport, error) {
+		cur := a.Store.VolumeSnapshot(snap.VolumeID)
+		if cur == nil {
+			return DriveReport{}, fmt.Errorf("volume %d has no snapshot", snap.VolumeID)
+		}
+		return a.driveReportOnce(cur)
+	})
+}
+
+func (a *App) driveReportOnce(snap *VolumeSnapshot) (DriveReport, error) {
 	rep := DriveReport{VolumeID: snap.VolumeID, Label: snap.Label,
 		TotalFiles: snap.TotalFiles, TotalBytes: snap.TotalBytes, Unreadable: snap.Unreadable}
 	if !snap.CapturedAt.IsZero() {
@@ -138,32 +180,37 @@ func (a *App) driveReport(snap *VolumeSnapshot) DriveReport {
 		}
 	}
 
-	// This drive's own hash sets: dedup set (for Jaccard) + per-file list preserved
-	// in snap.Files (for the "N of M files" count and folder overlap).
+	// This drive's own hash sets: dedup set (for Jaccard) + per-file list (for the
+	// "N of M files" count and folder overlap).
+	files, err := a.driveFiles(snap.VolumeID)
+	if err != nil {
+		return DriveReport{}, err
+	}
 	thisSet := map[string]bool{}
-	for _, f := range snap.Files {
-		if f.Hash != "" {
-			thisSet[f.Hash] = true
+	for _, f := range files {
+		if f.hash != "" {
+			thisSet[f.hash] = true
 		}
 	}
 
 	// Compare against every other drive snapshot.
 	for _, peer := range a.Store.VolumeSnapshots() {
-		if peer.VolumeID == snap.VolumeID || len(peer.Files) == 0 {
+		if peer.VolumeID == snap.VolumeID {
 			continue
 		}
-		peerSet := map[string]bool{}
-		for _, f := range peer.Files {
-			if f.Hash != "" {
-				peerSet[f.Hash] = true
-			}
+		peerSet, err := a.peerHashSet(peer.VolumeID)
+		if err != nil {
+			return DriveReport{}, err
+		}
+		if len(peerSet) == 0 {
+			continue
 		}
 		// How many of THIS drive's files (by content) already live on the peer.
 		shared, sharedBytes := 0, int64(0)
-		for _, f := range snap.Files {
-			if f.Hash != "" && peerSet[f.Hash] {
+		for _, f := range files {
+			if f.hash != "" && peerSet[f.hash] {
 				shared++
-				sharedBytes += f.SizeBytes
+				sharedBytes += f.size
 			}
 		}
 		if shared == 0 {
@@ -198,7 +245,11 @@ func (a *App) driveReport(snap *VolumeSnapshot) DriveReport {
 		rep.DuplicateOf = &top
 		rep.Notes = append(rep.Notes, fmt.Sprintf("%s of %s files already exist on %s.",
 			commaInt(top.SharedFiles), commaInt(snap.TotalFiles), top.Label))
-		rep.FolderOverlaps = folderOverlaps(snap, a.peerHashSet(top.VolumeID), top.Label)
+		peerSet, err := a.peerHashSet(top.VolumeID)
+		if err != nil {
+			return DriveReport{}, err
+		}
+		rep.FolderOverlaps = folderOverlaps(files, peerSet, top.Label)
 		for _, fo := range rep.FolderOverlaps {
 			rep.Notes = append(rep.Notes, fmt.Sprintf("Folder “%s” is %.0f%% already on %s.", fo.Path, fo.SharedPct, fo.PeerLabel))
 		}
@@ -209,7 +260,7 @@ func (a *App) driveReport(snap *VolumeSnapshot) DriveReport {
 	if rep.Mirror != nil {
 		rep.Notes = append(rep.Notes, rep.Mirror.Verdict)
 	}
-	return rep
+	return rep, nil
 }
 
 // mirrorVerdict returns the location-aware MIRROR call for the most-identical peer
@@ -246,21 +297,17 @@ func (a *App) mirrorVerdict(snap *VolumeSnapshot, peers []DrivePeer) *MirrorVerd
 
 // folderOverlaps flags each folder on this drive whose files are ≥ the threshold
 // already present (by hash) on the given peer.
-func folderOverlaps(snap *VolumeSnapshot, peerSet map[string]bool, peerLabel string) []FolderOverlap {
+func folderOverlaps(files []driveFile, peerSet map[string]bool, peerLabel string) []FolderOverlap {
 	type fc struct{ total, shared int }
 	byFolder := map[string]*fc{}
-	for _, f := range snap.Files {
-		dir := filepath.ToSlash(filepath.Dir(f.RelPath))
-		if dir == "." {
-			dir = "(root)"
-		}
-		c := byFolder[dir]
+	for _, f := range files {
+		c := byFolder[f.dir]
 		if c == nil {
 			c = &fc{}
-			byFolder[dir] = c
+			byFolder[f.dir] = c
 		}
 		c.total++
-		if f.Hash != "" && peerSet[f.Hash] {
+		if f.hash != "" && peerSet[f.hash] {
 			c.shared++
 		}
 	}
@@ -284,16 +331,17 @@ func folderOverlaps(snap *VolumeSnapshot, peerSet map[string]bool, peerLabel str
 }
 
 // peerHashSet returns the deduped content-hash set of a peer drive's snapshot.
-func (a *App) peerHashSet(volumeID int) map[string]bool {
+func (a *App) peerHashSet(volumeID int) (map[string]bool, error) {
 	set := map[string]bool{}
-	if s := a.Store.VolumeSnapshot(volumeID); s != nil {
-		for _, f := range s.Files {
-			if f.Hash != "" {
-				set[f.Hash] = true
-			}
+	for f, err := range a.Store.SnapshotFiles(volumeID) {
+		if err != nil {
+			return nil, err
+		}
+		if f.Hash != "" {
+			set[f.Hash] = true
 		}
 	}
-	return set
+	return set, nil
 }
 
 // sameLocation reports whether two volumes currently live in the same assigned
@@ -366,11 +414,12 @@ func roleSeverity(role string) int {
 }
 
 // snapshotTreemap computes one zoom level of a drive's treemap from its stored
-// snapshot — no disk access — colored by file role. dirPath "" is the drive root.
-func snapshotTreemap(snap *VolumeSnapshot, dirPath string) TreemapResult {
+// snapshot and its files — no disk access — colored by file role. dirPath "" is
+// the drive root.
+func snapshotTreemap(snap *VolumeSnapshot, files iter.Seq2[SnapFile, error], dirPath string) (TreemapResult, error) {
 	res := TreemapResult{Path: dirPath, ColorBy: "role", StatusBytes: map[string]int64{}}
 	if snap == nil {
-		return res
+		return res, nil
 	}
 	res.Name = snap.Label
 
@@ -388,7 +437,10 @@ func snapshotTreemap(snap *VolumeSnapshot, dirPath string) TreemapResult {
 		return a
 	}
 
-	for _, f := range snap.Files {
+	for f, err := range files {
+		if err != nil {
+			return TreemapResult{}, err
+		}
 		full := filepath.ToSlash(f.RelPath)
 		var childName, childPath, childKey string
 		var childIsDir bool
@@ -477,7 +529,7 @@ func snapshotTreemap(snap *VolumeSnapshot, dirPath string) TreemapResult {
 	}
 
 	res.Crumbs = snapshotCrumbs(res.Name, P)
-	return res
+	return res, nil
 }
 
 // snapshotCrumbs builds the zoom breadcrumb for a snapshot treemap: the drive

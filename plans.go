@@ -28,58 +28,6 @@ import (
 	"time"
 )
 
-// ---- store CRUD --------------------------------------------------------
-
-func (s *Store) AddPlan(p *Plan) *Plan {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	p.ID = s.next("plan")
-	if p.CreatedAt.IsZero() {
-		p.CreatedAt = time.Now().UTC()
-	}
-	if p.Status == "" {
-		p.Status = PlanDraft
-	}
-	s.c.Plans = append(s.c.Plans, p)
-	_ = s.save()
-	return p
-}
-
-func (s *Store) Plans() []*Plan {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]*Plan, len(s.c.Plans))
-	copy(out, s.c.Plans)
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out
-}
-
-func (s *Store) Plan(id int) *Plan {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, p := range s.c.Plans {
-		if p.ID == id {
-			return p
-		}
-	}
-	return nil
-}
-
-func (s *Store) UpdatePlan(p *Plan) { s.mu.Lock(); defer s.mu.Unlock(); _ = s.save() }
-
-func (s *Store) DeletePlan(id int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := s.c.Plans[:0]
-	for _, p := range s.c.Plans {
-		if p.ID != id {
-			out = append(out, p)
-		}
-	}
-	s.c.Plans = out
-	_ = s.save()
-}
-
 // ---- mapping (hash → planned path) -------------------------------------
 
 // PlanDrive is one drive that physically holds a plan file (by its snapshot).
@@ -109,6 +57,15 @@ type PlanFile struct {
 // EXECUTING plan the frozen Mapping is authoritative; for a DRAFT the path is
 // routed live (manual overrides always win).
 func (a *App) planFiles(plan *Plan) ([]PlanFile, error) {
+	m, err := a.Store.PlanMaps(plan.ID)
+	if err != nil {
+		return nil, err
+	}
+	return retrySnapshotRead(func() ([]PlanFile, error) { return a.planFilesWith(plan, m) })
+}
+
+// planFilesWith is planFiles with the plan's maps already read.
+func (a *App) planFilesWith(plan *Plan, m *PlanMaps) ([]PlanFile, error) {
 	frozen := plan.Status == PlanCompiled || plan.Status == PlanExecuting
 
 	// In-scope hashes (empty archive scope = every snapshot file). An optional folder-
@@ -168,7 +125,10 @@ func (a *App) planFiles(plan *Plan) ([]PlanFile, error) {
 	}
 	byHash := map[string]*acc{}
 	for _, snap := range a.Store.VolumeSnapshots() {
-		for _, sf := range snap.Files {
+		for sf, err := range a.Store.SnapshotFiles(snap.VolumeID) {
+			if err != nil {
+				return nil, err
+			}
 			if sf.Hash == "" || (useScope && !scope[sf.Hash]) {
 				continue
 			}
@@ -205,12 +165,12 @@ func (a *App) planFiles(plan *Plan) ([]PlanFile, error) {
 	out := make([]PlanFile, 0, len(byHash))
 	for h, ac := range byHash {
 		pf := ac.pf
-		pf.Parked = plan.Parked[h]
-		pf.Satisfied = plan.Satisfied[h]
-		if ov, ok := plan.Overrides[h]; ok {
+		pf.Parked = m.Parked[h]
+		pf.Satisfied = m.Satisfied[h]
+		if ov, ok := m.Overrides[h]; ok {
 			pf.Planned, pf.Overridden = normalisePlanned(ov), true
 		} else if frozen {
-			pf.Planned = plan.Mapping[h]
+			pf.Planned = m.Mapping[h]
 		} else if tmpl != nil {
 			role := pf.Role
 			if role == "" {
@@ -347,10 +307,10 @@ func (a *App) planTree(plan *Plan, dirPath string) (TreemapResult, error) {
 
 // uncompileLocked-style helper: any edit to a compiled plan reverts it to DRAFT so
 // the frozen mapping can't drift from the operator's intent (recompile required).
-func (a *App) touchPlanDraft(plan *Plan) {
+func (a *App) touchPlanDraft(plan *Plan, ch *PlanChange) {
 	if plan.Status == PlanCompiled {
 		plan.Status = PlanDraft
-		plan.Mapping = nil
+		ch.ClearMapping = true
 		plan.CompiledAt = nil
 	}
 }
@@ -364,13 +324,9 @@ func (a *App) SetOverride(planID int, hash, dest string) error {
 		return fmt.Errorf("plan not found")
 	}
 	dest = strings.TrimSpace(filepath.ToSlash(dest))
-	if plan.Overrides == nil {
-		plan.Overrides = map[string]string{}
-	}
-	a.touchPlanDraft(plan)
-	if dest == "" {
-		delete(plan.Overrides, hash)
-	} else {
+	var ch PlanChange
+	a.touchPlanDraft(plan, &ch)
+	if dest != "" {
 		if strings.HasSuffix(dest, "/") { // dropped onto a folder — keep the filename
 			rel, err := planRelForHash(a, plan, hash)
 			if err != nil {
@@ -381,10 +337,9 @@ func (a *App) SetOverride(planID int, hash, dest string) error {
 		if _, err := planRel(dest); err != nil {
 			return fmt.Errorf("%q is not a path inside the plan's destination: %w", dest, err)
 		}
-		plan.Overrides[hash] = dest
 	}
-	a.Store.UpdatePlan(plan)
-	return nil
+	ch.Overrides = map[string]string{hash: dest} // empty clears it
+	return a.Store.ChangePlan(plan, ch)
 }
 
 // MoveFolder re-homes every file currently planned under srcPrefix to dstPrefix (a
@@ -408,10 +363,8 @@ func (a *App) MoveFolder(planID int, srcPrefix, dstPrefix string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if plan.Overrides == nil {
-		plan.Overrides = map[string]string{}
-	}
-	a.touchPlanDraft(plan)
+	ch := PlanChange{Overrides: map[string]string{}}
+	a.touchPlanDraft(plan, &ch)
 	n := 0
 	for _, f := range files {
 		if f.Planned == "" {
@@ -420,11 +373,13 @@ func (a *App) MoveFolder(planID int, srcPrefix, dstPrefix string) (int, error) {
 		p := strings.Trim(f.Planned, "/")
 		if p == srcPrefix || strings.HasPrefix(p, srcPrefix+"/") {
 			rest := strings.TrimPrefix(p, srcPrefix)
-			plan.Overrides[f.Hash] = strings.Trim(dstPrefix+rest, "/")
+			ch.Overrides[f.Hash] = strings.Trim(dstPrefix+rest, "/")
 			n++
 		}
 	}
-	a.Store.UpdatePlan(plan)
+	if err := a.Store.ChangePlan(plan, ch); err != nil {
+		return 0, err
+	}
 	return n, nil
 }
 
@@ -434,17 +389,9 @@ func (a *App) SetParked(planID int, hash string, parked bool) error {
 	if plan == nil {
 		return fmt.Errorf("plan not found")
 	}
-	if plan.Parked == nil {
-		plan.Parked = map[string]bool{}
-	}
-	a.touchPlanDraft(plan)
-	if parked {
-		plan.Parked[hash] = true
-	} else {
-		delete(plan.Parked, hash)
-	}
-	a.Store.UpdatePlan(plan)
-	return nil
+	ch := PlanChange{Parked: map[string]bool{hash: parked}}
+	a.touchPlanDraft(plan, &ch)
+	return a.Store.ChangePlan(plan, ch)
 }
 
 func planRelForHash(a *App, plan *Plan, hash string) (string, error) {
@@ -598,9 +545,10 @@ func (a *App) CompilePlan(planID int) (PlanReport, error) {
 		return PlanReport{}, fmt.Errorf("plan not found")
 	}
 	// Recompute from scratch (draft view) even if previously compiled.
+	var revert PlanChange
 	if plan.Status == PlanCompiled {
 		plan.Status = PlanDraft
-		plan.Mapping = nil
+		revert.ClearMapping = true
 	}
 	files, err := a.planFiles(plan)
 	if err != nil {
@@ -608,8 +556,7 @@ func (a *App) CompilePlan(planID int) (PlanReport, error) {
 	}
 	rep := a.planReportFrom(plan, files)
 	if !rep.Compilable {
-		a.Store.UpdatePlan(plan)
-		return rep, nil
+		return rep, a.Store.ChangePlan(plan, revert)
 	}
 	mapping := make(map[string]string, rep.Files)
 	var outside []string
@@ -624,7 +571,9 @@ func (a *App) CompilePlan(planID int) (PlanReport, error) {
 		mapping[f.Hash] = f.Planned
 	}
 	if shared := mappingCollisions(mapping); len(shared) > 0 {
-		a.Store.UpdatePlan(plan)
+		if err := a.Store.ChangePlan(plan, revert); err != nil {
+			return rep, err
+		}
 		shown := shared
 		if len(shown) > 3 {
 			shown = shown[:3]
@@ -632,7 +581,9 @@ func (a *App) CompilePlan(planID int) (PlanReport, error) {
 		return rep, fmt.Errorf("plan %q not compiled: %d planned file(s) would share the same path with another file (%s; letter case and accents count as the same). Neither would be placed. Change the template route so each file has its own name, then compile again", plan.Name, len(shared), strings.Join(shown, ", "))
 	}
 	if len(outside) > 0 {
-		a.Store.UpdatePlan(plan)
+		if err := a.Store.ChangePlan(plan, revert); err != nil {
+			return rep, err
+		}
 		sort.Strings(outside)
 		shown := outside
 		if len(shown) > 3 {
@@ -641,11 +592,10 @@ func (a *App) CompilePlan(planID int) (PlanReport, error) {
 		return rep, fmt.Errorf("plan %q not compiled: %d planned path(s) are not inside the destination (%s). Fix the template route or the placement, then compile again", plan.Name, len(outside), strings.Join(shown, ", "))
 	}
 	now := time.Now().UTC()
-	plan.Mapping, plan.Status, plan.CompiledAt = mapping, PlanCompiled, &now
-	if plan.Satisfied == nil {
-		plan.Satisfied = map[string]bool{}
+	plan.Status, plan.CompiledAt = PlanCompiled, &now
+	if err := a.Store.ChangePlan(plan, PlanChange{Mapping: mapping}); err != nil {
+		return rep, err
 	}
-	a.Store.UpdatePlan(plan)
 	a.Store.Log("plan", fmt.Sprintf("plan %q compiled: %d files (%s), %d de-duped",
 		plan.Name, rep.Files, humanBytes(rep.Bytes), rep.DedupeFiles))
 	return rep, nil
@@ -661,7 +611,11 @@ func (a *App) AdoptDestination(planID int, progress func(float64, string)) (map[
 	if plan == nil {
 		return nil, fmt.Errorf("plan not found")
 	}
-	if len(plan.Mapping) == 0 {
+	m, err := a.Store.PlanMaps(plan.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(m.Mapping) == 0 {
 		return nil, fmt.Errorf("compile the plan before adopting its destination")
 	}
 	root := plan.DestinationRoot
@@ -669,7 +623,7 @@ func (a *App) AdoptDestination(planID int, progress func(float64, string)) (map[
 		return map[string]any{"present": 0, "note": "destination does not exist yet — nothing to adopt"}, nil
 	}
 	want := map[string]bool{}
-	for h := range plan.Mapping {
+	for h := range m.Mapping {
 		want[h] = true
 	}
 	var paths []string
@@ -686,19 +640,23 @@ func (a *App) AdoptDestination(planID int, progress func(float64, string)) (map[
 		paths = append(paths, p)
 		return nil
 	})
-	if plan.Satisfied == nil {
-		plan.Satisfied = map[string]bool{}
-	}
 	present := 0
+	newly := map[string]bool{}
 	parallelHash(paths, func(int) {}, func(_, sha, _ string, _ int64, _ time.Time) {
-		if want[sha] && !plan.Satisfied[sha] {
-			plan.Satisfied[sha] = true
+		if want[sha] && !m.Satisfied[sha] {
+			m.Satisfied[sha], newly[sha] = true, true
 			present++
 		}
 	})
-	a.Store.UpdatePlan(plan)
+	if _, err := a.Store.EditPlan(plan.ID, PlanChange{Satisfied: newly}, nil); err != nil {
+		return nil, err
+	}
 	a.Store.Log("plan", fmt.Sprintf("plan %q: adopted %d already-present destination file(s)", plan.Name, present))
-	return map[string]any{"present": present, "coverage": a.PlanCoverage(plan)}, nil
+	cov, err := a.PlanCoverage(plan)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"present": present, "coverage": cov}, nil
 }
 
 // ---- execution ---------------------------------------------------------
@@ -738,8 +696,12 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 	if plan.Status != PlanCompiled && plan.Status != PlanExecuting {
 		return nil, fmt.Errorf("plan %q is %s — compile it before executing", plan.Name, plan.Status)
 	}
+	m, err := a.Store.PlanMaps(plan.ID)
+	if err != nil {
+		return nil, err
+	}
 	// A plan compiled before paths were checked for sharing is checked here.
-	if shared := mappingCollisions(plan.Mapping); len(shared) > 0 {
+	if shared := mappingCollisions(m.Mapping); len(shared) > 0 {
 		return nil, fmt.Errorf("plan %q puts %d file(s) at the same path as another file (%s); compile it again", plan.Name, len(shared), shared[0])
 	}
 	if strings.TrimSpace(plan.DestinationRoot) == "" {
@@ -781,31 +743,51 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 	res.Notes = dest.Notes()
 	logDestinationNotes(a.Store, "plan", dest)
 	a.ensurePlanDestVolume(plan)
+	// The run's start is saved before anything is copied: the destination volume,
+	// so a run that stops here does not make another, and the executing status.
+	// The run changes only these fields of the stored header, so a change made
+	// while it runs (a close, a new scope) is kept.
+	destVol := plan.DestVolumeID
+	if plan, err = a.Store.EditPlan(plan.ID, PlanChange{}, func(p *Plan) {
+		p.DestVolumeID = destVol
+		if p.Status == PlanCompiled {
+			p.Status = PlanExecuting
+		}
+	}); err != nil {
+		return nil, err
+	}
 	a.Store.BeginBatch()
 	defer endBatchInto(a.Store, &err)
-	if plan.Status == PlanCompiled {
-		plan.Status = PlanExecuting
+	// The hashes this run marks satisfied, saved every few copies and at the end.
+	newly := map[string]bool{}
+	persist := func(edit func(p *Plan)) error {
+		p, err := a.Store.EditPlan(plan.ID, PlanChange{Satisfied: newly}, edit)
+		if err == nil {
+			plan, newly = p, map[string]bool{}
+		}
+		return err
 	}
-	if plan.Satisfied == nil {
-		plan.Satisfied = map[string]bool{}
-	}
+	satisfy := func(h string) { m.Satisfied[h], newly[h] = true, true }
 
 	th := &throttler{bps: cfg.ThrottleMbps * 1e6, start: time.Now()}
 	var refs []ChunkFileRef
 	// Deterministic order so resume is stable and progress reads sensibly.
-	work := append([]SnapFile(nil), snap.Files...)
+	work, err := retrySnapshotRead(func() ([]SnapFile, error) { return a.Store.SnapshotFileList(vol.ID) })
+	if err != nil {
+		return nil, err
+	}
 	sort.Slice(work, func(i, j int) bool { return work[i].RelPath < work[j].RelPath })
 	total := len(work)
 	for i, sf := range work {
 		if sf.Hash == "" {
 			continue
 		}
-		planned, ok := plan.Mapping[sf.Hash]
+		planned, ok := m.Mapping[sf.Hash]
 		if !ok {
 			continue // not in this plan (parked / unrouted / out of scope)
 		}
 		progress(0.02+float64(i)/float64(maxInt(total, 1))*0.94, progStats(res.Bytes, 0, int64(res.Copied), int64(total), "executing "+sf.RelPath))
-		if plan.Satisfied[sf.Hash] {
+		if m.Satisfied[sf.Hash] {
 			res.Confirmed++ // an earlier drive already placed this content
 			continue
 		}
@@ -837,7 +819,7 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 			// placed it and stopped before recording it, say), it is credited:
 			// it is only read for that.
 			if h, herr := dest.HashRel(rel); herr == nil && strings.EqualFold(h, sf.Hash) {
-				plan.Satisfied[sf.Hash] = true
+				satisfy(sf.Hash)
 				res.Adopted++
 				if fi, serr := dest.Stat(rel); serr == nil {
 					refs = append(refs, ChunkFileRef{RelPath: rel, SizeBytes: fi.Size(), Hash: sf.Hash})
@@ -851,31 +833,45 @@ func (a *App) ExecutePlanFromDrive(planID int, mountPath, serial string, progres
 			if stop := a.stopOnDestinationChange("plan", err, res.Copied); stop != nil {
 				// This run's copies are not recorded: they are no longer known to
 				// be in the folder that was checked.
+				undo := map[string]bool{}
 				for _, r := range refs {
-					delete(plan.Satisfied, r.Hash)
+					undo[r.Hash] = false
 				}
-				a.Store.UpdatePlan(plan)
+				if _, err := a.Store.EditPlan(plan.ID, PlanChange{Satisfied: undo}, nil); err != nil {
+					return nil, errors.Join(stop, err)
+				}
 				return nil, stop
 			}
 			res.Unreadable++
 			continue
 		}
-		plan.Satisfied[sf.Hash] = true
+		satisfy(sf.Hash)
 		res.Copied++
 		res.Bytes += n
 		refs = append(refs, ChunkFileRef{RelPath: rel, SizeBytes: n, Hash: sf.Hash})
 		if res.Copied%25 == 0 {
-			a.Store.UpdatePlan(plan) // periodic persist → resumable mid-drive
+			if err := persist(nil); err != nil { // periodic persist → resumable mid-drive
+				return nil, err
+			}
 		}
 	}
 
 	a.recordPlanDestCopies(plan, refs)
-	if a.PlanCoverage(plan).Pct >= 100 {
+	var finish func(p *Plan)
+	if cov, _ := a.planCoverageWith(m); cov.Pct >= 100 {
 		now := time.Now().UTC()
-		plan.Status, plan.ClosedAt = PlanClosed, &now
+		finish = func(p *Plan) {
+			if p.Status == PlanExecuting {
+				p.Status, p.ClosedAt = PlanClosed, &now
+			}
+		}
 	}
-	a.Store.UpdatePlan(plan)
-	res.Coverage = a.PlanCoverage(plan)
+	if err := persist(finish); err != nil {
+		return nil, err
+	}
+	if res.Coverage, err = a.PlanCoverage(plan); err != nil {
+		return nil, err
+	}
 	res.Message = fmt.Sprintf("%s: copied %d, confirmed %d, %d differ from snapshot. Plan %q %.0f%% complete.",
 		vol.Label, res.Copied, res.Confirmed, res.DriveDiffers, plan.Name, res.Coverage.Pct)
 	if res.Adopted > 0 {
@@ -974,10 +970,19 @@ type PlanCoverage struct {
 
 // PlanCoverage computes how much of a compiled plan is done and which drives still
 // hold unsatisfied content.
-func (a *App) PlanCoverage(plan *Plan) PlanCoverage {
-	cov := PlanCoverage{Total: len(plan.Mapping)}
-	for h := range plan.Mapping {
-		if plan.Satisfied[h] {
+func (a *App) PlanCoverage(plan *Plan) (PlanCoverage, error) {
+	m, err := a.Store.PlanMaps(plan.ID)
+	if err != nil {
+		return PlanCoverage{}, err
+	}
+	return retrySnapshotRead(func() (PlanCoverage, error) { return a.planCoverageWith(m) })
+}
+
+// planCoverageWith is PlanCoverage with the plan's maps already read.
+func (a *App) planCoverageWith(m *PlanMaps) (PlanCoverage, error) {
+	cov := PlanCoverage{Total: len(m.Mapping)}
+	for h := range m.Mapping {
+		if m.Satisfied[h] {
 			cov.Satisfied++
 		}
 	}
@@ -985,10 +990,16 @@ func (a *App) PlanCoverage(plan *Plan) PlanCoverage {
 	if cov.Total > 0 {
 		cov.Pct = round1(float64(cov.Satisfied) / float64(cov.Total) * 100)
 	}
+	if cov.Remaining == 0 {
+		return cov, nil // no drive holds pending work
+	}
 	seen := map[string]bool{}
 	for _, snap := range a.Store.VolumeSnapshots() {
-		for _, sf := range snap.Files {
-			if _, ok := plan.Mapping[sf.Hash]; ok && !plan.Satisfied[sf.Hash] {
+		for sf, err := range a.Store.SnapshotFiles(snap.VolumeID) {
+			if err != nil {
+				return PlanCoverage{}, err
+			}
+			if _, ok := m.Mapping[sf.Hash]; ok && !m.Satisfied[sf.Hash] {
 				name := snap.Label
 				if name == "" {
 					name = fmt.Sprintf("vol#%d", snap.VolumeID)
@@ -1002,7 +1013,7 @@ func (a *App) PlanCoverage(plan *Plan) PlanCoverage {
 		}
 	}
 	sort.Strings(cov.RemainingDrives)
-	return cov
+	return cov, nil
 }
 
 // ClosePlan finalizes a plan (final report), leaving sources untouched.
@@ -1013,7 +1024,9 @@ func (a *App) ClosePlan(planID int) (*Plan, error) {
 	}
 	now := time.Now().UTC()
 	plan.Status, plan.ClosedAt = PlanClosed, &now
-	a.Store.UpdatePlan(plan)
+	if err := a.Store.UpdatePlan(plan); err != nil {
+		return nil, err
+	}
 	return plan, nil
 }
 
@@ -1035,25 +1048,41 @@ type PlanWorkItem struct {
 // plansPendingForVolume returns the plans this volume (by its snapshot) still has
 // unsatisfied work for — the hook the dock uses to offer execution when the drive
 // with pending work is inserted.
-func (a *App) plansPendingForVolume(volumeID int) []PlanWorkItem {
-	snap := a.Store.VolumeSnapshot(volumeID)
-	if snap == nil {
-		return nil
+func (a *App) plansPendingForVolume(volumeID int) ([]PlanWorkItem, error) {
+	return retrySnapshotRead(func() ([]PlanWorkItem, error) { return a.plansPendingOnce(volumeID) })
+}
+
+func (a *App) plansPendingOnce(volumeID int) ([]PlanWorkItem, error) {
+	if a.Store.VolumeSnapshot(volumeID) == nil {
+		return nil, nil
+	}
+	var plans []*Plan
+	for _, p := range a.Store.Plans() {
+		if p.Status == PlanCompiled || p.Status == PlanExecuting {
+			plans = append(plans, p)
+		}
+	}
+	if len(plans) == 0 {
+		return nil, nil
 	}
 	have := map[string]bool{}
-	for _, sf := range snap.Files {
+	for sf, err := range a.Store.SnapshotFiles(volumeID) {
+		if err != nil {
+			return nil, err
+		}
 		if sf.Hash != "" {
 			have[sf.Hash] = true
 		}
 	}
 	var out []PlanWorkItem
-	for _, p := range a.Store.Plans() {
-		if p.Status != PlanCompiled && p.Status != PlanExecuting {
-			continue
+	for _, p := range plans {
+		m, err := a.Store.PlanMaps(p.ID)
+		if err != nil {
+			return nil, err
 		}
 		pending := 0
-		for h := range p.Mapping {
-			if have[h] && !p.Satisfied[h] {
+		for h := range m.Mapping {
+			if have[h] && !m.Satisfied[h] {
 				pending++
 			}
 		}
@@ -1061,7 +1090,7 @@ func (a *App) plansPendingForVolume(volumeID int) []PlanWorkItem {
 			out = append(out, PlanWorkItem{PlanID: p.ID, Name: p.Name, Pending: pending})
 		}
 	}
-	return out
+	return out, nil
 }
 
 // mappingCollisions lists the planned paths that more than one file would take

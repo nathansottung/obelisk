@@ -8,9 +8,11 @@ package main
 // snapshot of each drive as before (VolumeSnapshot), for the views that use it.
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -154,42 +156,128 @@ func (a *App) sweepScanFiles(dir string) {
 	}
 }
 
-// scanFileLists maps each scan record's file-list name to its recorded SHA-256.
-func (s *Store) scanFileLists() map[string]string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make(map[string]string, len(s.c.Scans))
-	for _, r := range s.c.Scans {
-		if validScanFileName(r.FileList) {
-			out[r.FileList] = r.FileListSHA256
-		}
-	}
-	return out
-}
-
 // LoadScanFiles reads a scan's file list, checking it against its recorded
 // SHA-256.
 func (a *App) LoadScanFiles(rec *ScanRecord) (*ScanFileList, error) {
-	if rec == nil || !validScanFileName(rec.FileList) {
-		return nil, fmt.Errorf("scan has no file list")
-	}
-	b, err := os.ReadFile(filepath.Join(a.scansDir(), rec.FileList))
-	if err != nil {
-		return nil, fmt.Errorf("reading scan %d's file list: %w", rec.ID, err)
-	}
-	if sha256Hex(b) != rec.FileListSHA256 {
-		return nil, fmt.Errorf("scan %d's file list does not match its record (changed or damaged)", rec.ID)
-	}
-	zr, err := gzip.NewReader(bytes.NewReader(b))
+	var files []SnapFile
+	list, err := a.StreamScanFiles(rec, func(f SnapFile) error {
+		files = append(files, f)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	var list ScanFileList
-	if err := json.NewDecoder(io.LimitReader(zr, 8<<30)).Decode(&list); err != nil {
+	list.Files = files
+	return list, nil
+}
+
+// StreamScanFiles reads a scan's file list one file at a time, calling fn for
+// each, and returns the rest of the list (its gaps) without the files. The whole
+// compressed file is checked against its recorded SHA-256 as it is read; a list
+// that does not match is refused only once it has been read, so fn may already
+// have seen some of its files: a caller keeps nothing from a read that fails.
+func (a *App) StreamScanFiles(rec *ScanRecord, fn func(SnapFile) error) (*ScanFileList, error) {
+	if rec == nil || !validScanFileName(rec.FileList) {
+		return nil, fmt.Errorf("scan has no file list")
+	}
+	f, err := os.Open(filepath.Join(a.scansDir(), rec.FileList))
+	if err != nil {
 		return nil, fmt.Errorf("reading scan %d's file list: %w", rec.ID, err)
+	}
+	defer f.Close()
+	sum := sha256.New()
+	raw := bufio.NewReaderSize(io.TeeReader(f, sum), 1<<16)
+	damaged := fmt.Errorf("scan %d's file list does not match its record (changed or damaged)", rec.ID)
+	// Whatever goes wrong, a file that does not match its record is reported as
+	// that: the rest of it is read so the comparison covers every byte.
+	check := func(readErr error) error {
+		_, cerr := io.Copy(io.Discard, raw)
+		if cerr == nil && hex.EncodeToString(sum.Sum(nil)) != rec.FileListSHA256 {
+			return damaged
+		}
+		if readErr != nil {
+			return fmt.Errorf("reading scan %d's file list: %w", rec.ID, readErr)
+		}
+		if cerr != nil {
+			return fmt.Errorf("reading scan %d's file list: %w", rec.ID, cerr)
+		}
+		return nil
+	}
+	zr, err := gzip.NewReader(raw)
+	if err != nil {
+		return nil, check(err)
+	}
+	list, err := decodeScanFileList(io.LimitReader(zr, 8<<30), fn)
+	if err == nil {
+		_, err = io.Copy(io.Discard, zr) // to the end, so the gzip checksum is checked
+	}
+	if err := check(err); err != nil {
+		return nil, err
 	}
 	if list.Format != scanFileListFormat || list.VolumeID != rec.VolumeID {
 		return nil, fmt.Errorf("scan %d's file list is not this scan's", rec.ID)
+	}
+	return list, nil
+}
+
+// decodeScanFileList decodes a ScanFileList document, passing each of its files to
+// fn instead of keeping them. Every other key is decoded as json.Unmarshal would
+// into a ScanFileList.
+func decodeScanFileList(r io.Reader, fn func(SnapFile) error) (*ScanFileList, error) {
+	dec := json.NewDecoder(r)
+	if tok, err := dec.Token(); err != nil {
+		return nil, err
+	} else if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return nil, fmt.Errorf("not a scan file list")
+	}
+	rest := map[string]json.RawMessage{}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, _ := tok.(string)
+		if !strings.EqualFold(key, "files") {
+			var v json.RawMessage
+			if err := dec.Decode(&v); err != nil {
+				return nil, err
+			}
+			rest[key] = v
+			continue
+		}
+		tok, err = dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		if tok == nil {
+			continue // "files": null
+		}
+		if d, ok := tok.(json.Delim); !ok || d != '[' {
+			return nil, fmt.Errorf("a scan file list whose files are not a list")
+		}
+		for dec.More() {
+			var f SnapFile
+			if err := dec.Decode(&f); err != nil {
+				return nil, err
+			}
+			if err := fn(f); err != nil {
+				return nil, err
+			}
+		}
+		if _, err := dec.Token(); err != nil { // ]
+			return nil, err
+		}
+	}
+	if _, err := dec.Token(); err != nil { // }
+		return nil, err
+	}
+	var list ScanFileList
+	b, err := json.Marshal(rest)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(b, &list); err != nil {
+		return nil, err
 	}
 	return &list, nil
 }

@@ -40,9 +40,9 @@ func TestCatalogEngine_OutOfRangeTimesAreKept(t *testing.T) {
 			if s.Collection(after.ID) == nil {
 				t.Fatal("a change saved after the old-dated records was lost")
 			}
-			snap := s.VolumeSnapshot(v.ID)
-			if snap == nil || len(snap.Files) != 1 || !snap.Files[0].ModTime.Equal(old) {
-				t.Fatalf("snapshot file time: %+v", snap)
+			snapFiles := testSnapFiles(t, s, v.ID)
+			if s.VolumeSnapshot(v.ID) == nil || len(snapFiles) != 1 || !snapFiles[0].ModTime.Equal(old) {
+				t.Fatalf("snapshot file time: %+v", snapFiles)
 			}
 			got := noErr[*File](t)(s.FileByID(f.ID))
 			if got == nil || !got.ModTime.Equal(old) || !got.ShotAt.Equal(future) {
