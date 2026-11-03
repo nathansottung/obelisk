@@ -44,6 +44,26 @@ type fileQuery struct {
 	// engine, for a scan that reads nothing else. It applies only with no filter
 	// but CollectionID, IDs and ByPath; otherwise the whole record is read.
 	PathsOnly bool
+	// Under, when not nil, keeps only files in one of these folders whose path
+	// starts with its prefix ("" is the whole folder), compared exactly, case
+	// included. On the database engine it is a range of the path index.
+	Under []folderPrefix
+}
+
+// folderPrefix is a folder and a path prefix within it.
+type folderPrefix struct {
+	FolderID int
+	Prefix   string
+}
+
+// underMatches reports whether f is in one of under's folders, below its prefix.
+func underMatches(f *File, under []folderPrefix) bool {
+	for _, u := range under {
+		if f.FolderID == u.FolderID && strings.HasPrefix(f.RelPath, u.Prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // pathsOnly reports whether q can be answered from the path columns alone.
@@ -64,6 +84,7 @@ func fileMatches(f *File, q *fileQuery, ids map[int]bool) bool {
 	switch {
 	case q.CollectionID != 0 && f.CollectionID != q.CollectionID,
 		ids != nil && !ids[f.ID],
+		q.Under != nil && !underMatches(f, q.Under),
 		q.EventID > 0 && f.EventID != q.EventID,
 		q.InEvent && f.EventID == 0,
 		q.NoEvent && f.EventID != 0,
