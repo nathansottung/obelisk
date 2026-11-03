@@ -117,7 +117,10 @@ func (a *App) StructureExport(collectionID int) (StructureExport, error) {
 		return StructureExport{}, err
 	}
 	// Planned path per hash from any compiled/executing plan.
-	plannedByHash := a.plannedPathsByHash()
+	plannedByHash, err := a.plannedPathsByHash()
+	if err != nil {
+		return StructureExport{}, err
+	}
 	// Event lookup.
 	events := map[int]*Event{}
 	for _, e := range a.Store.Events(0) {
@@ -219,19 +222,23 @@ func (a *App) fileExportLocations() (map[int][]ExportLocation, error) {
 
 // plannedPathsByHash returns hash → planned path across every compiled/executing
 // plan (first plan wins) — so a Structure Export can annotate "where this should go."
-func (a *App) plannedPathsByHash() map[string]string {
+func (a *App) plannedPathsByHash() (map[string]string, error) {
 	out := map[string]string{}
 	for _, p := range a.Store.Plans() {
 		if p.Status != PlanCompiled && p.Status != PlanExecuting && p.Status != PlanClosed {
 			continue
 		}
-		for h, dest := range p.Mapping {
+		m, err := a.Store.PlanMaps(p.ID)
+		if err != nil {
+			return nil, err
+		}
+		for h, dest := range m.Mapping {
 			if _, ok := out[h]; !ok {
 				out[h] = dest
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
 func (a *App) locationOffsite(name string) bool {
@@ -488,7 +495,11 @@ func (a *App) PlanExport(planID int) (PlanExport, error) {
 	if plan == nil {
 		return PlanExport{}, fmt.Errorf("plan not found")
 	}
-	if len(plan.Mapping) == 0 {
+	m, err := a.Store.PlanMaps(plan.ID)
+	if err != nil {
+		return PlanExport{}, err
+	}
+	if len(m.Mapping) == 0 {
 		return PlanExport{}, fmt.Errorf("compile the plan before exporting it")
 	}
 	exp := PlanExport{Format: planFormat, Version: planExportVersion, Name: plan.Name,
@@ -499,13 +510,16 @@ func (a *App) PlanExport(planID int) (PlanExport, error) {
 	}
 	for _, snap := range a.Store.VolumeSnapshots() {
 		var files []ExportPlanFile
-		for _, sf := range snap.Files {
-			dest, ok := plan.Mapping[sf.Hash]
+		for sf, err := range a.Store.SnapshotFiles(snap.VolumeID) {
+			if err != nil {
+				return PlanExport{}, err
+			}
+			dest, ok := m.Mapping[sf.Hash]
 			if !ok {
 				continue
 			}
 			files = append(files, ExportPlanFile{Hash: sf.Hash, SrcRel: sf.RelPath, Size: sf.SizeBytes,
-				Planned: dest, Satisfied: plan.Satisfied[sf.Hash]})
+				Planned: dest, Satisfied: m.Satisfied[sf.Hash]})
 		}
 		if len(files) == 0 {
 			continue
@@ -582,12 +596,19 @@ func (a *App) ImportPlan(exp PlanExport) (res map[string]any, err error) {
 	}
 
 	now := time.Now().UTC()
-	plan := a.Store.AddPlan(&Plan{Name: exp.Name, TemplateID: tmpl.ID, DestinationRoot: exp.DestinationRoot,
+	plan, err := a.Store.AddPlanErr(&Plan{Name: exp.Name, TemplateID: tmpl.ID, DestinationRoot: exp.DestinationRoot,
 		Status: PlanCompiled, Mapping: mapping, Satisfied: satisfied, CompiledAt: &now})
+	if err != nil {
+		return nil, err
+	}
 	a.Store.Log("export", fmt.Sprintf("imported plan %q: %d file(s) across %d drive(s)",
 		exp.Name, len(mapping), len(exp.Drives)))
+	cov, err := a.PlanCoverage(plan)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{"plan_id": plan.ID, "name": plan.Name,
-		"files": len(mapping), "drives": len(exp.Drives), "coverage": a.PlanCoverage(plan)}, nil
+		"files": len(mapping), "drives": len(exp.Drives), "coverage": cov}, nil
 }
 
 // exportJSON marshals any export value with indentation (stable, human-diffable).

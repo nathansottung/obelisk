@@ -1198,7 +1198,11 @@ func api(mux *http.ServeMux, app *App) {
 		}))
 	})
 	register(mux, "GET /api/collections/{id}/drift", func(w http.ResponseWriter, r *http.Request) {
-		d := app.Store.DriftReport(pathID(r))
+		d, err := app.Store.DriftReportWithItems(pathID(r))
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
 		if d == nil {
 			jsonErr(w, 404, fmt.Errorf("no reconcile report yet — run Rescan & compare"))
 			return
@@ -1801,8 +1805,13 @@ func api(mux *http.ServeMux, app *App) {
 		rows := make([]map[string]any, 0, len(plans))
 		for _, p := range plans {
 			row := map[string]any{"plan": p}
-			if len(p.Mapping) > 0 {
-				row["coverage"] = app.PlanCoverage(p)
+			cov, err := app.PlanCoverage(p)
+			if err != nil {
+				jsonErr(w, 500, err)
+				return
+			}
+			if cov.Total > 0 {
+				row["coverage"] = cov
 			}
 			rows = append(rows, row)
 		}
@@ -1820,9 +1829,13 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 400, fmt.Errorf("choose a template for the plan"))
 			return
 		}
-		p := app.Store.AddPlan(&Plan{Name: name, ArchiveIDs: intList(b, "archive_ids"),
+		p, err := app.Store.AddPlanErr(&Plan{Name: name, ArchiveIDs: intList(b, "archive_ids"),
 			ScopePrefix: filepath.ToSlash(s(b, "scope_prefix")),
 			TemplateID:  tid, DestinationRoot: filepath.ToSlash(s(b, "destination_root"))})
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
 		jsonOut(w, p)
 	})
 	mux.HandleFunc("GET /api/plans/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -1838,8 +1851,13 @@ func api(mux *http.ServeMux, app *App) {
 			return
 		}
 		out := map[string]any{"plan": p, "report": rep, "unrouted": app.planUnrouted(pfiles)}
-		if len(p.Mapping) > 0 {
-			out["coverage"] = app.PlanCoverage(p)
+		cov, err := app.PlanCoverage(p)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
+		if cov.Total > 0 {
+			out["coverage"] = cov
 		}
 		jsonOut(w, out)
 	})
@@ -1850,6 +1868,7 @@ func api(mux *http.ServeMux, app *App) {
 			return
 		}
 		b := body(r)
+		var ch PlanChange
 		if v := strings.TrimSpace(s(b, "name")); v != "" {
 			p.Name = v
 		}
@@ -1858,17 +1877,20 @@ func api(mux *http.ServeMux, app *App) {
 		}
 		if _, ok := b["template_id"]; ok {
 			p.TemplateID = int(f(b, "template_id"))
-			p.Status, p.Mapping = PlanDraft, nil // template change → recompile
+			p.Status, ch.ClearMapping = PlanDraft, true // template change → recompile
 		}
 		if _, ok := b["archive_ids"]; ok {
 			p.ArchiveIDs = intList(b, "archive_ids")
-			p.Status, p.Mapping = PlanDraft, nil
+			p.Status, ch.ClearMapping = PlanDraft, true
 		}
 		if _, ok := b["scope_prefix"]; ok {
 			p.ScopePrefix = filepath.ToSlash(s(b, "scope_prefix"))
-			p.Status, p.Mapping = PlanDraft, nil // scope change → recompile
+			p.Status, ch.ClearMapping = PlanDraft, true // scope change → recompile
 		}
-		app.Store.UpdatePlan(p)
+		if err := app.Store.ChangePlan(p, ch); err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
 		jsonOut(w, p)
 	})
 	// Gated: prepare op "record-delete" {kind:"plan", id}, then execute with "Delete".
@@ -2853,6 +2875,11 @@ func api(mux *http.ServeMux, app *App) {
 			jsonOut(w, map[string]any{"has_snapshot": false})
 			return
 		}
+		report, err := app.driveReport(snap)
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
 		jsonOut(w, map[string]any{
 			"has_snapshot": true,
 			"captured_at":  snap.CapturedAt, "session_id": snap.SessionID,
@@ -2861,7 +2888,7 @@ func api(mux *http.ServeMux, app *App) {
 			"scan": snap.Scan, "unreadable_folders": snap.UnreadableFolders, "unreadable_files": snap.UnreadableFiles,
 			"skipped_folders": snap.SkippedFolders,
 			"role_files":      snap.RoleFiles, "role_bytes": snap.RoleBytes,
-			"smart": snap.Smart, "report": app.driveReport(snap),
+			"smart": snap.Smart, "report": report,
 		})
 	})
 	// Comparing scans and the cross-drive lists (compare_routes.go).
@@ -2893,7 +2920,11 @@ func api(mux *http.ServeMux, app *App) {
 			jsonErr(w, 404, fmt.Errorf("no snapshot for this volume — dock-ingest the drive first"))
 			return
 		}
-		res := snapshotTreemap(snap, r.URL.Query().Get("path"))
+		res, err := snapshotTreemap(snap, app.Store.SnapshotFiles(v.ID), r.URL.Query().Get("path"))
+		if err != nil {
+			jsonErr(w, 500, err)
+			return
+		}
 		res.Name = v.Label
 		jsonOut(w, res)
 	})

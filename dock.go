@@ -133,7 +133,11 @@ func (a *App) DockCandidates(sessionID int) ([]DockCandidate, error) {
 			c.VolumeID = v.ID
 			c.AlreadyProcessed = a.volumeHasMirror(v.ID, ds.ArchiveIDs)
 			c.ProcessedInSession = inSession[v.ID]
-			c.PlanWork = a.plansPendingForVolume(v.ID) // offer "Execute plan work from this drive"
+			work, err := a.plansPendingForVolume(v.ID) // offer "Execute plan work from this drive"
+			if err != nil {
+				return nil, err
+			}
+			c.PlanWork = work
 		}
 		out = append(out, c)
 	}
@@ -301,7 +305,11 @@ func (a *App) IngestDrive(sessionID int, mountPath, serial, label, mode, level s
 	// Built from the snapshot mirrorAdopt just stored (nil on the cheap A/C re-verify
 	// path, which does not re-walk the drive).
 	if snap := a.Store.VolumeSnapshot(vol.ID); snap != nil {
-		out["report"] = a.driveReport(snap)
+		report, err := a.driveReport(snap)
+		if err != nil {
+			return nil, err
+		}
+		out["report"] = report
 	}
 	return out, nil
 }
@@ -443,7 +451,10 @@ func (a *App) mirrorAdopt(ds *DockSession, mountPath string, vol *Volume, mode s
 	// Only a snapshot of the whole drive says where things were on it.
 	if prev := a.Store.VolumeSnapshot(vol.ID); prev != nil && prev.Root == "" {
 		seenAt := map[string]bool{} // hash -> every place the previous scan saw it is known now
-		for _, f := range prev.Files {
+		for f, err := range a.Store.SnapshotFiles(vol.ID) {
+			if err != nil {
+				return nil, err
+			}
 			if f.Hash == "" {
 				continue
 			}

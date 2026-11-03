@@ -159,7 +159,10 @@ func (a *App) knownContent() (map[string][]string, error) {
 	// Offline snapshots — every drive you've inventoried ("adopted").
 	for _, snap := range a.Store.VolumeSnapshots() {
 		loc := "Drive: " + nonEmpty(snap.Label, fmt.Sprintf("vol#%d", snap.VolumeID))
-		for _, sf := range snap.Files {
+		for sf, err := range a.Store.SnapshotFiles(snap.VolumeID) {
+			if err != nil {
+				return nil, err
+			}
 			add(sf.Hash, loc)
 			add(sf.Blake3, loc)
 		}

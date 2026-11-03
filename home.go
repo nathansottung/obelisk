@@ -218,7 +218,10 @@ func (a *App) HomeOverview(onlineVolumeIDs map[int]bool) (HomeData, error) {
 		}
 	}
 	for _, snap := range snapshots {
-		for _, sf := range snap.Files {
+		for sf, err := range a.Store.SnapshotFiles(snap.VolumeID) {
+			if err != nil {
+				return HomeData{}, err
+			}
 			addContent(sf.Hash, sf.SizeBytes)
 		}
 	}
@@ -271,7 +274,10 @@ func (a *App) HomeOverview(onlineVolumeIDs map[int]bool) (HomeData, error) {
 	ungroupedVols := map[int]string{}
 	ung := &HomeUngrouped{}
 	for _, snap := range snapshots {
-		for _, sf := range snap.Files {
+		for sf, err := range a.Store.SnapshotFiles(snap.VolumeID) {
+			if err != nil {
+				return HomeData{}, err
+			}
 			grouped := (sf.Hash != "" && groupedSha[sf.Hash]) || (sf.Blake3 != "" && groupedB3[sf.Blake3])
 			if grouped {
 				continue
@@ -306,7 +312,11 @@ func (a *App) HomeOverview(onlineVolumeIDs map[int]bool) (HomeData, error) {
 	// Two feeds, merged: content-containment against adopted-drive snapshots, PLUS the
 	// explicit incremental "back up changes" sessions (which name their target volume
 	// and archive directly — no heuristic needed).
-	data.Incremental = a.detectIncrementalBackups(activeArchives, snapshots, archiveSha, archiveB3)
+	inc, err := a.detectIncrementalBackups(activeArchives, snapshots, archiveSha, archiveB3)
+	if err != nil {
+		return HomeData{}, err
+	}
+	data.Incremental = inc
 	data.Incremental = append(data.Incremental, a.sessionIncrementals(activeArchives, data.Incremental)...)
 	sort.Slice(data.Incremental, func(i, j int) bool {
 		if data.Incremental[i].ArchiveName != data.Incremental[j].ArchiveName {
@@ -356,7 +366,7 @@ func (a *App) HomeOverview(onlineVolumeIDs map[int]bool) (HomeData, error) {
 // SOURCED archive. Several drives backing up the same archive read as "periodic
 // backups"; one reads as "a backup." Purely descriptive — nothing is moved.
 func (a *App) detectIncrementalBackups(archives []*Collection, snapshots []*VolumeSnapshot,
-	archiveSha map[int]map[string]bool, archiveB3 map[int]map[string]bool) []HomeIncremental {
+	archiveSha map[int]map[string]bool, archiveB3 map[int]map[string]bool) ([]HomeIncremental, error) {
 	sourced := map[int]*Collection{}
 	for _, c := range archives {
 		if !c.IsSourceless() {
@@ -364,7 +374,7 @@ func (a *App) detectIncrementalBackups(archives []*Collection, snapshots []*Volu
 		}
 	}
 	if len(sourced) == 0 {
-		return nil
+		return nil, nil
 	}
 	var out []HomeIncremental
 	perArchive := map[int]int{} // archiveID -> how many drives back it up
@@ -374,20 +384,24 @@ func (a *App) detectIncrementalBackups(archives []*Collection, snapshots []*Volu
 		}
 		bestAID, bestMatch := 0, 0
 		var bestMax time.Time
-		for aid := range sourced {
-			sset, bset := archiveSha[aid], archiveB3[aid]
-			matched := 0
-			var maxMT time.Time
-			for _, sf := range snap.Files {
-				if (sf.Hash != "" && sset[sf.Hash]) || (sf.Blake3 != "" && bset[sf.Blake3]) {
-					matched++
-					if sf.ModTime.After(maxMT) {
-						maxMT = sf.ModTime
+		// One read of the drive's files, matched against every sourced archive.
+		matched, maxMT := map[int]int{}, map[int]time.Time{}
+		for sf, err := range a.Store.SnapshotFiles(snap.VolumeID) {
+			if err != nil {
+				return nil, err
+			}
+			for aid := range sourced {
+				if (sf.Hash != "" && archiveSha[aid][sf.Hash]) || (sf.Blake3 != "" && archiveB3[aid][sf.Blake3]) {
+					matched[aid]++
+					if sf.ModTime.After(maxMT[aid]) {
+						maxMT[aid] = sf.ModTime
 					}
 				}
 			}
-			if matched > bestMatch {
-				bestAID, bestMatch, bestMax = aid, matched, maxMT
+		}
+		for aid := range sourced {
+			if matched[aid] > bestMatch {
+				bestAID, bestMatch, bestMax = aid, matched[aid], maxMT[aid]
 			}
 		}
 		if bestAID == 0 {
@@ -421,7 +435,7 @@ func (a *App) detectIncrementalBackups(archives []*Collection, snapshots []*Volu
 		}
 		return out[i].AsOf < out[j].AsOf
 	})
-	return out
+	return out, nil
 }
 
 // sessionIncrementals turns explicit incremental "back up changes" sessions into

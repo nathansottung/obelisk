@@ -1303,6 +1303,17 @@ type catalogBackend interface {
 	chunkFilesPut(ch *Chunk, ord int, lists map[int][]ChunkFileRef) error
 	listingScan(chunkIDs, fileIDs []int, idsOnly bool, fn func(chunkID int, ref ChunkFileRef) error) error
 	unlinkedListings(hashes []string, fn func(chunkID int, ref ChunkFileRef) error) error
+
+	// Drive snapshots' files, plans' entries and drift reports' items live in the
+	// database, never in memory (catalogdb_drives.go). Each write puts the
+	// record's header too, all or nothing.
+	snapshotPut(snap *VolumeSnapshot, ord int, files []SnapFile) error
+	snapFilePage(volumeID, after, n int) ([]SnapFile, int, error)
+	planEntries(planID int) (*PlanMaps, error)
+	planHasSatisfied(planID int) (bool, error)
+	planPut(p *Plan, ord int, ch PlanChange) error
+	driftPut(r *DriftReport, ord int, items []DriftItem) error
+	driftItems(collectionID int) ([]DriftItem, error)
 }
 
 // openCatalogBackend opens (or creates, or moves catalog.json into) the catalog
@@ -2510,37 +2521,6 @@ func (s *Store) ChunkedFileHashes(collectionID int) (map[int]string, error) {
 	return m, err
 }
 
-// ReplaceDriftReport stores r as the latest report for its collection.
-func (s *Store) ReplaceDriftReport(r *DriftReport) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := s.c.Drift[:0]
-	for _, d := range s.c.Drift {
-		if d.CollectionID != r.CollectionID {
-			out = append(out, d)
-		}
-	}
-	s.c.Drift = append(out, r)
-	_ = s.save()
-}
-
-func (s *Store) DriftReport(collectionID int) *DriftReport {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, d := range s.c.Drift {
-		if d.CollectionID == collectionID {
-			return d
-		}
-	}
-	return nil
-}
-
-func (s *Store) DriftReports() []*DriftReport {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]*DriftReport{}, s.c.Drift...)
-}
-
 func (s *Store) ChunkedFileIDs(collectionID int) (map[int]bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2883,110 +2863,6 @@ func (s *Store) AppendSmartSnapshot(v *Volume, snap SmartSnapshot) {
 		v.SmartHistory = v.SmartHistory[len(v.SmartHistory)-50:]
 	}
 	_ = s.save()
-}
-
-// ---- drive snapshots ---------------------------------------------------
-
-// PutVolumeSnapshot stores (or replaces) the offline inventory for a volume. One
-// snapshot per volume, keyed by VolumeID — a re-ingest overwrites in place; earlier
-// scans are kept as ScanRecords. Persists (coalesced under an active batch) and
-// returns the save's error.
-func (s *Store) PutVolumeSnapshot(snap *VolumeSnapshot) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i, ex := range s.c.Snapshots {
-		if ex.VolumeID == snap.VolumeID {
-			s.c.Snapshots[i] = snap
-			return s.save()
-		}
-	}
-	s.c.Snapshots = append(s.c.Snapshots, snap)
-	return s.save()
-}
-
-// AddScanRecord records a drive scan, giving it its ID, and drops the oldest
-// records of that drive beyond keep. The catalog is written to disk at once, even
-// inside a batch, so the caller may remove the dropped records' file lists only
-// after this returns them. If the write fails, the record is not added, nothing is
-// dropped, and the error is returned.
-func (s *Store) AddScanRecord(rec *ScanRecord, keep int) ([]*ScanRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	prevScans := append([]*ScanRecord(nil), s.c.Scans...)
-	prevID := s.c.NextID["scan"]
-	rec.ID = s.next("scan")
-	s.c.Scans = append(s.c.Scans, rec)
-	n := 0
-	for _, r := range s.c.Scans {
-		if r.VolumeID == rec.VolumeID {
-			n++
-		}
-	}
-	var dropped []*ScanRecord
-	kept := make([]*ScanRecord, 0, len(s.c.Scans))
-	for _, r := range s.c.Scans { // oldest first
-		if r.VolumeID == rec.VolumeID && n > keep {
-			dropped = append(dropped, r)
-			n--
-			continue
-		}
-		kept = append(kept, r)
-	}
-	s.c.Scans = kept
-	if err := s.writeCatalog(); err != nil {
-		s.c.Scans, s.c.NextID["scan"] = prevScans, prevID
-		return nil, err
-	}
-	return dropped, nil
-}
-
-// ScanFileListsInUse is the set of file-list names the scan records point at.
-func (s *Store) ScanFileListsInUse() map[string]bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make(map[string]bool, len(s.c.Scans))
-	for _, r := range s.c.Scans {
-		out[r.FileList] = true
-	}
-	return out
-}
-
-// ScanRecords returns copies of a drive's scan records, newest first.
-func (s *Store) ScanRecords(volumeID int) []*ScanRecord {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var out []*ScanRecord
-	for i := len(s.c.Scans) - 1; i >= 0; i-- {
-		if r := s.c.Scans[i]; r.VolumeID == volumeID {
-			c := *r
-			out = append(out, &c)
-		}
-	}
-	return out
-}
-
-// VolumeSnapshot returns the offline inventory for a volume, or nil if the drive
-// has never been ingested. The returned pointer is the live catalog record —
-// treat it as read-only.
-func (s *Store) VolumeSnapshot(volumeID int) *VolumeSnapshot {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, snap := range s.c.Snapshots {
-		if snap.VolumeID == volumeID {
-			return snap
-		}
-	}
-	return nil
-}
-
-// VolumeSnapshots returns every drive snapshot (for cross-drive duplicate/mirror
-// comparison). The slice is a fresh copy; the elements are live records.
-func (s *Store) VolumeSnapshots() []*VolumeSnapshot {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]*VolumeSnapshot, len(s.c.Snapshots))
-	copy(out, s.c.Snapshots)
-	return out
 }
 
 // ---- events ------------------------------------------------------------

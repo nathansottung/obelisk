@@ -494,7 +494,7 @@ func catalogDBRowCounts(c *catalog) map[string]int {
 		"collection": len(c.Collections), "folder": len(c.Folders), "file": len(c.Files), "chunk": len(c.Chunks),
 		"volume": len(c.Volumes), "location": len(c.Locations), "volume_snapshot": len(c.Snapshots),
 		"scan": len(c.Scans), "event": len(c.Events), "audit": len(c.Audit), "plan": len(c.Plans),
-		"drift_report": len(c.Drift),
+		"drift_report": len(c.Drift), "compare_run": len(c.CompareRuns),
 	}
 	for _, f := range c.Files {
 		n["file_version"] += len(f.Versions)

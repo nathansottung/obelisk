@@ -230,6 +230,53 @@ var catalogDBInserts = map[string]string{
 	"plan_entry":      `INSERT INTO plan_entry VALUES(?,?,?,?,?,?)`,
 	"drift_report":    `INSERT INTO drift_report VALUES(?,?,?,?,?,?,?)`,
 	"drift_item":      `INSERT INTO drift_item VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	"compare_run":     `INSERT INTO compare_run VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+}
+
+// catalogDBHeaderColumns are the columns of the records whose lists the store
+// writes on their own (a drive snapshot's files, a plan's entries, a drift
+// report's items), key first. Their header row is rewritten in place, never
+// deleted, so its list stays.
+var catalogDBHeaderColumns = map[string][]string{
+	"volume_snapshot": {"volume_id", "ord", "captured_at", "session_id", "label", "serial", "model", "device_size",
+		"location_id", "smart", "total_files", "total_bytes", "unreadable", "root", "scan", "unreadable_folders",
+		"unreadable_files", "skipped_folders", "role_files", "role_bytes"},
+	"plan": {"id", "ord", "name", "archive_ids", "scope_prefix", "template_id", "destination_root", "status",
+		"dest_volume_id", "created_at", "compiled_at", "closed_at"},
+	"drift_report": {"collection_id", "ord", "at", "counts", "info_counts", "by_ext", "unread"},
+}
+
+// headerUpsert is the statement that writes a header row in place.
+func headerUpsert(table string) string {
+	cols := catalogDBHeaderColumns[table]
+	set := make([]string, 0, len(cols)-1)
+	for _, c := range cols[1:] {
+		set = append(set, c+" = excluded."+c)
+	}
+	return `INSERT INTO ` + table + `(` + strings.Join(cols, ", ") + `) VALUES(?` + strings.Repeat(",?", len(cols)-1) +
+		`) ON CONFLICT(` + cols[0] + `) DO UPDATE SET ` + strings.Join(set, ", ")
+}
+
+// header writes a header row in place (see catalogDBHeaderColumns).
+func (w *rowWriter) header(table, what string, args ...any) error {
+	if w.e.err != nil {
+		err := w.e.err
+		w.e.err = nil
+		return fmt.Errorf("%s %s: %w", table, what, err)
+	}
+	key := table + ":header"
+	st := w.st[key]
+	if st == nil {
+		var err error
+		if st, err = w.tx.Prepare(headerUpsert(table)); err != nil {
+			return fmt.Errorf("%s: %w", table, err)
+		}
+		w.st[key] = st
+	}
+	if _, err := st.Exec(args...); err != nil {
+		return fmt.Errorf("%s %s: %w", table, what, err)
+	}
+	return nil
 }
 
 // rowWriter writes catalog records into the v1 tables inside one transaction,
@@ -431,17 +478,34 @@ func (w *rowWriter) location(i int, l *Location) error {
 	return w.exec("location", fmt.Sprintf("id %d", l.ID), l.ID, i, l.Name, b(l.Offsite), l.Notes, w.e.t(l.CreatedAt))
 }
 
-func (w *rowWriter) snapshot(i int, s *VolumeSnapshot) error {
+// snapshotColumns are a drive snapshot's header values in column order.
+func (w *rowWriter) snapshotColumns(i int, s *VolumeSnapshot) []any {
 	e := &w.e
-	what := fmt.Sprintf("of volume %d", s.VolumeID)
-	if err := w.exec("volume_snapshot", what, s.VolumeID, i, e.t(s.CapturedAt), s.SessionID, s.Label, s.Serial,
+	return []any{s.VolumeID, i, e.t(s.CapturedAt), s.SessionID, s.Label, s.Serial,
 		s.Model, s.DeviceSize, s.LocationID, e.j(s.Smart), s.TotalFiles, s.TotalBytes, s.Unreadable, s.Root, s.Scan,
 		e.j(s.UnreadableFolders), e.j(s.UnreadableFiles), e.j(s.SkippedFolders), e.j(s.RoleFiles),
-		e.j(s.RoleBytes)); err != nil {
+		e.j(s.RoleBytes)}
+}
+
+func (w *rowWriter) snapshot(i int, s *VolumeSnapshot) error {
+	what := fmt.Sprintf("of volume %d", s.VolumeID)
+	if err := w.exec("volume_snapshot", what, w.snapshotColumns(i, s)...); err != nil {
 		return err
 	}
-	for k, f := range s.Files {
-		if err := w.exec("snap_file", what, s.VolumeID, k, f.RelPath, f.SizeBytes, e.t(f.ModTime), e.h(f.Hash),
+	return w.snapFiles(s.VolumeID, s.Files)
+}
+
+// snapshotHeader writes a drive snapshot's header in place, keeping its files.
+func (w *rowWriter) snapshotHeader(i int, s *VolumeSnapshot) error {
+	return w.header("volume_snapshot", fmt.Sprintf("of volume %d", s.VolumeID), w.snapshotColumns(i, s)...)
+}
+
+// snapFiles writes a drive snapshot's files, in order.
+func (w *rowWriter) snapFiles(volumeID int, files []SnapFile) error {
+	e := &w.e
+	what := fmt.Sprintf("of volume %d", volumeID)
+	for k, f := range files {
+		if err := w.exec("snap_file", what, volumeID, k, f.RelPath, f.SizeBytes, e.t(f.ModTime), e.h(f.Hash),
 			e.h(f.Blake3), f.Role, b(f.Critical), e.t(f.ShotAt), f.CameraSerial); err != nil {
 			return err
 		}
@@ -453,6 +517,13 @@ func (w *rowWriter) scan(i int, s *ScanRecord) error {
 	return w.exec("scan", fmt.Sprintf("id %d", s.ID), s.ID, i, s.VolumeID, w.e.t(s.At), s.SessionID, s.Root,
 		s.Label, s.Serial, s.Scan, s.TotalFiles, s.TotalBytes, s.UnreadableFolders, s.UnreadableFiles,
 		s.SkippedFolders, s.FileList, s.FileListSHA256)
+}
+
+func (w *rowWriter) compareRun(i int, r *CompareRun) error {
+	e := &w.e
+	return w.exec("compare_run", fmt.Sprintf("id %d", r.ID), r.ID, i, e.t(r.At), r.RefScanID, r.RefVolumeID,
+		r.RefArchiveID, r.RefLabel, b(r.RefComplete), r.RefRoot, r.OtherScanID, r.OtherVolumeID, r.OtherLabel,
+		b(r.OtherComplete), r.OtherRoot, e.j(r.Counts), r.Total, r.ResultFile, r.ResultSHA256)
 }
 
 func (w *rowWriter) event(i int, ev *Event) error {
@@ -467,11 +538,22 @@ func (w *rowWriter) audit(i int, a Audit) error {
 	return w.exec("audit", fmt.Sprintf("entry %d", i+1), i+1, w.e.t(a.At), a.Action, a.Detail)
 }
 
+// planColumns are a plan's header values in column order.
+func (w *rowWriter) planColumns(i int, p *Plan) []any {
+	e := &w.e
+	return []any{p.ID, i, p.Name, e.j(p.ArchiveIDs), p.ScopePrefix, p.TemplateID,
+		p.DestinationRoot, p.Status, p.DestVolumeID, e.t(p.CreatedAt), e.tp(p.CompiledAt), e.tp(p.ClosedAt)}
+}
+
+// planHeader writes a plan's header in place, keeping its entries.
+func (w *rowWriter) planHeader(i int, p *Plan) error {
+	return w.header("plan", fmt.Sprintf("id %d (%s)", p.ID, p.Name), w.planColumns(i, p)...)
+}
+
 func (w *rowWriter) plan(i int, p *Plan) error {
 	e := &w.e
 	what := fmt.Sprintf("id %d (%s)", p.ID, p.Name)
-	if err := w.exec("plan", what, p.ID, i, p.Name, e.j(p.ArchiveIDs), p.ScopePrefix, p.TemplateID,
-		p.DestinationRoot, p.Status, p.DestVolumeID, e.t(p.CreatedAt), e.tp(p.CompiledAt), e.tp(p.ClosedAt)); err != nil {
+	if err := w.exec("plan", what, w.planColumns(i, p)...); err != nil {
 		return err
 	}
 	for _, hash := range planHashes(p) {
@@ -495,15 +577,31 @@ func (w *rowWriter) plan(i int, p *Plan) error {
 	return nil
 }
 
-func (w *rowWriter) drift(i int, r *DriftReport) error {
+// driftColumns are a drift report's header values in column order.
+func (w *rowWriter) driftColumns(i int, r *DriftReport) []any {
 	e := &w.e
+	return []any{r.CollectionID, i, e.t(r.At), e.j(r.Counts), e.j(r.InfoCounts), e.j(r.ByExt), e.j(r.Unread)}
+}
+
+// driftHeader writes a drift report's header in place, keeping its items.
+func (w *rowWriter) driftHeader(i int, r *DriftReport) error {
+	return w.header("drift_report", fmt.Sprintf("of archive %d", r.CollectionID), w.driftColumns(i, r)...)
+}
+
+func (w *rowWriter) drift(i int, r *DriftReport) error {
 	what := fmt.Sprintf("of archive %d", r.CollectionID)
-	if err := w.exec("drift_report", what, r.CollectionID, i, e.t(r.At), e.j(r.Counts), e.j(r.InfoCounts),
-		e.j(r.ByExt), e.j(r.Unread)); err != nil {
+	if err := w.exec("drift_report", what, w.driftColumns(i, r)...); err != nil {
 		return err
 	}
-	for k, it := range r.Items {
-		if err := w.exec("drift_item", what, r.CollectionID, k, it.State, it.Path, it.Ext, it.Hash, it.MovedFrom,
+	return w.driftItems(r.CollectionID, r.Items)
+}
+
+// driftItems writes a drift report's items, in order.
+func (w *rowWriter) driftItems(collectionID int, items []DriftItem) error {
+	e := &w.e
+	what := fmt.Sprintf("of archive %d", collectionID)
+	for k, it := range items {
+		if err := w.exec("drift_item", what, collectionID, k, it.State, it.Path, it.Ext, it.Hash, it.MovedFrom,
 			it.Chunk, e.j(it.Volumes), b(it.NeedsBackup), b(it.Informational), it.FileID, it.PriorHash,
 			it.PriorVersion); err != nil {
 			return err
@@ -650,13 +748,26 @@ func catalogUnits(c *catalog, withFiles bool) []catalogUnit {
 		i, x := i, x
 		add(fmt.Sprintf("location:%d", x.ID), i, x, func(w *rowWriter) error { return w.location(i, x) })
 	}
+	// The store's drive snapshots, plans and drift reports: the header, rewritten
+	// in place; their lists are written by their own methods and are not in memory.
+	inPlace := func() { out[len(out)-1].inPlace = !withFiles }
 	for i, x := range c.Snapshots {
 		i, x := i, x
-		add(fmt.Sprintf("volume_snapshot:%d", x.VolumeID), i, x, func(w *rowWriter) error { return w.snapshot(i, x) })
+		add(fmt.Sprintf("volume_snapshot:%d", x.VolumeID), i, x, func(w *rowWriter) error {
+			if withFiles {
+				return w.snapshot(i, x)
+			}
+			return w.snapshotHeader(i, x)
+		})
+		inPlace()
 	}
 	for i, x := range c.Scans {
 		i, x := i, x
 		add(fmt.Sprintf("scan:%d", x.ID), i, x, func(w *rowWriter) error { return w.scan(i, x) })
+	}
+	for i, x := range c.CompareRuns {
+		i, x := i, x
+		add(fmt.Sprintf("compare_run:%d", x.ID), i, x, func(w *rowWriter) error { return w.compareRun(i, x) })
 	}
 	for i, x := range c.Events {
 		i, x := i, x
@@ -668,11 +779,23 @@ func catalogUnits(c *catalog, withFiles bool) []catalogUnit {
 	}
 	for i, x := range c.Plans {
 		i, x := i, x
-		add(fmt.Sprintf("plan:%d", x.ID), i, x, func(w *rowWriter) error { return w.plan(i, x) })
+		add(fmt.Sprintf("plan:%d", x.ID), i, x, func(w *rowWriter) error {
+			if withFiles {
+				return w.plan(i, x)
+			}
+			return w.planHeader(i, x)
+		})
+		inPlace()
 	}
 	for i, x := range c.Drift {
 		i, x := i, x
-		add(fmt.Sprintf("drift_report:%d", x.CollectionID), i, x, func(w *rowWriter) error { return w.drift(i, x) })
+		add(fmt.Sprintf("drift_report:%d", x.CollectionID), i, x, func(w *rowWriter) error {
+			if withFiles {
+				return w.drift(i, x)
+			}
+			return w.driftHeader(i, x)
+		})
+		inPlace()
 	}
 	for _, d := range catalogDBDocTables {
 		field := reflect.ValueOf(c).Elem().FieldByName(d.field)
@@ -701,6 +824,7 @@ var catalogUnitDeletes = map[string]string{
 	"volume_snapshot": `DELETE FROM volume_snapshot WHERE volume_id = ?`, "scan": `DELETE FROM scan WHERE id = ?`,
 	"event": `DELETE FROM event WHERE id = ?`, "audit": `DELETE FROM audit WHERE id = ?`,
 	"plan": `DELETE FROM plan WHERE id = ?`, "drift_report": `DELETE FROM drift_report WHERE collection_id = ?`,
+	"compare_run": `DELETE FROM compare_run WHERE id = ?`,
 }
 
 // deleteCatalogUnit removes the rows of the unit named key.
@@ -1105,7 +1229,9 @@ func exportCatalogTables(tx *sql.Tx, withFiles bool) (*catalog, error) {
 	}); err != nil {
 		return nil, err
 	}
-	if err := q("snap_file", `SELECT volume_id, rel_path, size_bytes, mtime, sha256, blake3, role, critical, shot_at,
+	if !withFiles {
+		// The store reads a snapshot's files from the table when asked.
+	} else if err := q("snap_file", `SELECT volume_id, rel_path, size_bytes, mtime, sha256, blake3, role, critical, shot_at,
 		camera_serial FROM snap_file ORDER BY volume_id, ord`, func(r *sql.Rows) error {
 		var id int
 		var f SnapFile
@@ -1138,6 +1264,23 @@ func exportCatalogTables(tx *sql.Tx, withFiles bool) (*catalog, error) {
 			c.Scans = append(c.Scans, s)
 			return nil
 		}); err != nil {
+		return nil, err
+	}
+	if err := q("compare_run", `SELECT id, at, ref_scan_id, ref_volume_id, ref_archive_id, ref_label, ref_complete,
+		ref_root, other_scan_id, other_volume_id, other_label, other_complete, other_root, counts, total, result_file,
+		result_sha256 FROM compare_run ORDER BY ord`, func(r *sql.Rows) error {
+		x := &CompareRun{}
+		var at nint
+		var counts nstr
+		if err := r.Scan(&x.ID, &at, &x.RefScanID, &x.RefVolumeID, &x.RefArchiveID, &x.RefLabel, &x.RefComplete,
+			&x.RefRoot, &x.OtherScanID, &x.OtherVolumeID, &x.OtherLabel, &x.OtherComplete, &x.OtherRoot, &counts,
+			&x.Total, &x.ResultFile, &x.ResultSHA256); err != nil {
+			return err
+		}
+		x.At = tget(at)
+		c.CompareRuns = append(c.CompareRuns, x)
+		return jget(counts, &x.Counts)
+	}); err != nil {
 		return nil, err
 	}
 	if err := q("event", `SELECT id, name, event_type, year, capture_start, capture_end, notes, collection_id,
@@ -1183,7 +1326,9 @@ func exportCatalogTables(tx *sql.Tx, withFiles bool) (*catalog, error) {
 	}); err != nil {
 		return nil, err
 	}
-	if err := q("plan_entry", `SELECT plan_id, sha256, override, parked, mapped, satisfied FROM plan_entry`,
+	if !withFiles {
+		// The store reads a plan's entries from the table when asked.
+	} else if err := q("plan_entry", `SELECT plan_id, sha256, override, parked, mapped, satisfied FROM plan_entry`,
 		func(r *sql.Rows) error {
 			var id int
 			var sha []byte
@@ -1249,7 +1394,9 @@ func exportCatalogTables(tx *sql.Tx, withFiles bool) (*catalog, error) {
 	}); err != nil {
 		return nil, err
 	}
-	if err := q("drift_item", `SELECT collection_id, state, path, ext, hash, moved_from, chunk, volumes, needs_backup,
+	if !withFiles {
+		// The store reads a drift report's items from the table when asked.
+	} else if err := q("drift_item", `SELECT collection_id, state, path, ext, hash, moved_from, chunk, volumes, needs_backup,
 		informational, file_id, prior_hash, prior_version FROM drift_item ORDER BY collection_id, seq`,
 		func(r *sql.Rows) error {
 			var id int

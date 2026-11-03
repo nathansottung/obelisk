@@ -36,7 +36,6 @@ var catalogDBDocTables = []struct{ table, field string }{
 	{"protection_summary", "Protection"},
 	{"conflict", "Conflicts"},
 	{"quarantine_entry", "Quarantine"},
-	{"compare_run", "CompareRuns"},
 	{"backup_session", "BackupSessions"},
 	{"destination_choice", "DestinationChoices"},
 }
@@ -46,6 +45,7 @@ var catalogDBDocTables = []struct{ table, field string }{
 var catalogDBSequences = map[string]string{
 	"collection": "collection", "folder": "folder", "file": "file", "chunk": "chunk",
 	"volume": "volume", "location": "location", "event": "event", "plan": "plan", "scan": "scan",
+	"compare_run": "compare",
 }
 
 const catalogDBSchemaV1 = `
@@ -214,6 +214,18 @@ CREATE TABLE scan(
 	file_list TEXT NOT NULL, file_list_sha256 TEXT NOT NULL
 ) STRICT;
 CREATE INDEX scan_volume ON scan(volume_id, at);
+
+-- A saved comparison of two scans, or of a scan and an archive. Its per-file
+-- results stay in the compares folder, named here with their SHA-256.
+CREATE TABLE compare_run(
+	id INTEGER PRIMARY KEY AUTOINCREMENT, ord INTEGER NOT NULL, at ANY, ref_scan_id INTEGER NOT NULL,
+	ref_volume_id INTEGER NOT NULL, ref_archive_id INTEGER NOT NULL, ref_label TEXT NOT NULL,
+	ref_complete INTEGER NOT NULL, ref_root TEXT NOT NULL, other_scan_id INTEGER NOT NULL,
+	other_volume_id INTEGER NOT NULL, other_label TEXT NOT NULL, other_complete INTEGER NOT NULL,
+	other_root TEXT NOT NULL, counts TEXT, total INTEGER NOT NULL, result_file TEXT NOT NULL,
+	result_sha256 TEXT NOT NULL
+) STRICT;
+CREATE INDEX compare_run_at ON compare_run(at);
 
 CREATE TABLE event(
 	id INTEGER PRIMARY KEY AUTOINCREMENT, ord INTEGER NOT NULL, name TEXT NOT NULL, event_type TEXT NOT NULL,
