@@ -494,6 +494,22 @@ catalog until the cutover slice. Until then the database engine is opt-in:
   the database engine no longer holds (610 MB before S6). Comparing with the
   archive takes 20.1 s and 1.4 GB (32.9 s and 2.1 GB), and the cross-drive lists
   12.5 s and 0.9 GB (12.5 s and 2.2 GB).
+- **S7 — audit log and jobs** (`store_jobs.go`, `catalogdb_jobs.go`). On the
+  database engine the audit log is only in its table: an entry waits in memory
+  until the next commit writes it (a commit that fails keeps it for the next), and
+  the newest is read back from there. The job board moves from `jobs.json` into the
+  `job` table on the first open on this engine; the file is read that once, a
+  damaged or unreadable one stops the open, and it is never changed. A database
+  a newer version wrote opens read-only and keeps its board in `jobs.json`. Every
+  write of the board is a commit of the catalog too: the job rows that changed go
+  in the same transaction as every catalog change not yet committed. A job that
+  succeeded is COMPLETED only in a commit that also saves all of its changes; when
+  one of them is refused, or a change was lost earlier, the job is recorded FAILED
+  instead. When the commit itself fails nothing of it is saved: the job says FAILED
+  (COMPLETED when it changed nothing) and not recorded, and the changes stay in
+  memory for the next commit. A batch's `EndBatch` still commits on its own, as a
+  batch does every few seconds, so a crash before the job's end leaves the changes
+  saved and the job INTERRUPTED, never a COMPLETED job without its changes.
 
 Measured on the Windows dev box (SSD): a million files each listed in one
 package move from a 647 MB `catalog.json` to a 382 MB `catalog.db` in under two
