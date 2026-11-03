@@ -70,7 +70,10 @@ archive that can damage its sources or say "verified" when it isn't.
   - S5 packages: header, copies, segments and verify events written through, listings only in
     their table and read when asked for, every access through Store methods: merged
     ([#19](https://github.com/nathansottung/obelisk/pull/19)).
-  - S6 drives, scans and plans.
+  - S6 drives, scans and plans: snapshot files, plan entries and drift items only in
+    their tables and read when asked for, comparisons in their own table, scan lists
+    read file by file for comparisons and the cross-drive lists, every access
+    through Store methods.
   - S7 audit log and jobs in the same transaction.
   - S8 backups: `VACUUM INTO`, 7 daily and 4 weekly copies with a size cap, plus app backup
     and restore.

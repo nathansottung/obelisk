@@ -470,6 +470,30 @@ catalog until the cutover slice. Until then the database engine is opt-in:
   ancestors once: with a million files in 100 packages of 10,000, each with a
   verified copy, it takes 3.8 s on the database engine and 1.2 s on
   `catalog.json` (8.4 s and 3.9 s, without listings, before S5).
+- **S6 — drives, scans and plans** (`store_drives.go`, `store_plans.go`,
+  `catalogdb_drives.go`). The header of each drive snapshot, plan and drift
+  report stays in memory on both engines and is rewritten in place; their lists
+  (a snapshot's files, a plan's per-hash entries, a report's items) live only in
+  `snap_file`, `plan_entry` and `drift_item` on the database engine. A snapshot's
+  files are read a page at a time (`SnapshotFiles`), and a snapshot replaced
+  while it is being read ends the read with an error rather than mixing two
+  scans. A plan change names only the entries it touches (`PlanChange`), so
+  marking a file satisfied writes one row. Every snapshot, plan and drift report
+  a method returns is a copy without its list. Scan and comparison records are
+  small and capped; they stay in memory and are written through, comparisons in
+  their own `compare_run` table. Scan file lists and comparison results stay as
+  compressed files: a comparison and the cross-drive lists read each scan's list
+  file by file, checking its SHA-256 as it streams, keep only each file's path,
+  hash and size, and write results straight to the compressed file. Snapshot and
+  plan hashes must be canonical on both engines. The access test also covers
+  these records and lists. With two drives of a million files each and an archive
+  of the same million (`TestDriveCompareScale1M`), comparing one scan with the
+  other takes 19.2 s with at most 1.4 GB more heap on the database engine
+  (27.2 s and 2.4 GB before S6), and 28.3 s with 4.6 GB on `catalog.json`
+  (28.8 s and 5.5 GB), where the snapshots themselves keep 1.3 GB in memory that
+  the database engine no longer holds (610 MB before S6). Comparing with the
+  archive takes 20.1 s and 1.4 GB (32.9 s and 2.1 GB), and the cross-drive lists
+  12.5 s and 0.9 GB (12.5 s and 2.2 GB).
 
 Measured on the Windows dev box (SSD): a million files each listed in one
 package move from a 647 MB `catalog.json` to a 382 MB `catalog.db` in under two
