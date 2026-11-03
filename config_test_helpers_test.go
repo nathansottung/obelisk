@@ -7,6 +7,13 @@ func initializedTestApp(t *testing.T, a *App) *App {
 	if _, err := a.InitializeConfig(); err != nil {
 		t.Fatal("fixture configuration initialization failed")
 	}
+	// The store the app ends with is closed before the test's folders are removed:
+	// a restore or a data folder move opens one of its own.
+	t.Cleanup(func() {
+		if a.Store != nil {
+			a.Store.Close()
+		}
+	})
 	return a
 }
 func mustConfig(t *testing.T, a *App) Config {

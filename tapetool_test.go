@@ -35,7 +35,6 @@ func TestTapeTool_IsChecked(t *testing.T) {
 
 // A restore holds the backup's tape tool with the other program settings.
 func TestRestoreAppBackup_HoldsTapeTool(t *testing.T) {
-	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	app, _ := compatApp(t)
 	tool := filepath.Join(t.TempDir(), "itdt.exe")
 	mustWrite(t, tool, "x")

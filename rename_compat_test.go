@@ -48,7 +48,6 @@ func TestRenameCompat_DataDirFallback(t *testing.T) {
 
 // (a) Migrate: COPY (never move) + verify by hash before switching.
 func TestRenameCompat_MigrateCopiesVerifiesAndSwitches(t *testing.T) {
-	jsonEngineOnly(t, "moving a data folder that holds a catalog database comes with slice S8")
 	root := t.TempDir()
 	legacy := filepath.Join(root, ".mnemo")
 	target := filepath.Join(root, ".obelisk")
@@ -74,8 +73,8 @@ func TestRenameCompat_MigrateCopiesVerifiesAndSwitches(t *testing.T) {
 	// aborted with an error above). Here we confirm the copy landed: catalog.json is
 	// present (the reopen at the new home legitimately re-stamps it), and a file the
 	// store never rewrites — the keystore — is byte-identical to its original.
-	if !fileExists(filepath.Join(target, "catalog.json")) {
-		t.Error("catalog.json was not copied into the new home")
+	if !fileExists(filepath.Join(target, catalogFileName())) {
+		t.Errorf("%s was not copied into the new home", catalogFileName())
 	}
 	ksRel := filepath.FromSlash("keystores/k.json")
 	sh, e1 := hashFileHex(filepath.Join(legacy, ksRel))
@@ -87,7 +86,7 @@ func TestRenameCompat_MigrateCopiesVerifiesAndSwitches(t *testing.T) {
 		t.Error("the migrated keystore is not byte-identical to the original")
 	}
 	// The originals are NEVER moved or deleted.
-	if !fileExists(filepath.Join(legacy, "catalog.json")) {
+	if !fileExists(filepath.Join(legacy, catalogFileName())) {
 		t.Error("migration must leave the legacy originals in place")
 	}
 	// The running app switched to the new home.
@@ -197,7 +196,6 @@ func TestRenameCompat_StructurePlanImportMarkers(t *testing.T) {
 
 // (e) App backups made under the old name verify + restore.
 func TestRenameCompat_AppBackupLegacyFormat(t *testing.T) {
-	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	app, _ := compatApp(t)
 	dir := t.TempDir()
 	legacyTar := buildLegacyAppBackup(t, app, dir)

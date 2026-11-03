@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,7 +13,6 @@ import (
 // goes in as scans/<name>, and a restore puts them back so the scans load. The
 // pre-restore copy holds the scans that were there before.
 func TestAppBackup_CarriesScanHistory(t *testing.T) {
-	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	src := dockApp(t)
 	drive := t.TempDir()
 	writeTree(t, drive, map[string]string{"a.txt": "alpha\n"})
@@ -51,7 +51,6 @@ func TestAppBackup_CarriesScanHistory(t *testing.T) {
 // leaves it out (and says so), and a restore that meets one skips it and
 // restores everything else.
 func TestAppBackup_DamagedScanFileIsLeftOut(t *testing.T) {
-	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	src := dockApp(t)
 	drive := t.TempDir()
 	writeTree(t, drive, map[string]string{"a.txt": "alpha\n"})
@@ -78,7 +77,10 @@ func TestAppBackup_DamagedScanFileIsLeftOut(t *testing.T) {
 	// the restore skips that file and says so.
 	man := appBackupManifest{Members: []appBackupMember{{Name: "scans/" + rec.FileList}}}
 	members := map[string][]byte{"scans/" + rec.FileList: []byte("tampered")}
-	catBytes, _ := os.ReadFile(filepath.Join(src.DataDir, "catalog.json"))
+	catBytes, err := json.Marshal(persistedCatalog(t, src.DataDir))
+	if err != nil {
+		t.Fatal(err)
+	}
 	members["catalog.json"] = catBytes
 	skip, err := checkBackupScanFiles(man, members)
 	if err != nil || !skip["scans/"+rec.FileList] {

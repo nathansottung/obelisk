@@ -38,7 +38,6 @@ func refusedWith(t *testing.T, err error, status int, what string) {
 // The whole path: prepare lists exactly the files the restore replaces, and
 // execute with the typed word runs it.
 func TestDestructive_PrepareThenExecute(t *testing.T) {
-	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	app, dataDir, tarPath := restorableAppForTest(t)
 	p, err := app.PrepareDestructive(testSession, "appbackup-restore", map[string]any{"tar_path": tarPath})
 	if err != nil {
@@ -54,7 +53,7 @@ func TestDestructive_PrepareThenExecute(t *testing.T) {
 			t.Errorf("target %s is not recorded exactly: %+v", tg.Path, tg)
 		}
 	}
-	for _, want := range []string{tarPath, filepath.Join(dataDir, "catalog.json"), filepath.Join(dataDir, "config.json")} {
+	for _, want := range []string{tarPath, filepath.Join(dataDir, catalogFileName()), filepath.Join(dataDir, "config.json")} {
 		if !listed[want] {
 			t.Errorf("%s is not among the targets", want)
 		}
@@ -72,7 +71,6 @@ func TestDestructive_PrepareThenExecute(t *testing.T) {
 // Every refusal: another session, an expired token, the wrong word, a used
 // token, and targets that changed after prepare. None of them changes anything.
 func TestDestructive_Refusals(t *testing.T) {
-	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	prepare := func(t *testing.T, app *App, tarPath string) *PreparedAction {
 		t.Helper()
 		p, err := app.PrepareDestructive(testSession, "appbackup-restore", map[string]any{"tar_path": tarPath})
@@ -153,7 +151,6 @@ func TestDestructive_Refusals(t *testing.T) {
 // The old direct routes answer 428 and change nothing; the gate's routes work
 // over HTTP with the session header.
 func TestDestructive_OldRoutesNeedConfirmation(t *testing.T) {
-	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	app, _, tarPath := restorableAppForTest(t)
 	mux := http.NewServeMux()
 	api(mux, app)

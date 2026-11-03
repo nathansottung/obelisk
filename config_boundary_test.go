@@ -384,7 +384,6 @@ func TestConfigBoundary_OptionalToolsUseValidatedSnapshot(t *testing.T) {
 }
 
 func TestConfigBoundary_RestoreUsesCheckedPublisher(t *testing.T) {
-	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	src := abTestApp(t)
 	bundle, e := src.ExportAppBackup(t.TempDir(), false)
 	if e != nil {

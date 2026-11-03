@@ -121,7 +121,6 @@ func memberNames(man appBackupManifest) map[string]bool {
 // into a fresh one, and confirm the recovered counts + verify history + job artifacts
 // match. Also confirms keystores are excluded by default and the auth token is scrubbed.
 func TestAppBackup_ExportRestoreRoundTrip(t *testing.T) {
-	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	src := abTestApp(t)
 	wantArch, wantFiles, wantVols, wantPkgs, wantVE, wantJobs := abPopulate(t, src)
 
@@ -139,7 +138,12 @@ func TestAppBackup_ExportRestoreRoundTrip(t *testing.T) {
 
 	man := readManifest(t, res.TarPath)
 	names := memberNames(man)
-	for _, need := range []string{"catalog.json", "config.json", "jobs.json"} {
+	// On the database engine the catalog and its job board are one member.
+	need := []string{"catalog.json", "config.json", "jobs.json"}
+	if sqliteEngineRun() {
+		need = []string{"catalog.db", "config.json"}
+	}
+	for _, need := range need {
 		if !names[need] {
 			t.Errorf("manifest missing expected member %q", need)
 		}
@@ -199,7 +203,6 @@ func TestAppBackup_ExportRestoreRoundTrip(t *testing.T) {
 
 // TestAppBackup_IncludeKeys proves the opt-in includes keystore members.
 func TestAppBackup_IncludeKeys(t *testing.T) {
-	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	app := abTestApp(t)
 	abPopulate(t, app)
 	dest := t.TempDir()
@@ -225,7 +228,6 @@ func TestAppBackup_IncludeKeys(t *testing.T) {
 // TestAppBackup_TamperedMemberRefused proves a member altered after export fails the
 // import hash check, and the target data dir is left untouched.
 func TestAppBackup_TamperedMemberRefused(t *testing.T) {
-	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	src := abTestApp(t)
 	abPopulate(t, src)
 	dest := t.TempDir()
@@ -234,12 +236,12 @@ func TestAppBackup_TamperedMemberRefused(t *testing.T) {
 		t.Fatalf("export: %v", err)
 	}
 
-	// Rebuild the tar with catalog.json bytes flipped (manifest hash no longer matches).
+	// Rebuild the tar with the catalog's bytes changed (manifest hash no longer matches).
 	members, err := readTarMembers(res.TarPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	members["catalog.json"] = append(members["catalog.json"], []byte(" tampered")...)
+	members[catalogFileName()] = append(members[catalogFileName()], []byte(" tampered")...)
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	// MANIFEST first (unchanged), then the rest.
@@ -273,7 +275,6 @@ func TestAppBackup_TamperedMemberRefused(t *testing.T) {
 // TestAppBackup_NewerSchemaRefused proves a bundle from a newer app is refused with
 // the "update the app" message, before touching the data dir.
 func TestAppBackup_NewerSchemaRefused(t *testing.T) {
-	jsonEngineOnly(t, "app backups carry catalog.db from slice S8")
 	src := abTestApp(t)
 	abPopulate(t, src)
 	dest := t.TempDir()
