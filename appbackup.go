@@ -540,7 +540,8 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	if err != nil {
 		return RestoreResult{}, err
 	}
-	// A job's work would go to the store this restore closes or replaces.
+	// A job's work would go to the store this restore closes or replaces. (A
+	// backup that is not valid is refused as such first.)
 	if running := a.Store.RunningJobs(); len(running) > 0 {
 		return RestoreResult{}, errJobsRunning("a restore", running)
 	}

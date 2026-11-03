@@ -35,6 +35,10 @@ func configSnapshot(t *testing.T, dir string) map[string]string {
 			return nil
 		}
 		switch base := filepath.Base(p); {
+		case strings.HasPrefix(base, catalogDBBackupPrefix):
+			// The daily backups of the catalog database are made in the background
+			// by a commit, a copy of what it already holds.
+			return nil
 		case base == catalogDBName+"-wal" || base == catalogDBName+"-shm":
 			// SQLite's write-ahead log and its shared-memory index come and go as
 			// the database is opened and closed; the data is compared below.
