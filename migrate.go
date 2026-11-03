@@ -10,7 +10,6 @@ package main
 import (
 	"fmt"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,6 +84,9 @@ func (a *App) MigrateLegacyDataDir() (map[string]any, error) {
 // migrateDataDir is the testable core of MigrateLegacyDataDir with explicit source
 // and destination directories.
 func (a *App) migrateDataDir(legacy, target string) (map[string]any, error) {
+	if running := a.Store.RunningJobs(); len(running) > 0 {
+		return nil, errJobsRunning("moving the data folder", running)
+	}
 	if !sameDir(a.DataDir, legacy) {
 		return nil, fmt.Errorf("nothing to migrate: the app is not running from the legacy %s directory. Nothing was changed", legacy)
 	}
@@ -141,10 +143,12 @@ func (a *App) migrateDataDir(legacy, target string) (map[string]any, error) {
 		return nil, err
 	}
 	if useDB {
-		// Every change the store holds is committed first, and the copy is checked
-		// before it is used.
-		if _, err := a.Store.snapshotDB(filepath.Join(target, "catalog.db")); err != nil {
-			return nil, fmt.Errorf("copying the catalog database: %w. Your original records under %s are untouched", err, legacy)
+		// Every change the store holds is committed first, the copy is checked, and
+		// the store is closed with nothing let in between: no change can reach the
+		// original folder after the copy. From here the app switches to the copy.
+		if err := a.Store.closeWithCopy("moving the data folder", filepath.Join(target, "catalog.db")); err != nil {
+			err = fmt.Errorf("copying the catalog database: %w. Your original records under %s are untouched", err, legacy)
+			return nil, a.reopenAfterRefusal(err)
 		}
 		copied++
 		if fi, e := os.Stat(filepath.Join(target, "catalog.db")); e == nil {
@@ -156,18 +160,14 @@ func (a *App) migrateDataDir(legacy, target string) (map[string]any, error) {
 	// reopening the store there. The catalog and job board now come from ~/.obelisk.
 	ns, err := OpenStore(target)
 	if err != nil {
+		if useDB {
+			return nil, a.reopenAfterRefusal(fmt.Errorf("your records copied and verified, but opening the catalog at %s failed: %w. The app keeps using %s", target, err, legacy))
+		}
 		a.Store.checkJobsAfterFailedReopen()
 		return nil, fmt.Errorf("your records copied and verified, but reopening the catalog at %s failed: %w. Resolve the rejected state before retrying", target, err)
 	}
-	old := a.Store
 	a.Store = ns
 	a.DataDir = target
-	if useDB {
-		// Nothing may commit to the original folder's database any more.
-		if err := old.Close(); err != nil {
-			log.Printf("closing the catalog database in %s after moving it: %v", legacy, err)
-		}
-	}
 	a.Store.Log("migrate", fmt.Sprintf("copied %d verified file(s) from %s to %s", copied, legacy, target))
 	return map[string]any{
 		"from": legacy, "to": target, "files": copied, "bytes": bytes, "verified": copied,

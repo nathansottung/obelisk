@@ -128,6 +128,14 @@ func appBackupRestoreTargets(a *App, p map[string]any) ([]destructiveTarget, err
 		default:
 			dest = filepath.Join(a.DataDir, m.Name)
 		}
+		if a.Store.UsesDatabase() && dest == filepath.Join(a.DataDir, appBackupDBMember) {
+			// The open database is not opened again here: on Unix closing any
+			// descriptor of it drops SQLite's locks. Its records are the change
+			// count below.
+			out = append(out, destructiveTarget{Kind: "database", Path: dest,
+				Note: "replaced by the backup's catalog (the current one is copied to pre-restore first)"})
+			continue
+		}
 		t := fileTarget(dest, "replaced by the backup's copy (the current one is copied to pre-restore first)")
 		if t.Kind == "missing" {
 			t.Note = "created from the backup"

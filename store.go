@@ -1158,6 +1158,9 @@ type Store struct {
 	path    string
 	c       catalog
 	lastBak string // YYYYMMDD of the most recent daily backup written
+	// backups is the daily backup of the catalog database being made, if any: it
+	// runs without the store's lock, and closing the database waits for it.
+	backups sync.WaitGroup
 	// readOnly latches when catalog.json was written by a NEWER schema than this
 	// build understands. Every write is then refused (silently dropping fields the
 	// newer app added would be data loss); reads/viewing still work. See OpenStore.
@@ -1796,6 +1799,7 @@ func (s *Store) Close() error {
 	}
 	s.closed = true
 	if s.be != nil {
+		s.backups.Wait()
 		err = errors.Join(err, s.be.close())
 	}
 	return errors.Join(err, s.lostErr)

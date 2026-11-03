@@ -67,11 +67,17 @@ func copyDSN(path string) string {
 }
 
 // vacuumCopy writes a consistent copy of the database at src to dest, which must
-// not exist, and syncs it. A failed copy is removed.
+// not exist, and syncs it. dest is made empty first, so a file already there is
+// never touched; a failed copy is removed.
 func vacuumCopy(src, dest string) error {
 	if strings.ContainsRune(dest, '?') {
 		return fmt.Errorf("the copy's path %s contains a ?, which the database driver cannot write", dest)
 	}
+	f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	f.Close()
 	db, err := sql.Open(catalogDBDriver, copyDSN(src))
 	if err != nil {
 		return err
@@ -442,13 +448,26 @@ func stageRestoreImport(dataDir string, raw, jobs []byte) (string, *catalog, err
 // markBoardMoved writes board (when not nil) into the job table of the database at
 // path and marks the board moved, so opening it never reads a jobs.json. A database
 // already marked is left as it is. The database keeps its journal mode.
-func markBoardMoved(path string, board *jobBoard) error {
+func markBoardMoved(path string, board *jobBoard) (err error) {
 	db, err := sql.Open(catalogDBDriver, catalogDBDSN(path, "synchronous(FULL)"))
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() {
+		if cerr := db.Close(); err == nil {
+			err = cerr
+		}
+	}()
 	db.SetMaxOpenConns(1)
+	// One file, whatever its header said: a database in WAL mode folds its log in
+	// here, so the stage has no side file and the rename moves all of it.
+	var mode string
+	if err := db.QueryRow(`PRAGMA journal_mode=DELETE`).Scan(&mode); err != nil {
+		return err
+	}
+	if !strings.EqualFold(mode, "delete") {
+		return fmt.Errorf("it could not be taken out of WAL mode (journal mode %q)", mode)
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -534,6 +553,7 @@ func swapCatalogDB(dataDir, stage string) error {
 	if err := renameReplacing(stage, live); err != nil {
 		return err
 	}
+	removeDBFile(stage) // side files a check of the stage left; the stage itself is now catalog.db
 	_ = syncDir(dataDir)
 	return nil
 }

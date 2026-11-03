@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -33,9 +35,44 @@ func (s *Store) dailyBackupDBLocked() {
 	}
 	s.lastBak = day
 	s.notePersist("backup-create", s.path+".bak-"+day)
-	if err := s.be.dailyBackup(now); err != nil {
-		log.Printf("daily backup of the catalog database: %v", err)
+	// The copy reads the last commit through a connection of its own, so it is made
+	// without holding the store: a large catalog takes a while, and the store keeps
+	// answering meanwhile.
+	be := s.be
+	s.backups.Add(1)
+	go func() {
+		defer s.backups.Done()
+		if err := be.dailyBackup(now); err != nil {
+			log.Printf("daily backup of the catalog database: %v", err)
+		}
+	}()
+}
+
+// waitBackups waits for a daily backup being made.
+func (s *Store) waitBackups() { s.backups.Wait() }
+
+// runningJobsLocked names the jobs that are running. Caller holds s.jobs.mu.
+func (s *Store) runningJobsLocked() []string {
+	var out []string
+	for _, j := range s.jobs.rows {
+		if j.Status == "RUNNING" {
+			out = append(out, fmt.Sprintf("%d (%s)", j.ID, j.Label))
+		}
 	}
+	return out
+}
+
+// RunningJobs names the jobs that are running.
+func (s *Store) RunningJobs() []string {
+	s.jobs.mu.Lock()
+	defer s.jobs.mu.Unlock()
+	return s.runningJobsLocked()
+}
+
+// errJobsRunning refuses a restore or a data folder move while jobs run: their work
+// would go to a store that is closed or replaced under them.
+func errJobsRunning(what string, jobs []string) error {
+	return fmt.Errorf("%s waits until no job is running, so nothing was changed. Running: %s", what, strings.Join(jobs, ", "))
 }
 
 // errNotDatabase refuses a copy of the catalog database on catalog.json.
@@ -71,23 +108,33 @@ func (s *Store) commitAllLocked() error {
 	return nil
 }
 
-// closeForRestore commits every pending change, writes the pre-restore copy of the
-// catalog database to preCopy, and closes the store, all without letting another
-// change in between: the copy holds everything the store held. When the commit or
-// the copy fails, the store stays open and nothing is changed. A failed close
-// leaves the store closed; the caller opens the data folder again.
-func (s *Store) closeForRestore(preCopy string) error {
+// closeWithCopy commits every pending change, writes a copy of the catalog
+// database to dest (the pre-restore copy, or the database of a data folder being
+// moved), and closes the store, all without letting another change in between: the
+// copy holds everything the store held. It is refused while a job runs, and the
+// board is held throughout, so no job starts: after the close every new job is
+// refused. When the commit or the copy fails, the store stays open and nothing is
+// changed. A failed close leaves the store closed; the caller opens it again.
+func (s *Store) closeWithCopy(what, dest string) error {
+	s.jobs.mu.Lock()
+	defer s.jobs.mu.Unlock()
+	if running := s.runningJobsLocked(); len(running) > 0 {
+		return errJobsRunning(what, running)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.commitAllLocked(); err != nil {
-		return fmt.Errorf("the restore stopped before changing anything: %w", err)
+		return fmt.Errorf("%s stopped before changing anything: %w", what, err)
 	}
-	if _, err := s.be.snapshot(preCopy); err != nil {
-		return fmt.Errorf("the restore stopped before changing anything: the pre-restore copy of the catalog database (%s) failed: %w", preCopy, err)
+	if _, err := s.be.snapshot(dest); err != nil {
+		return fmt.Errorf("%s stopped before changing anything: the copy of the catalog database (%s) failed: %w", what, dest, err)
 	}
+	// The copy's folder entry is on disk before anything relies on it.
+	_ = syncDir(filepath.Dir(dest))
 	s.closed = true
+	s.backups.Wait()
 	if err := s.be.close(); err != nil {
-		return fmt.Errorf("the restore stopped before changing the catalog: closing the catalog database: %w", err)
+		return fmt.Errorf("%s stopped before changing the catalog: closing the catalog database: %w", what, err)
 	}
 	return nil
 }

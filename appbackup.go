@@ -540,6 +540,10 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	if err != nil {
 		return RestoreResult{}, err
 	}
+	// A job's work would go to the store this restore closes or replaces.
+	if running := a.Store.RunningJobs(); len(running) > 0 {
+		return RestoreResult{}, errJobsRunning("a restore", running)
+	}
 	useDB := a.Store.UsesDatabase()
 	catJSON, hasJSON := members["catalog.json"]
 	catDB, hasDB := members[appBackupDBMember]
@@ -553,7 +557,7 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	// replace it: a catalog.db is written and checked whole; a catalog.json (a
 	// backup an older version made) goes through the importer, with its job board.
 	var incoming *catalog
-	dbStage := ""
+	dbStage, swapped := "", false
 	defer func() {
 		if dbStage != "" { // not swapped in: only the stage this restore made is removed
 			for _, side := range []string{"", "-wal", "-shm", "-journal"} {
@@ -688,7 +692,7 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	// replaced. Until the swap the catalog is unchanged, and a refusal opens it
 	// again.
 	if dbStage != "" {
-		if err := a.Store.closeForRestore(filepath.Join(preDir, appBackupDBMember)); err != nil {
+		if err := a.Store.closeWithCopy("the restore", filepath.Join(preDir, appBackupDBMember)); err != nil {
 			return RestoreResult{}, a.reopenAfterRefusal(err)
 		}
 		if restoreAfterClose != nil {
@@ -698,6 +702,15 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 			return RestoreResult{}, a.reopenAfterRefusal(fmt.Errorf("the restore stopped before changing the catalog: %w", err))
 		}
 		dbStage = ""
+		swapped = true
+	}
+	// After the swap a failure leaves the restored catalog in place: the catalog is
+	// opened again, and the error says where the records it replaced are.
+	fail := func(err error) (RestoreResult, error) {
+		if swapped {
+			err = a.reopenAfterRefusal(fmt.Errorf("%w (the catalog was already restored; the records it replaced are in %s)", err, preDir))
+		}
+		return RestoreResult{}, err
 	}
 
 	// (5) Extract members (except the manifest + config, handled below). Keystores land
@@ -731,25 +744,25 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 		case strings.HasPrefix(m.Name, "keystores/"):
 			dest := filepath.Join(a.DataDir, "keystores", filepath.Base(m.Name))
 			if err := writeFile(dest, b, 0o600); err != nil { // key material: owner only
-				return RestoreResult{}, fmt.Errorf("restore %s: %w", m.Name, err)
+				return fail(fmt.Errorf("restore %s: %w", m.Name, err))
 			}
 		case strings.HasPrefix(m.Name, "scans/"):
 			if skipScans[m.Name] {
 				continue
 			}
 			if err := writeFile(filepath.Join(a.scansDir(), strings.TrimPrefix(m.Name, "scans/")), b, 0o600); err != nil {
-				return RestoreResult{}, fmt.Errorf("restore %s: %w", m.Name, err)
+				return fail(fmt.Errorf("restore %s: %w", m.Name, err))
 			}
 		case strings.HasPrefix(m.Name, "compares/"):
 			if skipCompares[m.Name] {
 				continue
 			}
 			if err := writeFile(filepath.Join(a.comparesDir(), strings.TrimPrefix(m.Name, "compares/")), b, 0o600); err != nil {
-				return RestoreResult{}, fmt.Errorf("restore %s: %w", m.Name, err)
+				return fail(fmt.Errorf("restore %s: %w", m.Name, err))
 			}
 		default: // catalog.json, jobs.json, formats.json
 			if err := writeFile(filepath.Join(a.DataDir, m.Name), b, 0o644); err != nil {
-				return RestoreResult{}, fmt.Errorf("restore %s: %w", m.Name, err)
+				return fail(fmt.Errorf("restore %s: %w", m.Name, err))
 			}
 		}
 	}
@@ -759,12 +772,12 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 		_, e := a.publishConfig(restoredConfig, false)
 		a.configMu.Unlock()
 		if e != nil {
-			return RestoreResult{}, fmt.Errorf("restore config.json (other members may already be restored): %w", e)
+			return fail(fmt.Errorf("restore config.json (other members may already be restored): %w", e))
 		}
 	}
 	if held != nil {
 		if e := a.saveHeldSettings(held); e != nil {
-			return RestoreResult{}, fmt.Errorf("the backup's program settings could not be held for confirmation (other members are already restored): %w", e)
+			return fail(fmt.Errorf("the backup's program settings could not be held for confirmation (other members are already restored): %w", e))
 		}
 	}
 
