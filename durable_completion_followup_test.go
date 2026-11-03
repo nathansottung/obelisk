@@ -444,7 +444,7 @@ func TestDurableCompletion_J_CombinedFailureStaysObservable(t *testing.T) {
 	// the catalog unwritable there is no durable audit entry, and no code may say
 	// otherwise. Read it back from a genuine reopen rather than from memory.
 	app.Store.failSaveJobs = nil
-	app.Store.failSave = nil
+	clearFailSave(app.Store)
 	store2, err := openTestStore(t, app.DataDir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)

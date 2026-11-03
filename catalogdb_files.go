@@ -99,6 +99,35 @@ func fileWhere(q fileQuery) (string, []any, bool) {
 		// One JSON array, so any number of IDs fits in a statement.
 		add(`id IN (SELECT value FROM json_each(?))`, idsJSON(q.IDs))
 	}
+	if q.Under != nil {
+		if len(q.Under) == 0 {
+			return "", nil, false
+		}
+		var ors []string
+		var oargs []any
+		for _, u := range q.Under {
+			if u.Prefix == "" {
+				ors = append(ors, `folder_id = ?`)
+				oargs = append(oargs, u.FolderID)
+				continue
+			}
+			// Every text starting with the prefix sorts from it up to its successor:
+			// the prefix with its last byte raised by one.
+			hi := []byte(u.Prefix)
+			for len(hi) > 0 && hi[len(hi)-1] == 0xff {
+				hi = hi[:len(hi)-1]
+			}
+			if len(hi) == 0 {
+				ors = append(ors, `(folder_id = ? AND rel_path >= ?)`)
+				oargs = append(oargs, u.FolderID, u.Prefix)
+				continue
+			}
+			hi[len(hi)-1]++
+			ors = append(ors, `(folder_id = ? AND rel_path >= ? AND rel_path < ?)`)
+			oargs = append(oargs, u.FolderID, u.Prefix, string(hi))
+		}
+		add(`(`+strings.Join(ors, " OR ")+`)`, oargs...)
+	}
 	if q.EventID > 0 {
 		add(`event_id = ?`, q.EventID)
 	}

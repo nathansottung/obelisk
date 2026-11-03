@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -1212,6 +1213,13 @@ type Store struct {
 	// Every record still lives in c; each save writes the records that changed.
 	be     catalogBackend
 	closed bool // Close was called; every later save is refused
+	// held names the restore or data folder move that holds the catalog
+	// (holdEdits): while it is set no job starts and nothing is written, except
+	// by the holder itself (holderWriting, set by closeWithCopy). isHeld mirrors
+	// it for the job board, which checks it without s.mu.
+	held          string
+	isHeld        atomic.Bool
+	holderWriting atomic.Bool
 	// lostErr is a change the catalog database dropped where no caller could be
 	// told (a commit that failed holding file writes, a file write whose method
 	// returns no error). FlushPending, EndBatch and Close return it, so no job that
@@ -1264,18 +1272,24 @@ func OpenStore(dataDir string) (*Store, error) {
 	return openStore(dataDir, readFileRetrying, nil)
 }
 
-// catalogEngineEnv chooses the catalog engine: unset or "json" keeps catalog.json
-// (the default); "sqlite" uses catalog.db, moving an existing catalog.json into it
-// first. The database engine is being built in slices and is opt-in until its
-// cutover.
+// catalogEngineEnv chooses the catalog engine: unset or "sqlite" uses catalog.db
+// (the default), moving an existing catalog.json into it first; "json" keeps the
+// catalog in catalog.json, as every version before the database did.
 const catalogEngineEnv = "OBELISK_CATALOG_ENGINE"
 
 // catalogEngine returns the engine named by catalogEngineEnv, or an error for a
 // name it does not know.
 func catalogEngine() (string, error) {
 	switch e := os.Getenv(catalogEngineEnv); e {
-	case "", "json":
+	case "json":
 		return "json", nil
+	case "":
+		// A build without the database engine (the launcher-only build) keeps
+		// catalog.json when no engine is named.
+		if openCatalogBackend == nil {
+			return "json", nil
+		}
+		return "sqlite", nil
 	case "sqlite":
 		return "sqlite", nil
 	default:
@@ -1656,6 +1670,9 @@ func (s *Store) save() error {
 	// The catalog has an unsaved change until a write succeeds (writeCatalog
 	// clears this), so a failed or put-off save is still known about at the end
 	// of a job (see FlushPending).
+	if err := s.heldLocked(); err != nil {
+		return err // refused: nothing is marked to be written later either
+	}
 	s.dirty = true
 	s.saveGen++
 	if s.batchDepth > 0 {
@@ -1691,6 +1708,12 @@ func (s *Store) writeGateLocked() error {
 	// Record the ATTEMPT first — ahead of the fault seam and the read-only gate below,
 	// either of which would otherwise return early and hide it from an observer.
 	s.notePersist("catalog-write", s.path)
+	// A held catalog is written only by its holder (closeWithCopy's commit).
+	if !s.holderWriting.Load() {
+		if err := s.heldLocked(); err != nil {
+			return err
+		}
+	}
 	// Test-only fault-injection seam (nil in production): simulate a write failure so
 	// tests can prove persistence errors propagate rather than being dropped.
 	if s.failSave != nil {
@@ -1795,7 +1818,9 @@ func (s *Store) Close() error {
 		return nil
 	}
 	var err error
-	if s.be != nil && s.dirty && !s.readOnly {
+	// A held store saves nothing more: its swap closed or replaced it, and what
+	// it still holds are edits it refused.
+	if s.be != nil && s.dirty && !s.readOnly && s.held == "" {
 		err = s.writeCatalog()
 	}
 	s.closed = true
@@ -3023,6 +3048,9 @@ func (s *Store) UpdateEvent(e *Event) { s.mu.Lock(); defer s.mu.Unlock(); _ = s.
 func (s *Store) DeleteEvent(id int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.heldLocked(); err != nil {
+		return err
+	}
 	out := s.c.Events[:0]
 	for _, e := range s.c.Events {
 		if e.ID != id {
@@ -3050,6 +3078,9 @@ func (s *Store) DeleteEvent(id int) error {
 func (s *Store) AssignFilesToEvent(fileIDs []int, eventID int) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.heldLocked(); err != nil {
+		return 0, err
+	}
 	n := 0
 	if s.be != nil {
 		var err error
@@ -3758,6 +3789,9 @@ func (s *Store) KeyMetas() []*KeyMeta {
 // is therefore recorded now, and must stop saying otherwise. See writeJobsRows for
 // why the flags are cleared before the bytes are produced rather than after.
 func (s *Store) saveJobs() error {
+	if s.isHeld.Load() && !s.holderWriting.Load() {
+		return errCatalogHeld
+	}
 	if s.jobs.loadErr != nil {
 		return fmt.Errorf("job board unavailable after refused load: %w", s.jobs.loadErr)
 	}
@@ -3850,6 +3884,12 @@ func (s *Store) NewJob(kind, label string) (*Job, error) {
 	}
 	if s.jobs.next == int(^uint(0)>>1) {
 		return nil, fmt.Errorf("job identity counter exhausted; no work was started")
+	}
+	s.mu.Lock()
+	herr := s.heldLocked()
+	s.mu.Unlock()
+	if herr != nil {
+		return nil, fmt.Errorf("no work was started: %w", herr)
 	}
 	s.jobs.next++
 	j := &Job{ID: s.jobs.next, Kind: kind, Label: label, Status: "RUNNING", CreatedAt: time.Now().UTC()}

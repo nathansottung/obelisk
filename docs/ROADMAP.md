@@ -80,7 +80,10 @@ archive that can damage its sources or say "verified" when it isn't.
   - S8 backups: `VACUUM INTO`, 7 daily and 4 weekly copies with a size cap, plus app backup
     and restore carrying `catalog.db`: merged
     ([#23](https://github.com/nathansottung/obelisk/pull/23)).
-  - S9 cutover: the move runs on open.
+  - S9 cutover: no catalog edit, job or not, during a restore's or move's swap; the
+    database is the default engine, and the move runs on open as a job the UI
+    shows; the importer and a portable exporter stay for good: merged
+    ([#24](https://github.com/nathansottung/obelisk/pull/24)).
   - S10 proof at 3 million files.
 - **Done when:** an existing data folder upgrades on open with every record proven equal, the
   whole test suite passes on the database, app backup and restore carry it, and a 3-million-file

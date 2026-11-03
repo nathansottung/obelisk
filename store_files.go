@@ -44,6 +44,26 @@ type fileQuery struct {
 	// engine, for a scan that reads nothing else. It applies only with no filter
 	// but CollectionID, IDs and ByPath; otherwise the whole record is read.
 	PathsOnly bool
+	// Under, when not nil, keeps only files in one of these folders whose path
+	// starts with its prefix ("" is the whole folder), compared exactly, case
+	// included. On the database engine it is a range of the path index.
+	Under []folderPrefix
+}
+
+// folderPrefix is a folder and a path prefix within it.
+type folderPrefix struct {
+	FolderID int
+	Prefix   string
+}
+
+// underMatches reports whether f is in one of under's folders, below its prefix.
+func underMatches(f *File, under []folderPrefix) bool {
+	for _, u := range under {
+		if f.FolderID == u.FolderID && strings.HasPrefix(f.RelPath, u.Prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // pathsOnly reports whether q can be answered from the path columns alone.
@@ -64,6 +84,7 @@ func fileMatches(f *File, q *fileQuery, ids map[int]bool) bool {
 	switch {
 	case q.CollectionID != 0 && f.CollectionID != q.CollectionID,
 		ids != nil && !ids[f.ID],
+		q.Under != nil && !underMatches(f, q.Under),
 		q.EventID > 0 && f.EventID != q.EventID,
 		q.InEvent && f.EventID == 0,
 		q.NoEvent && f.EventID != 0,
@@ -149,6 +170,9 @@ func (s *Store) fileLocked(id int) (*File, error) {
 // putFileLocked stores f whole (its versions too): a new record when isNew,
 // otherwise in place of the record with its ID.
 func (s *Store) putFileLocked(f *File, isNew bool) error {
+	if err := s.heldLocked(); err != nil {
+		return err
+	}
 	if s.be != nil {
 		s.changedLocked() // the open transaction holds a change the next save commits
 		return s.be.filePut(f, isNew)
@@ -175,6 +199,9 @@ func (s *Store) putFileLocked(f *File, isNew bool) error {
 // deleteFilesLocked removes the files q selects (by IDs or archive) and returns
 // how many there were.
 func (s *Store) deleteFilesLocked(q fileQuery) (int, error) {
+	if err := s.heldLocked(); err != nil {
+		return 0, err
+	}
 	if s.be != nil {
 		s.changedLocked()
 		return s.be.fileDelete(q)
@@ -389,6 +416,9 @@ func (s *Store) UpsertFile(f File) *File {
 func (s *Store) UpsertFileErr(f File) (*File, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.heldLocked(); err != nil {
+		return nil, err
+	}
 	s.releaseFile(f.ID)
 	now := time.Now().UTC()
 	if s.be != nil {

@@ -540,6 +540,21 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	if err != nil {
 		return RestoreResult{}, err
 	}
+	// The restore is prepared inside the swap gate, like any request, and holds it
+	// for the swap below (swapgate.go).
+	leave, err := a.enterCatalog()
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	left := false
+	leavePrep := func() {
+		if !left {
+			left = true
+			leave()
+		}
+	}
+	defer leavePrep()
+	prepared := a.Store
 	// A job's work would go to the store this restore closes or replaces. (A
 	// backup that is not valid is refused as such first.)
 	if running := a.Store.RunningJobs(); len(running) > 0 {
@@ -655,10 +670,20 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	skipScans := backupFilesToSkip(man, members, "scans/", incoming, (*catalog).scanListSums)
 	skipCompares := backupFilesToSkip(man, members, "compares/", incoming, (*catalog).compareFileSums)
 
-	// Every change the store holds is saved before anything is copied or replaced,
-	// so the pre-restore copy has it. One that cannot be saved stops the restore.
-	if err := a.Store.savePending(); err != nil {
-		return RestoreResult{}, fmt.Errorf("the restore stopped before changing anything: the catalog has changes that could not be saved: %w", err)
+	// From here no edit reaches the catalog until the restore has finished: every
+	// request in progress finishes first, then every request, job start and save
+	// is refused (swapgate.go). Every change the store holds is saved before
+	// anything is copied or replaced, so the pre-restore copy has it. One that
+	// cannot be saved stops the restore.
+	leavePrep()
+	keep, done, err := a.holdForSwap("a restore")
+	if err != nil {
+		return RestoreResult{}, fmt.Errorf("the restore stopped before changing anything: %w", err)
+	}
+	defer done()
+	if a.Store != prepared {
+		return RestoreResult{}, errors.New("the restore stopped before changing anything: the catalog was replaced while " +
+			"the restore was being prepared. Start it again")
 	}
 
 	// (4) Back up the current records first, so the restore is itself reversible.
@@ -696,6 +721,7 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 		if err := a.Store.closeWithCopy("the restore", filepath.Join(preDir, appBackupDBMember)); err != nil {
 			return RestoreResult{}, a.reopenAfterRefusal(err)
 		}
+		keep("") // closed: it never takes an edit again
 		if restoreAfterClose != nil {
 			restoreAfterClose(a.DataDir)
 		}
@@ -734,6 +760,12 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 			return err
 		}
 		return nil
+	}
+	if !useDB {
+		// On catalog.json the members replace the store's files under it: from the
+		// first one written, the old store never saves again, even if the restore
+		// stops partway.
+		keep("a restore that stopped partway (restart Obelisk to open the catalog it left)")
 	}
 	for _, m := range man.Members {
 		b := members[m.Name]
@@ -793,6 +825,7 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 		return RestoreResult{}, fmt.Errorf("reopen catalog after restore (members may already be restored; the records it replaced are in %s): %w", preDir, err)
 	}
 	a.Store = ns
+	keep("") // replaced: it never takes an edit again
 	if useDB {
 		// The old store is closed (a swap) or holds the same database; nothing may
 		// commit through it any more.
@@ -895,7 +928,13 @@ func (a *App) maybeAutoExport(now time.Time) error {
 	if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
 		return nil
 	}
-	err := a.autoExportInto(dir, name)
+	// Not while a restore or move swaps the catalog: the next hourly run makes it.
+	leave, err := a.enterCatalog()
+	if err != nil {
+		return nil
+	}
+	defer leave()
+	err = a.autoExportInto(dir, name)
 	if err != nil {
 		// Into the event log once per period and reason, so it shows in the app.
 		if key := name + " " + err.Error(); key != a.autoExportFailed {

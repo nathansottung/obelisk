@@ -149,6 +149,24 @@ func TestTreeExpansionBudget(t *testing.T) {
 		})
 	}
 	st.c.NextID = map[string]int{"file": len(st.c.Files), "collection": 1, "folder": 1}
+	if st.UsesDatabase() {
+		// On the catalog database files live in their table: put them there.
+		files := st.c.Files
+		st.c.Files = nil
+		st.BeginBatch()
+		st.mu.Lock()
+		for _, f := range files {
+			if err := st.putFileLocked(f, true); err != nil {
+				st.mu.Unlock()
+				t.Fatal(err)
+			}
+		}
+		st.dirty = true
+		st.mu.Unlock()
+		if err := st.EndBatch(); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	// Warm once (fault in pages), then take the best of a few runs to shed GC noise —
 	// the budget is about the algorithm, not scheduler jitter.

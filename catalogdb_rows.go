@@ -650,18 +650,23 @@ func (w *rowWriter) meta(key string, v any) error {
 
 // importCatalogRows writes every record of c into the v1 tables, inside tx, and
 // continues each ID sequence from the catalog's next_id.
-func importCatalogRows(tx *sql.Tx, c *catalog) error {
+func importCatalogRows(tx *sql.Tx, c *catalog, progress func(done, total int)) error {
 	files := make(map[int]*File, len(c.Files))
 	for _, f := range c.Files {
 		files[f.ID] = f
 	}
 	w := newRowWriter(tx, files)
 	defer w.close()
-	for _, u := range catalogUnits(c, true) {
+	units := catalogUnits(c, true)
+	for i, u := range units {
+		if i%2000 == 0 {
+			progress(i, len(units))
+		}
 		if err := u.write(w); err != nil {
 			return err
 		}
 	}
+	progress(len(units), len(units))
 	return seedCatalogSequences(tx, c.NextID)
 }
 

@@ -37,7 +37,7 @@ func TestBuildChunk_TerminalStageWriteIsDurabilityGate(t *testing.T) {
 	}
 
 	// A fresh open must not show the package as STAGED — the staged write never landed.
-	app.Store.failSave = nil
+	clearFailSave(app.Store)
 	store2, err := openTestStore(t, app.DataDir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
@@ -65,7 +65,7 @@ func TestAppendVerifyEventErr_RollsBackOnSaveFailure(t *testing.T) {
 	}
 
 	// Clean save: exactly one event, and it survives a reopen.
-	app.Store.failSave = nil
+	clearFailSave(app.Store)
 	if err := app.Store.AppendVerifyEventErr(c, VerifyEvent{OK: true, Path: "X:/pkg"}); err != nil {
 		t.Fatalf("clean AppendVerifyEventErr must succeed: %v", err)
 	}

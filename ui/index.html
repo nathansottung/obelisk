@@ -3627,6 +3627,7 @@ async function vSettings(){
     <div class="row" style="margin-top:12px;gap:8px">
       <button class="btn" onclick="appBackupDlg()">Back up this app's records…</button>
       <button class="btn ghost" onclick="appRestoreDlg()">Restore from an app backup…</button>
+      <button class="btn ghost" onclick="portableCatalogDlg()">Export the portable catalog…</button>
     </div>
     <label style="margin-top:16px">Automatic backups (optional)</label>
     <div class="row" style="gap:8px;align-items:flex-start">
@@ -4067,6 +4068,19 @@ function appBackupDlg(){
     if(!(await destGate(dest)))throw new Error('No backup written: choose what to do about '+dest+' first');
     await api('POST','/api/appbackup/export',{dest_dir:dest,include_keys:keys});
     toast('Backup started — see Jobs for the file it writes',1);loc('jobs');
+  });
+}
+function portableCatalogDlg(){
+  dlg(`<h1>Export the portable catalog</h1>
+    <div class="help" style="margin-bottom:10px">Writes the whole catalog as one <span class="mono">catalog.json</span> document: plain text any editor can read, which this tool (or a later one) opens as a catalog. Settings, keys and job history are not in it; use an app backup for those.</div>
+    <label>Destination folder</label>
+    <input id="pcdest" class="full" placeholder="e.g. a USB drive or NAS folder">${browseBtn('pcdest')}
+    <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Export</button></div>`,
+  async()=>{
+    const dest=(($('#pcdest')||{}).value||'').trim();if(!dest){toast('Destination folder required',1);throw new Error('dest')}
+    if(!(await destGate(dest)))throw new Error('Nothing written: choose what to do about '+dest+' first');
+    await api('POST','/api/catalog/export',{dest_dir:dest});
+    toast('Export started — see Jobs for the file it writes',1);loc('jobs');
   });
 }
 function appRestoreDlg(){
@@ -4730,9 +4744,22 @@ function route(){const raw=(location.hash||'#home').slice(1);
 }
 window.addEventListener('hashchange',route);
 // Load the saved view mode before the first paint, then render.
-(async()=>{try{const c=await api('GET','/api/config');if(c&&c.config&&c.config.ui_mode)_uiMode=c.config.ui_mode;}catch(e){}
-  renderNav();route();refreshStartHere();})();
-lamp();setInterval(lamp,20000);activity();
+// The first start on the catalog database upgrades the catalog as a job. Until it
+// has finished only that job is shown (every other request is refused), then the
+// page loads as usual. A refused upgrade stays on screen with its reason.
+let _upgradeSeen=false;
+function upgradeScreen(h){const j=h.upgrade||{},pct=Math.round((j.progress||0)*100);
+  $('#view').innerHTML=`<h1>Upgrading the catalog</h1><p>${esc(j.label||'')}</p>
+    <div class="bar" style="margin:12px 0"><div style="width:${pct}%"></div></div>
+    <p>${h.error?esc(h.error):'Obelisk opens once every record has been checked in the new catalog database. Your catalog.json is kept as it was.'}</p>`;}
+async function upgradeGate(){let h=null;try{h=await api('GET','/api/health')}catch(e){}
+  if(h&&h.upgrade){_upgradeSeen=true;upgradeScreen(h);if(h.upgrading)setTimeout(upgradeGate,1000);return true}
+  if(_upgradeSeen)location.reload();
+  return false}
+(async()=>{if(await upgradeGate())return;
+  try{const c=await api('GET','/api/config');if(c&&c.config&&c.config.ui_mode)_uiMode=c.config.ui_mode;}catch(e){}
+  renderNav();route();refreshStartHere();
+  lamp();setInterval(lamp,20000);activity();})();
 // Sidebar version comes from the one source of truth (/api/health), never hardcoded.
 api('GET','/api/health').then(h=>{const w=$('#wordsub');if(w&&h&&h.version)w.textContent='archival vault · '+h.version}).catch(()=>{});
 </script>

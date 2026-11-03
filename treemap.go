@@ -249,7 +249,41 @@ func (s *Store) levelAggregate(collectionID int, dirPath, colorBy string) ([]*tr
 		return a
 	}
 
-	if err := s.eachFileLocked(fileQuery{CollectionID: collectionID}, func(f *File) error {
+	// Below the archive root only the files under P are wanted. On the catalog
+	// database a first pass reads paths alone (from the path index) to find them,
+	// and only those records are read whole; the filter below still applies.
+	q := fileQuery{CollectionID: collectionID}
+	switch {
+	case s.be != nil && !archiveRoot && !caseFold:
+		// Paths compare exactly: a range of the path index per folder. A folder at
+		// or under P is wanted whole; one above P from P's remainder on.
+		under := []folderPrefix{}
+		for id, root := range folderPath {
+			switch {
+			case root == nP || strings.HasPrefix(root, nP+"/"):
+				under = append(under, folderPrefix{FolderID: id})
+			case strings.HasPrefix(nP+"/", root+"/"):
+				under = append(under, folderPrefix{FolderID: id, Prefix: nP[len(root)+1:] + "/"})
+			}
+		}
+		q.Under = under
+	case s.be != nil && !archiveRoot:
+		ids := []int{} // none matched: an empty list, not "any"
+		if err := s.eachFileLocked(fileQuery{CollectionID: collectionID, PathsOnly: true}, func(f *File) error {
+			full := folderPath[f.FolderID] + "/" + f.RelPath
+			if caseFold {
+				full = strings.ToLower(full)
+			}
+			if strings.HasPrefix(full, nP+"/") {
+				ids = append(ids, f.ID)
+			}
+			return nil
+		}); err != nil {
+			return nil, TreemapResult{}, nil, err
+		}
+		q.IDs = ids
+	}
+	if err := s.eachFileLocked(q, func(f *File) error {
 		if f.CollectionID != collectionID {
 			return nil
 		}

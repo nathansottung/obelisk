@@ -43,7 +43,10 @@ func openTestStore(t testing.TB, dataDir string) (*Store, error) {
 }
 
 // sqliteEngineRun reports whether this test run uses the catalog database.
-func sqliteEngineRun() bool { return os.Getenv(catalogEngineEnv) == "sqlite" }
+func sqliteEngineRun() bool {
+	engine, _ := catalogEngine()
+	return engine == "sqlite"
+}
 
 // jsonEngineOnly skips a test that is about catalog.json itself (its bytes, its
 // daily backups, app backups that carry it) when the run uses the database
@@ -149,4 +152,12 @@ func (s *Store) AddPlan(p *Plan) *Plan {
 		panic(err)
 	}
 	return np
+}
+
+// clearFailSave removes the save fault seam under the store's lock: a job's
+// goroutine can still be saving (its end, a log entry) when the test clears it.
+func clearFailSave(s *Store) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failSave = nil
 }

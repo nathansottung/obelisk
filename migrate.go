@@ -84,9 +84,14 @@ func (a *App) MigrateLegacyDataDir() (map[string]any, error) {
 // migrateDataDir is the testable core of MigrateLegacyDataDir with explicit source
 // and destination directories.
 func (a *App) migrateDataDir(legacy, target string) (map[string]any, error) {
-	if running := a.Store.RunningJobs(); len(running) > 0 {
-		return nil, errJobsRunning("moving the data folder", running)
+	// No edit reaches the catalog while it is copied: one made after its file was
+	// copied would stay behind in the original folder (swapgate.go). The hold is
+	// refused while a job runs, and saves every pending change first.
+	keep, done, err := a.holdForSwap("moving the data folder")
+	if err != nil {
+		return nil, err
 	}
+	defer done()
 	if !sameDir(a.DataDir, legacy) {
 		return nil, fmt.Errorf("nothing to migrate: the app is not running from the legacy %s directory. Nothing was changed", legacy)
 	}
@@ -99,7 +104,7 @@ func (a *App) migrateDataDir(legacy, target string) (map[string]any, error) {
 	// would make a copy of a moment that never was): it is snapshot whole below.
 	useDB := a.Store.UsesDatabase()
 	var copied, bytes int64
-	err := filepath.WalkDir(legacy, func(path string, d fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(legacy, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -168,6 +173,7 @@ func (a *App) migrateDataDir(legacy, target string) (map[string]any, error) {
 	}
 	a.Store = ns
 	a.DataDir = target
+	keep("") // replaced: the original folder's store never takes an edit again
 	a.Store.Log("migrate", fmt.Sprintf("copied %d verified file(s) from %s to %s", copied, legacy, target))
 	return map[string]any{
 		"from": legacy, "to": target, "files": copied, "bytes": bytes, "verified": copied,

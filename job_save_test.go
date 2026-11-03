@@ -28,7 +28,7 @@ func TestJob_UnsavedCatalogChangeFailsTheJob(t *testing.T) {
 		t.Fatal(jerr)
 	}
 	j := waitTerminalJob(t, app.Store, resp["job_id"].(int))
-	app.Store.failSave = nil
+	clearFailSave(app.Store) // the job's goroutine may still be logging its end
 	if j.Status != "FAILED" || !strings.Contains(j.Label, "catalog could not be saved") {
 		t.Errorf("job %q %q, want FAILED naming the unsaved catalog", j.Status, j.Label)
 	}

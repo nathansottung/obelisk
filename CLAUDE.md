@@ -8,8 +8,8 @@ These rules apply to every session in this repository.
   Never touch a NAS, network share, mapped drive or external drive unless the
   owner says so.
 - Never delete user data.
-- Never `git checkout`, `git restore` or `git reset` files that have uncommitted
-  changes. Commit work in progress first.
+- Never `git checkout`, `git restore`, `git reset` or `git stash` files that have
+  uncommitted changes. Commit work in progress first.
 
 ## Commits and PRs
 
@@ -18,8 +18,8 @@ These rules apply to every session in this repository.
 ## Tests
 
 - Write tests that fail first, then make them pass.
-- Run the full suite on both catalog engines (the default and
-  `OBELISK_CATALOG_ENGINE=sqlite`), plus the known-failure gate:
+- Run the full suite on both catalog engines (the default, the catalog database,
+  and `OBELISK_CATALOG_ENGINE=json`), plus the known-failure gate:
   `go test -json ./... > out.jsonl` then `node scripts/ci/go-known-failures.mjs out.jsonl`,
   run from the repo folder.
 
