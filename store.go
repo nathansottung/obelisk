@@ -1283,7 +1283,14 @@ func catalogEngine() (string, error) {
 	switch e := os.Getenv(catalogEngineEnv); e {
 	case "json":
 		return "json", nil
-	case "", "sqlite":
+	case "":
+		// A build without the database engine (the launcher-only build) keeps
+		// catalog.json when no engine is named.
+		if openCatalogBackend == nil {
+			return "json", nil
+		}
+		return "sqlite", nil
+	case "sqlite":
 		return "sqlite", nil
 	default:
 		return "", fmt.Errorf("%s=%q is not a catalog engine; use json or sqlite", catalogEngineEnv, e)
