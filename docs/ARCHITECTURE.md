@@ -548,7 +548,10 @@ both engines.
   progress, then answers each new one 409 until the swap ends; each destructive
   action and the automatic app backup enter the same gate. The store's hold, taken
   with it, is refused while a job runs, saves every pending change, and then
-  refuses every job start and every save. A store a swap closed or replaced is
+  refuses every job start, edit and write of the catalog or the job board except
+  the holder's own copy and close. A swap that still finds a request in progress
+  after 30 s is refused, so a stalled request cannot hold the app off; reads that
+  never touch the catalog (the folder browser) stay outside the gate. A store a swap closed or replaced is
   never released, nor is a `catalog.json` store whose restore stopped partway, so
   it can never save over the files the restore wrote. Then the catalog database
   became the default engine. The first start on a folder with a `catalog.json`
@@ -558,10 +561,14 @@ both engines.
   changed (the UI shows the job alone and reloads when it ends). Only when the move
   has proved every record does the store open on the database; the job is then
   recorded on the board, with the rows moved and where the old `catalog.json`
-  bytes were kept. A refused move changes nothing: the job says FAILED with the
-  reason, every request is answered with it, and `catalog.json` stays the catalog
-  (`OBELISK_CATALOG_ENGINE=json` opens it). Stopping during the move is safe, as
-  each step is resumable. The importer stays for good, as the way an older
+  bytes were kept. A move refused before it publishes the database changes no
+  record: `catalog.json` stays the catalog (`OBELISK_CATALOG_ENGINE=json` opens
+  it), though a copy of its bytes may already be kept beside it. The job says
+  FAILED with the reason, and every request is answered with it. One refused
+  after publishing is finished by the next start, or refused there as two
+  catalogs. A `catalog.json` from a newer version is refused too (the JSON engine
+  opens it read-only). Stopping during the move is safe, as each step is
+  resumable. The importer stays for good, as the way an older
   catalog (a folder, or an app backup) comes in, and so does the exporter:
   `POST /api/catalog/export` writes the whole catalog, every pending change
   included, as a portable v8 `catalog.json` document that either engine opens.

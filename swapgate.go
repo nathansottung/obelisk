@@ -22,9 +22,10 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 )
 
-// swapGate is the app's side of a swap (see the file comment).
+// swapGateState is the app's side of a swap (see the file comment).
 type swapGateState struct {
 	mu       sync.Mutex
 	cond     *sync.Cond
@@ -42,6 +43,9 @@ func (g *swapGateState) condLocked() *sync.Cond {
 	}
 	return g.cond
 }
+
+// swapDrainWait is how long a swap waits for requests in progress.
+var swapDrainWait = 30 * time.Second
 
 // errSwapping refuses a request while what swaps the catalog.
 func errSwapping(what string) error {
@@ -78,7 +82,22 @@ func (a *App) beginSwap(what string) (end func(), err error) {
 		return nil, fmt.Errorf("%s waits until %s has finished, so nothing was changed", what, g.what)
 	}
 	g.what = what
+	// A request that never finishes (a stalled network folder) must not hold every
+	// other request off for good: after swapDrainWait the swap is refused instead.
+	deadline := time.Now().Add(swapDrainWait)
+	timer := time.AfterFunc(swapDrainWait, func() {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		g.condLocked().Broadcast()
+	})
+	defer timer.Stop()
 	for g.inflight > 0 {
+		if !time.Now().Before(deadline) {
+			g.what = ""
+			g.condLocked().Broadcast()
+			return nil, fmt.Errorf("%s waits until no request is in progress, and %d still were after %v, so nothing "+
+				"was changed. Try again", what, g.inflight, swapDrainWait)
+		}
 		g.condLocked().Wait()
 	}
 	return func() {

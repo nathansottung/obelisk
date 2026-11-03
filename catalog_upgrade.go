@@ -79,6 +79,15 @@ func (a *App) runCatalogUpgrade(u *catalogUpgrade) {
 	}
 	g := &a.swap
 	if err != nil {
+		// Say which catalog is the one now: catalog.json, unless the move had
+		// already published the database (a refusal after that is finished, or
+		// refused as two catalogs, by the next start).
+		if _, serr := os.Lstat(filepath.Join(a.DataDir, catalogDBName)); serr == nil {
+			err = fmt.Errorf("%w. The catalog database was already published; the next start of Obelisk finishes the upgrade", err)
+		} else {
+			err = fmt.Errorf("%w. catalog.json is unchanged and is still the catalog: start Obelisk with "+
+				"OBELISK_CATALOG_ENGINE=json to keep using it as before", err)
+		}
 		log.Printf("the catalog upgrade was refused: %v", err)
 		now := time.Now().UTC()
 		u.mu.Lock()

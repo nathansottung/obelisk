@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -1213,8 +1214,12 @@ type Store struct {
 	be     catalogBackend
 	closed bool // Close was called; every later save is refused
 	// held names the restore or data folder move that holds the catalog
-	// (holdEdits): while it is set no job starts and no edit is saved.
-	held string
+	// (holdEdits): while it is set no job starts and nothing is written, except
+	// by the holder itself (holderWriting, set by closeWithCopy). isHeld mirrors
+	// it for the job board, which checks it without s.mu.
+	held          string
+	isHeld        atomic.Bool
+	holderWriting atomic.Bool
 	// lostErr is a change the catalog database dropped where no caller could be
 	// told (a commit that failed holding file writes, a file write whose method
 	// returns no error). FlushPending, EndBatch and Close return it, so no job that
@@ -1658,11 +1663,11 @@ func (s *Store) save() error {
 	// The catalog has an unsaved change until a write succeeds (writeCatalog
 	// clears this), so a failed or put-off save is still known about at the end
 	// of a job (see FlushPending).
+	if err := s.heldLocked(); err != nil {
+		return err // refused: nothing is marked to be written later either
+	}
 	s.dirty = true
 	s.saveGen++
-	if err := s.heldLocked(); err != nil {
-		return err
-	}
 	if s.batchDepth > 0 {
 		iv := s.batchInterval
 		if iv <= 0 {
@@ -1696,6 +1701,12 @@ func (s *Store) writeGateLocked() error {
 	// Record the ATTEMPT first — ahead of the fault seam and the read-only gate below,
 	// either of which would otherwise return early and hide it from an observer.
 	s.notePersist("catalog-write", s.path)
+	// A held catalog is written only by its holder (closeWithCopy's commit).
+	if !s.holderWriting.Load() {
+		if err := s.heldLocked(); err != nil {
+			return err
+		}
+	}
 	// Test-only fault-injection seam (nil in production): simulate a write failure so
 	// tests can prove persistence errors propagate rather than being dropped.
 	if s.failSave != nil {
@@ -3771,6 +3782,9 @@ func (s *Store) KeyMetas() []*KeyMeta {
 // is therefore recorded now, and must stop saying otherwise. See writeJobsRows for
 // why the flags are cleared before the bytes are produced rather than after.
 func (s *Store) saveJobs() error {
+	if s.isHeld.Load() && !s.holderWriting.Load() {
+		return errCatalogHeld
+	}
 	if s.jobs.loadErr != nil {
 		return fmt.Errorf("job board unavailable after refused load: %w", s.jobs.loadErr)
 	}

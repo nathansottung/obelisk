@@ -279,3 +279,128 @@ func TestSwapGate_ADestructiveActionDuringARestoreIsRefused(t *testing.T) {
 		t.Fatal("the restore never reached its swap")
 	}
 }
+
+// A held store writes nothing, on either engine and by any path: not a flush, not
+// the end of a batch, not the job board. Only its holder's copy and close do.
+func TestStoreHold_WritesNothingByAnyPath(t *testing.T) {
+	for _, engine := range []string{"json", "sqlite"} {
+		t.Run(engine, func(t *testing.T) {
+			t.Setenv(catalogEngineEnv, engine)
+			dir := t.TempDir()
+			s, err := openTestStore(t, dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.AddCollection("Saved")
+			j, err := s.NewJob("scan", "before the hold")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.FinishJob(j.ID, 1, "", "COMPLETED", nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			release, err := s.holdEdits("a restore")
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := persistedCatalogNames(t, engine, dir)
+			// An edit that reached memory past every gate, as a missed one would.
+			s.mu.Lock()
+			s.c.Collections = append(s.c.Collections, &Collection{ID: 99, Name: "Refused"})
+			s.dirty = true
+			s.mu.Unlock()
+			s.BeginBatch()
+			if err := s.EndBatch(); err == nil {
+				t.Error("EndBatch wrote a held store")
+			}
+			if err := s.FlushPending(); err == nil {
+				t.Error("FlushPending wrote a held store")
+			}
+			if err := s.SetJob(j.ID, 1, "relabelled", "COMPLETED"); !errors.Is(err, errCatalogHeld) {
+				t.Errorf("a job board write on a held store: %v", err)
+			}
+			if after := persistedCatalogNames(t, engine, dir); after != before {
+				t.Fatalf("a held store wrote: %s, then %s", before, after)
+			}
+			release()
+		})
+	}
+}
+
+// persistedCatalogNames reads the archive names dir's catalog holds on disk.
+func persistedCatalogNames(t *testing.T, engine, dir string) string {
+	t.Helper()
+	if engine == "json" {
+		var c catalog
+		raw, err := os.ReadFile(filepath.Join(dir, "catalog.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := decodeCatalogJSON(raw, &c); err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, x := range c.Collections {
+			names = append(names, x.Name)
+		}
+		return strings.Join(names, ",")
+	}
+	d, err := openCatalogDB(filepath.Join(dir, catalogDBName), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	c, err := exportCatalogDB(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, x := range c.Collections {
+		names = append(names, x.Name)
+	}
+	return strings.Join(names, ",")
+}
+
+// A request that never finishes does not hold the app off: the swap gives up,
+// refuses with nothing changed, and requests are let in again. Reads outside the
+// catalog (the folder browser) never hold a swap at all.
+func TestSwapGate_AStalledRequestDoesNotHoldTheAppOff(t *testing.T) {
+	prev := swapDrainWait
+	swapDrainWait = 200 * time.Millisecond
+	t.Cleanup(func() { swapDrainWait = prev })
+	app := abTestApp(t)
+	release, entered, browsing := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() { close(browsing) })
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/stalled", func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-release
+	})
+	mux.HandleFunc("GET /api/browse", func(w http.ResponseWriter, r *http.Request) { <-browsing })
+	h := app.swapGate(mux)
+	go apiGet(h, "/api/browse")
+	go apiGet(h, "/api/stalled")
+	<-entered
+	if _, err := app.beginSwap("a restore"); err == nil || !strings.Contains(err.Error(), "in progress") {
+		t.Fatalf("a swap with a stalled request: %v", err)
+	}
+	if leave, err := app.enterCatalog(); err != nil {
+		t.Fatalf("after the swap gave up, a request was refused: %v", err)
+	} else {
+		leave()
+	}
+	close(release)
+	// With the stalled request gone, only the folder browser is left, still
+	// waiting, and it does not hold the swap.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		end, err := app.beginSwap("a restore")
+		if err == nil {
+			end()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the swap never started: %v", err)
+		}
+	}
+}

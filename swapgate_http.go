@@ -9,11 +9,24 @@ import (
 	"strings"
 )
 
-// swapRunners are the requests that run a restore or a move: they take the gate
+// swapRunner reports the requests that run a restore or a move: they take the gate
 // themselves (beginSwap), and the destructive actions behind execute enter it one
 // by one (ExecuteDestructive).
 func swapRunner(r *http.Request) bool {
 	return r.Method == http.MethodPost && (r.URL.Path == "/api/destructive/execute" || r.URL.Path == "/api/data-migration")
+}
+
+// outsideCatalog are reads that never touch the catalog (the folder browser can
+// wait on a slow network folder): they neither enter the gate nor hold a swap.
+func outsideCatalog(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	switch r.URL.Path {
+	case "/api/browse", "/api/pathinfo", "/api/media":
+		return true
+	}
+	return false
 }
 
 // swapGate puts every API request through the app's swap gate: one that arrives
@@ -24,7 +37,7 @@ func (a *App) swapGate(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/api/") && a.answerDuringUpgrade(w, r) {
 			return
 		}
-		if !strings.HasPrefix(r.URL.Path, "/api/") || swapRunner(r) {
+		if !strings.HasPrefix(r.URL.Path, "/api/") || swapRunner(r) || outsideCatalog(r) {
 			next.ServeHTTP(w, r)
 			return
 		}

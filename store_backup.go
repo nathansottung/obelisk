@@ -123,6 +123,8 @@ func (s *Store) closeWithCopy(what, dest string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.holderWriting.Store(true) // the holder's own commit and copy
+	defer s.holderWriting.Store(false)
 	if err := s.commitAllLocked(); err != nil {
 		return fmt.Errorf("%s stopped before changing anything: %w", what, err)
 	}
@@ -147,7 +149,7 @@ var errCatalogHeld = errors.New("the catalog is held")
 type heldError struct{ what string }
 
 func (e *heldError) Error() string {
-	return fmt.Sprintf("the catalog takes no changes while %s runs, so nothing was changed. Try again when it has finished", e.what)
+	return fmt.Sprintf("the catalog takes no changes: %s holds it, so nothing was changed", e.what)
 }
 
 func (e *heldError) Is(target error) bool { return target == errCatalogHeld }
@@ -186,10 +188,12 @@ func (s *Store) holdEdits(what string) (release func(), err error) {
 		}
 	}
 	s.held = what
+	s.isHeld.Store(true)
 	return func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.held = ""
+		s.isHeld.Store(false)
 	}, nil
 }
 
@@ -216,6 +220,7 @@ func (s *Store) setHeld(what string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.held = what
+	s.isHeld.Store(true)
 }
 
 // isClosed reports whether the store has been closed.

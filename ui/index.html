@@ -4758,8 +4758,8 @@ async function upgradeGate(){let h=null;try{h=await api('GET','/api/health')}cat
   return false}
 (async()=>{if(await upgradeGate())return;
   try{const c=await api('GET','/api/config');if(c&&c.config&&c.config.ui_mode)_uiMode=c.config.ui_mode;}catch(e){}
-  renderNav();route();refreshStartHere();})();
-lamp();setInterval(lamp,20000);activity();
+  renderNav();route();refreshStartHere();
+  lamp();setInterval(lamp,20000);activity();})();
 // Sidebar version comes from the one source of truth (/api/health), never hardcoded.
 api('GET','/api/health').then(h=>{const w=$('#wordsub');if(w&&h&&h.version)w.textContent='archival vault · '+h.version}).catch(()=>{});
 </script>
