@@ -57,13 +57,16 @@ type appBackupMember struct {
 // SHA-256 of every OTHER member (never itself); the whole-tar .sha256 sidecar covers
 // the manifest too.
 type appBackupManifest struct {
-	Format        string            `json:"format"`
-	Version       int               `json:"version"`
-	SchemaVersion int               `json:"schema_version"`
-	AppVersion    string            `json:"app_version"`
-	Created       string            `json:"created"`
-	IncludesKeys  bool              `json:"includes_keys"`
-	Members       []appBackupMember `json:"members"`
+	Format        string `json:"format"`
+	Version       int    `json:"version"`
+	SchemaVersion int    `json:"schema_version"`
+	AppVersion    string `json:"app_version"`
+	Created       string `json:"created"`
+	IncludesKeys  bool   `json:"includes_keys"`
+	// CatalogDBSchemaVersion is the schema of the catalog.db member, when the backup
+	// carries the catalog database instead of catalog.json.
+	CatalogDBSchemaVersion int               `json:"catalog_db_schema_version,omitempty"`
+	Members                []appBackupMember `json:"members"`
 }
 
 // ExportResult is the summary returned after writing a bundle.
@@ -77,6 +80,9 @@ type ExportResult struct {
 	// ScanFilesLeftOut are scan file lists not put in the backup: missing, or not
 	// matching their record.
 	ScanFilesLeftOut []string `json:"scan_files_left_out,omitempty"`
+	// CompareFilesLeftOut are comparison results files not put in the backup:
+	// missing, or not matching their record.
+	CompareFilesLeftOut []string `json:"compare_files_left_out,omitempty"`
 }
 
 // RestoreResult is the post-restore summary.
@@ -84,19 +90,22 @@ type RestoreResult struct {
 	// ScanFilesSkipped are the backup's scan file lists not restored because they
 	// do not match a scan record in the backup's catalog.
 	ScanFilesSkipped []string `json:"scan_files_skipped,omitempty"`
-	SchemaVersion    int      `json:"schema_version"`
-	AppVersion       string   `json:"app_version"`
-	Created          string   `json:"created"`
-	IncludedKeys     bool     `json:"included_keys"`
-	Archives         int      `json:"archives"`
-	Files            int      `json:"files"`
-	Volumes          int      `json:"volumes"`
-	Packages         int      `json:"packages"`
-	Jobs             int      `json:"jobs"`
-	VerifyEvents     int      `json:"verify_events"`
-	PreRestoreDir    string   `json:"pre_restore_dir"`
-	ReadOnly         bool     `json:"read_only,omitempty"`
-	ReadOnlyWhy      string   `json:"read_only_why,omitempty"`
+	// CompareFilesSkipped are the backup's comparison results files not restored
+	// because they do not match a comparison record in the backup's catalog.
+	CompareFilesSkipped []string `json:"compare_files_skipped,omitempty"`
+	SchemaVersion       int      `json:"schema_version"`
+	AppVersion          string   `json:"app_version"`
+	Created             string   `json:"created"`
+	IncludedKeys        bool     `json:"included_keys"`
+	Archives            int      `json:"archives"`
+	Files               int      `json:"files"`
+	Volumes             int      `json:"volumes"`
+	Packages            int      `json:"packages"`
+	Jobs                int      `json:"jobs"`
+	VerifyEvents        int      `json:"verify_events"`
+	PreRestoreDir       string   `json:"pre_restore_dir"`
+	ReadOnly            bool     `json:"read_only,omitempty"`
+	ReadOnlyWhy         string   `json:"read_only_why,omitempty"`
 	// HeldSettings are the backup's program settings, not applied (see
 	// heldsettings.go); nil when they match the current ones.
 	HeldSettings *HeldSettings `json:"held_settings,omitempty"`
@@ -111,35 +120,53 @@ type rawMember struct {
 	data []byte
 }
 
+// appBackupDBMember is the member that carries the catalog database.
+const appBackupDBMember = "catalog.db"
+
 // gatherMembers reads the data-dir files that make up the app state. config.json is
 // re-marshaled with the auth token scrubbed (a deployment secret, not knowledge);
 // keystores are included only when opted in. Missing optional files are skipped.
-func (a *App) gatherMembers(includeKeys bool) ([]rawMember, error) {
+// On the catalog database engine the catalog and its job board are one member,
+// catalog.db, a checked copy that includes every change not yet committed; its
+// schema version is returned (0 for catalog.json).
+func (a *App) gatherMembers(includeKeys bool) ([]rawMember, int, error) {
 	var members []rawMember
+	dbSchema := 0
 
-	// catalog.json — the exact on-disk bytes (the source of truth).
-	catalog, err := os.ReadFile(filepath.Join(a.DataDir, "catalog.json"))
-	if err != nil {
-		return nil, fmt.Errorf("read catalog.json: %w", err)
+	if a.Store.UsesDatabase() {
+		db, schema, err := a.Store.snapshotDBBytes()
+		if err != nil {
+			return nil, 0, fmt.Errorf("copy the catalog database: %w", err)
+		}
+		members = append(members, rawMember{appBackupDBMember, db})
+		dbSchema = schema
+	} else {
+		// catalog.json — the exact on-disk bytes (the source of truth).
+		catalog, err := os.ReadFile(filepath.Join(a.DataDir, "catalog.json"))
+		if err != nil {
+			return nil, 0, fmt.Errorf("read catalog.json: %w", err)
+		}
+		members = append(members, rawMember{"catalog.json", catalog})
 	}
-	members = append(members, rawMember{"catalog.json", catalog})
 
 	// config.json — scrub the auth token so a deployment secret never travels.
 	cfg, cfgErr := a.LoadConfig()
 	if cfgErr != nil {
-		return nil, cfgErr
+		return nil, 0, cfgErr
 	}
 	cfg.AuthToken = ""
 	cfgBytes, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		return nil, fmt.Errorf("encode config: %w", err)
+		return nil, 0, fmt.Errorf("encode config: %w", err)
 	}
 	members = append(members, rawMember{"config.json", cfgBytes})
 
 	// jobs.json — persisted job board (history + artifacts). Optional (a brand-new
-	// install may have none).
-	if b, err := os.ReadFile(filepath.Join(a.DataDir, "jobs.json")); err == nil {
-		members = append(members, rawMember{"jobs.json", b})
+	// install may have none). On the database engine the board is in catalog.db.
+	if !a.Store.UsesDatabase() {
+		if b, err := os.ReadFile(filepath.Join(a.DataDir, "jobs.json")); err == nil {
+			members = append(members, rawMember{"jobs.json", b})
+		}
 	}
 	// formats.json — user format-registry overrides. Optional.
 	if b, err := os.ReadFile(filepath.Join(a.DataDir, "formats.json")); err == nil {
@@ -151,20 +178,20 @@ func (a *App) gatherMembers(includeKeys bool) ([]rawMember, error) {
 		for _, ksPath := range cfg.KeystorePaths {
 			b, err := os.ReadFile(ksPath)
 			if err != nil {
-				return nil, fmt.Errorf("read keystore %q: %w", ksPath, err)
+				return nil, 0, fmt.Errorf("read keystore %q: %w", ksPath, err)
 			}
 			name := "keystores/" + filepath.Base(ksPath)
 			if seen[name] { // two keystores with the same basename — disambiguate
 				name = fmt.Sprintf("keystores/%d-%s", len(members), filepath.Base(ksPath))
 			}
 			if !validAppBackupMemberName(name) {
-				return nil, fmt.Errorf("keystore filename %q is not portable in an app backup; rename it before exporting", filepath.Base(ksPath))
+				return nil, 0, fmt.Errorf("keystore filename %q is not portable in an app backup; rename it before exporting", filepath.Base(ksPath))
 			}
 			seen[name] = true
 			members = append(members, rawMember{name, b})
 		}
 	}
-	return members, nil
+	return members, dbSchema, nil
 }
 
 // exportAppBackupTo writes the bundle to exactly tarPath (+ .sha256 sidecar),
@@ -183,10 +210,7 @@ func (a *App) exportAppBackupTo(tarPath string, includeKeys bool) (ExportResult,
 // (per-period filename). The bundle is staged in a new file and named only once
 // it reads back as written.
 func (a *App) exportAppBackupInto(out *outFolder, name string, includeKeys bool) (ExportResult, error) {
-	if a.Store.UsesDatabase() {
-		return ExportResult{}, errAppBackupNoDatabase
-	}
-	members, err := a.gatherMembers(includeKeys)
+	members, dbSchema, err := a.gatherMembers(includeKeys)
 	if err != nil {
 		return ExportResult{}, err
 	}
@@ -209,6 +233,23 @@ func (a *App) exportAppBackupInto(out *outFolder, name string, includeKeys bool)
 		}
 		members = append(members, rawMember{"scans/" + name, b})
 	}
+	// compares/<name> — each saved comparison's results file (compare.go), on the
+	// same terms as the scan file lists.
+	var comparesLeftOut []string
+	results := a.Store.compareFileLists()
+	names = names[:0]
+	for name := range results {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		b, err := os.ReadFile(filepath.Join(a.comparesDir(), name))
+		if err != nil || sha256Hex(b) != results[name] {
+			comparesLeftOut = append(comparesLeftOut, name)
+			continue
+		}
+		members = append(members, rawMember{"compares/" + name, b})
+	}
 
 	// Schema version comes from the catalog member itself, so the manifest states what
 	// the bundle actually holds.
@@ -227,7 +268,7 @@ func (a *App) exportAppBackupInto(out *outFolder, name string, includeKeys bool)
 	man := appBackupManifest{
 		Format: appBackupFormat, Version: appBackupVersion, SchemaVersion: schemaVer,
 		AppVersion: appVersion, Created: time.Now().UTC().Format(time.RFC3339),
-		IncludesKeys: includeKeys,
+		IncludesKeys: includeKeys, CatalogDBSchemaVersion: dbSchema,
 	}
 	for _, m := range members {
 		man.Members = append(man.Members, appBackupMember{Name: m.name, SHA256: sha256Hex(m.data), Size: int64(len(m.data))})
@@ -289,7 +330,8 @@ func (a *App) exportAppBackupInto(out *outFolder, name string, includeKeys bool)
 	}
 	return ExportResult{
 		TarPath: out.Join(name), SidecarPath: out.Join(sidecar), Bytes: size, ScanFilesLeftOut: logLeftOut(a, leftOut),
-		MemberCount: len(members) + 1, IncludesKeys: includeKeys, SchemaVersion: schemaVer,
+		CompareFilesLeftOut: logComparesLeftOut(a, comparesLeftOut),
+		MemberCount:         len(members) + 1, IncludesKeys: includeKeys, SchemaVersion: schemaVer,
 	}, nil
 }
 
@@ -300,9 +342,6 @@ func appBackupBaseName(t time.Time) string {
 
 // ExportAppBackup writes a dated app-backup bundle into destDir and returns a summary.
 func (a *App) ExportAppBackup(destDir string, includeKeys bool) (ExportResult, error) {
-	if a.Store.UsesDatabase() {
-		return ExportResult{}, errAppBackupNoDatabase
-	}
 	if strings.TrimSpace(destDir) == "" {
 		return ExportResult{}, fmt.Errorf("a destination folder is required")
 	}
@@ -325,11 +364,14 @@ func (a *App) ExportAppBackup(destDir string, includeKeys bool) (ExportResult, e
 // dot/space aliases. This is a format check, not filesystem/symlink containment.
 func validAppBackupMemberName(name string) bool {
 	switch name {
-	case "MANIFEST.json", "catalog.json", "config.json", "jobs.json", "formats.json":
+	case "MANIFEST.json", "catalog.json", appBackupDBMember, "config.json", "jobs.json", "formats.json":
 		return true
 	}
 	if leaf, ok := strings.CutPrefix(name, "scans/"); ok {
 		return validScanFileName(leaf)
+	}
+	if leaf, ok := strings.CutPrefix(name, "compares/"); ok {
+		return validCompareFileName(leaf)
 	}
 	if !strings.HasPrefix(name, "keystores/") {
 		return false
@@ -437,6 +479,20 @@ func verifyAppBackup(tarPath string) (appBackupManifest, map[string][]byte, erro
 			return man, nil, fmt.Errorf("integrity check failed on %q — size mismatch", m.Name)
 		}
 	}
+	// Only members the manifest lists, with their hashes checked, are used.
+	for name := range members {
+		if name != "MANIFEST.json" && !seen[name] {
+			delete(members, name)
+		}
+	}
+	_, hasJSON := members["catalog.json"]
+	_, hasDB := members[appBackupDBMember]
+	if hasJSON && hasDB {
+		return man, nil, fmt.Errorf("this backup carries both catalog.json and catalog.db; a restore needs exactly one catalog")
+	}
+	if _, ok := members["jobs.json"]; ok && hasDB {
+		return man, nil, fmt.Errorf("this backup carries jobs.json beside catalog.db, whose job board is inside it; a restore needs exactly one job board")
+	}
 	// A correctly hashed member can still be an invalid job board. Refuse it
 	// before restore publishes it and leaves the running Store holding stale rows.
 	if b, ok := members["jobs.json"]; ok {
@@ -459,15 +515,68 @@ func (a *App) InspectAppBackup(tarPath string) (appBackupManifest, error) {
 // verification happens before ANYTHING is written, so a bad backup leaves the current
 // data dir untouched.
 // preRestoreWriteFile writes a pre-restore copy; a test seam.
+// The catalog database's side of a restore (catalogdb_backup.go); nil in a build
+// without the engine. stageCatalogDBRestore writes and checks a backup's catalog.db
+// under a stage name beside the catalog; importCatalogJSONRestore moves a backup's
+// catalog.json (and its job board) into a staged database through the importer;
+// swapRestoredCatalogDB puts a stage in place of the closed catalog database.
+var (
+	stageCatalogDBRestore    func(dataDir string, member []byte) (string, *catalog, error)
+	importCatalogJSONRestore func(dataDir string, raw, jobs []byte) (string, *catalog, error)
+	swapRestoredCatalogDB    func(dataDir, stage string) error
+)
+
+// restoreAfterClose is a test seam: nil in production. It runs after a restore
+// on the database engine has closed the store and before it clears the old
+// database's side files and swaps the restored one in.
+var restoreAfterClose func(dataDir string)
+
 var preRestoreWriteFile = func(name string, b []byte, _ os.FileMode) error { return writeSecretFile(name, b) }
 
 func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
-	if a.Store.UsesDatabase() {
-		return RestoreResult{}, errAppBackupNoDatabase
-	}
 	man, members, err := verifyAppBackup(tarPath)
 	if err != nil {
 		return RestoreResult{}, err
+	}
+	useDB := a.Store.UsesDatabase()
+	catJSON, hasJSON := members["catalog.json"]
+	catDB, hasDB := members[appBackupDBMember]
+	if hasDB && !useDB {
+		return RestoreResult{}, errors.New("this backup carries the catalog database (catalog.db), which the catalog.json " +
+			"engine cannot use, so nothing was changed. Restore it with OBELISK_CATALOG_ENGINE=sqlite")
+	}
+
+	// The backup's catalog, read and checked before anything changes. On the
+	// database engine it is staged beside the catalog as the database that will
+	// replace it: a catalog.db is written and checked whole; a catalog.json (a
+	// backup an older version made) goes through the importer, with its job board.
+	var incoming *catalog
+	dbStage := ""
+	defer func() {
+		if dbStage != "" { // not swapped in: only the stage this restore made is removed
+			for _, side := range []string{"", "-wal", "-shm", "-journal"} {
+				os.Remove(dbStage + side)
+			}
+		}
+	}()
+	switch {
+	case useDB && (hasDB || hasJSON):
+		if stageCatalogDBRestore == nil || importCatalogJSONRestore == nil || swapRestoredCatalogDB == nil {
+			return RestoreResult{}, errors.New("this build of Obelisk has no catalog database engine")
+		}
+		if hasDB {
+			dbStage, incoming, err = stageCatalogDBRestore(a.DataDir, catDB)
+		} else {
+			dbStage, incoming, err = importCatalogJSONRestore(a.DataDir, catJSON, members["jobs.json"])
+		}
+		if err != nil {
+			return RestoreResult{}, fmt.Errorf("%w. Nothing was changed", err)
+		}
+	case hasJSON:
+		incoming = &catalog{}
+		if e := decodeCatalogJSON(catJSON, incoming); e != nil {
+			return RestoreResult{}, fmt.Errorf("the backup's catalog is damaged: %w", e)
+		}
 	}
 
 	// Preserve the current machine's auth token when the backup's is blank (we scrub on
@@ -520,12 +629,10 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 		if e := checkConfigPaths(restored, a.Store); e != nil {
 			return RestoreResult{}, fmt.Errorf("the backup's settings are refused: %w", e)
 		}
-		if catBytes, ok := members["catalog.json"]; ok {
-			incoming := &Store{}
-			if e := decodeCatalogJSON(catBytes, &incoming.c); e != nil {
-				return RestoreResult{}, fmt.Errorf("the backup's catalog is damaged: %w", e)
-			}
-			if e := checkConfigPaths(restored, incoming); e != nil {
+		if incoming != nil {
+			in := &Store{}
+			in.c = *incoming
+			if e := checkConfigPaths(restored, in); e != nil {
 				return RestoreResult{}, fmt.Errorf("the backup's settings are refused: %w", e)
 			}
 		}
@@ -535,17 +642,33 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 		}
 	}
 
-	// Each scan file list must be the one a scan record in the backup's catalog
-	// names, with its recorded SHA-256. One that is not is skipped (and reported):
-	// it never stops the rest of the restore.
-	skipScans, err := checkBackupScanFiles(man, members)
-	if err != nil {
-		return RestoreResult{}, err
+	// Each scan file list and comparison results file must be one a record in the
+	// backup's catalog names, with its recorded SHA-256. One that is not is skipped
+	// (and reported): it never stops the rest of the restore.
+	skipScans := backupFilesToSkip(man, members, "scans/", incoming, (*catalog).scanListSums)
+	skipCompares := backupFilesToSkip(man, members, "compares/", incoming, (*catalog).compareFileSums)
+
+	// Every change the store holds is saved before anything is copied or replaced,
+	// so the pre-restore copy has it. One that cannot be saved stops the restore.
+	if err := a.Store.savePending(); err != nil {
+		return RestoreResult{}, fmt.Errorf("the restore stopped before changing anything: the catalog has changes that could not be saved: %w", err)
 	}
 
 	// (4) Back up the current records first, so the restore is itself reversible.
+	// Each restore has a folder of its own: one made earlier the same second is
+	// never written into.
 	stamp := time.Now().UTC().Format("20060102-150405")
 	preDir := filepath.Join(a.DataDir, "pre-restore-"+stamp)
+	for n := 2; ; n++ {
+		err := os.Mkdir(preDir, 0o700)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return RestoreResult{}, fmt.Errorf("prepare pre-restore backup: %w", err)
+		}
+		preDir = filepath.Join(a.DataDir, fmt.Sprintf("pre-restore-%s-%d", stamp, n))
+	}
 	if err := os.MkdirAll(filepath.Join(preDir, "keystores"), 0o700); err != nil {
 		return RestoreResult{}, fmt.Errorf("prepare pre-restore backup: %w", err)
 	}
@@ -554,6 +677,25 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	// otherwise be lost). If any copy fails, nothing is restored.
 	if err := a.copyPreRestore(cfg, preDir); err != nil {
 		return RestoreResult{}, fmt.Errorf("the restore stopped before changing anything: the pre-restore copy in %s failed: %w", preDir, err)
+	}
+
+	// On the database engine the catalog database is copied into pre-restore and
+	// the store closed, with no change let in between; then the staged database
+	// replaces it. No old -wal, -shm or -journal is left for SQLite to apply to the
+	// restored database, and a database another program still has open is never
+	// replaced. Until the swap the catalog is unchanged, and a refusal opens it
+	// again.
+	if dbStage != "" {
+		if err := a.Store.closeForRestore(filepath.Join(preDir, appBackupDBMember)); err != nil {
+			return RestoreResult{}, a.reopenAfterRefusal(err)
+		}
+		if restoreAfterClose != nil {
+			restoreAfterClose(a.DataDir)
+		}
+		if err := swapRestoredCatalogDB(a.DataDir, dbStage); err != nil {
+			return RestoreResult{}, a.reopenAfterRefusal(fmt.Errorf("the restore stopped before changing the catalog: %w", err))
+		}
+		dbStage = ""
 	}
 
 	// (5) Extract members (except the manifest + config, handled below). Keystores land
@@ -582,6 +724,8 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 		switch {
 		case m.Name == "config.json":
 			continue // handled last, after keystore paths are known
+		case useDB && (m.Name == "catalog.json" || m.Name == "jobs.json" || m.Name == appBackupDBMember):
+			continue // in the catalog database swapped in above
 		case strings.HasPrefix(m.Name, "keystores/"):
 			dest := filepath.Join(a.DataDir, "keystores", filepath.Base(m.Name))
 			if err := writeFile(dest, b, 0o600); err != nil { // key material: owner only
@@ -592,6 +736,13 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 				continue
 			}
 			if err := writeFile(filepath.Join(a.scansDir(), strings.TrimPrefix(m.Name, "scans/")), b, 0o600); err != nil {
+				return RestoreResult{}, fmt.Errorf("restore %s: %w", m.Name, err)
+			}
+		case strings.HasPrefix(m.Name, "compares/"):
+			if skipCompares[m.Name] {
+				continue
+			}
+			if err := writeFile(filepath.Join(a.comparesDir(), strings.TrimPrefix(m.Name, "compares/")), b, 0o600); err != nil {
 				return RestoreResult{}, fmt.Errorf("restore %s: %w", m.Name, err)
 			}
 		default: // catalog.json, jobs.json, formats.json
@@ -617,19 +768,25 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 
 	// (6) Reopen the store from the restored files — this runs the migration registry,
 	// bringing an older backup forward — and swap it in.
+	old := a.Store
 	ns, err := OpenStore(a.DataDir)
 	if err != nil {
 		// Other members may already have changed. If the on-disk board is now
 		// rejected, prevent this retained Store from publishing its stale history.
-		a.Store.checkJobsAfterFailedReopen()
-		return RestoreResult{}, fmt.Errorf("reopen catalog after restore (members may already be restored): %w", err)
+		old.checkJobsAfterFailedReopen()
+		return RestoreResult{}, fmt.Errorf("reopen catalog after restore (members may already be restored; the records it replaced are in %s): %w", preDir, err)
 	}
 	a.Store = ns
+	if useDB {
+		// The old store is closed (a swap) or holds the same database; nothing may
+		// commit through it any more.
+		_ = old.Close()
+	}
 
 	// (7) Summary.
 	res := RestoreResult{
-		ScanFilesSkipped: sortedKeys(skipScans),
-		SchemaVersion:    man.SchemaVersion, AppVersion: man.AppVersion, Created: man.Created,
+		ScanFilesSkipped: sortedKeys(skipScans), CompareFilesSkipped: sortedKeys(skipCompares),
+		SchemaVersion: man.SchemaVersion, AppVersion: man.AppVersion, Created: man.Created,
 		IncludedKeys: man.IncludesKeys, PreRestoreDir: preDir, HeldSettings: held, KeystoreNote: keystoreNote,
 		Archives: len(ns.Collections()), Volumes: len(ns.Volumes()), Jobs: len(ns.Jobs()),
 	}
@@ -650,7 +807,25 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	if n := len(res.ScanFilesSkipped); n > 0 {
 		ns.Log("appbackup", fmt.Sprintf("restore skipped %d scan file list(s) that did not match their scan records", n))
 	}
+	if n := len(res.CompareFilesSkipped); n > 0 {
+		ns.Log("appbackup", fmt.Sprintf("restore skipped %d comparison results file(s) that did not match their records", n))
+	}
 	return res, nil
+}
+
+// reopenAfterRefusal opens the data folder's catalog again when a refused restore
+// had already closed the store, and returns err (with why the catalog could not be
+// opened, if it could not).
+func (a *App) reopenAfterRefusal(err error) error {
+	if !a.Store.isClosed() {
+		return err
+	}
+	ns, oerr := OpenStore(a.DataDir)
+	if oerr != nil {
+		return fmt.Errorf("%w; opening the catalog again also failed: %v", err, oerr)
+	}
+	a.Store = ns
+	return err
 }
 
 // ---- auto-export ---------------------------------------------------------
@@ -788,24 +963,50 @@ func (a *App) copyPreRestore(cfg Config, preDir string) error {
 			return err
 		}
 	}
+	// The comparison results files, which a restore can add to (compare.go).
+	compares, err := os.ReadDir(a.comparesDir())
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("read %s: %w", a.comparesDir(), err)
+	}
+	for _, e := range compares {
+		if !e.Type().IsRegular() || !validCompareFileName(e.Name()) {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Join(preDir, "compares"), 0o700); err != nil {
+			return fmt.Errorf("prepare %s: %w", filepath.Join(preDir, "compares"), err)
+		}
+		if err := copyOne(filepath.Join(a.comparesDir(), e.Name()), filepath.Join(preDir, "compares", e.Name()), 0o600); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-// checkBackupScanFiles returns the backup's scans/ members to skip: those that
-// are not a file list its own catalog's scan records name, with the recorded
-// SHA-256. It fails only when the catalog itself cannot be read.
+// checkBackupScanFiles returns the backup's scans/ members to skip, judged by its
+// catalog.json. It fails only when that catalog cannot be read.
 func checkBackupScanFiles(man appBackupManifest, members map[string][]byte) (map[string]bool, error) {
-	want := map[string]string{} // file list -> recorded SHA-256
+	var c *catalog
 	if catBytes, ok := members["catalog.json"]; ok {
-		var c catalog
-		if err := decodeCatalogJSON(catBytes, &c); err != nil {
+		c = &catalog{}
+		if err := decodeCatalogJSON(catBytes, c); err != nil {
 			return nil, fmt.Errorf("the backup's catalog is damaged: %w", err)
 		}
-		want = c.scanListSums()
+	}
+	return backupFilesToSkip(man, members, "scans/", c, (*catalog).scanListSums), nil
+}
+
+// backupFilesToSkip returns the backup's members under prefix (scans/ or
+// compares/) to skip: those that are not a file a record in the backup's catalog c
+// names (sums maps each name to its recorded SHA-256), with that SHA-256. With no
+// catalog, every one is skipped.
+func backupFilesToSkip(man appBackupManifest, members map[string][]byte, prefix string, c *catalog, sums func(*catalog) map[string]string) map[string]bool {
+	want := map[string]string{}
+	if c != nil {
+		want = sums(c)
 	}
 	skip := map[string]bool{}
 	for _, m := range man.Members {
-		name, ok := strings.CutPrefix(m.Name, "scans/")
+		name, ok := strings.CutPrefix(m.Name, prefix)
 		if !ok {
 			continue
 		}
@@ -813,7 +1014,7 @@ func checkBackupScanFiles(man appBackupManifest, members map[string][]byte) (map
 			skip[m.Name] = true
 		}
 	}
-	return skip, nil
+	return skip
 }
 
 func sortedKeys(m map[string]bool) []string {
@@ -825,6 +1026,15 @@ func sortedKeys(m map[string]bool) []string {
 	return out
 }
 
+// logComparesLeftOut records comparison results files an app backup left out, and
+// returns them.
+func logComparesLeftOut(a *App, names []string) []string {
+	if len(names) > 0 {
+		a.Store.Log("appbackup", fmt.Sprintf("app backup left out %d comparison results file(s) that are missing or do not match their records", len(names)))
+	}
+	return names
+}
+
 // logLeftOut records scan file lists an app backup left out, and returns them.
 func logLeftOut(a *App, names []string) []string {
 	if len(names) > 0 {
@@ -832,10 +1042,3 @@ func logLeftOut(a *App, names []string) []string {
 	}
 	return names
 }
-
-// errAppBackupNoDatabase refuses app backup, restore and data-folder moves on the
-// catalog database engine until they carry catalog.db: an app backup without the
-// catalog, or a restore the database ignores, is worse than none.
-var errAppBackupNoDatabase = errors.New("app backups, restores and data folder moves do not carry the catalog " +
-	"database (catalog.db) yet, so they are refused while the catalog database engine is in use. Run with " +
-	"OBELISK_CATALOG_ENGINE=json to use them")

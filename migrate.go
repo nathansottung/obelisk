@@ -10,8 +10,10 @@ package main
 import (
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // legacyAndTargetDataDirs returns the pre-rename (~/.mnemo) and current (~/.obelisk)
@@ -40,7 +42,31 @@ func (a *App) LegacyDataDirMigrationAvailable() bool {
 	if legacy == "" || target == "" {
 		return false
 	}
-	return sameDir(a.DataDir, legacy) && !fileExists(filepath.Join(target, "catalog.json"))
+	return sameDir(a.DataDir, legacy) && !targetHoldsCatalog(target)
+}
+
+// targetHoldsCatalog reports whether dir already holds a catalog, on either engine.
+func targetHoldsCatalog(dir string) bool {
+	return fileExists(filepath.Join(dir, "catalog.json")) || fileExists(filepath.Join(dir, "catalog.db"))
+}
+
+// liveDatabaseFile reports whether rel (relative to the data folder) is the catalog
+// database, one of its side files, or a copy of it still being written. A data
+// folder move copies the database as one consistent snapshot instead.
+func liveDatabaseFile(rel string) bool {
+	if filepath.Dir(rel) != "." {
+		return false
+	}
+	switch rel {
+	case "catalog.db", "catalog.db-wal", "catalog.db-shm", "catalog.db-journal", "catalog.db.move-lock":
+		return true
+	}
+	for _, stage := range []string{".stage-", ".restore-", ".export-", ".creating-", ".migrating-"} {
+		if strings.HasPrefix(rel, "catalog.db") && strings.Contains(rel, stage) {
+			return true
+		}
+	}
+	return false
 }
 
 // MigrateLegacyDataDir COPIES the running (legacy ~/.mnemo) data directory into
@@ -59,17 +85,17 @@ func (a *App) MigrateLegacyDataDir() (map[string]any, error) {
 // migrateDataDir is the testable core of MigrateLegacyDataDir with explicit source
 // and destination directories.
 func (a *App) migrateDataDir(legacy, target string) (map[string]any, error) {
-	if a.Store.UsesDatabase() {
-		return nil, errAppBackupNoDatabase
-	}
 	if !sameDir(a.DataDir, legacy) {
 		return nil, fmt.Errorf("nothing to migrate: the app is not running from the legacy %s directory. Nothing was changed", legacy)
 	}
-	if fileExists(filepath.Join(target, "catalog.json")) {
+	if targetHoldsCatalog(target) {
 		return nil, fmt.Errorf("%s already holds a catalog. Refusing to overwrite it; move it aside first if you meant to replace it", target)
 	}
 
-	// Copy every regular file under legacy into target, verifying each by hash.
+	// Copy every regular file under legacy into target, verifying each by hash. On
+	// the database engine the catalog database is not copied file by file (its -wal
+	// would make a copy of a moment that never was): it is snapshot whole below.
+	useDB := a.Store.UsesDatabase()
 	var copied, bytes int64
 	err := filepath.WalkDir(legacy, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -85,6 +111,9 @@ func (a *App) migrateDataDir(legacy, target string) (map[string]any, error) {
 		}
 		if !d.Type().IsRegular() {
 			return nil // skip symlinks / sockets / devices
+		}
+		if useDB && liveDatabaseFile(rel) {
+			return nil // copied below, as one consistent snapshot
 		}
 		if err := copyFile(path, dst); err != nil {
 			return fmt.Errorf("copying %s: %w", rel, err)
@@ -111,6 +140,17 @@ func (a *App) migrateDataDir(legacy, target string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if useDB {
+		// Every change the store holds is committed first, and the copy is checked
+		// before it is used.
+		if _, err := a.Store.snapshotDB(filepath.Join(target, "catalog.db")); err != nil {
+			return nil, fmt.Errorf("copying the catalog database: %w. Your original records under %s are untouched", err, legacy)
+		}
+		copied++
+		if fi, e := os.Stat(filepath.Join(target, "catalog.db")); e == nil {
+			bytes += fi.Size()
+		}
+	}
 
 	// Everything copied and verified — switch the running app to the new home by
 	// reopening the store there. The catalog and job board now come from ~/.obelisk.
@@ -119,8 +159,15 @@ func (a *App) migrateDataDir(legacy, target string) (map[string]any, error) {
 		a.Store.checkJobsAfterFailedReopen()
 		return nil, fmt.Errorf("your records copied and verified, but reopening the catalog at %s failed: %w. Resolve the rejected state before retrying", target, err)
 	}
+	old := a.Store
 	a.Store = ns
 	a.DataDir = target
+	if useDB {
+		// Nothing may commit to the original folder's database any more.
+		if err := old.Close(); err != nil {
+			log.Printf("closing the catalog database in %s after moving it: %v", legacy, err)
+		}
+	}
 	a.Store.Log("migrate", fmt.Sprintf("copied %d verified file(s) from %s to %s", copied, legacy, target))
 	return map[string]any{
 		"from": legacy, "to": target, "files": copied, "bytes": bytes, "verified": copied,

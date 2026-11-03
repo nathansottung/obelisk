@@ -52,6 +52,11 @@ type dbBackend struct {
 	// stand in for a file write the database refuses, before it starts and after the
 	// file's row is updated.
 	failFileWrite, failAfterFileUpdate func() error
+	// failVacuum and failBackupCheck are test seams: nil in production. They stand
+	// in for a VACUUM INTO that fails, and for a check of the database ("database")
+	// or of a copy ("copy") that finds damage.
+	failVacuum      func() error
+	failBackupCheck func(what string) error
 }
 
 // openDBBackend opens dataDir's catalog.db. When there is none, an existing

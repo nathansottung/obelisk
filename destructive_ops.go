@@ -117,6 +117,12 @@ func appBackupRestoreTargets(a *App, p map[string]any) ([]destructiveTarget, err
 		switch {
 		case m.Name == "MANIFEST.json":
 			continue
+		case a.Store.UsesDatabase() && m.Name == "jobs.json":
+			continue // its board goes into the catalog database with the catalog
+		case a.Store.UsesDatabase() && (m.Name == "catalog.json" || m.Name == appBackupDBMember):
+			// The catalog (a catalog.json through the importer) replaces the
+			// catalog database.
+			dest = filepath.Join(a.DataDir, appBackupDBMember)
 		case len(m.Name) > len("keystores/") && m.Name[:len("keystores/")] == "keystores/":
 			dest = filepath.Join(a.DataDir, "keystores", filepath.Base(m.Name))
 		default:
@@ -127,6 +133,12 @@ func appBackupRestoreTargets(a *App, p map[string]any) ([]destructiveTarget, err
 			t.Note = "created from the backup"
 		}
 		out = append(out, t)
+	}
+	if a.Store.UsesDatabase() {
+		// A commit lands in catalog.db's write-ahead log and can leave the file
+		// itself as it was, so a change to the catalog is recorded by its count.
+		out = append(out, recordTarget("the catalog's records", a.Store.SaveGen(),
+			"replaced by the backup's (the current ones are copied to pre-restore first)"))
 	}
 	return out, nil
 }

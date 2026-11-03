@@ -1334,6 +1334,12 @@ type catalogBackend interface {
 	// entry for the next commit, and lastAudit reads the newest.
 	auditAdd(a Audit)
 	lastAudit() (*Audit, error)
+
+	// Copies of the database (catalogdb_backup.go). snapshot writes a checked copy
+	// of the last commit to dest and returns its schema version; dailyBackup writes
+	// the day's backup beside the database and prunes the older ones.
+	snapshot(dest string) (int, error)
+	dailyBackup(now time.Time) error
 }
 
 // openCatalogBackend opens (or creates, or moves catalog.json into) the catalog
@@ -1712,6 +1718,7 @@ func (s *Store) commitDBLocked(jobs func(unitErr error) ([]storedJob, map[string
 	}
 	if commitErr == nil && unitErr == nil {
 		s.lastSave, s.dirty = time.Now(), false
+		s.dailyBackupDBLocked()
 	}
 	return unitErr, commitErr
 }
