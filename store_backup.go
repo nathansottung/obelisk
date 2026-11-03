@@ -193,6 +193,23 @@ func (s *Store) holdEdits(what string) (release func(), err error) {
 	}, nil
 }
 
+// savePending saves every pending change, on either engine. A change lost earlier
+// is not counted against it: it is already gone.
+func (s *Store) savePending() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("the catalog is closed")
+	}
+	if err := s.heldLocked(); err != nil {
+		return err
+	}
+	if s.dirty && !s.readOnly {
+		return s.writeCatalog()
+	}
+	return nil
+}
+
 // setHeld changes what a hold says holds the catalog: a restore that stopped
 // partway keeps the old store held for good.
 func (s *Store) setHeld(what string) {

@@ -540,6 +540,21 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	if err != nil {
 		return RestoreResult{}, err
 	}
+	// The restore is prepared inside the swap gate, like any request, and holds it
+	// for the swap below (swapgate.go).
+	leave, err := a.enterCatalog()
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	left := false
+	leavePrep := func() {
+		if !left {
+			left = true
+			leave()
+		}
+	}
+	defer leavePrep()
+	prepared := a.Store
 	// A job's work would go to the store this restore closes or replaces. (A
 	// backup that is not valid is refused as such first.)
 	if running := a.Store.RunningJobs(); len(running) > 0 {
@@ -660,11 +675,16 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	// is refused (swapgate.go). Every change the store holds is saved before
 	// anything is copied or replaced, so the pre-restore copy has it. One that
 	// cannot be saved stops the restore.
+	leavePrep()
 	keep, done, err := a.holdForSwap("a restore")
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("the restore stopped before changing anything: %w", err)
 	}
 	defer done()
+	if a.Store != prepared {
+		return RestoreResult{}, errors.New("the restore stopped before changing anything: the catalog was replaced while " +
+			"the restore was being prepared. Start it again")
+	}
 
 	// (4) Back up the current records first, so the restore is itself reversible.
 	// Each restore has a folder of its own: one made earlier the same second is

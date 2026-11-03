@@ -154,6 +154,9 @@ type App struct {
 	// duringSwap is a test seam: nil in production. It runs once a restore or a
 	// move holds the catalog, before anything is copied.
 	duringSwap func(what string)
+	// upgradeStep is a test seam: nil in production. The first start's catalog
+	// upgrade tells it each step as it starts (catalog_upgrade.go).
+	upgradeStep func(step string)
 }
 
 func (a *App) configPath() string { return filepath.Join(a.DataDir, "config.json") }

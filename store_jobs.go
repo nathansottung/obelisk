@@ -296,3 +296,16 @@ func (s *Store) loadJobsDB(read func(string) ([]byte, error)) error {
 	}
 	return nil
 }
+
+// recordFinishedJob adds a job that ran before the store was open (the first
+// start's catalog upgrade) to the board, COMPLETED, with its result.
+func (s *Store) recordFinishedJob(kind, label string, started time.Time, result map[string]any) error {
+	j, err := s.NewJob(kind, label)
+	if err != nil {
+		return err
+	}
+	s.jobs.mu.Lock()
+	j.CreatedAt = started
+	s.jobs.mu.Unlock()
+	return s.FinishJob(j.ID, 1, "", "COMPLETED", nil, result)
+}

@@ -172,7 +172,7 @@ The image is multi-stage: a static, CGO-free binary on top of Alpine with the
 three restore-story tools baked in (`apk add tar gnupg par2cmdline` — Alpine's
 `tar` is GNU tar). It exposes port **7821** and declares two volumes:
 
-- **`/data`** — `catalog.json`, `config.json`, daily backups. *Persist and back
+- **`/data`** — `catalog.db`, `config.json`, daily backups. *Persist and back
   this up.*
 - **`/staging`** — scratch for package builds (big + fast; safe to lose).
 
@@ -310,7 +310,7 @@ brain:
 For the tape drive bolted into that same TrueNAS box, run the **native Linux
 binary** on the host (or in a privileged container with the tape `/dev` node
 passed through) — the build/catalog it shares with the app is the same
-`catalog.json`.
+`catalog.db`.
 
 ## Quickstart
 
@@ -1271,7 +1271,7 @@ restore tools each have multiple independent open-source implementations, and
 the runbook + Recovery Kit are written for a stranger with none of this
 software.
 
-**What if I lose the catalog (`catalog.json`)?**
+**What if I lose the catalog (`catalog.db`)?**
 Each medium is self-describing: `manifest.json` (the file list) + `RESTORE.txt`
 (the procedure) travel with the data. *Read manifest from mounted medium*
 rebuilds the listing from a found tape; a full restore drill gets the files

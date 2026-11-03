@@ -75,7 +75,7 @@ func main() {
 	}
 	listen := flag.String("listen", "127.0.0.1:7821", "listen address host:port. Default is localhost-only; use 0.0.0.0:7821 in a container (which then REQUIRES an auth token).")
 	port := flag.Int("port", 0, "DEPRECATED: listen port on 127.0.0.1 (use -listen). When set, overrides the port of -listen.")
-	dataDir := flag.String("data", defaultDataDir(), "data directory (catalog.json, config.json)")
+	dataDir := flag.String("data", defaultDataDir(), "data directory (catalog.db, config.json)")
 	initConfig := flag.Bool("init-config", false, "explicitly initialize configuration for first use; never overwrite damaged existing settings")
 	flag.Parse()
 
@@ -92,11 +92,26 @@ func main() {
 	if err != nil {
 		log.Fatalf("configuration: %v", err)
 	}
-	store, err := OpenStore(*dataDir)
+	app := &App{DataDir: *dataDir, Perf: NewPerfMeter()}
+	// The first start on the catalog database moves catalog.json into it as a job
+	// the UI shows, with the server already up (catalog_upgrade.go). Otherwise the
+	// catalog opens here, before the server starts.
+	upgrade, err := catalogUpgradeNeeded(*dataDir)
 	if err != nil {
 		log.Fatalf("open catalog: %v", err)
 	}
-	app := &App{DataDir: *dataDir, Store: store, Perf: NewPerfMeter()}
+	if upgrade {
+		app.beginCatalogUpgrade()
+	} else {
+		store, err := OpenStore(*dataDir)
+		if err != nil {
+			log.Fatalf("open catalog: %v", err)
+		}
+		app.Store = store
+		if ro, why := store.ReadOnly(); ro {
+			log.Printf("READ-ONLY: %s", why)
+		}
+	}
 	setHashAccel(startupConfig.HashAccel) // apply the persisted hash-acceleration preference at startup
 
 	// Optional gentle continuity: if an auto-export cadence is configured, write one
@@ -113,9 +128,6 @@ func main() {
 			}
 		}
 	}()
-	if ro, why := store.ReadOnly(); ro {
-		log.Printf("READ-ONLY: %s", why)
-	}
 
 	// The bearer token: env OBELISK_AUTH_TOKEN wins (container-friendly), with the
 	// pre-rename MNEMO_AUTH_TOKEN still accepted so existing deployments keep working;
@@ -852,6 +864,28 @@ func api(mux *http.ServeMux, app *App) {
 	// App-state backup (see appbackup.go): one plain-tar file + a .sha256 sidecar that
 	// carries the whole brain (catalog, config, job history, format overrides) to a new
 	// machine. Keystores are excluded unless include_keys is set.
+	// The portable catalog: the whole catalog as a catalog.json document
+	// (catalog_export.go), on either engine.
+	mux.HandleFunc("POST /api/catalog/export", func(w http.ResponseWriter, r *http.Request) {
+		b := body(r)
+		dest := s(b, "dest_dir")
+		if strings.TrimSpace(dest) == "" {
+			jsonErr(w, 400, fmt.Errorf("dest_dir (a destination folder) required"))
+			return
+		}
+		if !outFolderGate(w, app, dest) {
+			return
+		}
+		startedOn(w).write(runJob(app, "catalog-export", "Export the portable catalog → "+dest, func(p func(float64, string)) (map[string]any, error) {
+			p(0.1, "writing the catalog")
+			res, err := app.ExportPortableCatalog(dest)
+			if err != nil {
+				return nil, err
+			}
+			arts := []Artifact{{Kind: "export", Label: filepath.Base(res.Path), Path: res.Path, Size: res.Bytes}}
+			return map[string]any{"path": res.Path, "sha256": res.SHA256, "bytes": res.Bytes, "artifacts": arts}, nil
+		}))
+	})
 	mux.HandleFunc("POST /api/appbackup/export", func(w http.ResponseWriter, r *http.Request) {
 		b := body(r)
 		dest := s(b, "dest_dir")

@@ -4,8 +4,11 @@ package main
 
 // catalogdb_migrate.go — the one-way move of a v8 catalog.json into catalog.db.
 //
-// Nothing calls it yet; the cutover slice runs it on open. The move changes nothing
-// until it has proved the database holds the same catalog:
+// The first start on the database engine runs it as a job the UI shows
+// (catalog_upgrade.go); opening a store runs it too, and a restore of an older
+// backup runs it in a folder of its own. It stays for good, as the way an older
+// catalog.json comes in, with the exporter below as the way one goes out. The move
+// changes nothing until it has proved the database holds the same catalog:
 //
 //  1. catalog.json is read and checked: every key must be one this build knows
 //     (no unknown, duplicate or differently-cased key, which the JSON decoder would
@@ -67,8 +70,13 @@ const (
 	catalogMoveLock    = "catalog.db.move-lock"
 )
 
-// catalogMigrateOptions are test seams; production passes the zero value.
+// catalogMigrateOptions are test seams and the progress report; production passes
+// the zero value or a progress function only.
 type catalogMigrateOptions struct {
+	// progress, when set, is told each step of the move as it starts ("reading",
+	// "importing", "indexing", "checking", "publishing"); while importing, done
+	// and total count the records written.
+	progress func(step string, done, total int)
 	// afterImport runs on the staging database after the import, before it is
 	// checked, so a test can damage it and prove the check refuses.
 	afterImport func(db *sql.DB) error
@@ -78,6 +86,13 @@ type catalogMigrateOptions struct {
 	// stopAt names a step ("imported", "backup", "publish", "stub") at which the
 	// move stops as if the process died there: nothing is cleaned up.
 	stopAt string
+}
+
+// report tells opt.progress a step, if it is set.
+func (opt catalogMigrateOptions) report(step string, done, total int) {
+	if opt.progress != nil {
+		opt.progress(step, done, total)
+	}
 }
 
 // errCatalogMoveStopped is returned when a test stops the move at a step.
@@ -134,6 +149,7 @@ func moveCatalog(dataDir string, raw []byte, opt catalogMigrateOptions) (catalog
 		return catalogMigrateResult{}, fmt.Errorf("the catalog was not moved to %s: %w. catalog.json is unchanged "+
 			"and is still the catalog", catalogDBName, err)
 	}
+	opt.report("reading", 0, 0)
 	c, from, err := readCatalogForMove(raw)
 	if err != nil {
 		return refuse(err)
@@ -150,7 +166,7 @@ func moveCatalog(dataDir string, raw []byte, opt catalogMigrateOptions) (catalog
 	if err != nil {
 		return refuse(err)
 	}
-	err = importCatalogDB(d, c, raw, from)
+	err = importCatalogDB(d, c, raw, from, opt.report)
 	if err == nil && opt.afterImport != nil {
 		err = opt.afterImport(d.w)
 	}
@@ -166,6 +182,7 @@ func moveCatalog(dataDir string, raw []byte, opt catalogMigrateOptions) (catalog
 	}
 
 	// The check reads the staging database through a fresh open, as the app will.
+	opt.report("checking", 0, 0)
 	canonCatalog(c)
 	counts, err := checkCatalogDB(stage, c, want)
 	if err != nil {
@@ -184,6 +201,7 @@ func moveCatalog(dataDir string, raw []byte, opt catalogMigrateOptions) (catalog
 			"move was abandoned: catalog.json keeps the change and is still the catalog. Close any other copy of "+
 			"Obelisk using this folder and try again", catalogDBName, err)
 	}
+	opt.report("publishing", 0, 0)
 	backup, err := keepCatalogJSON(dataDir, raw, from)
 	if err != nil {
 		removeStage()
@@ -352,8 +370,8 @@ func readCatalogForMove(raw []byte) (*catalog, int, error) {
 
 // importCatalogDB writes c into the new database d in one transaction, with the
 // secondary indexes built afterwards (faster than updating them per row), and
-// records where it came from.
-func importCatalogDB(d *catalogDB, c *catalog, raw []byte, from int) error {
+// records where it came from. progress is told how many records are written.
+func importCatalogDB(d *catalogDB, c *catalog, raw []byte, from int, progress func(step string, done, total int)) error {
 	if _, err := d.w.Exec(`PRAGMA cache_size=-262144`); err != nil {
 		return err
 	}
@@ -378,9 +396,10 @@ func importCatalogDB(d *catalogDB, c *catalog, raw []byte, from int) error {
 				return err
 			}
 		}
-		if err := importCatalogRows(tx, c); err != nil {
+		if err := importCatalogRows(tx, c, func(done, total int) { progress("importing", done, total) }); err != nil {
 			return err
 		}
+		progress("indexing", 0, 0)
 		for _, ix := range indexes {
 			if _, err := tx.Exec(ix.sql); err != nil {
 				return fmt.Errorf("building index %s: %w", ix.name, err)

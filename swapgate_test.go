@@ -248,3 +248,34 @@ func TestStoreHold_RefusesJobsAndEdits(t *testing.T) {
 		t.Fatalf("an edit after the hold: %v", err)
 	}
 }
+
+// A destructive action is refused while a restore swaps the catalog, and a
+// restore run as a destructive action still runs: it leaves the gate before it
+// takes it for its swap.
+func TestSwapGate_ADestructiveActionDuringARestoreIsRefused(t *testing.T) {
+	src := abTestApp(t)
+	abPopulate(t, src)
+	exp, err := src.ExportAppBackup(t.TempDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := abTestApp(t)
+	ev := dst.Store.AddEvent(&Event{Name: "Keep me"})
+	del := prepareForTest(t, dst, "record-delete", map[string]any{"kind": "event", "id": float64(ev.ID)})
+	restore := prepareForTest(t, dst, "appbackup-restore", map[string]any{"tar_path": exp.TarPath})
+	reached := false
+	dst.duringSwap = func(string) {
+		reached = true
+		_, err := dst.ExecuteDestructive(testSession, del.Token, del.Word)
+		var de *destructiveError
+		if !errors.As(err, &de) || de.status != http.StatusConflict {
+			t.Errorf("a destructive action during the restore: %v, want a 409 refusal", err)
+		}
+	}
+	if _, err := dst.ExecuteDestructive(testSession, restore.Token, restore.Word); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if !reached {
+		t.Fatal("the restore never reached its swap")
+	}
+}

@@ -390,10 +390,11 @@ startup load is the remaining item the SQLite PR closes.
 
 ### The SQLite engine, in slices
 
-The swap lands in slices, each with its tests. `catalog.json` stays the default
-catalog until the cutover slice. Until then the database engine is opt-in:
-`OBELISK_CATALOG_ENGINE=sqlite` runs a store on `catalog.db` (moving an existing
-`catalog.json` in first), and CI runs the whole suite on both engines.
+The swap lands in slices, each with its tests. Since the cutover (S9) the catalog
+database is the default engine: a store runs on `catalog.db`, moving an existing
+`catalog.json` in first. `OBELISK_CATALOG_ENGINE=json` keeps the catalog in
+`catalog.json`, as every version before it did, and CI runs the whole suite on
+both engines.
 
 - **S0 — driver.** `modernc.org/sqlite`, pinned, full build only (see
   "Dependencies"). CI cross-builds every release target with CGO off.
@@ -541,6 +542,32 @@ catalog until the cutover slice. Until then the database engine is opt-in:
   with both catalogs, or `jobs.json` beside `catalog.db`, is refused. A data folder
   move copies the database as a snapshot, not file by file, and closes the
   original. Each restore makes a `pre-restore-…` folder of its own.
+- **S9 — cutover** (`swapgate.go`, `catalog_upgrade.go`, `catalog_export.go`).
+  First, no catalog edit lands during a restore's or a data folder move's swap,
+  job or not, on either engine. The app's swap gate waits for every API request in
+  progress, then answers each new one 409 until the swap ends; each destructive
+  action and the automatic app backup enter the same gate. The store's hold, taken
+  with it, is refused while a job runs, saves every pending change, and then
+  refuses every job start and every save. A store a swap closed or replaced is
+  never released, nor is a `catalog.json` store whose restore stopped partway, so
+  it can never save over the files the restore wrote. Then the catalog database
+  became the default engine. The first start on a folder with a `catalog.json`
+  and no `catalog.db` runs the S2 move as a job: the server is up, `GET /api/jobs`
+  shows the job and its progress through each step, `GET /api/health` says the
+  catalog is being upgraded, and every other request is answered 503 with nothing
+  changed (the UI shows the job alone and reloads when it ends). Only when the move
+  has proved every record does the store open on the database; the job is then
+  recorded on the board, with the rows moved and where the old `catalog.json`
+  bytes were kept. A refused move changes nothing: the job says FAILED with the
+  reason, every request is answered with it, and `catalog.json` stays the catalog
+  (`OBELISK_CATALOG_ENGINE=json` opens it). Stopping during the move is safe, as
+  each step is resumable. The importer stays for good, as the way an older
+  catalog (a folder, or an app backup) comes in, and so does the exporter:
+  `POST /api/catalog/export` writes the whole catalog, every pending change
+  included, as a portable v8 `catalog.json` document that either engine opens.
+  An end-to-end test runs the real binary on a v8 data folder made with real
+  operations and proves every record and job unchanged, the old bytes kept, and
+  one upgrade only.
 
 Measured on the Windows dev box (SSD): a million files each listed in one
 package move from a 647 MB `catalog.json` to a 382 MB `catalog.db` in under two
@@ -867,8 +894,8 @@ Small, pure-Go, CGO-free libraries — each earns its place against the
   so the binary stays static with no CGO; it brings its own C runtime
   (`modernc.org/libc`) and a few small helpers. It is linked into the full build
   only: the launcher-only (`guionly`) build never contains it, which
-  `TestGUIOnlyBinary` checks. Until the cutover, `catalog.json` remains the live
-  catalog and nothing reads or writes a database.
+  `TestGUIOnlyBinary` checks. Since the cutover it holds the live catalog
+  (`catalog.db`); `OBELISK_CATALOG_ENGINE=json` keeps a catalog in `catalog.json`.
 
 Everything else — tar, gpg, par2 — is an **external tool** shelled out to, on
 purpose (see the custody chain and Recovery Kit): the restore story must not

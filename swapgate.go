@@ -1,5 +1,3 @@
-//go:build !guionly
-
 package main
 
 // swapgate.go — no catalog edit while a restore or a data folder move swaps the
@@ -21,9 +19,8 @@ package main
 //     it is released. A store a swap has replaced is never released.
 
 import (
+	"errors"
 	"fmt"
-	"net/http"
-	"strings"
 	"sync"
 )
 
@@ -33,6 +30,10 @@ type swapGateState struct {
 	cond     *sync.Cond
 	what     string // the restore or move swapping the catalog; "" when none
 	inflight int    // requests and actions that entered and have not left
+	// upgrade is the move of catalog.json into the catalog database at the first
+	// start on that engine, while it runs or after it was refused
+	// (catalog_upgrade.go). The app has no store meanwhile.
+	upgrade *catalogUpgrade
 }
 
 func (g *swapGateState) condLocked() *sync.Cond {
@@ -87,32 +88,6 @@ func (a *App) beginSwap(what string) (end func(), err error) {
 	}, nil
 }
 
-// swapRunners are the requests that run a restore or a move: they take the gate
-// themselves (beginSwap), and the destructive actions behind execute enter it one
-// by one (ExecuteDestructive).
-func swapRunner(r *http.Request) bool {
-	return r.Method == http.MethodPost && (r.URL.Path == "/api/destructive/execute" || r.URL.Path == "/api/data-migration")
-}
-
-// swapGate puts every API request through the app's swap gate: one that arrives
-// while the catalog is being swapped is answered 409, and a swap waits for the
-// ones in progress.
-func (a *App) swapGate(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/api/") || swapRunner(r) {
-			next.ServeHTTP(w, r)
-			return
-		}
-		leave, err := a.enterCatalog()
-		if err != nil {
-			jsonErr(w, http.StatusConflict, err)
-			return
-		}
-		defer leave()
-		next.ServeHTTP(w, r)
-	})
-}
-
 // holdForSwap takes both gates for what: the app's (waiting for requests in
 // progress) and the store's (refused while a job runs; pending changes saved).
 // done ends the swap; it releases the store too unless keep was called, which a
@@ -146,4 +121,68 @@ func (a *App) holdForSwap(what string) (keep func(why string), done func(), err 
 		a.duringSwap(what)
 	}
 	return keep, done, nil
+}
+
+// catalogUpgradeJobKind is the job kind of the move.
+const catalogUpgradeJobKind = "catalog-upgrade"
+
+const catalogUpgradeLabel = "Upgrade the catalog to the catalog database"
+
+// catalogUpgrade is a move in progress, or one that was refused.
+type catalogUpgrade struct {
+	mu  sync.Mutex
+	job Job
+	err error // the refusal, once the move was refused
+	// onStep is a test seam: nil in production. It is told each step as it
+	// starts, after the job shows it.
+	onStep func(step string)
+}
+
+// snapshot is the job as it stands.
+func (u *catalogUpgrade) snapshot() Job {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.job
+}
+
+// refusal is what a request is answered while the move runs or after it failed.
+func (u *catalogUpgrade) refusal() error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.err != nil {
+		return fmt.Errorf("the catalog could not be upgraded, so Obelisk is not using it: %v", u.err)
+	}
+	return errors.New("the catalog is being upgraded to the catalog database; nothing was changed. " +
+		"Try again when the upgrade job has finished")
+}
+
+// catalogUpgradeSteps place each step of the move on the job's progress bar.
+var catalogUpgradeSteps = map[string]struct {
+	from, to float64
+	text     string
+}{
+	"reading":    {0, 0.05, "reading and checking catalog.json"},
+	"importing":  {0.05, 0.70, "copying records"},
+	"indexing":   {0.70, 0.75, "building indexes"},
+	"checking":   {0.75, 0.97, "checking every record against catalog.json"},
+	"publishing": {0.97, 0.99, "keeping the old catalog.json and switching over"},
+}
+
+func (u *catalogUpgrade) progress(step string, done, total int) {
+	st, ok := catalogUpgradeSteps[step]
+	if !ok {
+		return
+	}
+	u.mu.Lock()
+	p, text := st.from, st.text
+	if total > 0 {
+		p += (st.to - st.from) * float64(done) / float64(total)
+		text = fmt.Sprintf("%s (%d of %d)", text, done, total)
+	}
+	u.job.Progress = p
+	u.job.Label = catalogUpgradeLabel + " — " + text
+	u.mu.Unlock()
+	if u.onStep != nil && done == 0 {
+		u.onStep(step)
+	}
 }

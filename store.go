@@ -1267,19 +1267,18 @@ func OpenStore(dataDir string) (*Store, error) {
 	return openStore(dataDir, readFileRetrying, nil)
 }
 
-// catalogEngineEnv chooses the catalog engine: unset or "json" keeps catalog.json
-// (the default); "sqlite" uses catalog.db, moving an existing catalog.json into it
-// first. The database engine is being built in slices and is opt-in until its
-// cutover.
+// catalogEngineEnv chooses the catalog engine: unset or "sqlite" uses catalog.db
+// (the default), moving an existing catalog.json into it first; "json" keeps the
+// catalog in catalog.json, as every version before the database did.
 const catalogEngineEnv = "OBELISK_CATALOG_ENGINE"
 
 // catalogEngine returns the engine named by catalogEngineEnv, or an error for a
 // name it does not know.
 func catalogEngine() (string, error) {
 	switch e := os.Getenv(catalogEngineEnv); e {
-	case "", "json":
+	case "json":
 		return "json", nil
-	case "sqlite":
+	case "", "sqlite":
 		return "sqlite", nil
 	default:
 		return "", fmt.Errorf("%s=%q is not a catalog engine; use json or sqlite", catalogEngineEnv, e)
@@ -1801,7 +1800,9 @@ func (s *Store) Close() error {
 		return nil
 	}
 	var err error
-	if s.be != nil && s.dirty && !s.readOnly {
+	// A held store saves nothing more: its swap closed or replaced it, and what
+	// it still holds are edits it refused.
+	if s.be != nil && s.dirty && !s.readOnly && s.held == "" {
 		err = s.writeCatalog()
 	}
 	s.closed = true

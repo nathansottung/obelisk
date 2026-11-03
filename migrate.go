@@ -84,23 +84,20 @@ func (a *App) MigrateLegacyDataDir() (map[string]any, error) {
 // migrateDataDir is the testable core of MigrateLegacyDataDir with explicit source
 // and destination directories.
 func (a *App) migrateDataDir(legacy, target string) (map[string]any, error) {
-	if running := a.Store.RunningJobs(); len(running) > 0 {
-		return nil, errJobsRunning("moving the data folder", running)
+	// No edit reaches the catalog while it is copied: one made after its file was
+	// copied would stay behind in the original folder (swapgate.go). The hold is
+	// refused while a job runs, and saves every pending change first.
+	keep, done, err := a.holdForSwap("moving the data folder")
+	if err != nil {
+		return nil, err
 	}
+	defer done()
 	if !sameDir(a.DataDir, legacy) {
 		return nil, fmt.Errorf("nothing to migrate: the app is not running from the legacy %s directory. Nothing was changed", legacy)
 	}
 	if targetHoldsCatalog(target) {
 		return nil, fmt.Errorf("%s already holds a catalog. Refusing to overwrite it; move it aside first if you meant to replace it", target)
 	}
-	// No edit reaches the catalog while it is copied: one made after its file was
-	// copied would stay behind in the original folder (swapgate.go). Every pending
-	// change is saved first.
-	keep, done, err := a.holdForSwap("moving the data folder")
-	if err != nil {
-		return nil, err
-	}
-	defer done()
 
 	// Copy every regular file under legacy into target, verifying each by hash. On
 	// the database engine the catalog database is not copied file by file (its -wal

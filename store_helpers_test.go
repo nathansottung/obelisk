@@ -43,7 +43,10 @@ func openTestStore(t testing.TB, dataDir string) (*Store, error) {
 }
 
 // sqliteEngineRun reports whether this test run uses the catalog database.
-func sqliteEngineRun() bool { return os.Getenv(catalogEngineEnv) == "sqlite" }
+func sqliteEngineRun() bool {
+	engine, _ := catalogEngine()
+	return engine == "sqlite"
+}
 
 // jsonEngineOnly skips a test that is about catalog.json itself (its bytes, its
 // daily backups, app backups that carry it) when the run uses the database
