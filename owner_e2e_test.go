@@ -216,8 +216,10 @@ func TestOwner_SecondInstanceSaysWhy(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatalf("the second instance did not exit; it must refuse at once, not wait:\n%s", second.out)
 	}
-	if second.cmd.ProcessState.Success() {
-		t.Fatalf("the second instance exited with success:\n%s", second.out)
+	// Exit code 3 is the refusal at start, before the configuration or the catalog
+	// is touched; a later failure to open the catalog exits 1.
+	if code := second.cmd.ProcessState.ExitCode(); code != 3 {
+		t.Fatalf("the second instance exited %d, want 3 (refused before anything was opened):\n%s", code, second.out)
 	}
 	out := second.out.String()
 	for _, want := range []string{dir, fmt.Sprintf("Another Obelisk (process %d)", first.cmd.Process.Pid), "Only one Obelisk", "-data"} {

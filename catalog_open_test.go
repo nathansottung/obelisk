@@ -187,8 +187,8 @@ func snapshotFixture(t *testing.T, dir string) fixtureState {
 			return fmt.Errorf("relativising %s: %w", p, rerr)
 		}
 		rel = filepath.ToSlash(rel)
-		if rel == "." {
-			return nil // the fixture root itself
+		if rel == "." || rel == dataOwnerFile {
+			return nil // the fixture root itself; the owner lock holds no records
 		}
 		switch {
 		case d.IsDir():
@@ -263,6 +263,18 @@ func sortedFixtureKeys(m fixtureState) []string {
 // directory, the collection id that must survive, and a spy already installed. The spy
 // is deliberately NOT armed yet — this setup is allowed to write, including a daily
 // backup.
+// openStoreClosing is openStore for a test: a store it opens is closed when the
+// test ends, so its hold on the folder (dataowner.go) ends before the folder is
+// removed.
+func openStoreClosing(t *testing.T, dataDir string, readFile func(string) ([]byte, error), persistObserver func(op, path string)) (*Store, error) {
+	t.Helper()
+	st, err := openStore(dataDir, readFile, persistObserver)
+	if st != nil {
+		t.Cleanup(func() { st.Close() })
+	}
+	return st, err
+}
+
 func seedRealCatalog(t *testing.T) (dir string, collID int, spy *persistSpy) {
 	t.Helper()
 	dir = t.TempDir()
@@ -283,6 +295,10 @@ func seedRealCatalog(t *testing.T) (dir string, collID int, spy *persistSpy) {
 	}
 	if !spy.sawAnything() {
 		t.Fatal("fixture: the persist observer saw no write at all — the seam is not wired")
+	}
+	// Closed, so the folder is free for the open under test (dataowner.go).
+	if err := st.Close(); err != nil {
+		t.Fatalf("fixture: close: %v", err)
 	}
 	return dir, c.ID, spy
 }
@@ -314,7 +330,7 @@ func TestPersistObserver_SeesRealMutations(t *testing.T) {
 	// Catalog write plus daily backup, on a fresh directory.
 	dir := t.TempDir()
 	spy := &persistSpy{}
-	st, err := openStore(dir, os.ReadFile, spy.observer())
+	st, err := openStoreClosing(t, dir, os.ReadFile, spy.observer())
 	if err != nil {
 		t.Fatalf("openStore: %v", err)
 	}
@@ -333,7 +349,7 @@ func TestPersistObserver_SeesRealMutations(t *testing.T) {
 	dir2 := t.TempDir()
 	spy2 := &persistSpy{}
 	spy2.armAfterFixture() // arm from the very start: we want the seeding save's backup
-	if _, err := openStore(dir2, os.ReadFile, spy2.observer()); err != nil {
+	if _, err := openStoreClosing(t, dir2, os.ReadFile, spy2.observer()); err != nil {
 		t.Fatalf("openStore: %v", err)
 	}
 	if ops2 := spy2.recorded(); !hasOpPrefix(ops2, "backup-create") {
@@ -348,7 +364,7 @@ func TestPersistObserver_SeesRealMutations(t *testing.T) {
 	}
 	spy3 := &persistSpy{}
 	spy3.armAfterFixture()
-	if _, err := openStore(dir3, os.ReadFile, spy3.observer()); err != nil {
+	if _, err := openStoreClosing(t, dir3, os.ReadFile, spy3.observer()); err != nil {
 		t.Fatalf("openStore on a legacy catalog: %v", err)
 	}
 	if ops3 := spy3.recorded(); !hasOpPrefix(ops3, "pre-schema-backup") {
@@ -431,7 +447,7 @@ func TestPersistObserver_SeesBackupPrune(t *testing.T) {
 	// Fixture is complete; everything from here is the operation under test.
 	spy.armAfterFixture()
 
-	st, err := openStore(dir, os.ReadFile, spy.observer())
+	st, err := openStoreClosing(t, dir, os.ReadFile, spy.observer())
 	if err != nil {
 		t.Fatalf("reopen for the pruning write: %v", err)
 	}
@@ -530,7 +546,7 @@ func TestOpenStore_UnreadableCatalogFailsClosed(t *testing.T) {
 			before := snapshotFixture(t, dir)
 			spy.armAfterFixture()
 
-			st, err := openStore(dir, faultyReadAt(t, catPath, tc.bytes, tc.err), spy.observer())
+			st, err := openStoreClosing(t, dir, faultyReadAt(t, catPath, tc.bytes, tc.err), spy.observer())
 
 			if err == nil {
 				t.Fatal("openStore must fail closed when the catalog cannot be read; it returned no error")
@@ -550,7 +566,7 @@ func TestOpenStore_UnreadableCatalogFailsClosed(t *testing.T) {
 			before.requireUnchanged(t, dir, "refused startup ("+tc.name+")")
 
 			// And the catalog is genuinely intact: clear the fault, reopen, find the data.
-			st2, err := openStore(dir, os.ReadFile, nil)
+			st2, err := openStoreClosing(t, dir, os.ReadFile, nil)
 			if err != nil {
 				t.Fatalf("reopen after clearing the fault: %v", err)
 			}
@@ -590,7 +606,7 @@ func TestOpenStore_ZeroLengthCatalogIsDamagedNotNew(t *testing.T) {
 	}
 	spy.armAfterFixture()
 
-	st, err := openStore(dir, os.ReadFile, spy.observer())
+	st, err := openStoreClosing(t, dir, os.ReadFile, spy.observer())
 	if err == nil {
 		t.Fatal("a zero-length catalog.json must be reported as damaged, not initialized as new")
 	}
@@ -622,7 +638,7 @@ func TestOpenStore_InvalidJSONStillFailsWithDamagedMessage(t *testing.T) {
 	}
 	spy := &persistSpy{}
 	spy.armAfterFixture()
-	st, err := openStore(dir, os.ReadFile, spy.observer())
+	st, err := openStoreClosing(t, dir, os.ReadFile, spy.observer())
 	if err == nil {
 		t.Fatal("invalid JSON must still refuse to open")
 	}
@@ -656,7 +672,7 @@ func TestOpenStore_NewerSchemaStillOpensReadOnly(t *testing.T) {
 	if err := os.WriteFile(catPath, newer, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	st, err := openStore(dir, os.ReadFile, nil)
+	st, err := openStoreClosing(t, dir, os.ReadFile, nil)
 	if err != nil {
 		t.Fatalf("a newer-schema catalog must still open (read-only), got error: %v", err)
 	}
@@ -685,7 +701,7 @@ func TestOpenStore_NewerSchemaStillOpensReadOnly(t *testing.T) {
 func TestOpenStore_FreshDirectoryStillInitializes(t *testing.T) {
 	jsonEngineOnly(t, "the database's own open, fault and retry tests are in catalogdb_open_test.go")
 	dir := t.TempDir()
-	st, err := openStore(dir, os.ReadFile, nil)
+	st, err := openStoreClosing(t, dir, os.ReadFile, nil)
 	if err != nil {
 		t.Fatalf("a fresh directory must initialize normally: %v", err)
 	}
@@ -719,7 +735,7 @@ func TestOpenStore_NotExistShapesAllInitialize(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			catPath := filepath.Join(dir, "catalog.json")
-			st, err := openStore(dir, faultyReadAt(t, catPath, nil, readErr), nil)
+			st, err := openStoreClosing(t, dir, faultyReadAt(t, catPath, nil, readErr), nil)
 			if err != nil {
 				t.Fatalf("a not-found read must still initialize a new catalog, got: %v", err)
 			}
@@ -738,7 +754,7 @@ func TestOpenStore_ExistingCatalogReopensIntact(t *testing.T) {
 	dir, collID, _ := seedRealCatalog(t)
 	before := snapshotFixture(t, dir)
 
-	st, err := openStore(dir, os.ReadFile, nil)
+	st, err := openStoreClosing(t, dir, os.ReadFile, nil)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

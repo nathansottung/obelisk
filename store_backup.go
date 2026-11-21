@@ -135,7 +135,9 @@ func (s *Store) closeWithCopy(what, dest string) error {
 	_ = syncDir(filepath.Dir(dest))
 	s.closed = true
 	s.backups.Wait()
-	if err := s.be.close(); err != nil {
+	err := s.be.close()
+	s.releaseOwnerLocked() // the caller holds the folder across what comes next
+	if err != nil {
 		return fmt.Errorf("%s stopped before changing the catalog: closing the catalog database: %w", what, err)
 	}
 	return nil

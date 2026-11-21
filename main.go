@@ -88,6 +88,20 @@ func main() {
 		addr = net.JoinHostPort(host, strconv.Itoa(*port))
 	}
 
+	// This process owns the data folder before it reads or writes anything in it,
+	// and until it exits: a second Obelisk on the same folder is refused here, at
+	// once, having changed nothing (dataowner.go). The hold is never given up; the
+	// operating system ends it with the process.
+	// A folder that does not exist yet is created only by -init-config: without it
+	// the configuration load below refuses a fresh folder, having created nothing,
+	// and there is nothing in it to own.
+	if _, statErr := os.Stat(*dataDir); statErr == nil || *initConfig {
+		if _, err := acquireDataDir(*dataDir); err != nil {
+			fmt.Fprintln(os.Stderr, "obelisk: "+err.Error())
+			os.Exit(3)
+		}
+	}
+
 	startupConfig, err := loadStartupConfig(*dataDir, *initConfig)
 	if err != nil {
 		log.Fatalf("configuration: %v", err)

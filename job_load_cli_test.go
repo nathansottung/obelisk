@@ -155,7 +155,10 @@ func TestJobLoadCLI_StartupGate(t *testing.T) {
 		if _, err := (&App{DataDir: dir}).InitializeConfig(); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := openTestStore(t, dir); err != nil {
+		// Closed before the binary starts: an open catalog owns the folder.
+		if fs, err := openTestStore(t, dir); err != nil {
+			t.Fatal(err)
+		} else if err := fs.Close(); err != nil {
 			t.Fatal(err)
 		}
 		path := filepath.Join(dir, "jobs.json")
@@ -183,6 +186,9 @@ func TestJobLoadCLI_StartupGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := s.Close(); err != nil { // the binary owns the folder next
+		t.Fatal(err)
+	}
 	run("valid-reconcile", dir, true)
 	s, err = openTestStore(t, dir)
 	if err != nil {
@@ -190,6 +196,9 @@ func TestJobLoadCLI_StartupGate(t *testing.T) {
 	}
 	if got := s.Job(j.ID); got == nil || got.Status != "INTERRUPTED" {
 		t.Fatal("CLI reconciliation absent")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
 	}
 	before := configSnapshot(t, dir)
 	run("ordinary-restart", dir, true)
