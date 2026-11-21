@@ -33,6 +33,7 @@ These rules apply to every session in this repository.
 4. When CI is green, merge with a merge commit.
 5. Post the Lows to issue #6.
 6. Update `docs/STATUS.md`.
+7. Update `docs/KNOWN_ISSUES.md` when a fix merges.
 
 ## Design
 

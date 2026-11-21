@@ -1,5 +1,10 @@
 # Obelisk — an instrument of negentropy
 
+> [!WARNING]
+> Obelisk is pre-release. A full review in November 2026 found data-safety
+> problems. Do not trust it with your only copy of anything until a beta is
+> published. See [known issues](docs/KNOWN_ISSUES.md).
+
 **Back up your data, and re-verify it on a schedule.** &nbsp;*(formerly Mnemosyne)*
 
 [![CI](https://github.com/nathansottung/obelisk/actions/workflows/ci.yml/badge.svg)](https://github.com/nathansottung/obelisk/actions/workflows/ci.yml)
