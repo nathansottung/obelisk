@@ -1,0 +1,53 @@
+# Manual check: a drive mounted in a folder
+
+This check confirms that Obelisk reads a drive's disk and partition from the volume
+that holds the path, on real hardware. Automated tests cannot mount a second disk.
+
+The check reads only. It writes nothing to the drive. Use a spare USB drive anyway.
+
+## What you need
+
+- A Windows PC with Go and this repository.
+- A USB drive with an NTFS, exFAT, or FAT32 partition. It must not be your system disk.
+- An empty folder on an NTFS drive for the mount, such as
+  `C:\Users\<you>\obelisk-test-tmp\usb-mount`.
+
+## Steps
+
+1. Plug in the USB drive and open **Disk Management** (`diskmgmt.msc`).
+2. Right-click the USB partition and choose **Change Drive Letter and Paths**.
+3. Choose **Add**, then **Mount in the following empty NTFS folder**, and pick the
+   empty folder.
+4. In PowerShell, from the repository folder, run:
+
+   ```powershell
+   $env:OBELISK_MANUAL_MOUNT = "C:\Users\<you>\obelisk-test-tmp\usb-mount"
+   go test -count=1 -v -run '^TestManual_FolderMountedDrive$' .
+   Remove-Item Env:OBELISK_MANUAL_MOUNT
+   ```
+
+5. To undo the mount, return to **Change Drive Letter and Paths**, select the folder
+   path, and choose **Remove**. This removes the mount only. The data stays on the
+   drive.
+
+## What you should see
+
+The test prints two lines and passes:
+
+```text
+Windows:  disk 2, serial "ABC123", size 500107862016, partition {...}
+Obelisk:  disk 2, serial "ABC123", size 500107862016, partition gpt:...
+```
+
+The disk number, serial, size, and partition must agree. The disk must not be the
+one that holds `C:`.
+
+## If it fails
+
+- **"no single partition is mounted"**: the folder path does not match the mount.
+  Check it in Disk Management.
+- **"is on the system disk"**: the folder holds a partition of the system disk. Mount
+  a different drive.
+- **An empty serial on both lines** is normal for some USB bridges.
+- **Any mismatch** is a bug. Keep the output and report it.
+- **Access denied from `Get-Partition`**: run PowerShell as administrator.

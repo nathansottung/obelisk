@@ -35,6 +35,9 @@ type outFolder struct {
 	dest *DestRoot // guard platforms
 	root *os.Root  // elsewhere: the folder, opened after its source checks
 	path string    // the folder as given, for messages and records
+	// unreserve ends the folder's reservation as a live output (elsewhere; a
+	// DestRoot holds its own).
+	unreserve func()
 
 	tok    string
 	seq    atomic.Uint64
@@ -121,7 +124,11 @@ func (a *App) openOutFolderUnguarded(p string) (*outFolder, error) {
 	if _, err := rand.Read(b); err != nil {
 		return fail(err)
 	}
-	return &outFolder{root: r, path: p, tok: hex.EncodeToString(b), stages: map[string]*os.File{}}, nil
+	_, unreserve, err := a.Store.reserveOutput(gateFolderAt(real, id), p, abs, rootVolumeID(r))
+	if err != nil {
+		return fail(err)
+	}
+	return &outFolder{root: r, path: p, unreserve: unreserve, tok: hex.EncodeToString(b), stages: map[string]*os.File{}}, nil
 }
 
 // Name is the folder as given.
@@ -160,6 +167,9 @@ func (o *outFolder) Close() error {
 	o.mu.Unlock()
 	for _, t := range tmps {
 		o.Discard(t)
+	}
+	if o.unreserve != nil {
+		defer o.unreserve()
 	}
 	return o.root.Close()
 }

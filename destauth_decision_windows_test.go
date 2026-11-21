@@ -91,8 +91,10 @@ func TestDestPolicy_DriveRootNonDefaultACLRefuses(t *testing.T) {
 }
 
 // Each kind of grant on an ordinary destination folder: inherited Authenticated
-// Users or Users is a finding; Everyone, Guests, Anonymous Logon, another account,
-// or any grant set explicitly on the folder refuses; read-only grants pass.
+// Users or Users, or another account that can change files but not permissions, is
+// a finding; Everyone, Guests, Anonymous Logon, another account that can change
+// permissions, or Authenticated Users or Users set explicitly refuses; read-only
+// grants pass.
 func TestDestPolicy_GrantsWarnOrRefuse(t *testing.T) {
 	user, err := destUserSID()
 	if err != nil {
@@ -116,8 +118,10 @@ func TestDestPolicy_GrantsWarnOrRefuse(t *testing.T) {
 		{"explicit Everyone", "(A;OICI;" + modify + ";;;WD)", nil, "Everyone"},
 		{"inherited Guests", "(A;OICIID;" + modify + ";;;BG)", nil, "Guests"},
 		{"inherited Anonymous", "(A;OICIID;" + modify + ";;;AN)", nil, "Anonymous Logon"},
-		{"inherited other account", "(A;OICIID;" + modify + ";;;" + other + ")", nil, other},
-		{"explicit other account", "(A;OICI;" + modify + ";;;" + other + ")", nil, other},
+		{"inherited other account", "(A;OICIID;" + modify + ";;;" + other + ")", []string{other}, ""},
+		{"explicit other account", "(A;OICI;" + modify + ";;;" + other + ")", []string{other}, ""},
+		{"other account with full control", "(A;OICI;FA;;;" + other + ")", nil, other},
+		{"other account that can change permissions", "(A;OICI;0x1701bf;;;" + other + ")", nil, other},
 		{"Users plus Everyone", "(A;OICIID;" + modify + ";;;BU)(A;OICIID;" + modify + ";;;WD)", nil, "Everyone"},
 	}
 	for _, c := range cases {
@@ -138,7 +142,11 @@ func TestDestPolicy_GrantsWarnOrRefuse(t *testing.T) {
 		}
 		var groups []string
 		for _, f := range found {
-			if f.Kind != destFindingSharedGroup || !f.Inherited {
+			if f.SID == other {
+				if f.Kind != destFindingNamedAccount {
+					t.Errorf("%s: unexpected finding %+v", c.name, f)
+				}
+			} else if f.Kind != destFindingSharedGroup || !f.Inherited {
 				t.Errorf("%s: unexpected finding %+v", c.name, f)
 			}
 			groups = append(groups, f.Group)

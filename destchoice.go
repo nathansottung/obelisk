@@ -4,9 +4,10 @@ package main
 //
 // Some destinations are acceptable only once the user has chosen what to do: a
 // folder other accounts on this PC can change through a group Windows grants by
-// default, a drive root, or a drive whose filesystem (exFAT, FAT32) cannot record
-// permissions at all. Obelisk refuses to write to such a folder until the user
-// picks one of three choices, none of them preselected:
+// default or through a specific account a tool added, a drive root, or a drive whose
+// filesystem (exFAT, FAT32) cannot record permissions at all. Obelisk refuses to
+// write to such a folder until the user picks one of three choices, none of them
+// preselected (Make private is offered only for the groups Windows grants):
 //
 //   - Make this folder private: Obelisk removes the other groups from that one
 //     folder's permissions, after showing the exact change and a second confirm.
@@ -247,7 +248,7 @@ func (s *Store) ChooseUseAnyway(path, fingerprint, typed string) (*DestinationCh
 
 func destFindingSummary(f destFinding) string {
 	switch f.Kind {
-	case destFindingSharedGroup:
+	case destFindingSharedGroup, destFindingNamedAccount:
 		return f.Group + " can change " + f.Folder
 	case destFindingDriveRoot:
 		return f.Group + " can create folders in the drive root " + f.Folder
@@ -387,9 +388,9 @@ func (s *Store) ApplyMakePrivate(path, token string, confirmed bool) (*Destinati
 // destNotice writes the plain-words notice for a destination's findings.
 func destNotice(folder string, findings []destFinding, stale *DestinationChoice, created []string, canMakePrivate bool) *DestinationNotice {
 	n := &DestinationNotice{}
-	var groups []string
+	var groups, named []string
 	var root, unchecked *destFinding
-	groupFolder := folder
+	groupFolder, namedFolder := folder, folder
 	perms := false
 	for i := range findings {
 		f := &findings[i]
@@ -400,6 +401,11 @@ func destNotice(folder string, findings []destFinding, stale *DestinationChoice,
 			}
 			groupFolder = f.Folder
 			perms = perms || f.Permissions
+		case destFindingNamedAccount:
+			if !destContains(named, f.Group) {
+				named = append(named, f.Group)
+			}
+			namedFolder = f.Folder
 		case destFindingDriveRoot:
 			root = f
 		case destFindingUnchecked:
@@ -432,8 +438,18 @@ func destNotice(folder string, findings []destFinding, stale *DestinationChoice,
 		n.Lines = append(n.Lines,
 			fmt.Sprintf("✗ What we found: %s is the top folder of its drive, and Windows lets %s (anyone who signs in to this PC) create folders there.", root.Folder, root.Group),
 			"✗ Why it matters: Another account on this PC could create a folder with the name Obelisk is about to use. Obelisk will not write into a folder another account made, so your backup could stop part-way.")
+	case len(named) > 0:
+		n.Title = "Another account on this PC can change this folder"
 	case unchecked != nil:
 		n.Title = "This drive can't record who may change files"
+	}
+	if len(named) > 0 {
+		n.Lines = append(n.Lines,
+			fmt.Sprintf("✗ What we found: %s lets %s add, change and delete files in it. Windows does not set this up by default, so a person or a program added it.", namedFolder, joinAnd(named)),
+			"✗ Why it matters: That account, or a program running as it, could change or delete your backup copies, and you might not find out until you need them.")
+		if namedFolder != folder {
+			n.Lines = append(n.Lines, fmt.Sprintf("✗ Obelisk will write into %s, inside that folder, so the same applies there.", folder))
+		}
 	}
 	if unchecked != nil {
 		n.Lines = append(n.Lines, fmt.Sprintf("✗ What we found: %s is on a drive formatted as %s. %s has no folder permissions, no hard links and no stable file IDs, so Obelisk could not run these checks:", unchecked.Folder, unchecked.FS, unchecked.FS),
@@ -444,7 +460,9 @@ func destNotice(folder string, findings []destFinding, stale *DestinationChoice,
 			n.Lines = append(n.Lines, "✗ File size: "+unchecked.FS+" can't hold a file larger than 4 GB. Obelisk refuses such a job before it copies anything.")
 		}
 	}
-	if unchecked != nil && len(groups) == 0 && root == nil {
+	if len(named) > 0 {
+		n.Lines = append(n.Lines, "✓ Who it's fine for: If you know why "+joinAnd(named)+" has this access and you trust it, this is usually fine. If you don't recognize it, pick another folder.")
+	} else if unchecked != nil && len(groups) == 0 && root == nil {
 		n.Lines = append(n.Lines, "✓ Who it's fine for: If this drive stays with you and only your own PCs use it, this is usually fine.")
 	} else {
 		n.Lines = append(n.Lines, "✓ Who it's fine for: If you're the only person who signs in to this PC, this is usually fine.")

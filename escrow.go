@@ -451,6 +451,11 @@ func (a *App) FetchEscrowCache(includeReaders bool, census Census, progress func
 	if err := a.Store.CheckOutsideSources(cache); err != nil {
 		return nil, fmt.Errorf("escrow cache: %w", err)
 	}
+	releaseCache, err := a.Store.reserveOutputPath(cache)
+	if err != nil {
+		return nil, fmt.Errorf("escrow cache: %w", err)
+	}
+	defer releaseCache()
 	version := appVersion
 	if !looksLikeReleaseTag(version) {
 		return nil, fmt.Errorf("this build reports version %q, not a release tag (vMAJOR.MINOR.PATCH) — release binaries can only be fetched for a tagged build; the bundle still ships whatever is already cached", version)

@@ -515,7 +515,10 @@ func (a *App) ScanFolder(collectionID int, root string, progress func(float64, s
 	a.Store.BeginBatch()
 	defer endBatchInto(a.Store, &err)
 	a.Store.SetVersionsRetained(cfg.VersionsRetained) // cap file-version history per config
-	folder := a.Store.AddFolder(collectionID, root)
+	folder, err := a.Store.RegisterSource(collectionID, root)
+	if err != nil {
+		return 0, nil, err
+	}
 
 	// Problems are appended from both the WalkDir callback (single goroutine) and the
 	// parallelHash workers (many), so guard the slice.
@@ -1061,6 +1064,11 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	if err := a.Store.CheckOutsideSources(cfg.StagingDir); err != nil {
 		return err
 	}
+	releaseStaging, err := a.Store.reserveOutputPath(cfg.StagingDir)
+	if err != nil {
+		return err
+	}
+	defer releaseStaging()
 	work := filepath.Join(cfg.StagingDir, c.Name)
 	// A build starts from an empty folder: nothing from an earlier build (its
 	// payload, par2 volumes, manifest, RESTORE.txt) can be shipped beside this

@@ -12,6 +12,29 @@ import (
 	"strings"
 )
 
+// errVolumeSpansDisks means a volume lies on more than one physical disk, so it
+// has no single disk or partition to record.
+var errVolumeSpansDisks = fmt.Errorf("the volume spans more than one disk")
+
+// diskFromExtents reads a VOLUME_DISK_EXTENTS answer: a count, then 24-byte
+// DISK_EXTENT entries (disk number, offset, length) from byte 8.
+func diskFromExtents(b []byte) (uint32, error) {
+	if len(b) < 8 {
+		return 0, fmt.Errorf("the volume reported no disk")
+	}
+	count := uint64(binary.LittleEndian.Uint32(b))
+	if count == 0 || uint64(len(b)) < 8+24*count {
+		return 0, fmt.Errorf("the volume reported no complete list of disks")
+	}
+	disk := binary.LittleEndian.Uint32(b[8:])
+	for i := uint64(1); i < count; i++ {
+		if binary.LittleEndian.Uint32(b[8+24*i:]) != disk {
+			return 0, errVolumeSpansDisks
+		}
+	}
+	return disk, nil
+}
+
 // flexInt unmarshals a JSON number OR a quoted number (lsblk -b emits either
 // depending on version) into an int64.
 type flexInt int64

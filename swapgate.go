@@ -123,6 +123,13 @@ func (a *App) holdForSwap(what string) (keep func(why string), done func(), err 
 		end()
 		return nil, nil, err
 	}
+	// A swap replaces the catalog's sources. It must not happen under a live output,
+	// whose reservation is held by the store being replaced (source_gate.go).
+	if n := old.liveOutputCount(); n > 0 {
+		release()
+		end()
+		return nil, nil, fmt.Errorf("%s waits until Obelisk has finished writing to %d output folder(s), so nothing was changed. Try again when that work has finished", what, n)
+	}
 	kept := false
 	keep = func(why string) {
 		kept = true

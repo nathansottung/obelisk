@@ -138,10 +138,10 @@ type sourceRef struct {
 // it before returning. The mutex is NOT held for the duration of the job — a
 // mirror can run for hours and needs the same mutex to record its results.
 //
-// RESIDUAL: a source registered AFTER authorization, or protected data moved INTO
-// the authorized tree afterwards, is not covered by this snapshot. The retained
-// handle still confines every write to the directory that was authorized; it does
-// not re-decide whether that directory has since become protected.
+// A source registered after authorization is refused while the output is live
+// (source_gate.go). RESIDUAL: protected data moved INTO the authorized tree by
+// something outside Obelisk is not covered. The retained handle still confines every
+// write to the directory that was authorized.
 type sourceSnapshot struct {
 	at   time.Time
 	srcs []sourceRef
@@ -516,6 +516,9 @@ const (
 	// Other accounts on this PC can change the folder, through a group Windows
 	// grants by default (Authenticated Users or Users, inherited).
 	destFindingSharedGroup = "shared-group"
+	// A specific account or group can change the folder's files, but not its
+	// permissions. Windows does not add this by default; a person or a tool did.
+	destFindingNamedAccount = "named-account"
 	// The folder is a drive root with Windows' default "create folders" grant.
 	destFindingDriveRoot = "drive-root"
 	// The filesystem cannot record permissions, hard links or stable file IDs.
@@ -570,6 +573,7 @@ type DestRoot struct {
 	accepted  map[string]bool // findings the destination was accepted with (see findingKey)
 	token     string          // collision avoidance; object ownership is retained separately
 	release   func() error    // cooperative lease retained through the caller's catalog credit
+	unreserve func()          // ends this folder's reservation as a live output (source_gate.go)
 	volume    uint64
 	id        fileIdent // the authorized folder's identity
 	// fingerprint is the authorized folder's real permissions and those of every
@@ -608,7 +612,7 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 		in.anchor.Close()
 		return nil, &DestinationChoiceError{Check: s.checkFromInspection(in)}
 	}
-	display, snap := in.display, in.snap
+	display, firstSnap := in.display, in.snap
 	root := in.anchor
 
 	// Re-derive the canonical name from the handle actually retained, and take the
@@ -619,11 +623,11 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 		root.Close()
 		return nil, fmt.Errorf("cannot establish the real location of %s: %w — refusing rather than writing on a guess", display, err)
 	}
-	if err := snap.decide(canon, display); err != nil {
+	if err := firstSnap.decide(canon, display); err != nil {
 		root.Close()
 		return nil, err
 	}
-	if err := snap.decideOffline(rootVolumeID(root), in.abs, canon, display); err != nil {
+	if err := firstSnap.decideOffline(rootVolumeID(root), in.abs, canon, display); err != nil {
 		root.Close()
 		return nil, err
 	}
@@ -650,8 +654,20 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 		root.Close()
 		return nil, err
 	}
+	if destBeforeReserve != nil {
+		destBeforeReserve()
+	}
+	// The last decision: the sources as they are now, with the output recorded as
+	// live in the same step, so a source registered from here on is refused.
+	snap, unreserve, err := s.reserveOutput(gateFolderAt(canon, id), display, in.abs, rootVolumeID(root))
+	if err != nil {
+		release()
+		root.Close()
+		return nil, err
+	}
 	tok := make([]byte, 16)
 	if _, err := rand.Read(tok); err != nil {
+		unreserve()
 		release()
 		root.Close()
 		return nil, fmt.Errorf("cannot generate a staging token: %w", err)
@@ -671,7 +687,7 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 		}
 	}
 	return &DestRoot{root: root, canonical: canon, display: display, snap: snap, fs: destfs, accepted: accepted,
-		token: hex.EncodeToString(tok), release: release, volume: id.vol, id: id, fingerprint: fingerprint}, nil
+		token: hex.EncodeToString(tok), release: release, unreserve: unreserve, volume: id.vol, id: id, fingerprint: fingerprint}, nil
 }
 
 // DestinationChangedError stops a write because the destination is no longer the
@@ -950,6 +966,10 @@ func rootVolumeID(r *os.Root) string {
 	return id
 }
 
+// destBeforeReserve is a test seam: it runs after a destination was checked and
+// before it is reserved.
+var destBeforeReserve func()
+
 // Test seam immediately before the actual single-component creation.
 var bootstrapMkdir = func(r *os.Root, component string) error { return r.Mkdir(component, 0o755) }
 
@@ -1075,6 +1095,9 @@ func (d *DestRoot) Close() error {
 	}
 	d.closeOnce.Do(func() {
 		d.closeErr = errors.Join(d.discardAll(), d.root.Close(), d.release())
+		if d.unreserve != nil {
+			d.unreserve()
+		}
 	})
 	return d.closeErr
 }

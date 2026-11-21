@@ -3,9 +3,7 @@
 package main
 
 import (
-	"encoding/binary"
 	"fmt"
-	"strings"
 
 	"golang.org/x/sys/windows"
 )
@@ -17,38 +15,30 @@ const ioctlVolumeGetVolumeDiskExtents = 0x00560000
 // from the disk extents of its volume. ok is false when that cannot be read
 // (a network share, for example).
 func physicalDiskOf(dir string) (string, bool) {
-	p, err := windows.UTF16PtrFromString(dir)
+	n, err := volumeDiskNumber(dir)
 	if err != nil {
 		return "", false
 	}
-	var root [windows.MAX_PATH + 1]uint16
-	if err := windows.GetVolumePathName(p, &root[0], uint32(len(root))); err != nil {
-		return "", false
-	}
-	var name [windows.MAX_PATH + 1]uint16
-	if err := windows.GetVolumeNameForVolumeMountPoint(&root[0], &name[0], uint32(len(name))); err != nil {
-		return "", false
-	}
-	// The volume is opened without its trailing backslash, with no access
-	// asked for: reading its extents needs none.
-	vol, err := windows.UTF16PtrFromString(strings.TrimSuffix(windows.UTF16ToString(name[:]), `\`))
+	return fmt.Sprintf("disk:%d", n), true
+}
+
+// volumeDiskNumber is the number of the one physical disk holding the volume
+// that holds path. A variable so a test can present a volume without hardware.
+var volumeDiskNumber = func(path string) (uint32, error) {
+	vol, err := volumeDevicePath(path)
 	if err != nil {
-		return "", false
+		return 0, err
 	}
-	h, err := windows.CreateFile(vol, 0, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, 0, 0)
+	// The volume is opened with no access asked for: reading its extents needs none.
+	h, err := openForQuery(vol)
 	if err != nil {
-		return "", false
+		return 0, fmt.Errorf("opening the volume of %s: %w", path, err)
 	}
 	defer windows.CloseHandle(h)
-	// VOLUME_DISK_EXTENTS: a count, then DISK_EXTENT entries (disk number,
-	// offset, length) from byte 8. The first extent's disk names the device.
-	var buf [256]byte
+	var buf [512]byte
 	var n uint32
-	if err := windows.DeviceIoControl(h, ioctlVolumeGetVolumeDiskExtents, nil, 0, &buf[0], uint32(len(buf)), &n, nil); err != nil || n < 12 {
-		return "", false
+	if err := windows.DeviceIoControl(h, ioctlVolumeGetVolumeDiskExtents, nil, 0, &buf[0], uint32(len(buf)), &n, nil); err != nil {
+		return 0, fmt.Errorf("reading the disk of %s: %w", path, err)
 	}
-	if binary.LittleEndian.Uint32(buf[0:4]) == 0 {
-		return "", false
-	}
-	return fmt.Sprintf("disk:%d", binary.LittleEndian.Uint32(buf[8:12])), true
+	return diskFromExtents(buf[:n])
 }

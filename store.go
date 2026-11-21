@@ -1155,8 +1155,11 @@ type catalog struct {
 const compactThreshold = 50_000
 
 type Store struct {
-	mu   sync.Mutex
-	path string
+	mu sync.Mutex
+	// srcGate makes "this folder is a source" and "this folder is being written"
+	// exclusive (source_gate.go). When both are held, it is taken before mu.
+	srcGate sourceGate
+	path    string
 	// ownerRelease gives up this store's hold on its data folder (dataowner.go);
 	// closing the store calls it.
 	ownerRelease func()
@@ -2275,21 +2278,6 @@ func pruneID(ids []int, drop int) []int {
 		}
 	}
 	return out
-}
-
-func (s *Store) AddFolder(collectionID int, path string) *Folder {
-	vid := pathVolumeID(path) // disk access before taking the lock
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, f := range s.c.Folders { // idempotent per (collection, path)
-		if f.CollectionID == collectionID && f.Path == path {
-			return f
-		}
-	}
-	f := &Folder{ID: s.next("folder"), CollectionID: collectionID, Path: path, VolumeID: vid}
-	s.c.Folders = append(s.c.Folders, f)
-	_ = s.save()
-	return f
 }
 
 func (s *Store) FoldersOf(collectionID int) []*Folder {
