@@ -1155,13 +1155,13 @@ type catalog struct {
 const compactThreshold = 50_000
 
 type Store struct {
-	mu      sync.Mutex
-	path    string
+	mu   sync.Mutex
+	path string
 	// ownerRelease gives up this store's hold on its data folder (dataowner.go);
 	// closing the store calls it.
 	ownerRelease func()
-	c       catalog
-	lastBak string // YYYYMMDD of the most recent daily backup written
+	c            catalog
+	lastBak      string // YYYYMMDD of the most recent daily backup written
 	// backups is the daily backup of the catalog database being made, if any: it
 	// runs without the store's lock, and closing the database waits for it.
 	backups sync.WaitGroup
