@@ -441,8 +441,9 @@ function showTokenSignIn(){
 /* A new tab cannot send the page key, so it gets a single-use ticket for its URL. */
 function mediaURL(u){return u;}
 async function openMedia(u){const w=window.open('about:blank','_blank');
-  try{const r=await api('POST','/api/session/ticket',{url:u});if(w)w.location=r.url;else location.assign(r.url)}
-  catch(e){if(w)w.close();toast(e.message,1)}}
+  if(!w){toast('Your browser blocked the new tab. Allow pop-ups for Obelisk, then try again.',1);return}
+  try{const r=await api('POST','/api/session/ticket',{url:u});w.location=r.url}
+  catch(e){w.close();toast(e.message,1)}}
 document.addEventListener('click',e=>{const a=e.target.closest&&e.target.closest('a[href^="/api/"]');
   if(!a)return;e.preventDefault();openMedia(a.getAttribute('href'))});
 // _sid names this page's session. A delete/overwrite confirmation is issued to it

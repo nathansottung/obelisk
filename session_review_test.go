@@ -246,6 +246,29 @@ func TestSignIn_RecoveryCommandIsAlwaysPrinted(t *testing.T) {
 	}
 }
 
+// A page on another loopback port is same-site, so the browser would send the cookie
+// to a framed Obelisk. No response may be framed.
+func TestServer_NoResponseCanBeFramed(t *testing.T) {
+	app := sessionTestApp(t)
+	auth, _ := newSessionAuth("", 7821)
+	ts := httptest.NewServer(serverHandler(app, auth))
+	defer ts.Close()
+	code, _ := auth.mintCode()
+	for _, path := range []string{"/", signInPath + "?code=" + url.QueryEscape(code), signInPath + "?code=used", "/api/config", "/no-such-page"} {
+		res, err := signInClient().Do(uiCall(http.MethodGet, ts.URL+path, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if got := res.Header.Get("Content-Security-Policy"); got != "frame-ancestors 'none'" {
+			t.Errorf("%s: Content-Security-Policy %q", strings.SplitN(path, "?", 2)[0], got)
+		}
+		if got := res.Header.Get("X-Frame-Options"); got != "DENY" {
+			t.Errorf("%s: X-Frame-Options %q", strings.SplitN(path, "?", 2)[0], got)
+		}
+	}
+}
+
 func anyStrings(a []any) []string {
 	var out []string
 	for _, v := range a {

@@ -516,5 +516,15 @@ func uiPublicPaths() map[string]bool {
 func serverHandler(app *App, auth *sessionAuth) http.Handler {
 	mux, _ := newAppMux(app)
 	public := uiPublicPaths()
-	return apiGuard(auth.middleware(app.swapGate(mux), func(p string) bool { return public[p] }))
+	return denyFraming(apiGuard(auth.middleware(app.swapGate(mux), func(p string) bool { return public[p] })))
+}
+
+// denyFraming stops any page from framing Obelisk. A page on another loopback port
+// counts as same-site, so a framed Obelisk would be signed in and could be clicked.
+func denyFraming(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+		w.Header().Set("X-Frame-Options", "DENY")
+		next.ServeHTTP(w, r)
+	})
 }
