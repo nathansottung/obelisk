@@ -63,6 +63,22 @@ func ownerOnlyProblem(path string, plain bool, uid, euid int, perm os.FileMode) 
 	return nil
 }
 
+// signinParentRefusal explains a refused Obelisk folder and what fixes it.
+func signinParentRefusal(path string, plain bool, uid, euid int, perm os.FileMode) error {
+	err := ownerOnlyProblem(path, plain, uid, euid, perm)
+	if err == nil {
+		return nil
+	}
+	advice := "Run chmod 700 on it"
+	switch {
+	case !plain:
+		advice = "Replace it with a real folder owned by this account"
+	case uid != euid:
+		advice = "Give it to this account with chown, or move it aside"
+	}
+	return fmt.Errorf("Obelisk will not keep its sign-in file there: %w. %s, then stop and restart Obelisk", err, advice)
+}
+
 // signinDir is the per-user folder for sign-in files, created private if missing.
 func signinDir() (string, error) {
 	base := ""
@@ -238,18 +254,20 @@ func openSignInLink(link string) (string, error) {
 // failing stops the server. Messages name no key, code or link.
 func (s *sessionAuth) startOwnerSignIn(base string, logf func(string, ...any)) (cleanup func()) {
 	file, err := s.publishSigninFile()
+	// A started opener can still fail to show anything, so the way in is always printed.
+	// With no file for this run, -signin cannot work until Obelisk restarts.
+	recovery := "run: obelisk -signin -print-link -listen " + strings.TrimPrefix(base, "http://")
 	if err != nil {
-		logf("sign-in file could not be written, so obelisk -signin will not work for this run: %v", err)
+		logf("sign-in file could not be written: %v", err)
+		recovery = "fix the problem above, then stop and restart Obelisk"
 	}
 	cleanup = func() {
 		if file != "" {
 			_ = os.Remove(file)
 		}
 	}
-	// A started opener can still fail to show anything, so the way in is always printed.
-	recovery := "obelisk -signin -print-link -listen " + strings.TrimPrefix(base, "http://")
 	if os.Getenv("OBELISK_NO_BROWSER") != "" {
-		logf("not opening a browser. To sign in, run: %s", recovery)
+		logf("not opening a browser. To sign in, %s", recovery)
 		return cleanup
 	}
 	code, err := s.mintCode()
@@ -260,9 +278,9 @@ func (s *sessionAuth) startOwnerSignIn(base string, logf func(string, ...any)) (
 		}
 	}
 	if err != nil {
-		logf("could not open a browser (%v). To sign in, run: %s", err, recovery)
+		logf("could not open a browser (%v). To sign in, %s", err, recovery)
 	} else {
-		logf("opening your browser. If it does not appear signed in, run: %s", recovery)
+		logf("opening your browser. If it does not appear signed in, %s", recovery)
 	}
 	return cleanup
 }
@@ -290,7 +308,7 @@ func runSignIn(addr string, printLink bool, stdout, stderr io.Writer) int {
 	exact := net.JoinHostPort(host, portText)
 	rec, err := readSigninFile(exact)
 	if errors.Is(err, os.ErrNotExist) {
-		return fail("no Obelisk started by this account is listening on %s. Start Obelisk, or add -listen with the address it uses.", exact)
+		return fail("this account has no sign-in file for an Obelisk on %s. If Obelisk is not running, start it. If it is running, stop and restart it so it can write the file. If it uses another address, add -listen.", exact)
 	}
 	if err != nil {
 		return fail("cannot use the sign-in file: %v", err)

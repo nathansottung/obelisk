@@ -9,6 +9,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -113,6 +114,7 @@ func TestDownloadLink_PageScriptFetchesATicketAndGoes(t *testing.T) {
 	}
 	harness := `
 let went=null,sent=null;
+globalThis.document={body:{textContent:'This address has to be opened from Obelisk.'}};
 globalThis.localStorage={getItem:k=>k==='obelisk_page_key'?'page-key-value':null};
 globalThis.location={pathname:'/api/x/report',search:'?format=csv',replace:u=>{went=u}};
 globalThis.fetch=async(u,o)=>{sent={u,o};return {ok:true,json:async()=>({url:'/api/x/report?format=csv&ticket=t'})}};
@@ -123,6 +125,7 @@ setTimeout(()=>{
   if(sent.o.headers['X-Obelisk-Page-Key']!=='page-key-value'||sent.o.headers['X-Requested-By']!=='obelisk-ui'){console.error('wrong headers');process.exit(1)}
   if(b.url!=='/api/x/report?format=csv'){console.error('wrong url '+b.url);process.exit(1)}
   if(went!=='/api/x/report?format=csv&ticket=t'){console.error('did not continue: '+went);process.exit(1)}
+  if(!document.body.textContent.includes('download has started')){console.error('the tab still reads as a failure: '+document.body.textContent);process.exit(1)}
   console.log('PASS');process.exit(0);
 },50);
 `
@@ -252,6 +255,94 @@ func TestSigninDir_RefusesAParentThatFailsItsCheck(t *testing.T) {
 	base := os.Getenv("LOCALAPPDATA")
 	if _, err := os.Stat(filepath.Join(base, "Obelisk", "signin")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the signin folder was created under a refused parent: %v", err)
+	}
+}
+
+// A refused folder must lead to the real fix: repair it, then restart Obelisk.
+func TestSignIn_RefusedFolderLeadsToARestart(t *testing.T) {
+	isolateSigninFolder(t)
+	t.Setenv("OBELISK_NO_BROWSER", "1")
+	old := checkSigninParent
+	checkSigninParent = func(string) error { return errors.New("the folder is open to others") }
+	auth, _ := newSessionAuth("", 7821)
+	var logged []string
+	auth.startOwnerSignIn("http://127.0.0.1:7821", func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) })
+	checkSigninParent = old
+	joined := strings.Join(logged, "\n")
+	if !strings.Contains(joined, "the folder is open to others") || !strings.Contains(joined, "stop and restart Obelisk") {
+		t.Errorf("the log does not give the fix:\n%s", joined)
+	}
+	if strings.Contains(joined, "run: obelisk -signin") {
+		t.Errorf("the log offers a command that cannot work for this run:\n%s", joined)
+	}
+	// The folder is fixed, but this run never wrote its file.
+	var out, errOut bytes.Buffer
+	if code := runSignIn("127.0.0.1:7821", true, &out, &errOut); code == 0 {
+		t.Fatal("-signin succeeded with no sign-in file")
+	}
+	if !strings.Contains(errOut.String(), "stop and restart") {
+		t.Errorf("-signin does not say to restart a running Obelisk: %s", errOut.String())
+	}
+}
+
+func TestSigninParentRefusal_GivesTheFixThatApplies(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		plain   bool
+		uid     int
+		perm    os.FileMode
+		want    string
+		notWant string
+	}{
+		{"open", true, 1000, 0o755, "chmod 700", "chown"},
+		{"link", false, 1000, 0o700, "real folder", "chmod"},
+		{"other owner", true, 1001, 0o700, "chown", "chmod"},
+	} {
+		err := signinParentRefusal("/x/Obelisk", c.plain, c.uid, 1000, c.perm)
+		if err == nil || !strings.Contains(err.Error(), c.want) || strings.Contains(err.Error(), c.notWant) {
+			t.Errorf("%s: %v", c.name, err)
+		}
+		if err != nil && !strings.Contains(err.Error(), "stop and restart Obelisk") {
+			t.Errorf("%s does not say to restart: %v", c.name, err)
+		}
+	}
+	if err := signinParentRefusal("/x/Obelisk", true, 1000, 1000, 0o700); err != nil {
+		t.Errorf("a private folder was refused: %v", err)
+	}
+}
+
+// A call refused with the old key, just after another tab signed in, retries with the
+// new key instead of opening a sign-in box nothing will close.
+func TestUI_CallRefusedWithAnOldKeyRetriesWithTheNewOne(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("SKIPPED, NOT PASSED: node is not on PATH, so the retry was not run")
+	}
+	assertions := `
+const d=__el('#dsignin');let shown=0;d.showModal=()=>{shown++;d.open=true};
+localStorage.setItem('obelisk_page_key','old-key');
+const keys=[];
+globalThis.__fetch=async(u,o)=>{const k=o.headers['X-Obelisk-Page-Key'];keys.push(k);
+  if(k==='old-key'){localStorage.setItem('obelisk_page_key','new-key');
+    return {status:401,ok:false,statusText:'Unauthorized',json:async()=>({error:'sign-in required',sign_in:'owner'})}}
+  return {status:200,ok:true,statusText:'OK',json:async()=>({fine:true})}};
+(async()=>{
+  const r=await api('GET','/api/x');
+  if(!r.fine||keys.join()!=='old-key,new-key'||shown!==0){console.error('FAIL keys='+keys+' shown='+shown);process.exit(1)}
+  keys.length=0;
+  globalThis.__fetch=async(u,o)=>{keys.push(o.headers['X-Obelisk-Page-Key']);
+    return {status:401,ok:false,statusText:'Unauthorized',json:async()=>({error:'sign-in required',sign_in:'owner'})}};
+  let threw=false;try{await api('GET','/api/x')}catch(e){threw=true}
+  if(!threw||keys.length!==1||shown!==1){console.error('FAIL unchanged key: calls='+keys.length+' shown='+shown);process.exit(1)}
+  console.log('PASS');process.exit(0);
+})();
+`
+	file := filepath.Join(t.TempDir(), "old_key.js")
+	if err := os.WriteFile(file, []byte(uiPrelude+uiScript(t)+assertions), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(node, file).CombinedOutput(); err != nil || !strings.Contains(string(out), "PASS") {
+		t.Fatalf("retry: %v\n%s", err, out)
 	}
 }
 

@@ -36,10 +36,7 @@ func ensureSigninParentPrivate(path string) error {
 	if !ok {
 		return fmt.Errorf("cannot read the owner of %s", path)
 	}
-	if err := ownerOnlyProblem(path, fi.IsDir(), int(st.Uid), os.Geteuid(), fi.Mode().Perm()); err != nil {
-		return fmt.Errorf("Obelisk will not keep its sign-in file there: %w. The folder must belong to this account and be closed to others (chmod 700)", err)
-	}
-	return nil
+	return signinParentRefusal(path, fi.IsDir(), int(st.Uid), os.Geteuid(), fi.Mode().Perm())
 }
 
 // verifyPrivateFile confirms path is a plain file owned by this user, with no group

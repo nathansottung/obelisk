@@ -278,7 +278,7 @@ func (s *sessionAuth) middleware(next http.Handler, public func(path string) boo
 // the page's instructions stay on screen.
 const continueDownloadScript = `<script>(async()=>{let k='';try{k=localStorage.getItem('obelisk_page_key')||''}catch(e){}if(!k)return;` +
 	`try{const r=await fetch('` + sessionTicketPath + `',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-By':'obelisk-ui','X-Obelisk-Page-Key':k},` +
-	`body:JSON.stringify({url:location.pathname+location.search})});if(!r.ok)return;const j=await r.json();if(j.url)location.replace(j.url)}catch(e){}})()</script>`
+	`body:JSON.stringify({url:location.pathname+location.search})});if(!r.ok)return;const j=await r.json();if(j.url){document.body.textContent='If this is a download, your download has started and you can close this tab.';location.replace(j.url)}}catch(e){}})()</script>`
 
 // refuseNavigation answers a browser tab with a readable page instead of bare JSON.
 // Only a link followed from Obelisk itself may continue on its own. A failed ticket

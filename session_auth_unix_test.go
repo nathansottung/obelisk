@@ -42,9 +42,10 @@ func TestSigninParent_OpenFolderOrLinkIsRefused(t *testing.T) {
 					t.Skipf("cannot make a link here: %v", err)
 				}
 			}
+			want := map[string]string{"open": "chmod 700", "link": "real folder"}[mode]
 			_, err := signinDir()
-			if err == nil || !strings.Contains(err.Error(), "chmod 700") {
-				t.Fatalf("signinDir: %v", err)
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("signinDir: %v, want it to say %q", err, want)
 			}
 			if _, err := os.Lstat(filepath.Join(parent, "signin")); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("the signin folder was created: %v", err)

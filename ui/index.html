@@ -490,10 +490,14 @@ const api=async(m,u,b)=>{
   // X-Requested-By is the same-origin handshake the server requires on every /api
   // call: a cross-origin page can't set a custom header without a CORS preflight we
   // never grant, so this closes CSRF / DNS-rebinding. Set globally on every request.
-  const h={'Content-Type':'application/json','X-Requested-By':'obelisk-ui','X-Obelisk-Session':_sid,'X-Obelisk-Page-Key':pageKey()};
+  const key=pageKey();
+  const h={'Content-Type':'application/json','X-Requested-By':'obelisk-ui','X-Obelisk-Session':_sid,'X-Obelisk-Page-Key':key};
   const r=await fetch(u,{method:m,headers:h,body:b?JSON.stringify(b):undefined});
   const j=await r.json().catch(()=>({}));
   if(r.status===401){
+    // Another tab signed in while this call was out. The call was refused before it
+    // did anything, so it is safe to send again, and only a changed key retries.
+    if(pageKey()!==key)return api(m,u,b);
     if(j.sign_in==='token')showTokenSignIn();
     else showOwnerSignIn();
     throw new Error('Sign-in required');

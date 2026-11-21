@@ -288,7 +288,7 @@ func TestUI_TokenSignInDoesNotRepromptAndSendsThePageKey(t *testing.T) {
 	if strings.Contains(ui, "window.prompt('This Obelisk server requires") {
 		t.Error("the token request is still a blocking prompt that repeats on each refused call")
 	}
-	if !strings.Contains(ui, "'X-Obelisk-Page-Key':pageKey()") {
+	if !strings.Contains(ui, "const key=pageKey();") || !strings.Contains(ui, "'X-Obelisk-Page-Key':key") {
 		t.Error("API calls do not send the page key")
 	}
 	if strings.Contains(ui, "window.open(mediaURL(") {
