@@ -120,6 +120,9 @@ func acquireDataDir(dir string) (release func(), err error) {
 	}, nil
 }
 
+// takeDataDirLock takes the operating-system lock; a test seam.
+var takeDataDirLock = lockFileExclusive
+
 // lockDataDir takes the owner lock on dir for a new holder, ignoring holds this
 // process already has: a second call for the same folder is refused exactly as a
 // second process would be. Tests use it to stand in for that second process.
@@ -129,9 +132,14 @@ func lockDataDir(dir string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot open %s to claim the data folder: %w", path, err)
 	}
-	if err := lockFileExclusive(f); err != nil {
+	if err := takeDataDirLock(f); err != nil {
 		f.Close()
-		return nil, &DataDirInUseError{Dir: dir, PID: readDataOwnerPID(path)}
+		if lockHeldElsewhere(err) {
+			return nil, &DataDirInUseError{Dir: dir, PID: readDataOwnerPID(path)}
+		}
+		// Not another holder (a filesystem without locks, say): the process ID in a
+		// leftover file would name a process that has nothing to do with this.
+		return nil, fmt.Errorf("cannot lock %s to claim the data folder, so Obelisk did not open it: %w", path, err)
 	}
 	// Who holds it, for the refusal another process will print. Best-effort.
 	info := fmt.Sprintf("pid=%d\nsince=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339))

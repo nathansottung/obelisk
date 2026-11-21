@@ -9,3 +9,5 @@ import "os"
 func lockFileExclusive(*os.File) error { return nil }
 
 func unlockFile(*os.File) error { return nil }
+
+func lockHeldElsewhere(error) bool { return false }

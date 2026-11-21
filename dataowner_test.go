@@ -198,6 +198,77 @@ func TestOwner_MoveHoldsBothFolders(t *testing.T) {
 	}
 }
 
+// A lock that fails for any reason but another holder must say so. A leftover file
+// naming a dead process must not turn it into "another Obelisk is running".
+func TestOwner_LockFailureIsNotCalledInUse(t *testing.T) {
+	dir := t.TempDir()
+	leftover := make([]byte, dataOwnerInfoAt)
+	leftover = append(leftover, []byte("pid=999999\n")...)
+	if err := os.WriteFile(filepath.Join(dir, dataOwnerFile), leftover, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	prev := takeDataDirLock
+	takeDataDirLock = func(*os.File) error { return errors.New("locks are not supported here") }
+	t.Cleanup(func() { takeDataDirLock = prev })
+
+	release, err := acquireDataDir(dir)
+	if err == nil {
+		release()
+		t.Fatal("a folder that could not be locked was opened unowned")
+	}
+	if isDataDirInUse(err) {
+		t.Fatalf("a lock failure was reported as another Obelisk: %v", err)
+	}
+	if !strings.Contains(err.Error(), "locks are not supported here") {
+		t.Fatalf("the refusal does not give the cause: %v", err)
+	}
+}
+
+// A catalog that reaches the new folder after the first look, from a process that
+// has since exited, must not be overwritten: the move looks again once it owns the
+// folder.
+func TestOwner_MoveRechecksTheTargetOnceOwned(t *testing.T) {
+	for engine, name := range map[string]string{"sqlite": "catalog.db", "json": "catalog.json"} {
+		t.Run(engine, func(t *testing.T) {
+			t.Setenv(catalogEngineEnv, engine)
+			legacy := t.TempDir()
+			target := filepath.Join(t.TempDir(), "new-home")
+			s, err := openTestStore(t, legacy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			app := initializedTestApp(t, &App{DataDir: legacy, Store: s})
+			app.Store.AddCollection("Stays")
+
+			theirs := filepath.Join(target, name)
+			sentinel := []byte("another Obelisk's catalog")
+			dataDirSwapHook = func(stage string) {
+				if stage != "before-claim" {
+					return
+				}
+				if err := os.MkdirAll(target, 0o755); err != nil {
+					t.Error(err)
+				}
+				if err := os.WriteFile(theirs, sentinel, 0o600); err != nil {
+					t.Error(err)
+				}
+			}
+			t.Cleanup(func() { dataDirSwapHook = nil })
+
+			_, err = app.migrateDataDir(legacy, target)
+			if err == nil || !strings.Contains(err.Error(), "already holds a catalog") {
+				t.Errorf("got %v, want the move refused because the folder now holds a catalog", err)
+			}
+			if got, rerr := os.ReadFile(theirs); rerr != nil || string(got) != string(sentinel) {
+				t.Errorf("the other catalog was changed: %q, %v", got, rerr)
+			}
+			if app.DataDir != legacy {
+				t.Errorf("the app switched to %s", app.DataDir)
+			}
+		})
+	}
+}
+
 func TestOwner_MoveToAFolderAnotherProcessOwnsIsRefused(t *testing.T) {
 	legacy := t.TempDir()
 	target := filepath.Join(t.TempDir(), "new-home")

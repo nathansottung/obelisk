@@ -16,7 +16,8 @@ import (
 )
 
 // dataDirSwapHook, when set by a test, is told each step of a data folder move
-// ("copied": every file is in the new folder, before the switch).
+// ("before-claim": the new folder looked free and is not owned yet; "copied": every
+// file is in the new folder, before the switch).
 var dataDirSwapHook func(stage string)
 
 // legacyAndTargetDataDirs returns the pre-rename (~/.mnemo) and current (~/.obelisk)
@@ -106,11 +107,19 @@ func (a *App) migrateDataDir(legacy, target string) (map[string]any, error) {
 	// through its open catalog (and, for the server, from its start), the new one
 	// from here, before anything is copied into it (dataowner.go). The new folder
 	// stays owned afterwards through the catalog opened there.
+	if dataDirSwapHook != nil {
+		dataDirSwapHook("before-claim")
+	}
 	releaseTarget, err := acquireDataDir(target)
 	if err != nil {
 		return nil, err
 	}
 	defer releaseTarget()
+	// The look above was before this process owned the folder: another Obelisk may
+	// have written a catalog there and exited since. Nothing can change it now.
+	if targetHoldsCatalog(target) {
+		return nil, fmt.Errorf("%s already holds a catalog. Refusing to overwrite it; move it aside first if you meant to replace it", target)
+	}
 	releaseLegacy, err := acquireDataDir(legacy)
 	if err != nil {
 		return nil, err
