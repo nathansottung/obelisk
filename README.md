@@ -206,9 +206,41 @@ tabs as you like work on the same catalog.
 Binding anything other than localhost (which a container must, to be reachable)
 **requires a bearer token** — the binary refuses to start otherwise. Set a strong
 secret via **`OBELISK_AUTH_TOKEN`** (env, recommended) or **`auth_token`** in
-`config.json`; then every `/api` request needs `Authorization: Bearer <token>`.
-The web UI prompts once and remembers it for the browser session. The static UI
-itself is public (so it can load and prompt); only `/api` is gated.
+`config.json`. Scripts send `Authorization: Bearer <token>`. The web UI asks for
+the token once and swaps it for a browser session through a one-time link, so the
+token never appears in a URL. The UI page itself holds no user data and loads
+without a session. Everything that returns data or changes state needs one.
+
+### Signing in on your own computer
+
+With no token set, Obelisk still requires a signed-in session. Each start makes a
+new secret that stays in memory and opens your browser with a one-time link, so
+you get in with no typing. Other programs and other accounts on the PC do not.
+
+If you close the tab and your browser drops the session, run this from the same
+account (add `-listen 127.0.0.1:<port>` if you changed the port):
+
+```
+obelisk -signin
+```
+
+It reads a small file that only your account can open, then opens a new link. Each
+link works once and expires in 60 seconds. Sessions last up to 24 hours and end when
+Obelisk stops. On a computer with no browser, `obelisk -signin -print-link` prints
+the link instead, and setting `OBELISK_NO_BROWSER=1` stops the browser opening at
+start.
+
+| | Where the sign-in file lives | Who can read it |
+|---|---|---|
+| Windows | `%LocalAppData%\Obelisk\signin` | Your account only, by access list |
+| Linux | `$XDG_RUNTIME_DIR/Obelisk/signin`, or `~/.cache/Obelisk/signin` | Your account only (`0700` folder, `0600` file) |
+
+Sign-in keeps out other accounts on the PC and web pages. It does not keep out
+programs running under your own account, or an administrator.
+
+Open download links with a normal click or a middle-click. "Save link as" does not
+work, because the browser saves the address without the single-use ticket a download
+needs.
 
 ### One-time container initialization
 
@@ -331,7 +363,7 @@ passed through) — the build/catalog it shares with the app is the same
 it's self-contained.
 
 ```
-obelisk.exe                # Windows — then open http://127.0.0.1:7821
+obelisk.exe                # Windows — your browser opens, signed in
 ./obelisk-linux-amd64      # Linux (server / NAS / Pi)
 ./obelisk-darwin-arm64     # Apple Silicon
 ```
@@ -341,7 +373,8 @@ without that flag. If an existing installation reports a missing or damaged
 configuration, restore access to its settings before continuing; ordinary
 startup and settings updates do not recreate it.
 
-Flags: `-port 7821 -data ~/.obelisk`. Open the printed URL; the **Preflight**
+Flags: `-port 7821 -data ~/.obelisk`. If the tab is closed, `obelisk -signin` opens
+a new one ([details](#signing-in-on-your-own-computer)). The **Preflight**
 panel (Settings) checks that `tar`/`gpg`/`par2` are installed and tells you
 how to get any that are missing.
 

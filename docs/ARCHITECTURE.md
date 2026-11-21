@@ -16,8 +16,8 @@ main.go        HTTP server + REST API + embedded UI (//go:embed ui).
                Wires routes to App methods via runJob() (background jobs),
                registers OAIS aliases (/api/archives, /api/packages). -listen
                binds localhost by default; a non-localhost bind (containers)
-               REFUSES to start without a bearer token, and authMiddleware then
-               gates every /api call (static UI stays public so it can prompt).
+               REFUSES to start without a bearer token. session_auth.go requires
+               a signed-in session for everything except the embedded UI files.
                  |
                  v
 pipeline.go    App + Config. Keystores, parallel Scan, Plan (group files into

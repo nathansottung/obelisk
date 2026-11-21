@@ -393,17 +393,61 @@ button.help:hover{border-color:var(--act);color:var(--act)}
 
 <script>
 const $=q=>document.querySelector(q);
-/* Auth: a remote (non-localhost) server requires a bearer token. We store it in
-   sessionStorage and attach it to every /api call; on a 401 we prompt ONCE
-   (concurrent 401s share the single prompt), save it, and retry. */
-let _tok=sessionStorage.getItem('mnemo_token')||'';let _tokPrompt=null;
-function setToken(t){_tok=(t||'').trim();if(_tok)sessionStorage.setItem('mnemo_token',_tok);else sessionStorage.removeItem('mnemo_token');}
-function askToken(){if(_tokPrompt)return _tokPrompt;
-  _tokPrompt=new Promise(res=>{const t=window.prompt('This Obelisk server requires an access token.\nPaste the Authorization Bearer token (config auth_token / MNEMO_AUTH_TOKEN):','');setToken(t);_tokPrompt=null;res(_tok);});
-  return _tokPrompt;}
-/* mediaURL appends the token as a query param for browser-native GETs (opening a
-   label/QR/report in a new tab can't set an Authorization header). */
-function mediaURL(u){return _tok?u+(u.includes('?')?'&':'?')+'token='+encodeURIComponent(_tok):u;}
+/* Auth: every /api call needs a signed-in session: an HttpOnly cookie this page
+   cannot read, plus a page key in localStorage. Browsers send cookies to every port
+   on a host but keep localStorage to this exact host and port, so a program on
+   another port cannot use a cookie it collects. With no session the server answers
+   401 and says which way in applies. A configured token is sent once, swapped for a
+   one-time link, and never stored or put in a URL by this page. */
+try{sessionStorage.removeItem('mnemo_token')}catch(e){}
+function pageKey(){try{return localStorage.getItem('obelisk_page_key')||''}catch(e){return ''}}
+function signInDialog(){
+  let d=$('#dsignin');if(d&&d.open)return null;
+  if(!d){d=document.createElement('dialog');d.id='dsignin';document.body.append(d)}
+  d.oncancel=e=>e.preventDefault();
+  return d;
+}
+function showOwnerSignIn(){
+  const d=signInDialog();if(!d)return;
+  const where=location.host!=='127.0.0.1:7821'?' -listen '+location.host:'';
+  d.innerHTML=`<h1>Sign in to Obelisk</h1>
+    <div style="margin:6px 0">This browser has no session. From the computer account that started Obelisk, run:</div>
+    <div class="mono" style="margin:8px 0">obelisk -signin${esc(where)}</div>
+    <div class="dim">A new sign-in link opens in your browser. It works once and expires in a minute.</div>`;
+  d.showModal();
+}
+// A sign-in in another tab writes a new page key, and the browser tells every other
+// tab of this origin at once. A tab waiting at the sign-in box recovers. A working tab
+// is left alone: it reads the new key on its next call.
+window.addEventListener('storage',e=>{const d=$('#dsignin');
+  if(e.key==='obelisk_page_key'&&e.newValue&&d&&d.open)location.reload()});
+/* One dialog, whatever number of calls were refused. Nothing re-prompts. */
+function showTokenSignIn(){
+  const d=signInDialog();if(!d)return;
+  d.innerHTML=`<h1>Sign in to Obelisk</h1>
+    <label>This server requires an access token (config auth_token or OBELISK_AUTH_TOKEN)</label>
+    <input id="dsitok" class="full" type="password" autocomplete="off">
+    <div id="dsierr" class="dim" style="margin-top:6px"></div>
+    <div class="row" style="margin-top:12px"><button class="btn" id="dsigo">Sign in</button></div>`;
+  const go=async()=>{const t=d.querySelector('#dsitok').value.trim(),err=d.querySelector('#dsierr');
+    if(!t){err.textContent='Enter the access token.';return}
+    try{const r=await fetch('/api/session/exchange',{method:'POST',headers:{'X-Requested-By':'obelisk-ui','Authorization':'Bearer '+t}});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok||!j.link){err.textContent=r.status===401?'That access token was not accepted.':(j.error||r.statusText);return}
+      location.replace(j.link);
+    }catch(e){err.textContent=e.message}};
+  d.querySelector('#dsigo').onclick=go;
+  d.querySelector('#dsitok').onkeydown=e=>{if(e.key==='Enter')go()};
+  d.showModal();
+}
+/* A new tab cannot send the page key, so it gets a single-use ticket for its URL. */
+function mediaURL(u){return u;}
+async function openMedia(u){const w=window.open('about:blank','_blank');
+  if(!w){toast('Your browser blocked the new tab. Allow pop-ups for Obelisk, then try again.',1);return}
+  try{const r=await api('POST','/api/session/ticket',{url:u});w.location=r.url}
+  catch(e){w.close();toast(e.message,1)}}
+document.addEventListener('click',e=>{const a=e.target.closest&&e.target.closest('a[href^="/api/"]');
+  if(!a)return;e.preventDefault();openMedia(a.getAttribute('href'))});
 // _sid names this page's session. A delete/overwrite confirmation is issued to it
 // and works only from it.
 const _sid=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():Array.from({length:32},()=>Math.floor(Math.random()*16).toString(16)).join('');
@@ -446,11 +490,18 @@ const api=async(m,u,b)=>{
   // X-Requested-By is the same-origin handshake the server requires on every /api
   // call: a cross-origin page can't set a custom header without a CORS preflight we
   // never grant, so this closes CSRF / DNS-rebinding. Set globally on every request.
-  const go=()=>{const h={'Content-Type':'application/json','X-Requested-By':'obelisk-ui','X-Obelisk-Session':_sid};if(_tok)h['Authorization']='Bearer '+_tok;
-    return fetch(u,{method:m,headers:h,body:b?JSON.stringify(b):undefined});};
-  let r=await go();
-  if(r.status===401){await askToken();r=await go();}
+  const key=pageKey();
+  const h={'Content-Type':'application/json','X-Requested-By':'obelisk-ui','X-Obelisk-Session':_sid,'X-Obelisk-Page-Key':key};
+  const r=await fetch(u,{method:m,headers:h,body:b?JSON.stringify(b):undefined});
   const j=await r.json().catch(()=>({}));
+  if(r.status===401){
+    // Another tab signed in while this call was out. The call was refused before it
+    // did anything, so it is safe to send again, and only a changed key retries.
+    if(pageKey()!==key)return api(m,u,b);
+    if(j.sign_in==='token')showTokenSignIn();
+    else showOwnerSignIn();
+    throw new Error('Sign-in required');
+  }
   if(!r.ok)throw new Error(j.error||r.statusText);
   return j;};
 const GB=n=>((n||0)/1e9).toFixed(2);
@@ -2671,7 +2722,7 @@ async function printLabel(id,barcode){
     if(confirm(`This volume has no barcode. Assign ${nb||'the next barcode'} from the scheme and print it on the label?`)){
       try{const r=await api('POST',`/api/volumes/${id}/assign-barcode`,{});toast('Assigned '+r.barcode)}catch(e){toast(e.message,1)}}
   }
-  window.open(mediaURL('/api/volumes/'+id+'/label'),'_blank');
+  openMedia('/api/volumes/'+id+'/label');
 }
 /* A volume's offsite status comes from its Location (the "1" in 3-2-1). */
 async function setVolLocationDlg(vid,cur){
@@ -2743,7 +2794,7 @@ async function doFinalize(id,force){
     if(r.blocked){toast('Preconditions not met — see the checks',1);return}
     const d=$('#dlg');if(d)d.close();
     toast(force?'Volume force-sealed (audit-logged) — opening label':'Volume sealed ✓ — opening label');
-    if(r.label_url)window.open(mediaURL(r.label_url),'_blank');
+    if(r.label_url)openMedia(r.label_url);
     volDetail(id);
   }catch(e){toast(e.message,1)}}
 function unsealDlg(id,label){dlg(`<h1>Unseal “${esc(label)}”</h1>
@@ -3332,7 +3383,7 @@ function renderDock(d){
     h+=`</div>`;}
   h+=`<div class="panel"><div class="row" style="align-items:center;gap:10px">
     <div style="flex:1"><b>Session #${ds.id}</b> <span class="dim">· started ${esc((ds.started_at||'').slice(0,10))} · ${(ds.drives_processed||[]).length} drive(s)</span></div>
-    <button class="btn ghost" onclick="window.open(mediaURL('/api/dock/session/${ds.id}/report'),'_blank')">Export report (.md)</button>
+    <button class="btn ghost" onclick="openMedia('/api/dock/session/${ds.id}/report')">Export report (.md)</button>
     <button class="btn ghost" onclick="closeDock(${ds.id})">Close session</button></div>
     <div class="dim" style="font-size:11.5px;margin-top:6px">Read-only toward sources — NAS folders are only hashed, never written. Comparing against: ${(d.archives||[]).map(a=>esc(a.name)).join(', ')||'—'}</div></div>`;
 
@@ -3766,7 +3817,7 @@ async function vSettings(){
     <label>Access token (for reaching the app from another machine)</label>
     <input id="atok" class="full" style="font:12px var(--mono)" value="" autocomplete="off" placeholder="${tokSet?'a token is set — leave blank to keep it, or type a new one':'a long random secret'}">
     ${tokSet?'<button type="button" class="btn ghost" style="margin-top:4px" onclick="removeAuthToken()">Remove token</button>':''}
-    <div class="help">Only needed when the app is reached from off-box. It binds to localhost by default; the listen address is set with the <span class="mono">-listen</span> flag at startup, and a non-localhost bind refuses to run without a token.</div>
+    <div class="help">Only needed when the app is reached from off-box. It binds to localhost by default; the listen address is set with the <span class="mono">-listen</span> flag at startup, and a non-localhost bind refuses to run without a token. On this computer with no token, Obelisk signs you in through your browser when it starts. If you close the tab, run <span class="mono">obelisk -signin</span> from the same account.</div>
     <label class="row" style="gap:8px;align-items:center;margin-top:14px"><input id="upd" type="checkbox" ${cfg.update_check?'checked':''}> Remind me to check for updates</label>
     <div class="help">Shows a small "a newer release may be available" reminder with a link to the releases page. <b>The app never downloads anything or contacts the network on its own.</b></div>
     <label class="row" style="gap:8px;align-items:center;margin-top:14px"><input id="pm" type="checkbox" ${cfg.private_media?'checked':''}> Paranoid mode — hide the file list on encrypted media</label>
@@ -4169,7 +4220,7 @@ async function appRestoreInspect(){
   }catch(e){if(el)el.innerHTML=`<span class="err">${esc(e.message)}</span>`;}
 }
 async function removeAuthToken(){
-  if(!confirm('Remove the stored access token?\n\nObelisk keeps using the current token until it is next started. After that it needs no token on this computer, and refuses to start if it is reachable from other machines until a token is set.'))return;
+  if(!confirm('Remove the stored access token?\n\nObelisk keeps using the current token until it is next started. After that, on this computer it signs you in through your browser, and it refuses to start if it is reachable from other machines until a token is set.'))return;
   try{const r=await api('POST','/api/config/remove-token',{});toast(r.note||'Token removed',1);vSettings()}catch(e){toast(e.message,1)}}
 async function applyHeldSettings(){
   const w=prompt('These settings choose which programs run on this computer.\nType Confirm to apply the settings from the backup:','');

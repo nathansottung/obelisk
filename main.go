@@ -8,13 +8,12 @@ package main
 //   CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o obelisk.exe .
 
 import (
-	"crypto/subtle"
 	"embed"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -77,6 +76,8 @@ func main() {
 	port := flag.Int("port", 0, "DEPRECATED: listen port on 127.0.0.1 (use -listen). When set, overrides the port of -listen.")
 	dataDir := flag.String("data", defaultDataDir(), "data directory (catalog.db, config.json)")
 	initConfig := flag.Bool("init-config", false, "explicitly initialize configuration for first use; never overwrite damaged existing settings")
+	signIn := flag.Bool("signin", false, "get a new one-time sign-in link for the Obelisk this OS account is running, and open it. Use -listen if it is not on the default port.")
+	printLink := flag.Bool("print-link", false, "with -signin: print the link instead of opening a browser")
 	flag.Parse()
 
 	addr := *listen
@@ -86,6 +87,10 @@ func main() {
 			host = "127.0.0.1"
 		}
 		addr = net.JoinHostPort(host, strconv.Itoa(*port))
+	}
+	// Signing in to a running Obelisk touches no data folder.
+	if *signIn {
+		os.Exit(runSignIn(addr, *printLink, os.Stdout, os.Stderr))
 	}
 
 	// This process owns the data folder before it reads or writes anything in it,
@@ -98,6 +103,10 @@ func main() {
 	if _, statErr := os.Stat(*dataDir); statErr == nil || *initConfig {
 		if _, err := acquireDataDir(*dataDir); err != nil {
 			fmt.Fprintln(os.Stderr, "obelisk: "+err.Error())
+			var inUse *DataDirInUseError
+			if errors.As(err, &inUse) {
+				fmt.Fprintln(os.Stderr, "If that Obelisk is yours and you closed its tab, run: obelisk -signin (add -listen if it uses another port).")
+			}
 			os.Exit(3)
 		}
 	}
@@ -162,17 +171,26 @@ func main() {
 			"…or bind localhost only (-listen 127.0.0.1:7821).", addr, *dataDir)
 	}
 
-	mux := http.NewServeMux()
-	api(mux, app)
-
-	sub, _ := fs.Sub(uiFS, "ui")
-	mux.Handle("/", http.FileServer(http.FS(sub)))
-
-	auth := "off (localhost only)"
-	if token != "" {
-		auth = "ON — Authorization: Bearer <token> required for /api"
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatal(err)
 	}
-	log.Printf("Obelisk %s — http://%s  (data: %s · auth: %s)", appVersion, addr, *dataDir, auth)
+	auth, err := newSessionAuth(token, listener.Addr().(*net.TCPAddr).Port)
+	if err != nil {
+		log.Fatal(err)
+	}
+	auth.addr = listener.Addr().String()
+	handler := serverHandler(app, auth)
+
+	authNote := "sign-in required; obelisk -signin opens a new session"
+	if token != "" {
+		authNote = "ON — access token required"
+	}
+	log.Printf("Obelisk %s — http://%s  (data: %s · auth: %s)", appVersion, listener.Addr(), *dataDir, authNote)
+	removeSignin := func() {}
+	if token == "" {
+		removeSignin = auth.startOwnerSignIn("http://"+listener.Addr().String(), log.Printf)
+	}
 	// On an interrupt or termination signal, save what is pending and close the
 	// catalog before exiting.
 	stop := make(chan os.Signal, 1)
@@ -180,13 +198,14 @@ func main() {
 	go func() {
 		sig := <-stop
 		log.Printf("%v: saving the catalog and stopping", sig)
+		removeSignin()
 		if err := app.Shutdown(); err != nil {
 			log.Printf("saving the catalog on shutdown: %v", err)
 			os.Exit(1)
 		}
 		os.Exit(0)
 	}()
-	log.Fatal(http.ListenAndServe(addr, apiGuard(authMiddleware(app.swapGate(mux), token))))
+	log.Fatal(http.Serve(listener, handler))
 }
 
 // isLocalhostAddr reports whether addr binds only the loopback interface, so it
@@ -205,34 +224,6 @@ func isLocalhostAddr(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
-}
-
-// authMiddleware gates every /api/ request behind a bearer token when one is set.
-// The static UI (everything not under /api/) stays public so a browser can load
-// it and prompt for the token. Browser-native GETs that cannot set a header
-// (opening the label/QR/report in a new tab) may pass the token as ?token=.
-// A blank token means localhost-only operation with no auth.
-func authMiddleware(next http.Handler, token string) http.Handler {
-	if token == "" {
-		return next
-	}
-	want := []byte("Bearer " + token)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			ok := subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), want) == 1
-			if !ok {
-				if q := r.URL.Query().Get("token"); q != "" {
-					ok = subtle.ConstantTimeCompare([]byte(q), []byte(token)) == 1
-				}
-			}
-			if !ok {
-				w.Header().Set("WWW-Authenticate", `Bearer realm="obelisk"`)
-				jsonErr(w, http.StatusUnauthorized, fmt.Errorf("authorization required — send Authorization: Bearer <token>"))
-				return
-			}
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 // apiGuard is the cross-origin / CSRF gate in front of every /api/ route. It is
@@ -675,7 +666,7 @@ func runJob(app *App, kind, label string, fn func(progress func(float64, string)
 // register binds a route and, for the OAIS-renamed resources, a deprecated-but-
 // working alias: /api/archives -> collections handler, /api/packages -> chunks
 // handler. Existing catalogs and scripts using the old paths keep functioning.
-func register(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
+func register(mux routeRegistrar, pattern string, h http.HandlerFunc) {
 	mux.HandleFunc(pattern, h)
 	if strings.Contains(pattern, "/api/collections") {
 		mux.HandleFunc(strings.Replace(pattern, "/api/collections", "/api/archives", 1), h)
@@ -684,7 +675,7 @@ func register(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
 	}
 }
 
-func api(mux *http.ServeMux, app *App) {
+func api(mux routeRegistrar, app *App) {
 	destructiveRoutes(mux, app)
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		out := map[string]any{"ok": true, "version": appVersion, "schema_version": currentSchemaVersion}

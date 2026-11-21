@@ -252,7 +252,7 @@ func destructiveHTTPError(w http.ResponseWriter, err error) {
 }
 
 // destructiveRoutes registers prepare and execute.
-func destructiveRoutes(mux *http.ServeMux, app *App) {
+func destructiveRoutes(mux routeRegistrar, app *App) {
 	mux.HandleFunc("POST /api/destructive/prepare", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Op     string         `json:"op"`

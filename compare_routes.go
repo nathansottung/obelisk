@@ -15,7 +15,7 @@ import (
 	"strings"
 )
 
-func registerCompareRoutes(mux *http.ServeMux, app *App) {
+func registerCompareRoutes(mux routeRegistrar, app *App) {
 	registerCompareExports(mux, app)
 	// The marked reference (a drive or an archive), or null.
 	mux.HandleFunc("GET /api/reference", func(w http.ResponseWriter, r *http.Request) {
@@ -111,7 +111,7 @@ func registerCompareRoutes(mux *http.ServeMux, app *App) {
 
 // registerCompareExports adds the CSV and JSON downloads of a run's results and
 // of the cross-drive lists.
-func registerCompareExports(mux *http.ServeMux, app *App) {
+func registerCompareExports(mux routeRegistrar, app *App) {
 	// A run's results with the view's filters (?state=, ?q=), as ?format=csv or json.
 	mux.HandleFunc("GET /api/compare/runs/{id}/export", func(w http.ResponseWriter, r *http.Request) {
 		run, results, ok := compareRunResults(w, r, app)
