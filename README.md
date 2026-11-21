@@ -8,7 +8,7 @@
 **Back up your data, and re-verify it on a schedule.** &nbsp;*(formerly Mnemosyne)*
 
 [![CI](https://github.com/nathansottung/obelisk/actions/workflows/ci.yml/badge.svg)](https://github.com/nathansottung/obelisk/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/nathansottung/obelisk?logo=github&color=2e5e4e)](https://github.com/nathansottung/obelisk/releases/latest)
+[![Release](https://img.shields.io/github/v/release/nathansottung/obelisk?include_prereleases&logo=github&color=2e5e4e)](https://github.com/nathansottung/obelisk/releases)
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Single binary](https://img.shields.io/badge/deploy-single%20binary-2e5e4e)](#quickstart)
@@ -136,7 +136,7 @@ replace.
 ## Download
 
 Prebuilt, self-contained binaries for every release are on the
-**[Releases page](https://github.com/nathansottung/obelisk/releases/latest)** —
+**[Releases page](https://github.com/nathansottung/obelisk/releases)** —
 pick the zip for your OS/architecture.
 
 **Builds for:** Windows (x64, ARM), Linux (x64, ARM — Raspberry Pi), macOS (Intel, Apple Silicon).
