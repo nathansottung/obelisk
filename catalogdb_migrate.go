@@ -112,6 +112,12 @@ type catalogMigrateResult struct {
 func migrateCatalogToDB(dataDir string, opt catalogMigrateOptions) (catalogMigrateResult, error) {
 	jsonPath := filepath.Join(dataDir, "catalog.json")
 	dbPath := filepath.Join(dataDir, catalogDBName)
+	// The upgrade runs in a data folder this process owns, from start to finish.
+	releaseOwner, err := acquireDataDir(dataDir)
+	if err != nil {
+		return catalogMigrateResult{}, err
+	}
+	defer releaseOwner()
 	release, err := lockCatalogMove(dataDir)
 	if err != nil {
 		return catalogMigrateResult{}, err

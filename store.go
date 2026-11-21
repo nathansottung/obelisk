@@ -1155,10 +1155,13 @@ type catalog struct {
 const compactThreshold = 50_000
 
 type Store struct {
-	mu      sync.Mutex
-	path    string
-	c       catalog
-	lastBak string // YYYYMMDD of the most recent daily backup written
+	mu   sync.Mutex
+	path string
+	// ownerRelease gives up this store's hold on its data folder (dataowner.go);
+	// closing the store calls it.
+	ownerRelease func()
+	c            catalog
+	lastBak      string // YYYYMMDD of the most recent daily backup written
 	// backups is the daily backup of the catalog database being made, if any: it
 	// runs without the store's lock, and closing the database waits for it.
 	backups sync.WaitGroup
@@ -1374,6 +1377,28 @@ var openCatalogBackend func(dataDir string) (catalogBackend, *catalog, string, e
 // hooks means no shared mutable test state, no cleanup, and no way for one test's
 // injected fault to reach another.
 func openStore(dataDir string, readFile func(string) ([]byte, error), persistObserver func(op, path string)) (*Store, error) {
+	// This process owns the data folder before anything in it is read, migrated or
+	// rotated, and for as long as the store is open (dataowner.go). Another process
+	// that owns it refuses this open at once. An engine this build does not know is
+	// refused first, before anything is created.
+	if _, err := catalogEngine(); err != nil {
+		return nil, err
+	}
+	release, err := acquireDataDir(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	s, err := openOwnedStore(dataDir, readFile, persistObserver)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	s.ownerRelease = release
+	return s, nil
+}
+
+// openOwnedStore opens the catalog in a data folder this process owns.
+func openOwnedStore(dataDir string, readFile func(string) ([]byte, error), persistObserver func(op, path string)) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -1828,7 +1853,16 @@ func (s *Store) Close() error {
 		s.backups.Wait()
 		err = errors.Join(err, s.be.close())
 	}
+	s.releaseOwnerLocked()
 	return errors.Join(err, s.lostErr)
+}
+
+// releaseOwnerLocked gives up the closed store's hold on its data folder, once.
+func (s *Store) releaseOwnerLocked() {
+	if s.ownerRelease != nil {
+		s.ownerRelease()
+		s.ownerRelease = nil
+	}
 }
 
 // BeginBatch enters batched-save mode: while active, save() coalesces catalog

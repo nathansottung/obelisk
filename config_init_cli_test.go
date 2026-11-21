@@ -234,7 +234,9 @@ func TestConfigInitCLI_Lifecycle(t *testing.T) {
 	if os.Mkdir(existing, 0700) != nil {
 		t.Fatal("fixture failed")
 	}
-	if _, e := openTestStore(t, existing); e != nil {
+	// The fixture's catalog is closed before the binary starts: an open one owns the
+	// folder, and the binary would be refused for that instead (dataowner.go).
+	if fs, e := openTestStore(t, existing); e != nil || fs.Close() != nil {
 		t.Fatal("catalog fixture failed")
 	}
 	if os.WriteFile(filepath.Join(existing, "synthetic-keystore.json"), []byte(`{"obelisk_keystore":1,"keys":[]}`), 0600) != nil {

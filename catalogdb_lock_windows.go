@@ -3,10 +3,17 @@
 package main
 
 import (
+	"errors"
 	"os"
 
 	"golang.org/x/sys/windows"
 )
+
+// lockHeldElsewhere reports whether a lockFileExclusive error means another holder
+// has the lock, rather than that the lock could not be taken at all.
+func lockHeldElsewhere(err error) bool {
+	return errors.Is(err, windows.ERROR_LOCK_VIOLATION) || errors.Is(err, windows.ERROR_IO_PENDING)
+}
 
 // lockFileExclusive takes an exclusive lock on f without waiting. Windows drops
 // the lock when the process ends, so a crash never leaves the folder locked.

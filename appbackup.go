@@ -540,6 +540,14 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	if err != nil {
 		return RestoreResult{}, err
 	}
+	// The data folder stays this process's from the start of the restore to the
+	// end, including while the old catalog is closed and before the restored one
+	// opens (dataowner.go).
+	releaseOwner, err := acquireDataDir(a.DataDir)
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	defer releaseOwner()
 	// The restore is prepared inside the swap gate, like any request, and holds it
 	// for the swap below (swapgate.go).
 	leave, err := a.enterCatalog()
@@ -826,11 +834,11 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	}
 	a.Store = ns
 	keep("") // replaced: it never takes an edit again
-	if useDB {
-		// The old store is closed (a swap) or holds the same database; nothing may
-		// commit through it any more.
-		_ = old.Close()
-	}
+	// The old store is closed (a swap) or holds the same database; nothing may
+	// commit through it any more. Closing it also gives up its hold on the data
+	// folder, which the new store now holds (dataowner.go); a catalog.json store
+	// writes nothing on close.
+	_ = old.Close()
 
 	// (7) Summary.
 	res := RestoreResult{

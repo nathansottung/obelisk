@@ -440,6 +440,9 @@ func dirSnapshot(t *testing.T, dir string) string {
 	}
 	var b strings.Builder
 	for _, e := range entries {
+		if e.Name() == dataOwnerFile {
+			continue // the owner lock (dataowner.go): no records, never removed
+		}
 		b.WriteString(e.Name())
 		if e.Type().IsRegular() {
 			b.WriteString(":" + sha256Hex(fileBytes(t, filepath.Join(dir, e.Name()))))

@@ -15,6 +15,11 @@ import (
 	"strings"
 )
 
+// dataDirSwapHook, when set by a test, is told each step of a data folder move
+// ("before-claim": the new folder looked free and is not owned yet; "copied": every
+// file is in the new folder, before the switch).
+var dataDirSwapHook func(stage string)
+
 // legacyAndTargetDataDirs returns the pre-rename (~/.mnemo) and current (~/.obelisk)
 // default data directories. Both are empty if the home directory can't be resolved.
 func legacyAndTargetDataDirs() (legacy, target string) {
@@ -98,6 +103,28 @@ func (a *App) migrateDataDir(legacy, target string) (map[string]any, error) {
 	if targetHoldsCatalog(target) {
 		return nil, fmt.Errorf("%s already holds a catalog. Refusing to overwrite it; move it aside first if you meant to replace it", target)
 	}
+	// Both folders are this process's until the switch is done: the original one
+	// through its open catalog (and, for the server, from its start), the new one
+	// from here, before anything is copied into it (dataowner.go). The new folder
+	// stays owned afterwards through the catalog opened there.
+	if dataDirSwapHook != nil {
+		dataDirSwapHook("before-claim")
+	}
+	releaseTarget, err := acquireDataDir(target)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseTarget()
+	// The look above was before this process owned the folder: another Obelisk may
+	// have written a catalog there and exited since. Nothing can change it now.
+	if targetHoldsCatalog(target) {
+		return nil, fmt.Errorf("%s already holds a catalog. Refusing to overwrite it; move it aside first if you meant to replace it", target)
+	}
+	releaseLegacy, err := acquireDataDir(legacy)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseLegacy()
 
 	// Copy every regular file under legacy into target, verifying each by hash. On
 	// the database engine the catalog database is not copied file by file (its -wal
@@ -118,6 +145,9 @@ func (a *App) migrateDataDir(legacy, target string) (map[string]any, error) {
 		}
 		if !d.Type().IsRegular() {
 			return nil // skip symlinks / sockets / devices
+		}
+		if rel == dataOwnerFile {
+			return nil // each folder's own: the new folder has its own, held by this process
 		}
 		if useDB && liveDatabaseFile(rel) {
 			return nil // copied below, as one consistent snapshot
@@ -161,6 +191,9 @@ func (a *App) migrateDataDir(legacy, target string) (map[string]any, error) {
 		}
 	}
 
+	if dataDirSwapHook != nil {
+		dataDirSwapHook("copied")
+	}
 	// Everything copied and verified — switch the running app to the new home by
 	// reopening the store there. The catalog and job board now come from ~/.obelisk.
 	ns, err := OpenStore(target)
@@ -171,9 +204,13 @@ func (a *App) migrateDataDir(legacy, target string) (map[string]any, error) {
 		a.Store.checkJobsAfterFailedReopen()
 		return nil, fmt.Errorf("your records copied and verified, but reopening the catalog at %s failed: %w. Resolve the rejected state before retrying", target, err)
 	}
+	old := a.Store
 	a.Store = ns
 	a.DataDir = target
 	keep("") // replaced: the original folder's store never takes an edit again
+	// Its hold on the original folder ends with it (dataowner.go); on the database
+	// engine it is already closed, and a catalog.json store writes nothing on close.
+	_ = old.Close()
 	a.Store.Log("migrate", fmt.Sprintf("copied %d verified file(s) from %s to %s", copied, legacy, target))
 	return map[string]any{
 		"from": legacy, "to": target, "files": copied, "bytes": bytes, "verified": copied,

@@ -35,6 +35,10 @@ func configSnapshot(t *testing.T, dir string) map[string]string {
 			return nil
 		}
 		switch base := filepath.Base(p); {
+		case base == dataOwnerFile:
+			// The owner lock (dataowner.go) holds no records and is never removed;
+			// on Windows its locked byte cannot even be read while it is held.
+			return nil
 		case strings.HasPrefix(base, catalogDBBackupPrefix):
 			// The daily backups of the catalog database are made in the background
 			// by a commit, a copy of what it already holds.

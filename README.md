@@ -1,5 +1,10 @@
 # Obelisk — an instrument of negentropy
 
+> [!WARNING]
+> Obelisk is pre-release. A full review in November 2026 found data-safety
+> problems. Do not trust it with your only copy of anything until a beta is
+> published. See [known issues](docs/KNOWN_ISSUES.md).
+
 **Back up your data, and re-verify it on a schedule.** &nbsp;*(formerly Mnemosyne)*
 
 [![CI](https://github.com/nathansottung/obelisk/actions/workflows/ci.yml/badge.svg)](https://github.com/nathansottung/obelisk/actions/workflows/ci.yml)
@@ -184,9 +189,17 @@ pure file I/O over the network-attached storage. The **hardware-in-the-loop**
 workflows — **tape** and **optical** burning, the **docking** flow for a stack of
 loose drives, and **SMART**/tape-drive diagnostics — want a device physically
 attached, so they belong on a **native binary running next to the hardware**
-(download one above). Point that native instance at the same NAS shares; the
-catalog is one JSON file, so both can operate on the same data. *Bytes-to-metal
-lives at the metal; the container does the thinking.*
+(download one above). *Bytes-to-metal lives at the metal; the container does the
+thinking.*
+
+**One Obelisk owns a catalog.** A data folder belongs to the one Obelisk process
+that opened it, and a second process started on the same folder refuses to start.
+Each running Obelisk keeps its catalog in memory and numbers new records itself,
+so two of them on one folder would overwrite each other's records. Give the
+container and the native binary a data folder each, and keep every data folder on
+a local drive (the catalog database refuses a network share). Every browser, on
+any computer, is a client of one Obelisk: open its address, and as many browser
+tabs as you like work on the same catalog.
 
 ### Auth is mandatory off-box
 
