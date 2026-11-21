@@ -8,3 +8,5 @@ var errNoPrivateFiles = errors.New("this platform has no owner-only file check, 
 
 func ensurePrivateDir(string) error  { return errNoPrivateFiles }
 func verifyPrivateFile(string) error { return errNoPrivateFiles }
+
+func ensureSigninParentPrivate(string) error { return errNoPrivateFiles }

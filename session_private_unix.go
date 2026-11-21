@@ -25,6 +25,23 @@ func ensurePrivateDir(path string) error {
 	return checkOwnerOnlyInfo(fi, path)
 }
 
+// ensureSigninParentPrivate refuses an Obelisk folder that another account owns or
+// can change, because that account could swap the signin folder inside it.
+func ensureSigninParentPrivate(path string) error {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("cannot read the owner of %s", path)
+	}
+	if err := ownerOnlyProblem(path, fi.IsDir(), int(st.Uid), os.Geteuid(), fi.Mode().Perm()); err != nil {
+		return fmt.Errorf("Obelisk will not keep its sign-in file there: %w. The folder must belong to this account and be closed to others (chmod 700)", err)
+	}
+	return nil
+}
+
 // verifyPrivateFile confirms path is a plain file owned by this user, with no group
 // or other access.
 func verifyPrivateFile(path string) error {
@@ -43,11 +60,5 @@ func checkOwnerOnlyInfo(fi os.FileInfo, path string) error {
 	if !ok {
 		return fmt.Errorf("cannot read the owner of %s", path)
 	}
-	if int(st.Uid) != os.Geteuid() {
-		return fmt.Errorf("%s belongs to another account", path)
-	}
-	if fi.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("%s can be reached by another account", path)
-	}
-	return nil
+	return ownerOnlyProblem(path, true, int(st.Uid), os.Geteuid(), fi.Mode().Perm())
 }

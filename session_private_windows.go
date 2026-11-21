@@ -35,6 +35,11 @@ func ensurePrivateDir(path string) error {
 	return checkOwnerOnlyHandle(h, path)
 }
 
+// ensureSigninParentPrivate has nothing to check on Windows: the parent is inside
+// %LocalAppData%, which is per-user, and the signin folder below it has its own
+// protected access list.
+func ensureSigninParentPrivate(string) error { return nil }
+
 // verifyPrivateFile confirms path is a plain file owned by and open only to this user.
 func verifyPrivateFile(path string) error {
 	p, err := windows.UTF16PtrFromString(path)

@@ -235,8 +235,12 @@ start.
 | Windows | `%LocalAppData%\Obelisk\signin` | Your account only, by access list |
 | Linux | `$XDG_RUNTIME_DIR/Obelisk/signin`, or `~/.cache/Obelisk/signin` | Your account only (`0700` folder, `0600` file) |
 
-An administrator or root can read any file on the computer, so this does not protect
-you from them.
+Sign-in keeps out other accounts on the PC and web pages. It does not keep out
+programs running under your own account, or an administrator.
+
+Open download links with a normal click or a middle-click. "Save link as" does not
+work, because the browser saves the address without the single-use ticket a download
+needs.
 
 ### One-time container initialization
 

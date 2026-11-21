@@ -416,9 +416,11 @@ function showOwnerSignIn(){
     <div class="dim">A new sign-in link opens in your browser. It works once and expires in a minute.</div>`;
   d.showModal();
 }
-// After signing in from another tab, this one recovers when it is next looked at.
-window.addEventListener('focus',async()=>{const d=$('#dsignin');if(!d||!d.open||$('#dsitok'))return;
-  try{const r=await fetch('/api/health',{headers:{'X-Requested-By':'obelisk-ui','X-Obelisk-Page-Key':pageKey()}});if(r.ok)location.reload()}catch(e){}});
+// A sign-in in another tab writes a new page key, and the browser tells every other
+// tab of this origin at once. A tab waiting at the sign-in box recovers. A working tab
+// is left alone: it reads the new key on its next call.
+window.addEventListener('storage',e=>{const d=$('#dsignin');
+  if(e.key==='obelisk_page_key'&&e.newValue&&d&&d.open)location.reload()});
 /* One dialog, whatever number of calls were refused. Nothing re-prompts. */
 function showTokenSignIn(){
   const d=signInDialog();if(!d)return;

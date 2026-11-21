@@ -26,6 +26,8 @@ package main
 // added later needs a session without anyone remembering to list it.
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -263,8 +265,40 @@ func (s *sessionAuth) middleware(next http.Handler, public func(path string) boo
 			next.ServeHTTP(w, r)
 			return
 		}
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/") && r.Header.Get("Sec-Fetch-Mode") == "navigate" {
+			s.refuseNavigation(w, r)
+			return
+		}
 		s.refuse(w)
 	})
+}
+
+// continueDownloadScript runs in a tab opened without a ticket (a middle-click, say).
+// It asks this origin for a ticket for the same address and continues. If it cannot,
+// the page's instructions stay on screen.
+const continueDownloadScript = `<script>(async()=>{let k='';try{k=localStorage.getItem('obelisk_page_key')||''}catch(e){}if(!k)return;` +
+	`try{const r=await fetch('` + sessionTicketPath + `',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-By':'obelisk-ui','X-Obelisk-Page-Key':k},` +
+	`body:JSON.stringify({url:location.pathname+location.search})});if(!r.ok)return;const j=await r.json();if(j.url)location.replace(j.url)}catch(e){}})()</script>`
+
+// refuseNavigation answers a browser tab with a readable page instead of bare JSON.
+// Only a link followed from Obelisk itself may continue on its own. A failed ticket
+// never retries, so the page cannot loop.
+func (s *sessionAuth) refuseNavigation(w http.ResponseWriter, r *http.Request) {
+	signIn := "If Obelisk asks you to sign in, run <code>obelisk -signin</code> from the account that started it."
+	if !s.ownerMode() {
+		signIn = "If Obelisk asks you to sign in, enter your access token."
+	}
+	script := ""
+	if r.Header.Get("Sec-Fetch-Site") == "same-origin" && r.Header.Get("Sec-Fetch-Dest") == "document" && !r.URL.Query().Has("ticket") {
+		script = continueDownloadScript
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.WriteHeader(http.StatusUnauthorized)
+	_, _ = io.WriteString(w, `<!doctype html><meta charset="utf-8"><title>Open this from Obelisk</title>`+
+		`<p>This address has to be opened from Obelisk. Go back to the Obelisk tab and click the link normally.</p>`+
+		`<p>`+signIn+`</p>`+script)
 }
 
 // refuse answers 401 and tells the UI which way in applies.
@@ -399,30 +433,56 @@ func reentryClientProof(key, addr, nonce string) string {
 	return hex.EncodeToString(reentryMAC(key, "client", addr, nonce, ""))
 }
 
-func reentryServerProof(key, addr, nonce, sealed string) string {
-	return hex.EncodeToString(reentryMAC(key, "server", addr, nonce, sealed))
-}
-
 func reentryMAC(key, side, addr, nonce, extra string) []byte {
 	m := hmac.New(sha256.New, []byte(key))
 	_, _ = io.WriteString(m, strings.Join([]string{"obelisk-reentry", side, addr, nonce, extra}, "|"))
 	return m.Sum(nil)
 }
 
-// sealReentryCode masks a sign-in code with a pad only the key holder can compute, so
-// a program relaying the exchange never sees a usable code. It also unseals.
-func sealReentryCode(key, addr, nonce string, code []byte) []byte {
-	pad := reentryMAC(key, "seal", addr, nonce, "")
-	out := make([]byte, len(code))
-	for i := range code {
-		out[i] = code[i] ^ pad[i%len(pad)]
+// reentryAEAD is AES-256-GCM under a key derived from the sign-in file's key and this
+// exact listener address.
+func reentryAEAD(key, addr string) (cipher.AEAD, error) {
+	block, err := aes.NewCipher(reentryMAC(key, "seal-key", addr, "", ""))
+	if err != nil {
+		return nil, err
 	}
-	return out
+	return cipher.NewGCM(block)
 }
 
-// handleReenter gives obelisk -signin a new link. Each side proves it holds the key
-// from the owner-only file without sending it. The proofs name this exact listener
-// address, so an exchange aimed at another address cannot be relayed here.
+// sealReentryCode encrypts a sign-in code to the key holder, so a program relaying
+// the exchange never sees a usable code. The client's nonce is authenticated, so an
+// answer to one request cannot be replayed to another. A fresh random GCM nonce
+// leads the result.
+func sealReentryCode(key, addr, nonce string, code []byte) []byte {
+	aead, err := reentryAEAD(key, addr)
+	if err != nil {
+		return nil
+	}
+	iv := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(iv); err != nil {
+		return nil
+	}
+	return aead.Seal(iv, iv, code, []byte(nonce))
+}
+
+// openReentryCode decrypts a sealed code. Success also proves the answer came from
+// the holder of the key, for this address and this request.
+func openReentryCode(key, addr, nonce string, sealed []byte) ([]byte, error) {
+	aead, err := reentryAEAD(key, addr)
+	if err != nil {
+		return nil, err
+	}
+	if len(sealed) < aead.NonceSize() {
+		return nil, errors.New("the sealed code is too short")
+	}
+	iv, body := sealed[:aead.NonceSize()], sealed[aead.NonceSize():]
+	return aead.Open(nil, iv, body, []byte(nonce))
+}
+
+// handleReenter gives obelisk -signin a new link. The client proves it holds the key
+// from the owner-only file without sending it, and the answer is sealed to that key.
+// Both name this exact listener address, so an exchange aimed at another address
+// cannot be relayed here.
 func (s *sessionAuth) handleReenter(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
@@ -461,9 +521,14 @@ func (s *sessionAuth) handleReenter(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusTooManyRequests, err)
 		return
 	}
-	sealed := hex.EncodeToString(sealReentryCode(key, s.addr, req.Nonce, []byte(code)))
+	sealed := sealReentryCode(key, s.addr, req.Nonce, []byte(code))
+	if sealed == nil {
+		s.redeemCode(code)
+		jsonErr(w, http.StatusInternalServerError, errors.New("cannot seal the sign-in code"))
+		return
+	}
 	w.Header().Set("Cache-Control", "no-store")
-	jsonOut(w, map[string]string{"sealed": sealed, "proof": reentryServerProof(key, s.addr, req.Nonce, sealed)})
+	jsonOut(w, map[string]string{"sealed": hex.EncodeToString(sealed)})
 }
 
 // ---- the routes ----------------------------------------------------------

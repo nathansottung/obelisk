@@ -19,7 +19,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/hmac"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -45,6 +44,25 @@ type signinRecord struct {
 	Key     string `json:"key"`
 }
 
+// signInOpener is replaced in tests.
+var signInOpener = openSignInLink
+
+// checkSigninParent is the platform's check of the Obelisk folder above signin.
+var checkSigninParent = ensureSigninParentPrivate
+
+// ownerOnlyProblem says why a Unix folder or file cannot be trusted, or returns nil.
+func ownerOnlyProblem(path string, plain bool, uid, euid int, perm os.FileMode) error {
+	switch {
+	case !plain:
+		return fmt.Errorf("%s is not a plain folder or file", path)
+	case uid != euid:
+		return fmt.Errorf("%s belongs to another account", path)
+	case perm&0o077 != 0:
+		return fmt.Errorf("%s can be reached by another account", path)
+	}
+	return nil
+}
+
 // signinDir is the per-user folder for sign-in files, created private if missing.
 func signinDir() (string, error) {
 	base := ""
@@ -59,6 +77,9 @@ func signinDir() (string, error) {
 	}
 	parent := filepath.Join(base, "Obelisk")
 	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return "", err
+	}
+	if err := checkSigninParent(parent); err != nil {
 		return "", err
 	}
 	dir := filepath.Join(parent, "signin")
@@ -284,16 +305,15 @@ func runSignIn(addr string, printLink bool, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "Open this link within %d seconds. It works once:\n%s\n", int(signInLinkLifetime/time.Second), link)
 		return 0
 	}
-	page, err := openSignInLink(link)
-	if err != nil {
+	// A forwarding page stays until its link is dead, so a slow browser still finds it.
+	// The next -signin or start removes it. Its code works once and expires regardless.
+	if dir, err := signinDir(); err == nil {
+		removeStaleLaunchFiles(dir, time.Now())
+	}
+	if _, err := signInOpener(link); err != nil {
 		return fail("could not open a browser (%v). Run obelisk -signin -print-link and open the link yourself.", err)
 	}
 	fmt.Fprintln(stdout, "Opening Obelisk in your browser. If nothing appears, run obelisk -signin -print-link and open the link yourself.")
-	if page != "" {
-		// The browser reads the page just after it starts; the code expires regardless.
-		time.Sleep(5 * time.Second)
-		_ = os.Remove(page)
-	}
 	return 0
 }
 
@@ -321,14 +341,18 @@ func requestReentryCode(base, addr, key string) (string, error) {
 	}
 	var out struct {
 		Sealed string `json:"sealed"`
-		Proof  string `json:"proof"`
 	}
 	if err := json.NewDecoder(io.LimitReader(res.Body, 4096)).Decode(&out); err != nil {
 		return "", errors.New("the sign-in answer could not be read")
 	}
+	notObelisk := fmt.Errorf("the program on %s could not prove it is this account's Obelisk, so no browser was opened", addr)
 	sealed, err := hex.DecodeString(out.Sealed)
-	if err != nil || len(sealed) == 0 || !hmac.Equal([]byte(out.Proof), []byte(reentryServerProof(key, addr, nonce, out.Sealed))) {
-		return "", fmt.Errorf("the program on %s could not prove it is this account's Obelisk, so no browser was opened", addr)
+	if err != nil {
+		return "", notObelisk
 	}
-	return string(sealReentryCode(key, addr, nonce, sealed)), nil
+	code, err := openReentryCode(key, addr, nonce, sealed)
+	if err != nil || len(code) == 0 {
+		return "", notObelisk
+	}
+	return string(code), nil
 }
