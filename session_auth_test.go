@@ -175,13 +175,8 @@ func TestSignIn_CommandGivesTheSameAccountAWayBackIn(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			res.Body.Close()
-			if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/" || len(res.Cookies()) != 1 {
-				t.Fatalf("sign-in: HTTP %d, location %q, %d cookies", res.StatusCode, res.Header.Get("Location"), len(res.Cookies()))
-			}
-			req, _ := http.NewRequest(http.MethodGet, srv.base+"/api/config", nil)
-			req.Header.Set(requestedByHeader, requestedByValue)
-			req.AddCookie(res.Cookies()[0])
+			session := readSignInPage(t, res)
+			req := uiCall(http.MethodGet, srv.base+"/api/config", session)
 			got, err := http.DefaultClient.Do(req)
 			if err != nil {
 				t.Fatal(err)
@@ -229,14 +224,35 @@ func routeSample(pattern string) (method, path string) {
 	return method, routeWildcard.ReplaceAllString(path, "1")
 }
 
-func uiCall(method, target string, c *http.Cookie) *http.Request {
+// browserSession is what a signed-in browser holds.
+type browserSession struct {
+	cookie *http.Cookie
+	key    string
+}
+
+func uiCall(method, target string, s *browserSession) *http.Request {
 	req, _ := http.NewRequest(method, target, strings.NewReader("{}"))
 	req.Header.Set(requestedByHeader, requestedByValue)
 	req.Header.Set("Content-Type", "application/json")
-	if c != nil {
-		req.AddCookie(c)
+	if s != nil {
+		req.AddCookie(s.cookie)
+		req.Header.Set(sessionKeyHeader, s.key)
 	}
 	return req
+}
+
+var signInPageKey = regexp.MustCompile(`obelisk_page_key','([0-9a-f]{64})'`)
+
+// readSignInPage checks a successful sign-in answer and returns its session.
+func readSignInPage(t *testing.T, res *http.Response) *browserSession {
+	t.Helper()
+	defer res.Body.Close()
+	b, _ := io.ReadAll(res.Body)
+	m := signInPageKey.FindSubmatch(b)
+	if res.StatusCode != http.StatusOK || len(res.Cookies()) != 1 || m == nil || !bytes.Contains(b, []byte("location.replace('/')")) {
+		t.Fatalf("sign-in: HTTP %d with %d cookies: %s", res.StatusCode, len(res.Cookies()), b)
+	}
+	return &browserSession{cookie: res.Cookies()[0], key: string(m[1])}
 }
 
 func TestRoutes_EveryRegisteredRouteNeedsASession(t *testing.T) {
@@ -345,7 +361,7 @@ func signInClient() *http.Client {
 	return &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
-func signInCookie(t *testing.T, base string, auth *sessionAuth) *http.Cookie {
+func signInCookie(t *testing.T, base string, auth *sessionAuth) *browserSession {
 	t.Helper()
 	code, err := auth.mintCode()
 	if err != nil {
@@ -355,11 +371,7 @@ func signInCookie(t *testing.T, base string, auth *sessionAuth) *http.Cookie {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusSeeOther || len(res.Cookies()) != 1 {
-		t.Fatalf("sign-in: HTTP %d with %d cookies", res.StatusCode, len(res.Cookies()))
-	}
-	return res.Cookies()[0]
+	return readSignInPage(t, res)
 }
 
 func sessionGateServer(t *testing.T, auth *sessionAuth) *httptest.Server {
@@ -379,10 +391,7 @@ func TestSignIn_LinkWorksOnceThenIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first.Body.Close()
-	if first.StatusCode != http.StatusSeeOther || first.Header.Get("Location") != "/" {
-		t.Fatalf("first use: %d to %q", first.StatusCode, first.Header.Get("Location"))
-	}
+	readSignInPage(t, first)
 	second, err := signInClient().Get(link)
 	if err != nil {
 		t.Fatal(err)
@@ -413,9 +422,9 @@ func TestSignIn_ExpiredLinkIsRefused(t *testing.T) {
 func TestSession_CookieFlags(t *testing.T) {
 	auth, _ := newSessionAuth("", 43210)
 	ts := sessionGateServer(t, auth)
-	c := signInCookie(t, ts.URL, auth)
-	if c.Name != "obelisk_session_43210" {
-		t.Errorf("name %q does not carry the port", c.Name)
+	c := signInCookie(t, ts.URL, auth).cookie
+	if c.Name != auth.cookieName() || !strings.HasPrefix(c.Name, "obelisk_session_") {
+		t.Errorf("unexpected cookie name %q", c.Name)
 	}
 	if !c.HttpOnly || c.SameSite != http.SameSiteStrictMode || c.Path != "/" || c.Domain != "" {
 		t.Errorf("flags: HttpOnly=%v SameSite=%v Path=%q Domain=%q", c.HttpOnly, c.SameSite, c.Path, c.Domain)
@@ -427,9 +436,11 @@ func TestSession_ExpiresAndCannotBeAltered(t *testing.T) {
 	now := time.Now()
 	auth.now = func() time.Time { return now }
 	ts := sessionGateServer(t, auth)
-	c := signInCookie(t, ts.URL, auth)
+	session := signInCookie(t, ts.URL, auth)
+	c := session.cookie
 	status := func(v string) int {
-		res, err := http.DefaultClient.Do(uiCall(http.MethodGet, ts.URL+"/api/x", &http.Cookie{Name: c.Name, Value: v}))
+		res, err := http.DefaultClient.Do(uiCall(http.MethodGet, ts.URL+"/api/x",
+			&browserSession{cookie: &http.Cookie{Name: c.Name, Value: v}, key: session.key}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -496,10 +507,7 @@ func TestToken_ExchangeGivesAOneTimeLinkAndURLTokenIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signed.Body.Close()
-	if signed.StatusCode != http.StatusSeeOther {
-		t.Fatalf("redeeming the exchanged link: %d", signed.StatusCode)
-	}
+	readSignInPage(t, signed)
 	byURL, err := http.DefaultClient.Do(uiCall(http.MethodGet, ts.URL+"/api/x?token=fixture-configured-token", nil))
 	if err != nil {
 		t.Fatal(err)
@@ -538,7 +546,7 @@ func TestReenter_WrongProofAndReplayAreRefused(t *testing.T) {
 	if got := post(strings.Repeat("0", 64)); got != http.StatusUnauthorized {
 		t.Errorf("wrong proof: %d", got)
 	}
-	good := reentryClientProof(auth.reentryKey(), "7821", nonce)
+	good := reentryClientProof(auth.reentryKey(), auth.addr, nonce)
 	if got := post(good); got != http.StatusOK {
 		t.Errorf("right proof: %d", got)
 	}
@@ -551,12 +559,13 @@ func TestReenter_WrongProofAndReplayAreRefused(t *testing.T) {
 func TestSignInCommand_RefusesAnImpostorOnThePort(t *testing.T) {
 	isolateSigninFolder(t)
 	impostor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		jsonOut(w, map[string]string{"code": "attacker-code", "proof": strings.Repeat("0", 64)})
+		jsonOut(w, map[string]string{"sealed": "00ff", "proof": strings.Repeat("0", 64)})
 	}))
 	defer impostor.Close()
 	u, _ := url.Parse(impostor.URL)
 	port, _ := strconv.Atoi(u.Port())
 	auth, _ := newSessionAuth("", port)
+	auth.addr = u.Host
 	if _, err := auth.publishSigninFile(); err != nil {
 		t.Fatal(err)
 	}
@@ -573,7 +582,8 @@ func TestSignInCommand_RefusesAnImpostorOnThePort(t *testing.T) {
 	}
 }
 
-// The browser is given a private local page, so the link is never on a command line.
+// Where other accounts can read a command line, the browser gets a private local
+// page instead of the link. On Windows the link goes to the default browser directly.
 func TestSignIn_BrowserCommandLineHoldsNoLink(t *testing.T) {
 	isolateSigninFolder(t)
 	var target string
@@ -584,6 +594,12 @@ func TestSignIn_BrowserCommandLineHoldsNoLink(t *testing.T) {
 	page, err := openSignInLink(link)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		if target != link || page != "" {
+			t.Fatalf("Windows target %q, page %q", target, page)
+		}
+		return
 	}
 	if strings.Contains(target, "SENTINELCODE") || !strings.HasPrefix(target, "file:") {
 		t.Fatalf("browser target: %q", target)
@@ -610,7 +626,7 @@ func TestSigninFile_IsPrivateAndRefusedIfOpened(t *testing.T) {
 	if err := ensurePrivateDir(filepath.Dir(path)); err != nil {
 		t.Fatalf("the sign-in folder is not private: %v", err)
 	}
-	if _, err := readSigninFile(7821); err != nil {
+	if _, err := readSigninFile(auth.addr); err != nil {
 		t.Fatalf("the owner cannot read it: %v", err)
 	}
 	if runtime.GOOS == "windows" {
@@ -620,7 +636,7 @@ func TestSigninFile_IsPrivateAndRefusedIfOpened(t *testing.T) {
 	} else if err := os.Chmod(path, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readSigninFile(7821); err == nil {
+	if _, err := readSigninFile(auth.addr); err == nil {
 		t.Fatal("a sign-in file that others can read was trusted")
 	}
 }
@@ -665,12 +681,12 @@ func TestSecret_AppearsInNoLogJobRecordOrBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res.Body.Close()
-	cookie := res.Cookies()[0]
+	session := readSignInPage(t, res)
+	cookie := session.cookie
 
 	call := func(method, path string, body any) []byte {
 		b, _ := json.Marshal(body)
-		req := uiCall(method, ts.URL+path, cookie)
+		req := uiCall(method, ts.URL+path, session)
 		req.Body = io.NopCloser(bytes.NewReader(b))
 		req.ContentLength = int64(len(b))
 		req.Header.Set(sessionHeader, "sentinel-test-browser-0123456789")
@@ -713,6 +729,7 @@ func TestSecret_AppearsInNoLogJobRecordOrBackup(t *testing.T) {
 		"secret (b64)":   base64.StdEncoding.EncodeToString(auth.secret[:]),
 		"re-entry key":   auth.reentryKey(),
 		"session cookie": cookie.Value,
+		"page key":       session.key,
 		"sign-in code":   code,
 	}
 	for label, n := range needles {

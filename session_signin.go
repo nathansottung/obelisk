@@ -12,12 +12,14 @@ package main
 //
 // obelisk -signin reads it, proves it holds the key, and opens a new one-time link.
 //
-// The browser is pointed at an owner-only local HTML file that forwards to the link,
-// never at the link itself: a process's command line can be visible to other
-// accounts (on Linux, in /proc), and the link must not be.
+// On Linux and macOS, any account can read a process's command line, so the browser
+// is pointed at an owner-only local HTML file that forwards to the link. On Windows,
+// another standard account cannot read it, so the link is opened directly. That
+// reaches the default browser even when .html files open in an editor.
 
 import (
 	"bytes"
+	"crypto/hmac"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -38,7 +40,7 @@ import (
 
 type signinRecord struct {
 	Version int    `json:"version"`
-	Port    int    `json:"port"`
+	Addr    string `json:"addr"`
 	PID     int    `json:"pid"`
 	Key     string `json:"key"`
 }
@@ -66,7 +68,16 @@ func signinDir() (string, error) {
 	return dir, nil
 }
 
-func signinFileName(port int) string { return "port-" + strconv.Itoa(port) + ".json" }
+// signinFileName names the file for one exact listener address.
+func signinFileName(addr string) string {
+	safe := strings.Map(func(r rune) rune {
+		if r == '.' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
+			return r
+		}
+		return '_'
+	}, addr)
+	return "addr-" + safe + ".json"
+}
 
 // publishSigninFile writes this run's re-entry key for the same OS account.
 func (s *sessionAuth) publishSigninFile() (string, error) {
@@ -75,11 +86,11 @@ func (s *sessionAuth) publishSigninFile() (string, error) {
 		return "", err
 	}
 	removeStaleLaunchFiles(dir, time.Now())
-	b, err := json.Marshal(signinRecord{Version: 1, Port: s.port, PID: os.Getpid(), Key: s.reentryKey()})
+	b, err := json.Marshal(signinRecord{Version: 2, Addr: s.addr, PID: os.Getpid(), Key: s.reentryKey()})
 	if err != nil {
 		return "", err
 	}
-	final := filepath.Join(dir, signinFileName(s.port))
+	final := filepath.Join(dir, signinFileName(s.addr))
 	f, err := createStage(final, 0o600)
 	if err != nil {
 		return "", err
@@ -110,12 +121,12 @@ func removeStaleLaunchFiles(dir string, now time.Time) {
 	}
 }
 
-func readSigninFile(port int) (*signinRecord, error) {
+func readSigninFile(addr string) (*signinRecord, error) {
 	dir, err := signinDir()
 	if err != nil {
 		return nil, err
 	}
-	path := filepath.Join(dir, signinFileName(port))
+	path := filepath.Join(dir, signinFileName(addr))
 	if err := verifyPrivateFile(path); err != nil {
 		return nil, err
 	}
@@ -127,8 +138,8 @@ func readSigninFile(port int) (*signinRecord, error) {
 	if err := json.Unmarshal(b, &rec); err != nil {
 		return nil, fmt.Errorf("the sign-in file is not readable: %w", err)
 	}
-	if rec.Version != 1 || rec.Port != port || rec.Key == "" {
-		return nil, errors.New("the sign-in file is not for this port")
+	if rec.Version != 2 || rec.Addr != addr || rec.Key == "" {
+		return nil, errors.New("the sign-in file is not for this address")
 	}
 	return &rec, nil
 }
@@ -143,26 +154,38 @@ func signInLaunchPage(link string) string {
 
 // openBrowserAt is replaced in tests so that no test opens a real browser.
 var openBrowserAt = func(target string) error {
-	name, args := "xdg-open", []string{target}
+	argv := []string{"xdg-open", target}
 	switch runtime.GOOS {
 	case "windows":
-		name, args = "rundll32", []string{"url.dll,FileProtocolHandler", target}
+		argv = []string{"rundll32", "url.dll,FileProtocolHandler", target}
 	case "darwin":
-		name = "open"
+		argv[0] = "open"
 	}
-	// The helper environment withholds every Obelisk variable. A desktop opener
-	// also needs to find the user's display session.
-	cmd := helperCommand(name, args...)
-	for _, k := range []string{"DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"} {
-		if v := os.Getenv(k); v != "" {
-			cmd.Env = append(cmd.Env, k+"="+v)
-		}
-	}
+	// This keeps the caller's PATH, where a desktop's browser may be (/snap/bin), and
+	// withholds every Obelisk variable.
+	cmd := burnProgramCommand(argv)
+	cmd.Env = append(cmd.Env, desktopSessionEnv(os.Getenv)...)
 	return cmd.Start()
 }
 
-// openSignInLink opens link through a private forwarding page and returns the page's path.
+// desktopSessionEnv is what a desktop opener needs to find the user's session.
+func desktopSessionEnv(get func(string) string) []string {
+	var env []string
+	for _, k := range []string{"DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "XDG_DATA_DIRS",
+		"XDG_CONFIG_DIRS", "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE", "DESKTOP_SESSION", "DBUS_SESSION_BUS_ADDRESS"} {
+		if v := get(k); v != "" {
+			env = append(env, k+"="+v)
+		}
+	}
+	return env
+}
+
+// openSignInLink opens link, through a private forwarding page where a command line
+// is visible to other accounts. It returns that page's path, or "" if none was made.
 func openSignInLink(link string) (string, error) {
+	if runtime.GOOS == "windows" {
+		return "", openBrowserAt(link)
+	}
 	dir, err := signinDir()
 	if err != nil {
 		return "", err
@@ -202,19 +225,23 @@ func (s *sessionAuth) startOwnerSignIn(base string, logf func(string, ...any)) (
 			_ = os.Remove(file)
 		}
 	}
+	// A started opener can still fail to show anything, so the way in is always printed.
+	recovery := "obelisk -signin -print-link -listen " + strings.TrimPrefix(base, "http://")
 	if os.Getenv("OBELISK_NO_BROWSER") != "" {
-		logf("not opening a browser. To sign in, run: obelisk -signin -listen %s", strings.TrimPrefix(base, "http://"))
+		logf("not opening a browser. To sign in, run: %s", recovery)
 		return cleanup
 	}
 	code, err := s.mintCode()
 	if err == nil {
 		var page string
-		if page, err = openSignInLink(base + signInPath + "?code=" + url.QueryEscape(code)); err == nil {
+		if page, err = openSignInLink(base + signInPath + "?code=" + url.QueryEscape(code)); err == nil && page != "" {
 			time.AfterFunc(signInLinkLifetime, func() { _ = os.Remove(page) })
 		}
 	}
 	if err != nil {
-		logf("could not open a browser (%v). To sign in, run: obelisk -signin -print-link -listen %s", err, strings.TrimPrefix(base, "http://"))
+		logf("could not open a browser (%v). To sign in, run: %s", err, recovery)
+	} else {
+		logf("opening your browser. If it does not appear signed in, run: %s", recovery)
 	}
 	return cleanup
 }
@@ -239,15 +266,16 @@ func runSignIn(addr string, printLink bool, stdout, stderr io.Writer) int {
 	if strings.EqualFold(host, "localhost") {
 		host = "127.0.0.1"
 	}
-	rec, err := readSigninFile(port)
+	exact := net.JoinHostPort(host, portText)
+	rec, err := readSigninFile(exact)
 	if errors.Is(err, os.ErrNotExist) {
-		return fail("no Obelisk started by this account is signed up on port %d. Start Obelisk, or add -listen with the port it uses.", port)
+		return fail("no Obelisk started by this account is listening on %s. Start Obelisk, or add -listen with the address it uses.", exact)
 	}
 	if err != nil {
 		return fail("cannot use the sign-in file: %v", err)
 	}
-	base := "http://" + net.JoinHostPort(host, portText)
-	code, err := requestReentryCode(base, portText, rec.Key)
+	base := "http://" + exact
+	code, err := requestReentryCode(base, exact, rec.Key)
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -260,20 +288,22 @@ func runSignIn(addr string, printLink bool, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail("could not open a browser (%v). Run obelisk -signin -print-link and open the link yourself.", err)
 	}
-	fmt.Fprintln(stdout, "Opening Obelisk in your browser.")
-	// The browser reads the page just after it starts; the code expires regardless.
-	time.Sleep(5 * time.Second)
-	_ = os.Remove(page)
+	fmt.Fprintln(stdout, "Opening Obelisk in your browser. If nothing appears, run obelisk -signin -print-link and open the link yourself.")
+	if page != "" {
+		// The browser reads the page just after it starts; the code expires regardless.
+		time.Sleep(5 * time.Second)
+		_ = os.Remove(page)
+	}
 	return 0
 }
 
-func requestReentryCode(base, port, key string) (string, error) {
+func requestReentryCode(base, addr, key string) (string, error) {
 	var raw [32]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", err
 	}
 	nonce := hex.EncodeToString(raw[:])
-	body, _ := json.Marshal(map[string]string{"nonce": nonce, "proof": reentryClientProof(key, port, nonce)})
+	body, _ := json.Marshal(map[string]string{"nonce": nonce, "proof": reentryClientProof(key, addr, nonce)})
 	req, err := http.NewRequest(http.MethodPost, base+sessionReenterPath, bytes.NewReader(body))
 	if err != nil {
 		return "", err
@@ -283,21 +313,22 @@ func requestReentryCode(base, port, key string) (string, error) {
 	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil}}
 	res, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("no Obelisk answered on port %s. It may have stopped; start it again", port)
+		return "", fmt.Errorf("no Obelisk answered on %s. It may have stopped; start it again", addr)
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("the program on port %s refused the sign-in (HTTP %d). It may be a different Obelisk run; restart Obelisk", port, res.StatusCode)
+		return "", fmt.Errorf("the program on %s refused the sign-in (HTTP %d). It may be a different Obelisk run; restart Obelisk", addr, res.StatusCode)
 	}
 	var out struct {
-		Code  string `json:"code"`
-		Proof string `json:"proof"`
+		Sealed string `json:"sealed"`
+		Proof  string `json:"proof"`
 	}
 	if err := json.NewDecoder(io.LimitReader(res.Body, 4096)).Decode(&out); err != nil {
 		return "", errors.New("the sign-in answer could not be read")
 	}
-	if out.Code == "" || out.Proof != reentryServerProof(key, port, nonce, out.Code) {
-		return "", fmt.Errorf("the program on port %s could not prove it is this account's Obelisk, so no browser was opened", port)
+	sealed, err := hex.DecodeString(out.Sealed)
+	if err != nil || len(sealed) == 0 || !hmac.Equal([]byte(out.Proof), []byte(reentryServerProof(key, addr, nonce, out.Sealed))) {
+		return "", fmt.Errorf("the program on %s could not prove it is this account's Obelisk, so no browser was opened", addr)
 	}
-	return out.Code, nil
+	return string(sealReentryCode(key, addr, nonce, sealed)), nil
 }

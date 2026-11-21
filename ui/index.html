@@ -393,37 +393,58 @@ button.help:hover{border-color:var(--act);color:var(--act)}
 
 <script>
 const $=q=>document.querySelector(q);
-/* Auth: every /api call needs a signed-in session, held in an HttpOnly cookie this
-   page cannot read. With no session the server answers 401 and says which way in
-   applies. A configured token is sent once, swapped for a one-time link, and never
-   stored or put in a URL by this page. */
+/* Auth: every /api call needs a signed-in session: an HttpOnly cookie this page
+   cannot read, plus a page key in localStorage. Browsers send cookies to every port
+   on a host but keep localStorage to this exact host and port, so a program on
+   another port cannot use a cookie it collects. With no session the server answers
+   401 and says which way in applies. A configured token is sent once, swapped for a
+   one-time link, and never stored or put in a URL by this page. */
 try{sessionStorage.removeItem('mnemo_token')}catch(e){}
-let _signingIn=null;
-function showOwnerSignIn(){
-  let d=$('#dsignin');if(d&&d.open)return;
+function pageKey(){try{return localStorage.getItem('obelisk_page_key')||''}catch(e){return ''}}
+function signInDialog(){
+  let d=$('#dsignin');if(d&&d.open)return null;
   if(!d){d=document.createElement('dialog');d.id='dsignin';document.body.append(d)}
-  const port=location.port&&location.port!=='7821'?' -listen 127.0.0.1:'+location.port:'';
+  d.oncancel=e=>e.preventDefault();
+  return d;
+}
+function showOwnerSignIn(){
+  const d=signInDialog();if(!d)return;
+  const where=location.host!=='127.0.0.1:7821'?' -listen '+location.host:'';
   d.innerHTML=`<h1>Sign in to Obelisk</h1>
     <div style="margin:6px 0">This browser has no session. From the computer account that started Obelisk, run:</div>
-    <div class="mono" style="margin:8px 0">obelisk -signin${esc(port)}</div>
+    <div class="mono" style="margin:8px 0">obelisk -signin${esc(where)}</div>
     <div class="dim">A new sign-in link opens in your browser. It works once and expires in a minute.</div>`;
-  d.oncancel=e=>e.preventDefault();
   d.showModal();
 }
-function signInWithToken(){if(_signingIn)return _signingIn;
-  _signingIn=(async()=>{
-    const t=(window.prompt('This Obelisk server requires an access token.\nPaste the token (config auth_token or OBELISK_AUTH_TOKEN):','')||'').trim();
-    if(!t)throw new Error('An access token is required');
-    const r=await fetch('/api/session/exchange',{method:'POST',headers:{'X-Requested-By':'obelisk-ui','Authorization':'Bearer '+t}});
-    const j=await r.json().catch(()=>({}));
-    if(!r.ok||!j.link)throw new Error(r.status===401?'That access token was not accepted':(j.error||r.statusText));
-    location.replace(j.link);
-    return new Promise(()=>{}); // the page is leaving
-  })().finally(()=>{_signingIn=null});
-  return _signingIn;}
-/* Browser-native GETs (a label, QR card or report in a new tab) carry the session
-   cookie, so their URLs hold no secret. */
+// After signing in from another tab, this one recovers when it is next looked at.
+window.addEventListener('focus',async()=>{const d=$('#dsignin');if(!d||!d.open||$('#dsitok'))return;
+  try{const r=await fetch('/api/health',{headers:{'X-Requested-By':'obelisk-ui','X-Obelisk-Page-Key':pageKey()}});if(r.ok)location.reload()}catch(e){}});
+/* One dialog, whatever number of calls were refused. Nothing re-prompts. */
+function showTokenSignIn(){
+  const d=signInDialog();if(!d)return;
+  d.innerHTML=`<h1>Sign in to Obelisk</h1>
+    <label>This server requires an access token (config auth_token or OBELISK_AUTH_TOKEN)</label>
+    <input id="dsitok" class="full" type="password" autocomplete="off">
+    <div id="dsierr" class="dim" style="margin-top:6px"></div>
+    <div class="row" style="margin-top:12px"><button class="btn" id="dsigo">Sign in</button></div>`;
+  const go=async()=>{const t=d.querySelector('#dsitok').value.trim(),err=d.querySelector('#dsierr');
+    if(!t){err.textContent='Enter the access token.';return}
+    try{const r=await fetch('/api/session/exchange',{method:'POST',headers:{'X-Requested-By':'obelisk-ui','Authorization':'Bearer '+t}});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok||!j.link){err.textContent=r.status===401?'That access token was not accepted.':(j.error||r.statusText);return}
+      location.replace(j.link);
+    }catch(e){err.textContent=e.message}};
+  d.querySelector('#dsigo').onclick=go;
+  d.querySelector('#dsitok').onkeydown=e=>{if(e.key==='Enter')go()};
+  d.showModal();
+}
+/* A new tab cannot send the page key, so it gets a single-use ticket for its URL. */
 function mediaURL(u){return u;}
+async function openMedia(u){const w=window.open('about:blank','_blank');
+  try{const r=await api('POST','/api/session/ticket',{url:u});if(w)w.location=r.url;else location.assign(r.url)}
+  catch(e){if(w)w.close();toast(e.message,1)}}
+document.addEventListener('click',e=>{const a=e.target.closest&&e.target.closest('a[href^="/api/"]');
+  if(!a)return;e.preventDefault();openMedia(a.getAttribute('href'))});
 // _sid names this page's session. A delete/overwrite confirmation is issued to it
 // and works only from it.
 const _sid=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():Array.from({length:32},()=>Math.floor(Math.random()*16).toString(16)).join('');
@@ -466,11 +487,11 @@ const api=async(m,u,b)=>{
   // X-Requested-By is the same-origin handshake the server requires on every /api
   // call: a cross-origin page can't set a custom header without a CORS preflight we
   // never grant, so this closes CSRF / DNS-rebinding. Set globally on every request.
-  const h={'Content-Type':'application/json','X-Requested-By':'obelisk-ui','X-Obelisk-Session':_sid};
+  const h={'Content-Type':'application/json','X-Requested-By':'obelisk-ui','X-Obelisk-Session':_sid,'X-Obelisk-Page-Key':pageKey()};
   const r=await fetch(u,{method:m,headers:h,body:b?JSON.stringify(b):undefined});
   const j=await r.json().catch(()=>({}));
   if(r.status===401){
-    if(j.sign_in==='token')await signInWithToken();
+    if(j.sign_in==='token')showTokenSignIn();
     else showOwnerSignIn();
     throw new Error('Sign-in required');
   }
@@ -2694,7 +2715,7 @@ async function printLabel(id,barcode){
     if(confirm(`This volume has no barcode. Assign ${nb||'the next barcode'} from the scheme and print it on the label?`)){
       try{const r=await api('POST',`/api/volumes/${id}/assign-barcode`,{});toast('Assigned '+r.barcode)}catch(e){toast(e.message,1)}}
   }
-  window.open(mediaURL('/api/volumes/'+id+'/label'),'_blank');
+  openMedia('/api/volumes/'+id+'/label');
 }
 /* A volume's offsite status comes from its Location (the "1" in 3-2-1). */
 async function setVolLocationDlg(vid,cur){
@@ -2766,7 +2787,7 @@ async function doFinalize(id,force){
     if(r.blocked){toast('Preconditions not met — see the checks',1);return}
     const d=$('#dlg');if(d)d.close();
     toast(force?'Volume force-sealed (audit-logged) — opening label':'Volume sealed ✓ — opening label');
-    if(r.label_url)window.open(mediaURL(r.label_url),'_blank');
+    if(r.label_url)openMedia(r.label_url);
     volDetail(id);
   }catch(e){toast(e.message,1)}}
 function unsealDlg(id,label){dlg(`<h1>Unseal “${esc(label)}”</h1>
@@ -3355,7 +3376,7 @@ function renderDock(d){
     h+=`</div>`;}
   h+=`<div class="panel"><div class="row" style="align-items:center;gap:10px">
     <div style="flex:1"><b>Session #${ds.id}</b> <span class="dim">· started ${esc((ds.started_at||'').slice(0,10))} · ${(ds.drives_processed||[]).length} drive(s)</span></div>
-    <button class="btn ghost" onclick="window.open(mediaURL('/api/dock/session/${ds.id}/report'),'_blank')">Export report (.md)</button>
+    <button class="btn ghost" onclick="openMedia('/api/dock/session/${ds.id}/report')">Export report (.md)</button>
     <button class="btn ghost" onclick="closeDock(${ds.id})">Close session</button></div>
     <div class="dim" style="font-size:11.5px;margin-top:6px">Read-only toward sources — NAS folders are only hashed, never written. Comparing against: ${(d.archives||[]).map(a=>esc(a.name)).join(', ')||'—'}</div></div>`;
 

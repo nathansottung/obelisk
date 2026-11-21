@@ -179,6 +179,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	auth.addr = listener.Addr().String()
 	handler := serverHandler(app, auth)
 
 	authNote := "sign-in required; obelisk -signin opens a new session"

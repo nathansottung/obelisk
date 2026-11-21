@@ -207,7 +207,7 @@ Binding anything other than localhost (which a container must, to be reachable)
 **requires a bearer token** — the binary refuses to start otherwise. Set a strong
 secret via **`OBELISK_AUTH_TOKEN`** (env, recommended) or **`auth_token`** in
 `config.json`. Scripts send `Authorization: Bearer <token>`. The web UI asks for
-the token once and swaps it for a session cookie through a one-time link, so the
+the token once and swaps it for a browser session through a one-time link, so the
 token never appears in a URL. The UI page itself holds no user data and loads
 without a session. Everything that returns data or changes state needs one.
 
