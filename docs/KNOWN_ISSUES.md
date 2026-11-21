@@ -9,6 +9,9 @@ published.
 Sign-in keeps out other accounts on the PC and web pages. It does not keep out
 programs running under your own account, or an administrator.
 
+Download links open with a normal click or a middle-click. "Save link as" does
+not work.
+
 ## Fixed on main
 
 - Card Check no longer says a card is safe to format; it reports the number of verified copies and when they were last checked ([#25](https://github.com/nathansottung/obelisk/pull/25)).
