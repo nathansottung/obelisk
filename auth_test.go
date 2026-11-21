@@ -32,14 +32,24 @@ func TestAuthMiddleware(t *testing.T) {
 	inner.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
 	inner.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
 
-	// No token → middleware is a pass-through (localhost operation).
-	h := authMiddleware(inner, "")
-	if code := hitAuth(h, "GET", "/api/health", ""); code != 200 {
-		t.Errorf("no-token: /api/health should pass, got %d", code)
+	public := func(p string) bool { return p == "/" }
+
+	// No token: /api still needs a session; there is no pass-through.
+	owner, err := newSessionAuth("", 7821)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := owner.middleware(inner, public)
+	if code := hitAuth(h, "GET", "/api/health", ""); code != 401 {
+		t.Errorf("no-token: /api/health should need a session, got %d", code)
 	}
 
 	// Token set → /api gated, static UI still public.
-	h = authMiddleware(inner, "s3cret")
+	withToken, err := newSessionAuth("s3cret", 7821)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h = withToken.middleware(inner, public)
 	cases := []struct {
 		path, auth string
 		query      string
@@ -49,7 +59,7 @@ func TestAuthMiddleware(t *testing.T) {
 		{"/api/health", "Bearer s3cret", "", 200},
 		{"/api/health", "Bearer wrong", "", 401},
 		{"/api/health", "s3cret", "", 401},       // missing "Bearer " prefix
-		{"/api/health", "", "token=s3cret", 200}, // query-param fallback (browser GETs)
+		{"/api/health", "", "token=s3cret", 401}, // a token in the URL is no longer accepted
 		{"/api/health", "", "token=nope", 401},   // wrong query token
 		{"/", "", "", 200},                       // static UI is public even with a token set
 	}

@@ -46,6 +46,11 @@ settings are refused even with `-init-config`.
 That web address — `http://127.0.0.1:7821` — always means "this same computer."
 `127.0.0.1` is the standard address a computer uses to talk to itself.
 
+Your browser opens and signs you in by itself. If you close the tab and Obelisk
+asks you to sign in, open a terminal **as the same user** and run `obelisk -signin`
+(on Windows, `.\obelisk.exe -signin` in the program folder). A new sign-in link
+opens in your browser. It works once and expires in a minute.
+
 ### If you run Docker or Compose
 
 Use the image built from this corrected source checkout, not an older release

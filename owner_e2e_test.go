@@ -19,6 +19,9 @@ import (
 	"time"
 )
 
+// ownerE2EToken lets these tests call the API without a browser sign-in.
+const ownerE2EToken = "owner-e2e-fixture-token"
+
 // ownerServer is the real binary on a data folder and catalog engine.
 type ownerServer struct {
 	cmd  *exec.Cmd
@@ -37,6 +40,7 @@ func startOwnerServer(t *testing.T, bin, dataDir, engine string) *ownerServer {
 			env = append(env, kv)
 		}
 	}
+	env = append(env, "OBELISK_AUTH_TOKEN="+ownerE2EToken)
 	if engine != "" {
 		env = append(env, catalogEngineEnv+"="+engine)
 	}
@@ -69,6 +73,7 @@ func (s *ownerServer) call(method, path string, body any, into any) (int, error)
 	}
 	req, _ := http.NewRequest(method, s.base+path, rd)
 	req.Header.Set(requestedByHeader, requestedByValue)
+	req.Header.Set("Authorization", "Bearer "+ownerE2EToken)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
