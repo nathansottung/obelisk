@@ -3267,9 +3267,16 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
    error carrying `unrecorded` and the whole job, so the caller can still show what the
    work produced while it warns, and cannot accidentally announce plain success. That
    asymmetry is deliberate: a caller nobody updated fails loudly rather than lying
-   quietly. Every terminal status ends the poll; nothing here waits forever. */
+   quietly. Every terminal status ends the poll; nothing here waits forever. A failed
+   poll is retried: the job keeps running on the server, so one dropped request must
+   not be reported as the job stopping. Several failures in a row are. */
+const WAITJOB_POLL_TRIES=5;
 async function waitJob(jobId,onPoll){
-  for(;;){const jobs=await api('GET','/api/jobs');const j=(jobs||[]).find(x=>x.id===jobId);
+  let misses=0;
+  for(;;){let jobs;
+    try{jobs=await api('GET','/api/jobs');misses=0;}
+    catch(e){if(++misses>=WAITJOB_POLL_TRIES)throw e;await sleep(700);continue;}
+    const j=(jobs||[]).find(x=>x.id===jobId);
     if(j&&onPoll)onPoll(j);
     if(j&&j.status==='COMPLETED'){
       if(j.unrecorded)throw jobUnrecordedError(j);
@@ -3558,7 +3565,7 @@ function ccRender(res,path,job){
   const why=[];
   if(skipN)why.push(`<b>${commaN(skipN)}</b> file(s) <b>could not be read</b>, so their copies are unknown`);
   if(walkN)why.push(`<b>${commaN(walkN)}</b> folder(s) <b>could not be listed</b>; anything inside was never checked`);
-  if(exclN)why.push(`<b>${commaN(exclN)}</b> hidden or system item(s) <b>were not checked</b>`);
+  if(exclN)why.push(`<b>${commaN(exclN)}</b> hidden item(s) <b>were not checked</b>`);
   const sum=ccSummary(res);
   let banner;
   if(incomplete)banner=`<div class="ccban ccstop"><span class="ccdnf">✕ INCOMPLETE</span>
@@ -3576,7 +3583,7 @@ function ccRender(res,path,job){
     ${backedN?ccTile('Fewest copies',commaN(res.fewest_copies||0),'of any backed-up file'):''}
     ${skipN?ccTile('Could not read',commaN(skipN),'file(s) skipped'):''}
     ${walkN?ccTile('Could not list',commaN(walkN),'folder(s) skipped'):''}
-    ${exclN?ccTile('Not checked',commaN(exclN),'hidden or system item(s)'):''}
+    ${exclN?ccTile('Not checked',commaN(exclN),'hidden item(s)'):''}
   </div>`;
   if(skipN||walkN){
     h+=`<div class="panel" style="border-left:3px solid var(--bad)"><h2>What could not be read (${commaN(skipN+walkN)})</h2>
@@ -3589,9 +3596,11 @@ function ccRender(res,path,job){
     }
     h+='</div>';
   }
+  const sysN=res.system_folders||0,sysItems=res.system_folder_items||[];
+  if(sysN)h+=`<div class="dim" style="font-size:11.5px;margin:-6px 0 12px">${commaN(sysN)} system folder(s) were not read: ${sysItems.map(x=>esc(x.path||'')).join(', ')}${sysItems.length<sysN?', …':''}. The operating system makes these on drives it mounts.</div>`;
   if(exclN){
-    h+=`<div class="panel" style="border-left:3px solid var(--bad)"><h2>Not checked: hidden or system items (${commaN(exclN)})</h2>
-      <div class="dim" style="font-size:11.5px;margin-bottom:6px">Names starting with a dot, and system folders such as System Volume Information, were not read. A folder counts once; what is inside it was never seen.</div>
+    h+=`<div class="panel" style="border-left:3px solid var(--bad)"><h2>Not checked: hidden items (${commaN(exclN)})</h2>
+      <div class="dim" style="font-size:11.5px;margin-bottom:6px">Names starting with a dot were not read. A folder counts once; what is inside it was never seen.</div>
       <table><tr><th>Path</th><th>Kind</th></tr>`;
     for(const x of excl)h+=`<tr><td class="mono" style="font-size:11.5px">${esc(x.path||'')}</td><td class="dim">${x.folder?'folder':'file'}</td></tr>`;
     if(excl.length<exclN)h+=`<tr><td colspan="2" class="dim">…and ${commaN(exclN-excl.length)} more</td></tr>`;

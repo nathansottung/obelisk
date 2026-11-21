@@ -67,7 +67,21 @@ const clean={id:1,kind:'cardcheck',label:'Check card E:',status:'COMPLETED',prog
   h=__el('#ccresult').innerHTML;
   ck(h.includes('card removed')&&h.includes('Check again'),'a failed check shows its error and a retry; got: '+h);
 
-  // ---- 7. a finished but unrecorded check still shows its report, with the warning --
+  // ---- 7. a dropped poll is retried, not reported as the job stopping ----------
+  __routes={'POST /api/card-check':{job_id:10},'GET /api/jobs':[{...clean,id:10,result:all}]};
+  const realFetch=globalThis.__fetch;let drops=2;
+  globalThis.__fetch=async(u,o)=>{if(u==='/api/jobs'&&drops>0){drops--;throw new Error('network down');}return realFetch(u,o);};
+  await Promise.race([ccStart('E:'),new Promise(r=>setTimeout(r,6000))]);
+  globalThis.__fetch=realFetch;
+  h=__el('#ccresult').innerHTML;
+  ck(!h.includes('Check again')&&h.includes('files backed up as of'),'two dropped polls must not end the check; got: '+h);
+
+  // ---- 8. system folders are listed quietly, not as incomplete -----------------
+  ccRender({...all,system_folders:1,system_folder_items:[{path:'System Volume Information',folder:true}]},'E:',clean);
+  h=__el('#ccresult').innerHTML;
+  ck(!h.includes('INCOMPLETE')&&h.includes('System Volume Information'),'a system folder is listed without the incomplete banner; got: '+h);
+
+  // ---- 9. a finished but unrecorded check still shows its report, with the warning --
   __routes={'POST /api/card-check':{job_id:9},'GET /api/jobs':[{...clean,id:9,unrecorded:true,result:all}]};
   await Promise.race([ccStart('E:'),new Promise(r=>setTimeout(r,4000))]);
   h=__el('#ccresult').innerHTML;

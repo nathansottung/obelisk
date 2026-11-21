@@ -179,7 +179,8 @@ func TestCardCheck_UnlistableDirMakesItIncomplete(t *testing.T) {
 }
 
 // The tool's own sidecar folders hold its records, not anyone's files: they are passed
-// over without making the result incomplete. System folders are counted as not checked.
+// over. Operating-system folders are listed as not read, without making the result
+// incomplete: Windows makes them on nearly every drive it mounts.
 func TestCardCheck_SidecarsSkippedSystemFoldersCounted(t *testing.T) {
 	app := newSetupApp(t)
 	card := t.TempDir()
@@ -190,8 +191,13 @@ func TestCardCheck_SidecarsSkippedSystemFoldersCounted(t *testing.T) {
 		t.Fatalf("a sidecar folder must not count: %+v", res)
 	}
 	writeFile(t, card, "System Volume Information/x.dat", "system")
+	writeFile(t, card, "$RECYCLE.BIN/S-1/y.dat", "recycled")
 	res = checkCard(t, app, card)
-	if !res.Incomplete || res.Excluded != 1 || !res.ExcludedItems[0].Folder {
-		t.Fatalf("a system folder is not checked and must be counted: %+v", res)
+	if res.Incomplete || res.Excluded != 0 || res.SystemFolders != 2 || len(res.SystemFolderItems) != 2 {
+		t.Fatalf("system folders are listed, not counted as incomplete: %+v", res)
+	}
+	writeFile(t, card, ".Trashes/z.dat", "hidden")
+	if res = checkCard(t, app, card); !res.Incomplete || res.Excluded != 1 {
+		t.Fatalf("a dot-prefixed system folder is still a hidden item: %+v", res)
 	}
 }

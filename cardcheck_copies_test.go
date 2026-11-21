@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -219,7 +220,7 @@ func TestCardCheck_HiddenItemsAreNotDropped(t *testing.T) {
 		t.Fatalf("hidden items must be counted and make the result incomplete: incomplete=%v excluded=%d items=%+v",
 			res.Incomplete, res.Excluded, res.ExcludedItems)
 	}
-	if !strings.Contains(res.Summary, "Incomplete: 2 hidden or system item(s) were not checked.") {
+	if !strings.Contains(res.Summary, "Incomplete: 2 hidden item(s) were not checked.") {
 		t.Fatalf("the summary must say the result is incomplete: %q", res.Summary)
 	}
 }
@@ -434,5 +435,80 @@ func TestCardCheck_EmptyCardSaysSo(t *testing.T) {
 	assertNoVerdict(t, res)
 	if res.Summary != "No files found." || res.Incomplete {
 		t.Fatalf("summary = %q incomplete=%v", res.Summary, res.Incomplete)
+	}
+}
+
+// The card read through another reader reports that reader's serial. Its partition
+// still names it, so its own copy counts as zero.
+func TestCardCheck_SamePartitionOtherReaderCountsZero(t *testing.T) {
+	app := newSetupApp(t)
+	old := cardDeviceIdentity
+	cardDeviceIdentity = func(string) (DeviceIdentity, error) {
+		return DeviceIdentity{Serial: "READER-B", Partition: "guid:card-1"}, nil
+	}
+	t.Cleanup(func() { cardDeviceIdentity = old })
+	coll := app.Store.AddCollectionKind("Shoot", ArchiveSourced)
+	v := app.Store.AddVolume(Volume{Label: "CARD-AS-DOCKED", Kind: "OTHER", Serial: "READER-A", PartitionID: "guid:card-1"})
+	cardPackage(t, app, coll.ID, "MIRROR-1", []string{"frame"}, map[*Volume]time.Time{v: time.Now()})
+
+	card := t.TempDir()
+	writeFile(t, card, "IMG_1.JPG", "frame")
+	res := checkCard(t, app, card)
+	if res.BackedUpFiles != 0 {
+		t.Fatalf("the card's own copy, read through another reader, must count as zero: %+v", res.BackedUp)
+	}
+	if f := onlyFile(t, res.NoCopy); len(f.NotCounted) != 1 || !strings.Contains(f.NotCounted[0], "on this card") {
+		t.Fatalf("not_counted = %v", f.NotCounted)
+	}
+}
+
+// With two partitions of one disk registered, the lookup by serial alone is
+// ambiguous; the serial comparison still finds the card's disk.
+func TestCardCheck_SerialDecidesWhenPartitionsAmbiguous(t *testing.T) {
+	app := newSetupApp(t)
+	stubCard(t, "SER-DISK")
+	coll := app.Store.AddCollectionKind("Shoot", ArchiveSourced)
+	p1 := app.Store.AddVolume(Volume{Label: "DISK-P1", Kind: "HDD", Serial: "SER-DISK", PartitionID: "guid:p1"})
+	app.Store.AddVolume(Volume{Label: "DISK-P2", Kind: "HDD", Serial: "ser-disk", PartitionID: "guid:p2"})
+	cardPackage(t, app, coll.ID, "PKG-1", []string{"frame"}, map[*Volume]time.Time{p1: time.Now()})
+
+	card := t.TempDir()
+	writeFile(t, card, "IMG_1.JPG", "frame")
+	if res := checkCard(t, app, card); res.BackedUpFiles != 0 {
+		t.Fatalf("a copy on another partition of the card's disk must count as zero: %+v", res.BackedUp)
+	}
+}
+
+// A span over two tapes and a plain copy on one of them share a device: losing that
+// tape loses both, so they count as one copy.
+func TestCardCheck_SpanAndPlainCopyShareADevice(t *testing.T) {
+	app := newSetupApp(t)
+	stubCard(t, "CARD-SERIAL")
+	coll := app.Store.AddCollectionKind("Big", ArchiveSourced)
+	t1 := app.Store.AddVolume(Volume{Label: "TAPE-1", Kind: "TAPE", Serial: "T1"})
+	t2 := app.Store.AddVolume(Volume{Label: "TAPE-2", Kind: "TAPE", Serial: "T2"})
+	at := time.Now()
+	span := app.Store.AddChunk(Chunk{CollectionID: coll.ID, Name: "SPAN-1", Status: "VERIFIED", Spanned: true, VerifiedAt: &at,
+		Files: []ChunkFileRef{{RelPath: "f", Hash: sha256Hex([]byte("big-frame"))}}})
+	if err := app.Store.SetChunkSegments(span, []Segment{{Index: 1, Status: "VERIFIED", VolumeID: t1.ID}, {Index: 2, Status: "VERIFIED", VolumeID: t2.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	cardPackage(t, app, coll.ID, "PKG-2", []string{"big-frame"}, map[*Volume]time.Time{t1: at})
+
+	card := t.TempDir()
+	writeFile(t, card, "IMG.JPG", "big-frame")
+	res := checkCard(t, app, card)
+	if f := onlyFile(t, res.BackedUp); len(f.Copies) != 1 || res.FewestCopies != 1 {
+		t.Fatalf("copies sharing a device must count once: %+v", f.Copies)
+	}
+}
+
+// A typed drive letter without a separator still names the drive's root.
+func TestPathAtOrUnder_BareDriveLetter(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("drive letters are a Windows path form")
+	}
+	if !pathAtOrUnder(`E:\PKG-1`, "E:") || !pathAtOrUnder(`E:\PKG-1`, `E:\`) || pathAtOrUnder(`F:\PKG-1`, "E:") {
+		t.Fatal("a bare drive letter must match paths on that drive only")
 	}
 }

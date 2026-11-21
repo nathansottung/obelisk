@@ -59,6 +59,7 @@ type CardCopy struct {
 	// date is from the last time it was.
 	Offline bool `json:"offline,omitempty"`
 	vols    []int
+	devs    []string // the physical devices it is on; a file counts each device once
 }
 
 // CardFileResult is one file on the card and the backup copies its content has.
@@ -84,7 +85,7 @@ type CardExtRow struct {
 	NoCopyBytes int64  `json:"no_copy_bytes"`
 }
 
-// CardExcluded is a hidden or system file or folder the check did not read.
+// CardExcluded is a hidden file or folder, or a system folder, the check did not read.
 type CardExcluded struct {
 	Path   string `json:"path"`
 	Folder bool   `json:"folder,omitempty"`
@@ -108,12 +109,17 @@ type CardCheckResult struct {
 
 	Skipped    int `json:"skipped"`     // files listed but not hashed (I/O error)
 	WalkErrors int `json:"walk_errors"` // folders/entries that could not be listed at all
-	// Excluded counts hidden (dot-prefixed) and system files and folders that were not
-	// read. A folder counts once; what is inside it was never seen.
+	// Excluded counts hidden (dot-prefixed) files and folders that were not read. A
+	// folder counts once; what is inside it was never seen.
 	Excluded      int            `json:"excluded"`
 	ExcludedItems []CardExcluded `json:"excluded_items,omitempty"` // capped
+	// SystemFolders counts operating-system bookkeeping folders (System Volume
+	// Information, $RECYCLE.BIN, ...) that were not read. Windows makes them on nearly
+	// every drive it mounts, so they are listed but do not make the result incomplete.
+	SystemFolders     int            `json:"system_folders,omitempty"`
+	SystemFolderItems []CardExcluded `json:"system_folder_items,omitempty"` // capped
 	// Incomplete is true when anything on the card was not read: an unreadable file,
-	// an unlistable folder, or an excluded item.
+	// an unlistable folder, or a hidden item.
 	Incomplete bool `json:"incomplete"`
 
 	Problems          []ScanProblem    `json:"problems,omitempty"` // what could not be read, capped (kind walk|stat|hash|unsupported)
@@ -146,9 +152,10 @@ type cardRecord struct {
 
 // cardDevice is what is known of the card's physical device.
 type cardDevice struct {
-	mount    string
-	serial   string
-	volumeID int // the registered volume the card is, if any
+	mount     string
+	serial    string
+	partition string // the card's partition identity, when the system reports one
+	volumeID  int    // the registered volume the card is, if any
 }
 
 // placeOf reports whether v is on the card's device (true) or a different one
@@ -156,6 +163,11 @@ type cardDevice struct {
 // a serial, so they are one device.
 func (d cardDevice) placeOf(v *Volume, copyPath string) (onCard, known bool) {
 	if d.volumeID != 0 && v.ID == d.volumeID {
+		return true, true
+	}
+	// The same partition is the card itself, whatever the serials say: a card read
+	// through another reader reports that reader's serial, not the one recorded.
+	if same, ok := partitionCompare(v.PartitionID, d.partition); ok && same {
 		return true, true
 	}
 	vs := strings.TrimSpace(v.Serial)
@@ -173,11 +185,20 @@ func (d cardDevice) placeOf(v *Volume, copyPath string) (onCard, known bool) {
 // pathAtOrUnder reports whether p is root or inside it, at path-segment boundaries.
 // It handles a drive root such as E: as well as a folder.
 func pathAtOrUnder(p, root string) bool {
-	np, nr := strings.TrimSuffix(normPath(p), "/"), strings.TrimSuffix(normPath(root), "/")
+	np, nr := strings.TrimSuffix(normPath(driveRoot(p)), "/"), strings.TrimSuffix(normPath(driveRoot(root)), "/")
 	if np == "" || nr == "" {
 		return false
 	}
 	return np == nr || strings.HasPrefix(np, nr+"/")
+}
+
+// driveRoot turns a bare drive letter (E:) into its root (E:\); a bare letter
+// otherwise means the current folder on that drive.
+func driveRoot(p string) string {
+	if len(p) == 2 && p[1] == ':' {
+		return p + string(filepath.Separator)
+	}
+	return p
 }
 
 func (a *App) cardCopies(dev cardDevice) (*cardCopyIndex, error) {
@@ -227,7 +248,7 @@ func (a *App) cardCopiesOnce(dev cardDevice) (*cardCopyIndex, error) {
 			case checkOK != nil && !*checkOK && checkAt != nil && checkAt.After(*verifiedAt):
 				return CardCopy{}, name + ": a later check failed"
 			}
-			return CardCopy{Where: name, Package: c.Name, Kind: kind, LastVerifiedAt: *verifiedAt, vols: []int{v.ID}}, ""
+			return CardCopy{Where: name, Package: c.Name, Kind: kind, LastVerifiedAt: *verifiedAt, vols: []int{v.ID}, devs: []string{devKey(v)}}, ""
 		}
 		if c.Spanned {
 			// One logical copy spread over its segment media: it counts only when every
@@ -242,7 +263,11 @@ func (a *App) cardCopiesOnce(dev cardDevice) (*cardCopyIndex, error) {
 				}
 				v := vols[sg.VolumeID]
 				if v == nil {
-					reason = "a segment's drive is no longer registered"
+					if sg.VolumeID == 0 {
+						reason = c.Name + ": a segment has no drive recorded"
+					} else {
+						reason = c.Name + ": a segment's drive is no longer registered"
+					}
 					continue
 				}
 				if onCard, known := dev.placeOf(v, sg.Dest); onCard {
@@ -262,7 +287,7 @@ func (a *App) cardCopiesOnce(dev cardDevice) (*cardCopyIndex, error) {
 			default:
 				sort.Strings(keys)
 				pkg.counted["span:"+strings.Join(keys, "+")] = CardCopy{Where: strings.Join(names, " + "),
-					Package: c.Name, Kind: kind, LastVerifiedAt: *c.VerifiedAt, vols: ids}
+					Package: c.Name, Kind: kind, LastVerifiedAt: *c.VerifiedAt, vols: ids, devs: keys}
 			}
 		} else {
 			for _, cp := range c.Copies {
@@ -343,11 +368,13 @@ func cardSkipDir(name string) bool {
 	return false
 }
 
-// cardExcluded names hidden (dot-prefixed) and system entries the check does not
-// read. They are counted and listed, and they make the result incomplete.
-func cardExcluded(name string) bool {
-	return strings.HasPrefix(name, ".") || skipBrowseDir(name)
-}
+// cardExcluded names hidden (dot-prefixed) entries the check does not read. They are
+// counted and listed, and they make the result incomplete.
+func cardExcluded(name string) bool { return strings.HasPrefix(name, ".") }
+
+// cardSystemFolder names operating-system bookkeeping folders the check does not
+// read. They are counted and listed, and do not make the result incomplete.
+func cardSystemFolder(name string) bool { return !cardExcluded(name) && skipBrowseDir(name) }
 
 // CardCheck reads a mounted card/drive and reports, per file, how many backup copies
 // its content has, where, and when each was last verified. Read-only.
@@ -360,6 +387,7 @@ func (a *App) CardCheck(mountPath string, progress func(float64, string)) (*Card
 	dev := cardDevice{mount: mountPath}
 	if id, err := cardDeviceIdentity(mountPath); err == nil {
 		dev.serial = strings.TrimSpace(id.Serial)
+		dev.partition = strings.TrimSpace(id.Partition)
 		if v := a.Store.VolumeByIdentity(id.Serial, id.Partition); v != nil {
 			dev.volumeID = v.ID
 		}
@@ -385,14 +413,17 @@ func (a *App) CardCheck(mountPath string, progress func(float64, string)) (*Card
 			res.Problems = append(res.Problems, ScanProblem{Path: p, Kind: kind, Err: msg})
 		}
 	}
+	relOf := func(p string) string {
+		rel, e := filepath.Rel(mountPath, p)
+		if e != nil {
+			rel = filepath.Base(p)
+		}
+		return filepath.ToSlash(rel)
+	}
 	exclude := func(p string, folder bool) {
 		res.Excluded++
 		if len(res.ExcludedItems) < maxCardProblems {
-			rel, e := filepath.Rel(mountPath, p)
-			if e != nil {
-				rel = filepath.Base(p)
-			}
-			res.ExcludedItems = append(res.ExcludedItems, CardExcluded{Path: filepath.ToSlash(rel), Folder: folder})
+			res.ExcludedItems = append(res.ExcludedItems, CardExcluded{Path: relOf(p), Folder: folder})
 		}
 	}
 
@@ -412,6 +443,13 @@ func (a *App) CardCheck(mountPath string, progress func(float64, string)) (*Card
 			}
 			if cardExcluded(d.Name()) {
 				exclude(p, true)
+				return filepath.SkipDir
+			}
+			if cardSystemFolder(d.Name()) {
+				res.SystemFolders++
+				if len(res.SystemFolderItems) < maxCardProblems {
+					res.SystemFolderItems = append(res.SystemFolderItems, CardExcluded{Path: relOf(p), Folder: true})
+				}
 				return filepath.SkipDir
 			}
 			return nil
@@ -446,16 +484,14 @@ func (a *App) CardCheck(mountPath string, progress func(float64, string)) (*Card
 			rel = filepath.ToSlash(rel)
 			role, _ := classifyRole(reg, rel)
 			fr := CardFileResult{Rel: rel, Size: size, Hash: sha, Role: role}
-			counted := map[string]CardCopy{}
+			var cands []CardCopy
 			for _, pkg := range idx.copies[sha] {
-				for k, cc := range pkg.counted {
-					if prev, ok := counted[k]; !ok || cc.LastVerifiedAt.After(prev.LastVerifiedAt) {
-						counted[k] = cc
-					}
+				for _, cc := range pkg.counted {
+					cands = append(cands, cc)
 				}
 				fr.NotCounted = append(fr.NotCounted, pkg.notCounted...)
 			}
-			for _, cc := range counted {
+			for _, cc := range distinctDeviceCopies(cands) {
 				cc.Offline = !cardCopyOnline(cc.vols, online)
 				fr.Copies = append(fr.Copies, cc)
 			}
@@ -548,6 +584,40 @@ func (a *App) CardCheck(mountPath string, progress func(float64, string)) (*Card
 	return res, nil
 }
 
+// distinctDeviceCopies keeps copies that share no physical device with a copy
+// already kept, so losing one device never takes more than one counted copy. Copies
+// on fewer devices are kept first (a plain copy before a span over the same drive),
+// and among those the most recently verified.
+func distinctDeviceCopies(cands []CardCopy) []CardCopy {
+	sort.SliceStable(cands, func(i, j int) bool {
+		if len(cands[i].devs) != len(cands[j].devs) {
+			return len(cands[i].devs) < len(cands[j].devs)
+		}
+		if !cands[i].LastVerifiedAt.Equal(cands[j].LastVerifiedAt) {
+			return cands[i].LastVerifiedAt.After(cands[j].LastVerifiedAt)
+		}
+		return cands[i].Where < cands[j].Where
+	})
+	used := map[string]bool{}
+	var out []CardCopy
+	for _, cc := range cands {
+		clash := false
+		for _, d := range cc.devs {
+			if used[d] {
+				clash = true
+			}
+		}
+		if clash {
+			continue
+		}
+		for _, d := range cc.devs {
+			used[d] = true
+		}
+		out = append(out, cc)
+	}
+	return out
+}
+
 // cardCopyOnline reports whether every volume a copy is on is connected now.
 func cardCopyOnline(vols []int, online map[int]bool) bool {
 	if len(vols) == 0 {
@@ -601,7 +671,7 @@ func cardCheckSummary(res *CardCheckResult) string {
 			gaps = append(gaps, fmt.Sprintf("%s folder(s) could not be listed", commaInt(res.WalkErrors)))
 		}
 		if res.Excluded > 0 {
-			gaps = append(gaps, fmt.Sprintf("%s hidden or system item(s) were not checked", commaInt(res.Excluded)))
+			gaps = append(gaps, fmt.Sprintf("%s hidden item(s) were not checked", commaInt(res.Excluded)))
 		}
 		parts = append(parts, "Incomplete: "+strings.Join(gaps, ", ")+".")
 	}
