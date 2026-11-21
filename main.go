@@ -753,8 +753,8 @@ func api(mux *http.ServeMux, app *App) {
 	mux.HandleFunc("GET /api/mounts", func(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, enumerateMounts())
 	})
-	// Card check: read a mounted card/drive and report, by content, what's already in
-	// the inventory and what's new — the "is it safe to reformat?" answer. Read-only.
+	// Card check: read a mounted card/drive and report, by content, how many verified
+	// backup copies each file has, where, and when each was last checked. Read-only.
 	mux.HandleFunc("POST /api/card-check", func(w http.ResponseWriter, r *http.Request) {
 		b := body(r)
 		p := strings.TrimSpace(s(b, "path"))
