@@ -1,17 +1,22 @@
 package main
 
-// cardcheck.go — "Is this card already backed up?" Plug in an SD/CF/USB card, and
-// Obelisk reads it (NEVER writes, NEVER registers it as a source) and checks every
-// file BY CONTENT against the ENTIRE known inventory: your archives (and their retained
-// prior versions), packaged chunks and the volumes their copies live on, and the
-// offline snapshots of every drive you've inventoried. The answer is the one a
-// photographer actually wants before reformatting: which frames are already safe, which
-// are new, and — for the safe ones — where they already live.
+// cardcheck.go — "How many backup copies does this card's content have?" Plug in an
+// SD/CF/USB card, and Obelisk reads it (NEVER writes, NEVER registers it as a source)
+// and looks up every file BY CONTENT. For each file it reports how many separate,
+// verified backup copies exist, where each one lives, and when each was last checked.
+//
+// It never gives a verdict on formatting, erasing or reusing a card. That is a permanent rule:
+// the tool reports copies and dates, and the person decides.
+//
+// What counts as a copy is deliberately narrow. A copy counts only when it is a
+// package copy or an adopted backup copy (not a source-scan record, an earlier-version
+// record, or a drive snapshot on its own), is not superseded, last verified OK, and
+// sits on a different physical device from the card. A file the catalog knows only
+// from a scan or a snapshot is reported as recorded, with no backup copy.
 //
 // Read-only by construction: it only os.Opens files to hash them, mutates nothing in
-// the catalog, and adds no source root. Matching is by SHA-256 (the universal on-media
-// hash) with BLAKE3 as a fallback, so a file counts as "backed up" the instant its
-// content is found anywhere in the inventory — regardless of its name or folder on the card.
+// the catalog, and adds no source root. Copies are matched by SHA-256, the on-media
+// hash; BLAKE3 is used only to recognise a file the catalog has recorded.
 
 import (
 	"fmt"
@@ -19,166 +24,343 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-// maxKnownLocs caps how many places we remember per content hash (bounds memory on
-// huge libraries; a few is plenty to reassure "it's on the NAS and a backup drive").
-const maxKnownLocs = 3
-
 // maxCardProblems caps how many individual unreadable paths the result carries back
 // for display; the Skipped / WalkErrors counts below are always exact.
 const maxCardProblems = 100
 
-// CardFileResult is one file on the card and whether its content is already known.
+// maxCardFileRows caps each per-file list (files with copies, files without) the
+// result carries back; the counts are always exact.
+const maxCardFileRows = 500
+
+// cardDateTime is the date and time format the card check reports in, in local time.
+const cardDateTime = "01/02/2006 15:04:05"
+
+// cardDeviceIdentity resolves the physical device behind the card. A seam so tests
+// can name the card's device without real hardware.
+var cardDeviceIdentity = resolveDeviceIdentity
+
+// cardOnlineVolumes reports which registered volumes are connected right now. A seam
+// for tests; the live probe shells a tool per mount.
+var cardOnlineVolumes = func(a *App) map[int]bool { return a.onlineVolumeIDsCached() }
+
+// CardCopy is one counted backup copy of a card file's content.
+type CardCopy struct {
+	Where          string    `json:"where"`   // volume label (or labels, for a spanned copy)
+	Package        string    `json:"package"` // package name
+	Kind           string    `json:"kind"`    // "package" | "adopted"
+	LastVerifiedAt time.Time `json:"last_verified_at"`
+	// Offline: the volume is not connected now, so this copy was not rechecked; its
+	// date is from the last time it was.
+	Offline bool `json:"offline,omitempty"`
+	vols    []int
+	devs    []string // the physical devices it is on; a file counts each device once
+}
+
+// CardFileResult is one file on the card and the backup copies its content has.
 type CardFileResult struct {
-	Rel       string   `json:"rel"`
-	Size      int64    `json:"size"`
-	Hash      string   `json:"hash,omitempty"`
-	Role      string   `json:"role,omitempty"`
-	BackedUp  bool     `json:"backed_up"`
-	Locations []string `json:"locations,omitempty"` // where it already lives (for backed-up files)
+	Rel    string     `json:"rel"`
+	Size   int64      `json:"size"`
+	Hash   string     `json:"hash,omitempty"`
+	Role   string     `json:"role,omitempty"`
+	Copies []CardCopy `json:"copies,omitempty"`
+	// RecordedAt / RecordedIn: for a file with no backup copy that the catalog has
+	// still seen (a source scan, an earlier version, a drive snapshot), when and where.
+	RecordedAt *time.Time `json:"recorded_at,omitempty"`
+	RecordedIn string     `json:"recorded_in,omitempty"`
+	// NotCounted lists copies that were found but do not count, and why.
+	NotCounted []string `json:"not_counted,omitempty"`
 }
 
-// CardExtRow is a per-type tally of the card, split into new vs total.
+// CardExtRow is a per-type tally of the card, split into no-copy vs total.
 type CardExtRow struct {
-	Ext      string `json:"ext"`
-	Total    int    `json:"total"`
-	New      int    `json:"new"`
-	NewBytes int64  `json:"new_bytes"`
+	Ext         string `json:"ext"`
+	Total       int    `json:"total"`
+	NoCopy      int    `json:"no_copy"`
+	NoCopyBytes int64  `json:"no_copy_bytes"`
 }
 
-// CardCheckResult is the whole verdict.
+// CardExcluded is a hidden file or folder, or a system folder, the check did not read.
+type CardExcluded struct {
+	Path   string `json:"path"`
+	Folder bool   `json:"folder,omitempty"`
+}
+
+// CardCheckResult is the whole report. It carries counts and dates, never a verdict.
 type CardCheckResult struct {
-	MountPath     string           `json:"mount_path"`
-	TotalFiles    int              `json:"total_files"`
-	TotalBytes    int64            `json:"total_bytes"`
-	BackedUpFiles int              `json:"backed_up_files"`
-	BackedUpBytes int64            `json:"backed_up_bytes"`
-	NewFiles      int              `json:"new_files"`
-	NewBytes      int64            `json:"new_bytes"`
-	Skipped       int              `json:"skipped"`     // files listed but not hashed (I/O error)
-	WalkErrors    int              `json:"walk_errors"` // folders/entries that could not be listed at all
-	SafeToFormat  bool             `json:"safe_to_format"`
-	Problems      []ScanProblem    `json:"problems,omitempty"`      // what could not be read, capped (kind walk|stat|hash|unsupported)
-	Where         []string         `json:"where,omitempty"`         // distinct places the already-backed-up files live
-	New           []CardFileResult `json:"new,omitempty"`           // the not-yet-backed-up files (capped)
-	NewTruncated  int              `json:"new_truncated,omitempty"` // how many more new files beyond the cap
-	Sample        []CardFileResult `json:"sample,omitempty"`        // a few backed-up examples, with where
-	ByExt         []CardExtRow     `json:"by_ext,omitempty"`
+	MountPath     string `json:"mount_path"`
+	TotalFiles    int    `json:"total_files"`
+	TotalBytes    int64  `json:"total_bytes"`
+	BackedUpFiles int    `json:"backed_up_files"` // files with at least one counted copy
+	BackedUpBytes int64  `json:"backed_up_bytes"`
+	NoCopyFiles   int    `json:"no_copy_files"` // files with no counted copy
+	NoCopyBytes   int64  `json:"no_copy_bytes"`
+	RecordedOnly  int    `json:"recorded_only"` // of NoCopyFiles: known from a record, with no backup copy
+	// FewestCopies is the lowest copy count among files that have a copy.
+	FewestCopies int `json:"fewest_copies"`
+	// AsOf is the oldest last-verified time among every copy counted: the report is
+	// only as fresh as its stalest proof. Nil when no copy was counted.
+	AsOf *time.Time `json:"as_of,omitempty"`
+
+	Skipped    int `json:"skipped"`     // files listed but not hashed (I/O error)
+	WalkErrors int `json:"walk_errors"` // folders/entries that could not be listed at all
+	// Excluded counts hidden (dot-prefixed) files and folders that were not read. A
+	// folder counts once; what is inside it was never seen.
+	Excluded      int            `json:"excluded"`
+	ExcludedItems []CardExcluded `json:"excluded_items,omitempty"` // capped
+	// SystemFolders counts operating-system bookkeeping folders (System Volume
+	// Information, $RECYCLE.BIN, ...) that were not read. Windows makes them on nearly
+	// every drive it mounts, so they are listed but do not make the result incomplete.
+	SystemFolders     int            `json:"system_folders,omitempty"`
+	SystemFolderItems []CardExcluded `json:"system_folder_items,omitempty"` // capped
+	// Incomplete is true when anything on the card was not read: an unreadable file,
+	// an unlistable folder, or a hidden item.
+	Incomplete bool `json:"incomplete"`
+
+	Problems          []ScanProblem    `json:"problems,omitempty"` // what could not be read, capped (kind walk|stat|hash|unsupported)
+	Where             []string         `json:"where,omitempty"`    // distinct places counted copies live
+	NoCopy            []CardFileResult `json:"no_copy,omitempty"`  // files with no backup copy (capped)
+	NoCopyTruncated   int              `json:"no_copy_truncated,omitempty"`
+	BackedUp          []CardFileResult `json:"backed_up,omitempty"` // files with copies, with each copy (capped)
+	BackedUpTruncated int              `json:"backed_up_truncated,omitempty"`
+	ByExt             []CardExtRow     `json:"by_ext,omitempty"`
+	Summary           string           `json:"summary"`
 }
 
-// knownContent builds an index from every content hash the catalog knows (SHA-256 AND
-// BLAKE3) to a few human labels of where it lives — the whole inventory, in one map.
-func (a *App) knownContent() (map[string][]string, error) {
-	return retrySnapshotRead(a.knownContentOnce)
+// cardCopyIndex is what the catalog can say about content: the backup copies that
+// count, the ones that do not (and why), and the records that only show it was seen.
+type cardCopyIndex struct {
+	copies   map[string][]*cardPkg // SHA-256 → packages holding it
+	recorded map[string]cardRecord // SHA-256 or BLAKE3 → earliest record of it
 }
 
-func (a *App) knownContentOnce() (map[string][]string, error) {
-	idx := map[string][]string{}
-	add := func(hash, loc string) {
-		if hash == "" {
-			return
-		}
-		cur := idx[hash]
-		if loc == "" {
-			if cur == nil {
-				idx[hash] = []string{} // presence with no label
-			}
-			return
-		}
-		if len(cur) >= maxKnownLocs {
-			return
-		}
-		for _, l := range cur {
-			if l == loc {
-				return
-			}
-		}
-		idx[hash] = append(cur, loc)
+// cardPkg is one package's copies, judged once against the card.
+type cardPkg struct {
+	counted    map[string]CardCopy // keyed by physical device, so one device counts once
+	notCounted []string
+}
+
+type cardRecord struct {
+	at time.Time
+	in string
+}
+
+// cardDevice is what is known of the card's physical device.
+type cardDevice struct {
+	mount     string
+	serial    string
+	partition string // the card's partition identity, when the system reports one
+	volumeID  int    // the registered volume the card is, if any
+}
+
+// placeOf reports whether v is on the card's device (true) or a different one
+// (false), and whether that could be told at all. Two partitions of one disk share
+// a serial, so they are one device.
+func (d cardDevice) placeOf(v *Volume, copyPath string) (onCard, known bool) {
+	if d.volumeID != 0 && v.ID == d.volumeID {
+		return true, true
 	}
+	// The same partition is the card itself, whatever the serials say: a card read
+	// through another reader reports that reader's serial, not the one recorded.
+	if same, ok := partitionCompare(v.PartitionID, d.partition); ok && same {
+		return true, true
+	}
+	vs := strings.TrimSpace(v.Serial)
+	if d.serial != "" && vs != "" {
+		return strings.EqualFold(vs, d.serial), true
+	}
+	// Without both serials the device cannot be told apart. A copy recorded under the
+	// card's own mount is treated as on the card; anything else is unknown.
+	if pathAtOrUnder(copyPath, d.mount) {
+		return true, true
+	}
+	return false, false
+}
 
-	volLabel := map[int]string{}
+// pathAtOrUnder reports whether p is root or inside it, at path-segment boundaries.
+// It handles a drive root such as E: as well as a folder.
+func pathAtOrUnder(p, root string) bool {
+	np, nr := strings.TrimSuffix(normPath(driveRoot(p)), "/"), strings.TrimSuffix(normPath(driveRoot(root)), "/")
+	if np == "" || nr == "" {
+		return false
+	}
+	return np == nr || strings.HasPrefix(np, nr+"/")
+}
+
+// driveRoot turns a bare drive letter (E:) into its root (E:\); a bare letter
+// otherwise means the current folder on that drive.
+func driveRoot(p string) string {
+	if len(p) == 2 && p[1] == ':' {
+		return p + string(filepath.Separator)
+	}
+	return p
+}
+
+func (a *App) cardCopies(dev cardDevice) (*cardCopyIndex, error) {
+	return retrySnapshotRead(func() (*cardCopyIndex, error) { return a.cardCopiesOnce(dev) })
+}
+
+func (a *App) cardCopiesOnce(dev cardDevice) (*cardCopyIndex, error) {
+	idx := &cardCopyIndex{copies: map[string][]*cardPkg{}, recorded: map[string]cardRecord{}}
+	vols := map[int]*Volume{}
 	for _, v := range a.Store.Volumes() {
-		volLabel[v.ID] = nonEmpty(v.Label, fmt.Sprintf("vol#%d", v.ID))
+		vols[v.ID] = v
 	}
-
-	// Archives — current files and their retained prior versions.
-	for _, coll := range a.Store.Collections() {
-		loc := "Archive: " + coll.Name
-		for f, err := range a.Store.FilesOf(coll.ID) {
-			if err != nil {
-				return nil, err
-			}
-			add(f.Hash, loc)
-			add(f.Blake3, loc)
-			for _, v := range f.Versions {
-				add(v.Hash, loc+" (earlier version)") // retained prior versions keep only SHA-256
-			}
+	label := func(v *Volume) string { return nonEmpty(v.Label, fmt.Sprintf("vol#%d", v.ID)) }
+	devKey := func(v *Volume) string {
+		if s := strings.TrimSpace(v.Serial); s != "" {
+			return "dev:" + strings.ToUpper(s) // two partitions of one disk are one device
 		}
+		return "vol:" + strconv.Itoa(v.ID)
 	}
 
-	// Packaged chunks — a ref's content lives on the volumes the chunk's current
-	// copies (and spanned segments) sit on; else name the archive.
 	for _, c := range a.Store.Chunks(0) {
-		var locs []string
-		seen := map[int]bool{}
-		addVol := func(vid int) {
-			if vid == 0 || seen[vid] {
-				return
-			}
-			seen[vid] = true
-			locs = append(locs, volLabel[vid])
+		if c.ListingUnknown {
+			continue // contents never listed: nothing can be matched to it
 		}
-		for _, cp := range c.Copies {
-			if !cp.Superseded {
-				addVol(cp.VolumeID)
+		kind := "package"
+		if c.Adopted || c.Mirror {
+			kind = "adopted"
+		}
+		pkg := &cardPkg{counted: map[string]CardCopy{}}
+		judge := func(v *Volume, cpPath string, verifyOK *bool, verifiedAt *time.Time, checkOK *bool, checkAt *time.Time) (CardCopy, string) {
+			if v == nil {
+				return CardCopy{}, "the drive this copy was on is no longer registered"
+			}
+			name := label(v)
+			onCard, known := dev.placeOf(v, cpPath)
+			switch {
+			case onCard:
+				return CardCopy{}, name + ": on this card"
+			case !known:
+				return CardCopy{}, name + ": could not tell its drive apart from this card"
+			case verifyOK == nil:
+				return CardCopy{}, name + ": never verified"
+			case !*verifyOK:
+				return CardCopy{}, name + ": last verification failed"
+			case verifiedAt == nil:
+				return CardCopy{}, name + ": no verification date"
+			case checkOK != nil && !*checkOK && checkAt != nil && checkAt.After(*verifiedAt):
+				return CardCopy{}, name + ": a later check failed"
+			}
+			return CardCopy{Where: name, Package: c.Name, Kind: kind, LastVerifiedAt: *verifiedAt, vols: []int{v.ID}, devs: []string{devKey(v)}}, ""
+		}
+		if c.Spanned {
+			// One logical copy spread over its segment media: it counts only when every
+			// segment is verified and none is on the card.
+			var names, keys []string
+			var ids []int
+			reason := ""
+			done := len(c.Segments) > 0
+			for _, sg := range c.Segments {
+				if sg.Status != "VERIFIED" {
+					done = false
+				}
+				v := vols[sg.VolumeID]
+				if v == nil {
+					if sg.VolumeID == 0 {
+						reason = c.Name + ": a segment has no drive recorded"
+					} else {
+						reason = c.Name + ": a segment's drive is no longer registered"
+					}
+					continue
+				}
+				if onCard, known := dev.placeOf(v, sg.Dest); onCard {
+					reason = label(v) + ": a segment is on this card"
+				} else if !known && reason == "" {
+					reason = label(v) + ": could not tell its drive apart from this card"
+				}
+				names = append(names, label(v))
+				keys = append(keys, devKey(v))
+				ids = append(ids, v.ID)
+			}
+			switch {
+			case reason != "":
+				pkg.notCounted = append(pkg.notCounted, reason)
+			case !done || c.VerifiedAt == nil:
+				pkg.notCounted = append(pkg.notCounted, c.Name+": not every segment is verified")
+			default:
+				sort.Strings(keys)
+				pkg.counted["span:"+strings.Join(keys, "+")] = CardCopy{Where: strings.Join(names, " + "),
+					Package: c.Name, Kind: kind, LastVerifiedAt: *c.VerifiedAt, vols: ids, devs: keys}
+			}
+		} else {
+			for _, cp := range c.Copies {
+				if cp.Superseded {
+					continue // history only
+				}
+				v := vols[cp.VolumeID]
+				cc, why := judge(v, cp.Path, cp.VerifyOK, cp.LastVerifiedAt, cp.LastCheckOK, cp.LastCheckAt)
+				if why != "" {
+					pkg.notCounted = append(pkg.notCounted, why)
+					continue
+				}
+				k := devKey(v)
+				if prev, ok := pkg.counted[k]; !ok || cc.LastVerifiedAt.After(prev.LastVerifiedAt) {
+					pkg.counted[k] = cc
+				}
 			}
 		}
-		for _, sg := range c.Segments {
-			addVol(sg.VolumeID)
-		}
-		if len(locs) == 0 {
-			if coll := a.Store.Collection(c.CollectionID); coll != nil {
-				locs = []string{"Archive: " + coll.Name}
-			}
+		if len(pkg.counted) == 0 && len(pkg.notCounted) == 0 {
+			continue // no copies at all: it holds nothing for anyone
 		}
 		listed, err := a.Store.ChunkFiles(c.ID)
 		if err != nil {
 			return nil, err
 		}
+		seen := map[string]bool{}
 		for _, ref := range listed {
-			if len(locs) == 0 {
-				add(ref.Hash, "")
+			if ref.Hash == "" || seen[ref.Hash] {
 				continue
 			}
-			for _, l := range locs {
-				add(ref.Hash, l)
-			}
+			seen[ref.Hash] = true
+			idx.copies[ref.Hash] = append(idx.copies[ref.Hash], pkg)
 		}
 	}
 
-	// Offline snapshots — every drive you've inventoried ("adopted").
+	record := func(hash string, at time.Time, in string) {
+		if hash == "" {
+			return
+		}
+		if cur, ok := idx.recorded[hash]; ok && (at.IsZero() || (!cur.at.IsZero() && !at.Before(cur.at))) {
+			return
+		}
+		idx.recorded[hash] = cardRecord{at: at, in: in}
+	}
+	for _, coll := range a.Store.Collections() {
+		in := "Archive: " + coll.Name
+		for f, err := range a.Store.FilesOf(coll.ID) {
+			if err != nil {
+				return nil, err
+			}
+			record(f.Hash, f.FirstSeen, in)
+			record(f.Blake3, f.FirstSeen, in)
+			for _, v := range f.Versions {
+				record(v.Hash, v.FirstSeen, in+" (earlier version)")
+			}
+		}
+	}
 	for _, snap := range a.Store.VolumeSnapshots() {
-		loc := "Drive: " + nonEmpty(snap.Label, fmt.Sprintf("vol#%d", snap.VolumeID))
+		in := "Drive: " + nonEmpty(snap.Label, fmt.Sprintf("vol#%d", snap.VolumeID))
 		for sf, err := range a.Store.SnapshotFiles(snap.VolumeID) {
 			if err != nil {
 				return nil, err
 			}
-			add(sf.Hash, loc)
-			add(sf.Blake3, loc)
+			record(sf.Hash, snap.CapturedAt, in)
+			record(sf.Blake3, snap.CapturedAt, in)
 		}
 	}
 	return idx, nil
 }
 
-// cardSkipDir hides OS bookkeeping and the tool's own sidecars from a card walk.
+// cardSkipDir names the tool's own sidecar folders, which a card walk passes over
+// without counting: they hold the tool's records, not anyone's files.
 func cardSkipDir(name string) bool {
-	if strings.HasPrefix(name, ".") || skipBrowseDir(name) {
-		return true
-	}
 	switch name {
 	case dockSidecarDir, sealSidecarDir, dockSidecarDirLegacy, sealSidecarDirLegacy:
 		return true
@@ -186,15 +368,31 @@ func cardSkipDir(name string) bool {
 	return false
 }
 
-// CardCheck reads a mounted card/drive and reports, per file, whether its content is
-// already somewhere in the inventory. Read-only: it hashes files and touches nothing.
+// cardExcluded names hidden (dot-prefixed) entries the check does not read. They are
+// counted and listed, and they make the result incomplete.
+func cardExcluded(name string) bool { return strings.HasPrefix(name, ".") }
+
+// cardSystemFolder names operating-system bookkeeping folders the check does not
+// read. They are counted and listed, and do not make the result incomplete.
+func cardSystemFolder(name string) bool { return !cardExcluded(name) && skipBrowseDir(name) }
+
+// CardCheck reads a mounted card/drive and reports, per file, how many backup copies
+// its content has, where, and when each was last verified. Read-only.
 func (a *App) CardCheck(mountPath string, progress func(float64, string)) (*CardCheckResult, error) {
 	info, err := os.Stat(mountPath)
 	if err != nil || !info.IsDir() {
 		return nil, fmt.Errorf("not a readable folder/drive: %s", mountPath)
 	}
 	progress(0.01, "reading inventory")
-	idx, err := a.knownContent()
+	dev := cardDevice{mount: mountPath}
+	if id, err := cardDeviceIdentity(mountPath); err == nil {
+		dev.serial = strings.TrimSpace(id.Serial)
+		dev.partition = strings.TrimSpace(id.Partition)
+		if v := a.Store.VolumeByIdentity(id.Serial, id.Partition); v != nil {
+			dev.volumeID = v.ID
+		}
+	}
+	idx, err := a.cardCopies(dev)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +402,7 @@ func (a *App) CardCheck(mountPath string, progress func(float64, string)) (*Card
 	// Whatever the card will not give us is COUNTED, never dropped. A folder we cannot
 	// list and a file we cannot hash are independent losses — a file inside an unlistable
 	// folder never reaches `paths`, so it can never show up in Skipped — so each gets its
-	// own tally, and either one vetoes the format verdict below.
+	// own tally, and either one makes the result incomplete.
 	addProblem := func(p, kind, msg string) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -215,6 +413,19 @@ func (a *App) CardCheck(mountPath string, progress func(float64, string)) (*Card
 			res.Problems = append(res.Problems, ScanProblem{Path: p, Kind: kind, Err: msg})
 		}
 	}
+	relOf := func(p string) string {
+		rel, e := filepath.Rel(mountPath, p)
+		if e != nil {
+			rel = filepath.Base(p)
+		}
+		return filepath.ToSlash(rel)
+	}
+	exclude := func(p string, folder bool) {
+		res.Excluded++
+		if len(res.ExcludedItems) < maxCardProblems {
+			res.ExcludedItems = append(res.ExcludedItems, CardExcluded{Path: relOf(p), Folder: folder})
+		}
+	}
 
 	progress(0.03, "listing files on the card")
 	var paths []string
@@ -223,13 +434,28 @@ func (a *App) CardCheck(mountPath string, progress func(float64, string)) (*Card
 			addProblem(p, "walk", err.Error()) // could not list this entry — keep going, but remember
 			return nil
 		}
+		if p == mountPath {
+			return nil
+		}
 		if d.IsDir() {
-			if p != mountPath && cardSkipDir(d.Name()) {
+			if cardSkipDir(d.Name()) {
+				return filepath.SkipDir
+			}
+			if cardExcluded(d.Name()) {
+				exclude(p, true)
+				return filepath.SkipDir
+			}
+			if cardSystemFolder(d.Name()) {
+				res.SystemFolders++
+				if len(res.SystemFolderItems) < maxCardProblems {
+					res.SystemFolderItems = append(res.SystemFolderItems, CardExcluded{Path: relOf(p), Folder: true})
+				}
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if strings.HasPrefix(d.Name(), ".") {
+		if cardExcluded(d.Name()) {
+			exclude(p, false)
 			return nil
 		}
 		paths = append(paths, p)
@@ -242,68 +468,97 @@ func (a *App) CardCheck(mountPath string, progress func(float64, string)) (*Card
 	extAgg := map[string]*CardExtRow{}
 	whereSet := map[string]bool{}
 	total := len(paths)
-	if total == 0 {
-		// No readable file is not the same as nothing to save: an empty listing is
-		// itself what an unreadable card looks like. SafeToFormat stays false.
-		progress(1.0, cardCheckSummary(res))
-		return res, nil
+	var online map[int]bool
+	if total > 0 && len(idx.copies) > 0 {
+		online = cardOnlineVolumes(a)
 	}
 
-	parallelHash(paths, func(done int) {
-		progress(0.05+0.9*float64(done)/float64(total), progStats(0, 0, int64(done), int64(total), "hashing card files"))
-	}, func(p, sha, b3 string, size int64, _ time.Time) {
-		rel, e := filepath.Rel(mountPath, p)
-		if e != nil {
-			rel = filepath.Base(p)
-		}
-		rel = filepath.ToSlash(rel)
-		role, _ := classifyRole(reg, rel)
-		// Backed up if the content (sha, else blake3) is known anywhere.
-		locs, ok := idx[sha]
-		if !ok && b3 != "" {
-			locs, ok = idx[b3]
-		}
+	if total > 0 {
+		parallelHash(paths, func(done int) {
+			progress(0.05+0.9*float64(done)/float64(total), progStats(0, 0, int64(done), int64(total), "hashing card files"))
+		}, func(p, sha, b3 string, size int64, _ time.Time) {
+			rel, e := filepath.Rel(mountPath, p)
+			if e != nil {
+				rel = filepath.Base(p)
+			}
+			rel = filepath.ToSlash(rel)
+			role, _ := classifyRole(reg, rel)
+			fr := CardFileResult{Rel: rel, Size: size, Hash: sha, Role: role}
+			var cands []CardCopy
+			for _, pkg := range idx.copies[sha] {
+				for _, cc := range pkg.counted {
+					cands = append(cands, cc)
+				}
+				fr.NotCounted = append(fr.NotCounted, pkg.notCounted...)
+			}
+			for _, cc := range distinctDeviceCopies(cands) {
+				cc.Offline = !cardCopyOnline(cc.vols, online)
+				fr.Copies = append(fr.Copies, cc)
+			}
+			sort.Slice(fr.Copies, func(i, j int) bool { return fr.Copies[i].Where < fr.Copies[j].Where })
+			fr.NotCounted = dedupStrings(fr.NotCounted)
+			if len(fr.Copies) == 0 {
+				rec, ok := idx.recorded[sha]
+				if !ok && b3 != "" {
+					rec, ok = idx.recorded[b3]
+				}
+				if ok {
+					fr.RecordedIn = rec.in
+					if !rec.at.IsZero() {
+						at := rec.at
+						fr.RecordedAt = &at
+					}
+				}
+			}
 
-		mu.Lock()
-		defer mu.Unlock()
-		res.TotalFiles++
-		res.TotalBytes += size
-		ext := strings.ToLower(path.Ext(rel))
-		er := extAgg[ext]
-		if er == nil {
-			er = &CardExtRow{Ext: ext}
-			extAgg[ext] = er
-		}
-		er.Total++
-		if ok {
-			res.BackedUpFiles++
-			res.BackedUpBytes += size
-			for _, l := range locs {
-				whereSet[l] = true
+			mu.Lock()
+			defer mu.Unlock()
+			res.TotalFiles++
+			res.TotalBytes += size
+			ext := strings.ToLower(path.Ext(rel))
+			er := extAgg[ext]
+			if er == nil {
+				er = &CardExtRow{Ext: ext}
+				extAgg[ext] = er
 			}
-			if len(res.Sample) < 8 {
-				res.Sample = append(res.Sample, CardFileResult{Rel: rel, Size: size, Hash: sha, Role: role, BackedUp: true, Locations: append([]string(nil), locs...)})
-			}
-		} else {
-			res.NewFiles++
-			res.NewBytes += size
-			er.New++
-			er.NewBytes += size
-			if len(res.New) < 500 {
-				res.New = append(res.New, CardFileResult{Rel: rel, Size: size, Hash: sha, Role: role})
+			er.Total++
+			if n := len(fr.Copies); n > 0 {
+				res.BackedUpFiles++
+				res.BackedUpBytes += size
+				if res.FewestCopies == 0 || n < res.FewestCopies {
+					res.FewestCopies = n
+				}
+				for _, cc := range fr.Copies {
+					whereSet[cc.Where] = true
+					if res.AsOf == nil || cc.LastVerifiedAt.Before(*res.AsOf) {
+						at := cc.LastVerifiedAt
+						res.AsOf = &at
+					}
+				}
+				if len(res.BackedUp) < maxCardFileRows {
+					res.BackedUp = append(res.BackedUp, fr)
+				} else {
+					res.BackedUpTruncated++
+				}
 			} else {
-				res.NewTruncated++
+				res.NoCopyFiles++
+				res.NoCopyBytes += size
+				if fr.RecordedIn != "" {
+					res.RecordedOnly++
+				}
+				er.NoCopy++
+				er.NoCopyBytes += size
+				if len(res.NoCopy) < maxCardFileRows {
+					res.NoCopy = append(res.NoCopy, fr)
+				} else {
+					res.NoCopyTruncated++
+				}
 			}
-		}
-	}, addProblem)
+		}, addProblem)
+	}
 
 	res.Skipped = total - res.TotalFiles // listed but never hashed (stat/read errors)
-	// FAIL CLOSED on the one destructive path in the product. "Safe to format" may only
-	// mean: we read the card COMPLETELY (every folder listed, every file hashed) and found
-	// every single file already in the inventory. Skipped and WalkErrors are separate
-	// gates because they hide different losses — Skipped cannot see files we never listed.
-	// Any doubt at all, the answer is no.
-	res.SafeToFormat = res.TotalFiles > 0 && res.NewFiles == 0 && res.Skipped == 0 && res.WalkErrors == 0
+	res.Incomplete = res.Skipped > 0 || res.WalkErrors > 0 || res.Excluded > 0
 
 	for l := range whereSet {
 		res.Where = append(res.Where, l)
@@ -316,24 +571,109 @@ func (a *App) CardCheck(mountPath string, progress func(float64, string)) (*Card
 		res.ByExt = append(res.ByExt, *er)
 	}
 	sort.Slice(res.ByExt, func(i, j int) bool {
-		if res.ByExt[i].New != res.ByExt[j].New {
-			return res.ByExt[i].New > res.ByExt[j].New // most-new types first
+		if res.ByExt[i].NoCopy != res.ByExt[j].NoCopy {
+			return res.ByExt[i].NoCopy > res.ByExt[j].NoCopy // most uncopied types first
 		}
 		return res.ByExt[i].Ext < res.ByExt[j].Ext
 	})
-	sort.Slice(res.New, func(i, j int) bool { return res.New[i].Rel < res.New[j].Rel })
+	sort.Slice(res.NoCopy, func(i, j int) bool { return res.NoCopy[i].Rel < res.NoCopy[j].Rel })
+	sort.Slice(res.BackedUp, func(i, j int) bool { return res.BackedUp[i].Rel < res.BackedUp[j].Rel })
 
-	progress(1.0, cardCheckSummary(res))
+	res.Summary = cardCheckSummary(res)
+	progress(1.0, res.Summary)
 	return res, nil
 }
 
-// cardCheckSummary is the one-line human verdict, and it always says what we could NOT
-// read — the counts are the reason "safe to format" is withheld, so they must travel
-// with it rather than silently flipping a boolean.
-func cardCheckSummary(res *CardCheckResult) string {
-	msg := fmt.Sprintf("checked %d file(s): %d already backed up, %d new", res.TotalFiles, res.BackedUpFiles, res.NewFiles)
-	if res.Skipped > 0 || res.WalkErrors > 0 {
-		msg += fmt.Sprintf(" — %d file(s) could not be read, %d folder(s) could not be listed: DO NOT FORMAT", res.Skipped, res.WalkErrors)
+// distinctDeviceCopies keeps copies that share no physical device with a copy
+// already kept, so losing one device never takes more than one counted copy. Copies
+// on fewer devices are kept first (a plain copy before a span over the same drive),
+// and among those the most recently verified.
+func distinctDeviceCopies(cands []CardCopy) []CardCopy {
+	sort.SliceStable(cands, func(i, j int) bool {
+		if len(cands[i].devs) != len(cands[j].devs) {
+			return len(cands[i].devs) < len(cands[j].devs)
+		}
+		if !cands[i].LastVerifiedAt.Equal(cands[j].LastVerifiedAt) {
+			return cands[i].LastVerifiedAt.After(cands[j].LastVerifiedAt)
+		}
+		return cands[i].Where < cands[j].Where
+	})
+	used := map[string]bool{}
+	var out []CardCopy
+	for _, cc := range cands {
+		clash := false
+		for _, d := range cc.devs {
+			if used[d] {
+				clash = true
+			}
+		}
+		if clash {
+			continue
+		}
+		for _, d := range cc.devs {
+			used[d] = true
+		}
+		out = append(out, cc)
 	}
-	return msg
+	return out
+}
+
+// cardCopyOnline reports whether every volume a copy is on is connected now.
+func cardCopyOnline(vols []int, online map[int]bool) bool {
+	if len(vols) == 0 {
+		return false
+	}
+	for _, id := range vols {
+		if !online[id] {
+			return false
+		}
+	}
+	return true
+}
+
+func dedupStrings(in []string) []string {
+	if len(in) < 2 {
+		return in
+	}
+	seen := map[string]bool{}
+	out := in[:0]
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// cardCheckSummary is the report in one line: how many files have no backup copy
+// (first, when any), how many are backed up and as of when, the fewest copies any
+// file has, and what was not read. It never says whether to format.
+func cardCheckSummary(res *CardCheckResult) string {
+	var parts []string
+	tot := commaInt(res.TotalFiles)
+	if res.NoCopyFiles > 0 {
+		parts = append(parts, fmt.Sprintf("%s of %s files have no backup copy.", commaInt(res.NoCopyFiles), tot))
+	}
+	if res.BackedUpFiles > 0 && res.AsOf != nil {
+		parts = append(parts, fmt.Sprintf("%s of %s files backed up as of %s. Fewest copies: %d.",
+			commaInt(res.BackedUpFiles), tot, res.AsOf.Local().Format(cardDateTime), res.FewestCopies))
+	}
+	if res.TotalFiles == 0 && !res.Incomplete {
+		parts = append(parts, "No files found.")
+	}
+	if res.Incomplete {
+		var gaps []string
+		if res.Skipped > 0 {
+			gaps = append(gaps, fmt.Sprintf("%s file(s) could not be read", commaInt(res.Skipped)))
+		}
+		if res.WalkErrors > 0 {
+			gaps = append(gaps, fmt.Sprintf("%s folder(s) could not be listed", commaInt(res.WalkErrors)))
+		}
+		if res.Excluded > 0 {
+			gaps = append(gaps, fmt.Sprintf("%s hidden item(s) were not checked", commaInt(res.Excluded)))
+		}
+		parts = append(parts, "Incomplete: "+strings.Join(gaps, ", ")+".")
+	}
+	return strings.Join(parts, " ")
 }

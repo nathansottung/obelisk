@@ -208,11 +208,12 @@ ck(jobRecordingNote(healed).includes('Recorded.'),'the history note must say the
   ck(texts.includes('Destination adopted'),'positive control: a clean completion must still toast success; got: '+texts);
 
   // ---- 6. the card-check consumer -----------------------------------------
-  ccRender({safe_to_format:true,total_files:1,total_bytes:10},'E:',unrec);
+  const ccRes={total_files:1,total_bytes:10,backed_up_files:1,fewest_copies:1,as_of:'2026-11-20T18:42:07Z'};
+  ccRender(ccRes,'E:',unrec);
   const cc=__el('#ccresult').innerHTML;
   ck(cc.includes(JOB_UNRECORDED_MSG),'the card-check result must carry the warning when its job was not recorded');
-  ck(cc.includes('Safe to format'),'the card-check verdict itself must not be discarded');
-  ccRender({safe_to_format:true,total_files:1,total_bytes:10},'E:',clean);
+  ck(cc.includes('1 of 1 files backed up as of'),'the card-check report itself must not be discarded');
+  ccRender(ccRes,'E:',clean);
   ck(!__el('#ccresult').innerHTML.includes(JOB_UNRECORDED_MSG),'positive control: a recorded card check carries no warning');
 
   if(__fail.length){console.error('FAIL\n - '+__fail.join('\n - '));process.exit(1)}

@@ -4,7 +4,9 @@ These rules apply to every session in this repository.
 
 ## Files and drives
 
-- Work only on the C: drive and in temp folders (test temp: `C:\obelisk-test-tmp`).
+- Work only on the C: drive and in temp folders (test temp: `%USERPROFILE%\obelisk-test-tmp`;
+  set `TMP` and `TEMP` to it for test runs). The write guard refuses folders that other
+  users can change, which a folder made at the drive root is.
   Never touch a NAS, network share, mapped drive or external drive unless the
   owner says so.
 - Never delete user data.
