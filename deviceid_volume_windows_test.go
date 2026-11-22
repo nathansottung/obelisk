@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -147,17 +148,20 @@ func TestManual_FolderMountedDrive(t *testing.T) {
 		`$p=@(Get-Partition | Where-Object { $_.AccessPaths -contains $m });` +
 		`if($p.Count -ne 1){throw "no single partition is mounted at $m"};` +
 		`$d=$p[0] | Get-Disk;` +
+		`$sig=0;if($d.Signature){$sig=[uint32]$d.Signature};` +
 		`$c=(Get-Partition -DriveLetter C | Get-Disk).Number;` +
 		`[pscustomobject]@{Number=[int]$d.Number;Serial=[string]$d.SerialNumber;Size=[int64]$d.Size;` +
-		`Guid=[string]$p[0].Guid;SystemDisk=[int]$c}|ConvertTo-Json -Compress`
+		`Style=[string]$d.PartitionStyle;Guid=[string]$p[0].Guid;Signature=$sig;PartNumber=[int]$p[0].PartitionNumber;` +
+		`SystemDisk=[int]$c}|ConvertTo-Json -Compress`
 	out, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()
 	if err != nil {
 		t.Fatalf("asking Windows about %s: %v\n%s", mount, err, out)
 	}
 	var want struct {
-		Number, SystemDisk int
-		Serial, Guid       string
-		Size               int64
+		Number, SystemDisk, PartNumber int
+		Serial, Guid, Style            string
+		Signature                      uint32
+		Size                           int64
 	}
 	if err := json.Unmarshal(out, &want); err != nil {
 		t.Fatalf("%v: %s", err, out)
@@ -173,7 +177,8 @@ func TestManual_FolderMountedDrive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Obelisk could not identify %s: %v", mount, err)
 	}
-	t.Logf("Windows:  disk %d, serial %q, size %d, partition %s", want.Number, strings.TrimSpace(want.Serial), want.Size, want.Guid)
+	part := windowsPartition{Style: want.Style, Guid: want.Guid, Signature: want.Signature, Number: want.PartNumber}
+	t.Logf("Windows:  disk %d, serial %q, size %d, partition %s", want.Number, strings.TrimSpace(want.Serial), want.Size, part.id())
 	t.Logf("Obelisk:  disk %d, serial %q, size %d, partition %s", n, id.Serial, id.SizeBytes, id.Partition)
 	if int(n) != want.Number {
 		t.Errorf("disk: Obelisk %d, Windows %d", n, want.Number)
@@ -184,8 +189,8 @@ func TestManual_FolderMountedDrive(t *testing.T) {
 	if id.SizeBytes != want.Size {
 		t.Errorf("size: Obelisk %d, Windows %d", id.SizeBytes, want.Size)
 	}
-	if g := strings.ToLower(strings.Trim(want.Guid, "{}")); g != "" && !strings.Contains(strings.ToLower(id.Partition), g) {
-		t.Errorf("partition: Obelisk %q, Windows %q", id.Partition, want.Guid)
+	if err := part.compare(id.Partition); err != nil {
+		t.Errorf("partition: %v", err)
 	}
 	if link := os.Getenv("OBELISK_MANUAL_LINK"); link != "" {
 		viaLink, err := resolveDeviceIdentity(link)
@@ -197,6 +202,40 @@ func TestManual_FolderMountedDrive(t *testing.T) {
 			t.Errorf("through the link Obelisk sees %+v, at the mount %+v", viaLink, id)
 		}
 	}
+}
+
+// windowsPartition is what Windows itself reports about a partition, written the way
+// Obelisk records one: a GPT partition GUID, or an MBR disk signature and number.
+type windowsPartition struct {
+	Style, Guid string
+	Signature   uint32
+	Number      int
+}
+
+// id is the partition ID Windows' answer gives, or "" when it gives none.
+func (p windowsPartition) id() string {
+	switch p.Style {
+	case "GPT":
+		return gptPartitionID(p.Guid)
+	case "MBR":
+		if p.Number < 0 {
+			return ""
+		}
+		return mbrPartitionID(p.Signature, uint32(p.Number))
+	}
+	return ""
+}
+
+// compare is an error unless Windows named a partition and Obelisk read the same one.
+func (p windowsPartition) compare(obelisk string) error {
+	want := p.id()
+	if want == "" {
+		return fmt.Errorf("Windows reported no partition ID (style %q), so nothing could be compared", p.Style)
+	}
+	if want != obelisk {
+		return fmt.Errorf("Obelisk %q, Windows %q", obelisk, want)
+	}
+	return nil
 }
 
 // The real lookup answers through a junction and for a path not there yet. Both are

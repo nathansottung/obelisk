@@ -138,6 +138,12 @@ func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, 
 	if q == nil {
 		return nil, fmt.Errorf("burn queue %d not found", id)
 	}
+	// One burn per queue, so two requests cannot pick the same disc.
+	releaseQueue, err := a.Store.claimWork(fmt.Sprintf("burn-queue:%d", id), fmt.Sprintf("%q is already burning a disc; wait for it to finish", q.Name))
+	if err != nil {
+		return nil, err
+	}
+	defer releaseQueue()
 	var disc *BurnDisc
 	for _, d := range q.Discs {
 		if d.Status == "PENDING" {
@@ -158,6 +164,12 @@ func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, 
 		set("FAILED", fmt.Sprintf("package %d not found in catalog", disc.ChunkID))
 		return nil, errors.New(disc.Detail)
 	}
+	// A build of this package would clear the folder being burned.
+	releasePackage, err := a.Store.claimWork(packageWorkKey(c.ID), fmt.Sprintf("package %s is already being built or burned; wait for that job to finish", c.Name))
+	if err != nil {
+		return nil, err
+	}
+	defer releasePackage()
 	// The same gate as a write: the package's last build succeeded and its payload
 	// and sidecars are in staging, unchanged.
 	if err := burnStagedCheck(c); err != nil {

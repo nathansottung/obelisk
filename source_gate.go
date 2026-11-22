@@ -6,14 +6,18 @@ package main
 // starts, and can then run for hours. Without more, a folder that was a fair output
 // at the start could be registered as a source mid-job and still be written to.
 //
-// The gate makes the two decisions exclusive. Both happen while holding it:
+// The gate makes the two decisions exclusive:
 //
-//   - RegisterSource checks the outputs being written right now, and refuses a source
-//     that is one of them, is inside one, or holds one.
+//   - RegisterSource checks the outputs being written right now and adds the source in
+//     one locked step, refusing a source that is one of them, is inside one, or holds
+//     one.
 //   - reserveOutput looks at the sources afresh (including any registered since the
-//     output was first checked) and only then records the output as live.
+//     output was first checked) and records the output as live only if no source was
+//     added while it looked. If one was, it looks again.
 //
-// So whichever request comes second is refused. Folders are compared by the object
+// The lock is never held for disk work, so a source drive that stops answering
+// delays only the job looking at it, and a finished job can always let go of its
+// folder. Whichever request comes second is refused. Folders are compared by the object
 // that was opened (volume and file ID, of it and each folder above it) as well as by
 // its real location, so another spelling of a folder is the same folder.
 //
@@ -36,7 +40,13 @@ import (
 type sourceGate struct {
 	mu   sync.Mutex
 	live map[*liveOutput]struct{}
+	gen  uint64              // counts sources added, so a decision can tell it went stale
+	busy map[string]struct{} // packages and burn queues a job is working on
 }
+
+// gateRetries is how many times a decision is made again because a source was added
+// while it was being made.
+const gateRetries = 8
 
 // liveOutput is one folder a running job holds for writing.
 type liveOutput struct {
@@ -65,6 +75,10 @@ func (o *liveOutput) blocks(src gateFolder) bool {
 type gateFolder struct {
 	canonical string
 	chain     []idEntry
+	// ancestors, for a folder not there yet, is its deepest existing folder and each
+	// folder above. It is kept apart from chain: a source that is one of these holds
+	// the new folder, but a source beside it does not.
+	ancestors []idEntry
 }
 
 // locateForGate finds what path really is.
@@ -75,10 +89,12 @@ func locateForGate(path string) (gateFolder, error) {
 	}
 	f, err := os.Open(abs)
 	if errors.Is(err, fs.ErrNotExist) {
+		where := gateFolder{canonical: abs}
 		if canon := canonicalOfMissing(abs); canon != "" {
-			return gateFolder{canonical: canon}, nil
+			where.canonical = canon
 		}
-		return gateFolder{canonical: abs}, nil
+		where.ancestors = existingAncestors(abs)
+		return where, nil
 	}
 	if err != nil {
 		return gateFolder{}, err
@@ -93,6 +109,29 @@ func locateForGate(path string) (gateFolder, error) {
 		return gateFolder{}, err
 	}
 	return gateFolderAt(canon, id), nil
+}
+
+// existingAncestors is the identity of the deepest existing folder above abs and each
+// folder above that, or nil when none can be read (the real location is still compared).
+func existingAncestors(abs string) []idEntry {
+	dir, _, err := deepestExistingDir(abs)
+	if err != nil {
+		return nil
+	}
+	f, err := os.Open(dir)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	canon, err := handleCanonicalPath(f)
+	if err != nil {
+		return nil
+	}
+	id, err := handleIdentity(f)
+	if err != nil {
+		return nil
+	}
+	return gateFolderAt(canon, id).chain
 }
 
 // gateFolderAt is the folder at canon with identity id. A folder above it that cannot
@@ -117,37 +156,102 @@ func (a gateFolder) overlaps(b gateFolder) bool {
 
 // heldBy reports whether b, by identity, is a or one of the folders above a.
 func (a gateFolder) heldBy(b gateFolder) bool {
-	if len(a.chain) == 0 || len(b.chain) == 0 || b.chain[0].id.idx == 0 {
+	if len(b.chain) == 0 || b.chain[0].id.idx == 0 {
 		return false
 	}
-	return chainHas(a.chain, b.chain[0].id)
+	chain := a.chain
+	if len(chain) == 0 {
+		chain = a.ancestors
+	}
+	return len(chain) > 0 && chainHas(chain, b.chain[0].id)
 }
 
 // RegisterSource records path as a source of the archive, unless it overlaps a folder
-// a running job is writing to.
+// a running job is writing to. Where things really are is read before the gate is
+// taken; the check against live outputs and the new record are one locked step.
 func (s *Store) RegisterSource(collectionID int, path string) (*Folder, error) {
-	s.srcGate.mu.Lock()
-	defer s.srcGate.mu.Unlock()
 	recorded := s.folderRecorded(collectionID, path)
-	if len(s.srcGate.live) > 0 || !recorded {
-		where, err := locateForGate(path)
+	var where gateFolder
+	located := false
+	locate := func() error {
+		w, err := locateForGate(path)
 		if err != nil {
-			return nil, fmt.Errorf("cannot add %s as a source: could not establish where it really is: %w", path, err)
+			return fmt.Errorf("cannot add %s as a source: could not establish where it really is: %w", path, err)
+		}
+		where, located = w, true
+		return nil
+	}
+	if !recorded {
+		if err := locate(); err != nil {
+			return nil, err
 		}
 		// A source already in the catalog stays scannable, so an older catalog with
 		// a source around the data folder is not locked out of its own records.
-		if !recorded {
-			if err := s.refuseDataFolder(path, where); err != nil {
+		if err := s.refuseDataFolder(path, where); err != nil {
+			return nil, err
+		}
+	}
+	vid := pathVolumeID(path) // disk access before taking any lock
+	for range gateRetries {
+		if !located && s.liveOutputCount() > 0 {
+			if err := locate(); err != nil {
 				return nil, err
 			}
 		}
-		for o := range s.srcGate.live {
-			if o.blocks(where) {
-				return nil, fmt.Errorf("cannot add %s as a source: Obelisk is writing to %s right now, and a folder cannot be a source and a live output at once. Nothing was added. Wait for that job to finish, then scan again", path, o.display)
+		// After locating: an output that exists by then is compared by identity.
+		s.refreshLiveOutputs()
+		f, err := s.insertSource(collectionID, path, vid, func() error {
+			if !located && len(s.srcGate.live) > 0 {
+				return errGateStale
 			}
+			for o := range s.srcGate.live {
+				if o.blocks(where) {
+					return fmt.Errorf("cannot add %s as a source: Obelisk is writing to %s right now, and a folder cannot be a source and a live output at once. Nothing was added. Wait for that job to finish, then scan again", path, o.display)
+				}
+			}
+			return nil
+		})
+		if errors.Is(err, errGateStale) {
+			continue
+		}
+		return f, err
+	}
+	return nil, fmt.Errorf("cannot add %s as a source: jobs kept starting while it was being checked. Nothing was added. Try again", path)
+}
+
+// errGateStale means a decision must be made again on what is true now.
+var errGateStale = errors.New("the decision is out of date")
+
+// refreshLiveOutputs reads the identity of outputs that did not exist when they were
+// reserved and may exist now. The disk work is done outside the gate.
+func (s *Store) refreshLiveOutputs() {
+	type pending struct {
+		o      *liveOutput
+		target string
+	}
+	var list []pending
+	s.srcGate.mu.Lock()
+	for o := range s.srcGate.live {
+		if len(o.where.chain) == 0 {
+			target := o.where.canonical
+			if o.file {
+				target = filepath.Dir(target)
+			}
+			list = append(list, pending{o, target})
 		}
 	}
-	return s.addFolderRecord(collectionID, path), nil
+	s.srcGate.mu.Unlock()
+	for _, p := range list {
+		loc, err := locateForGate(p.target)
+		if err != nil {
+			continue
+		}
+		s.srcGate.mu.Lock()
+		if _, live := s.srcGate.live[p.o]; live && len(p.o.where.chain) == 0 {
+			p.o.where.chain, p.o.where.ancestors = loc.chain, loc.ancestors
+		}
+		s.srcGate.mu.Unlock()
+	}
 }
 
 // folderRecorded reports whether this archive already has path as a source.
@@ -155,7 +259,7 @@ func (s *Store) folderRecorded(collectionID int, path string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, f := range s.c.Folders {
-		if f.CollectionID == collectionID && f.Path == path {
+		if f.CollectionID == collectionID && (f.Path == path || normPath(f.Path) == normPath(path)) {
 			return true
 		}
 	}
@@ -173,72 +277,148 @@ func (s *Store) refuseDataFolder(path string, where gateFolder) error {
 		return fmt.Errorf("cannot add %s as a source: could not establish where Obelisk's data folder is: %w", path, err)
 	}
 	if where.overlaps(data) {
-		return fmt.Errorf("cannot add %s as a source: it overlaps Obelisk's own data folder %s, which Obelisk writes to all the time. Nothing was added. Choose a folder that does not include it", path, data.canonical)
+		return fmt.Errorf("cannot add %s as a source: it overlaps Obelisk's own data folder %s, which Obelisk writes to all the time. Nothing was added. Choose a folder that does not include it. To back up a folder around it, such as your user folder, add the folders inside it one at a time, like Documents and Pictures", path, data.canonical)
 	}
 	return nil
 }
 
-// addFolderRecord adds the catalog record. Only RegisterSource calls it.
-func (s *Store) addFolderRecord(collectionID int, path string) *Folder {
-	vid := pathVolumeID(path) // disk access before taking the lock
+// insertSource adds the catalog record if allowed (called with the gate held) says it
+// may. Only RegisterSource calls it. The record is visible to every decision as soon
+// as the gate is released; saving it happens after.
+func (s *Store) insertSource(collectionID int, path, vid string, allowed func() error) (*Folder, error) {
+	s.srcGate.mu.Lock()
+	if allowed != nil {
+		if err := allowed(); err != nil {
+			s.srcGate.mu.Unlock()
+			return nil, err
+		}
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for _, f := range s.c.Folders { // idempotent per (collection, path)
 		if f.CollectionID == collectionID && f.Path == path {
-			return f
+			s.mu.Unlock()
+			s.srcGate.mu.Unlock()
+			return f, nil
 		}
 	}
 	f := &Folder{ID: s.next("folder"), CollectionID: collectionID, Path: path, VolumeID: vid}
 	s.c.Folders = append(s.c.Folders, f)
+	s.srcGate.gen++
+	s.mu.Unlock()
+	s.srcGate.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	_ = s.save()
-	return f
+	return f, nil
 }
 
-// reserveOutput decides the output at where against the sources as they are now and
-// records it as live. requested is the path as given and volumeID its volume, for
-// sources whose drive is away. It returns that decision's snapshot and the release,
-// which is safe to call more than once.
-func (s *Store) reserveOutput(where gateFolder, display, requested, volumeID string) (*sourceSnapshot, func(), error) {
+// sourceGeneration is the count of sources added so far.
+func (s *Store) sourceGeneration() uint64 {
 	s.srcGate.mu.Lock()
 	defer s.srcGate.mu.Unlock()
+	return s.srcGate.gen
+}
+
+// sourceIdentityOf reads a source's identity. A variable so a test can present one
+// network share under two names.
+var sourceIdentityOf = pathIdentity
+
+// decideOutput decides the output at where against the sources as they are now. It
+// does disk work, so it runs outside the gate.
+func (s *Store) decideOutput(where gateFolder, display, requested, volumeID string) (*sourceSnapshot, error) {
 	snap, err := s.sourceSnapshot()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if err := snap.decide(where.canonical, display); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if err := snap.decideOffline(volumeID, requested, where.canonical, display); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if len(where.chain) == 0 { // not there yet: it must not become an away source's folder
 		if err := snap.decideCreate(where.canonical, display); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	}
 	for _, src := range snap.srcs {
 		if src.offline || !src.fromHandle {
 			continue
 		}
-		id, err := pathIdentity(src.canonical)
+		id, err := sourceIdentityOf(src.canonical)
 		if err != nil {
 			continue // its real location was compared above
 		}
 		if where.overlaps(gateFolderAt(src.canonical, id)) {
-			return nil, nil, fmt.Errorf("refusing: %s overlaps registered source %s; Obelisk never writes into source data", display, src.registered)
+			return nil, fmt.Errorf("refusing: %s overlaps registered source %s; Obelisk never writes into source data", display, src.registered)
 		}
 	}
-	o := &liveOutput{display: display, where: where}
+	return snap, nil
+}
+
+// reserveOutput decides the output at where against the sources as they are now and
+// records it as live, deciding again if a source was added meanwhile. requested is
+// the path as given and volumeID its volume, for sources whose drive is away. It
+// returns that decision's snapshot and the release, which is safe to call more than
+// once.
+func (s *Store) reserveOutput(where gateFolder, display, requested, volumeID string) (*sourceSnapshot, func(), error) {
+	for range gateRetries {
+		gen := s.sourceGeneration()
+		snap, err := s.decideOutput(where, display, requested, volumeID)
+		if err != nil {
+			return nil, nil, err
+		}
+		o := &liveOutput{display: display, where: where}
+		if release, ok := s.recordLive(gen, o); ok {
+			return snap, release, nil
+		}
+	}
+	return nil, nil, fmt.Errorf("refusing: sources kept being added while %s was being checked. Try again", display)
+}
+
+// recordLive records outputs as live if no source was added since generation gen.
+func (s *Store) recordLive(gen uint64, outputs ...*liveOutput) (func(), bool) {
+	s.srcGate.mu.Lock()
+	defer s.srcGate.mu.Unlock()
+	if s.srcGate.gen != gen {
+		return nil, false
+	}
 	if s.srcGate.live == nil {
 		s.srcGate.live = map[*liveOutput]struct{}{}
 	}
-	s.srcGate.live[o] = struct{}{}
+	for _, o := range outputs {
+		s.srcGate.live[o] = struct{}{}
+	}
 	var once sync.Once
-	return snap, func() {
+	return func() {
 		once.Do(func() {
 			s.srcGate.mu.Lock()
 			defer s.srcGate.mu.Unlock()
-			delete(s.srcGate.live, o)
+			for _, o := range outputs {
+				delete(s.srcGate.live, o)
+			}
+		})
+	}, true
+}
+
+// claimWork marks key (a package or burn queue) as being worked on, or says it already
+// is. It is held in memory, so a crash leaves nothing to clear.
+func (s *Store) claimWork(key, busy string) (func(), error) {
+	s.srcGate.mu.Lock()
+	defer s.srcGate.mu.Unlock()
+	if _, taken := s.srcGate.busy[key]; taken {
+		return nil, errors.New(busy)
+	}
+	if s.srcGate.busy == nil {
+		s.srcGate.busy = map[string]struct{}{}
+	}
+	s.srcGate.busy[key] = struct{}{}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.srcGate.mu.Lock()
+			defer s.srcGate.mu.Unlock()
+			delete(s.srcGate.busy, key)
 		})
 	}, nil
 }
@@ -297,42 +477,53 @@ func (s *Store) reserveOutputPaths(paths ...string) (func(), error) {
 
 // reserveOutputFiles reserves files written by path (keystores), all or none: each
 // must not be, or be inside, a registered source, and until released no source may
-// be registered that is one of them or holds one.
+// be registered that is one of them or holds one. Every folder must also really take
+// writes, so one that cannot is found before any keystore is changed.
 func (s *Store) reserveOutputFiles(paths []string) (func(), error) {
-	s.srcGate.mu.Lock()
-	defer s.srcGate.mu.Unlock()
-	outputs := make([]*liveOutput, 0, len(paths))
-	for _, p := range paths {
-		if err := s.CheckFileOutsideSources(p); err != nil {
-			return nil, err
-		}
-		abs, err := filepath.Abs(p)
-		if err != nil {
-			return nil, err
-		}
-		dir, err := locateForGate(filepath.Dir(abs))
-		if err != nil {
-			return nil, fmt.Errorf("refusing: could not establish the real location of %s: %w", p, err)
-		}
-		outputs = append(outputs, &liveOutput{display: p, file: true,
-			where: gateFolder{canonical: filepath.Join(dir.canonical, filepath.Base(abs)), chain: dir.chain}})
-	}
-	if s.srcGate.live == nil {
-		s.srcGate.live = map[*liveOutput]struct{}{}
-	}
-	for _, o := range outputs {
-		s.srcGate.live[o] = struct{}{}
-	}
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			s.srcGate.mu.Lock()
-			defer s.srcGate.mu.Unlock()
-			for _, o := range outputs {
-				delete(s.srcGate.live, o)
+	for range gateRetries {
+		gen := s.sourceGeneration()
+		outputs := make([]*liveOutput, 0, len(paths))
+		for _, p := range paths {
+			if err := s.CheckFileOutsideSources(p); err != nil {
+				return nil, err
 			}
-		})
-	}, nil
+			o, err := fileOutputAt(p)
+			if err != nil {
+				return nil, fmt.Errorf("refusing: could not establish the real location of %s: %w", p, err)
+			}
+			outputs = append(outputs, o)
+		}
+		release, ok := s.recordLive(gen, outputs...)
+		if !ok {
+			continue
+		}
+		for _, p := range paths {
+			abs, err := filepath.Abs(p)
+			if err == nil {
+				err = proveWriteAccess(filepath.Dir(abs), "a keystore")
+			}
+			if err != nil {
+				release()
+				return nil, err
+			}
+		}
+		return release, nil
+	}
+	return nil, fmt.Errorf("refusing: sources kept being added while the keystores were being checked. Try again")
+}
+
+// fileOutputAt is the live output for a file written by path.
+func fileOutputAt(p string) (*liveOutput, error) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return nil, err
+	}
+	dir, err := locateForGate(filepath.Dir(abs))
+	if err != nil {
+		return nil, err
+	}
+	return &liveOutput{display: p, file: true, where: gateFolder{canonical: filepath.Join(dir.canonical, filepath.Base(abs)),
+		chain: dir.chain, ancestors: dir.ancestors}}, nil
 }
 
 // liveOutputCount is how many outputs running jobs hold.

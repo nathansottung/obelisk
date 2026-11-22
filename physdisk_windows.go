@@ -5,6 +5,9 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"golang.org/x/sys/windows"
 )
@@ -21,6 +24,27 @@ func physicalDiskOf(dir string) (string, bool) {
 		return "", false
 	}
 	return fmt.Sprintf("disk:%d", n), true
+}
+
+// diskLookupSupported: a keystore's disks are read here.
+const diskLookupSupported = true
+
+// pathOnNetwork reports whether dir is on a network share.
+func pathOnNetwork(dir string) bool {
+	f, err := os.Open(dir)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	canon, err := handleCanonicalPath(f)
+	if err != nil {
+		return false
+	}
+	if strings.HasPrefix(canon, `\\`) {
+		return true
+	}
+	root, err := windows.UTF16PtrFromString(filepath.VolumeName(canon) + `\`)
+	return err == nil && windows.GetDriveType(root) == windows.DRIVE_REMOTE
 }
 
 // physicalDisksOf names every physical disk holding folder dir. ok is false when

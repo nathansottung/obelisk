@@ -283,13 +283,13 @@ func TestSourcePaths_EveryAdditionGoesThroughTheGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	allowed := map[string]int{
-		"source_gate.go":    1, // addFolderRecord
+		"source_gate.go":    1, // insertSource
 		"catalogdb_rows.go": 1, // loading the catalog
 		"gui_inventory.go":  1, // a disposable catalog of its own
 		"store.go":          1, // forgetting an archive removes its folders
 	}
 	adds := regexp.MustCompile(`\.Folders\s*=`)
-	calls := regexp.MustCompile(`\.addFolderRecord\(`)
+	calls := regexp.MustCompile(`\.insertSource\(`)
 	for _, file := range files {
 		if strings.HasSuffix(file, "_test.go") {
 			continue
@@ -306,7 +306,7 @@ func TestSourcePaths_EveryAdditionGoesThroughTheGate(t *testing.T) {
 			want = 1
 		}
 		if n := len(calls.FindAll(b, -1)); n != want {
-			t.Errorf("%s calls addFolderRecord %d time(s), want %d", file, n, want)
+			t.Errorf("%s calls insertSource %d time(s), want %d", file, n, want)
 		}
 	}
 }

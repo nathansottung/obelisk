@@ -100,6 +100,9 @@ func (a *App) openOutFolderUnguarded(p string) (*outFolder, error) {
 	if afterPathReserved != nil {
 		afterPathReserved(abs)
 	}
+	if err := checkWriteAccess(abs, destWriteUse); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(abs, 0o755); err != nil {
 		return nil, err
 	}
@@ -127,6 +130,9 @@ func (a *App) openOutFolderUnguarded(p string) (*outFolder, error) {
 		return fail(err)
 	}
 	if err := a.Store.CheckOutsideSources(real); err != nil {
+		return fail(err)
+	}
+	if err := proveRootWrite(r, real, destWriteUse); err != nil {
 		return fail(err)
 	}
 	b := make([]byte, 8)

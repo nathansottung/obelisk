@@ -37,7 +37,7 @@ func smartDeviceNode(path string) (string, error) {
 func smartNodeLinux(abs string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := helperCommandContext(ctx, "lsblk", "-J", "-o", "NAME,MOUNTPOINT,TYPE").Output()
+	out, err := helperCommandContext(ctx, "lsblk", "-J", "-o", "NAME,KNAME,MOUNTPOINT,TYPE").Output()
 	if err != nil {
 		return "", fmt.Errorf("lsblk: %v", err)
 	}
@@ -47,17 +47,14 @@ func smartNodeLinux(abs string) (string, error) {
 	if err := json.Unmarshal(out, &doc); err != nil {
 		return "", fmt.Errorf("parsing lsblk JSON: %w", err)
 	}
-	best := -1
-	name := ""
-	for i := range doc.BlockDevices {
-		if l, _ := deepestMountMatch(&doc.BlockDevices[i], abs); l > best {
-			best, name = l, doc.BlockDevices[i].Name
-		}
+	disk, _, err := lsblkPick(doc.BlockDevices, abs, blockDeviceName(abs))
+	if err != nil {
+		return "", err
 	}
-	if best < 0 || name == "" {
+	if disk.Name == "" {
 		return "", fmt.Errorf("no block device mounts %s", abs)
 	}
-	return "/dev/" + name, nil
+	return "/dev/" + disk.Name, nil
 }
 
 // smartNodeDarwin follows "Part of Whole" to the physical disk id.

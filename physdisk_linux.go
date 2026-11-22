@@ -50,15 +50,61 @@ func physicalDiskOf(dir string) (string, bool) {
 // physicalDisksOf names every whole disk under folder dir, following LVM, RAID and
 // encryption layers. ok is false when they cannot be read.
 func physicalDisksOf(dir string) ([]string, bool) {
-	entry, ok := blockEntryOf(dir)
-	if !ok {
+	name := blockDeviceName(dir)
+	if name == "" {
 		return nil, false
 	}
-	disks, err := leafDisks(sysClassBlock, filepath.Base(entry), sysfsWholeDisk)
+	disks, err := leafDisks(sysClassBlock, name, sysfsWholeDisk)
 	if err != nil || len(disks) == 0 {
 		return nil, false
 	}
 	return disks, true
+}
+
+// diskLookupSupported: a keystore's disks are read here.
+const diskLookupSupported = true
+
+// blockDeviceName is the kernel name of the block device holding dir, or "". A Btrfs
+// subvolume reports a device number with no block device, so its mount is read.
+func blockDeviceName(dir string) string {
+	if entry, ok := blockEntryOf(dir); ok {
+		return filepath.Base(entry)
+	}
+	b, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return ""
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return ""
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = real
+	}
+	name := mountSourceFrom(string(b), abs)
+	if name == "" {
+		return ""
+	}
+	if _, err := os.Stat(filepath.Join(sysClassBlock, name)); err == nil {
+		return name
+	}
+	if real, err := filepath.EvalSymlinks(filepath.Join("/dev/mapper", name)); err == nil {
+		return filepath.Base(real)
+	}
+	return ""
+}
+
+// pathOnNetwork reports whether dir is on a network filesystem.
+func pathOnNetwork(dir string) bool {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		return false
+	}
+	switch uint32(st.Type) {
+	case 0x6969, 0xFF534D42, 0xFE534D42, 0x517B: // NFS, CIFS, SMB2, SMB
+		return true
+	}
+	return false
 }
 
 // sysfsWholeDisk is the disk a partition belongs to, or "" for anything else.

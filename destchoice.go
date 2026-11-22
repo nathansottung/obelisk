@@ -452,7 +452,7 @@ func destNotice(folder string, findings []destFinding, stale *DestinationChoice,
 	}
 	if len(named) > 0 {
 		n.Lines = append(n.Lines,
-			fmt.Sprintf("✗ What we found: %s lets %s add, change and delete files in it. Windows does not set this up by default, so a person or a program added it.", namedFolder, joinAnd(named)),
+			strings.TrimRight(fmt.Sprintf("✗ What we found: %s lets %s add, change and delete files in it. Windows does not set this up by default, so a person or a program added it. %s", namedFolder, joinAnd(named), groupMeaning(named)), " "),
 			"✗ Why it matters: That account, or a program running as it, could change or delete your backup copies, and you might not find out until you need them.")
 		if namedFolder != folder {
 			n.Lines = append(n.Lines, fmt.Sprintf("✗ Obelisk will write into %s, inside that folder, so the same applies there.", folder))

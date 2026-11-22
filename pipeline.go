@@ -1028,6 +1028,9 @@ func decryptRoundtripHash(gpgBin, ciphertext, pass string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// packageWorkKey names a package for claimWork.
+func packageWorkKey(id int) string { return fmt.Sprintf("package:%d", id) }
+
 func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	cfg, cfgErr := a.LoadConfig()
 	if cfgErr != nil {
@@ -1037,6 +1040,12 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	if c == nil {
 		return fmt.Errorf("package %d not found", id)
 	}
+	// One worker per package: a second build would clear the first one's folder.
+	releasePackage, err := a.Store.claimWork(packageWorkKey(id), fmt.Sprintf("package %s is already being built or burned; wait for that job to finish", c.Name))
+	if err != nil {
+		return err
+	}
+	defer releasePackage()
 	if c.Status != "PLANNED" && c.Status != "FAILED" {
 		return fmt.Errorf("package %s is %s; only PLANNED/FAILED can build", c.Name, c.Status)
 	}
@@ -1057,7 +1066,6 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 		return err
 	}
 	var gpgBin string
-	var err error
 	if c.Encrypted {
 		if gpgBin, err = a.tool("gpg"); err != nil {
 			return err
@@ -1083,6 +1091,11 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	defer releaseStaging()
 	if afterPathReserved != nil {
 		afterPathReserved(cfg.StagingDir)
+	}
+	// Before the earlier build is cleared: a folder that cannot take the new one
+	// must not lose the old one.
+	if err := proveWriteAccess(cfg.StagingDir, "the staging folder"); err != nil {
+		return err
 	}
 	work := filepath.Join(cfg.StagingDir, c.Name)
 	// A build starts from an empty folder: nothing from an earlier build (its

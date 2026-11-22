@@ -10,6 +10,31 @@ import (
 	"strings"
 )
 
+// mountSourceFrom reads /proc/self/mountinfo text and returns the device name (no
+// /dev/) of the longest mount holding abs, or "" when that mount is not on a device.
+func mountSourceFrom(info, abs string) string {
+	best, name := -1, ""
+	for _, line := range strings.Split(info, "\n") {
+		left, right, ok := strings.Cut(line, " - ")
+		if !ok {
+			continue
+		}
+		l, r := strings.Fields(left), strings.Fields(right)
+		if len(l) < 5 || len(r) < 2 {
+			continue
+		}
+		mp := strings.ReplaceAll(l[4], `\040`, " ")
+		if !mountMatches(mp, abs) || len(mp) <= best {
+			continue
+		}
+		best, name = len(mp), ""
+		if strings.HasPrefix(r[1], "/dev/") {
+			name = strings.TrimPrefix(r[1][strings.LastIndex(r[1], "/"):], "/")
+		}
+	}
+	return name
+}
+
 // leafDisks walks /sys/class/block (root) from device name down through its "slaves"
 // (LVM, RAID, encryption) to the whole disks underneath, as "disk:<major:minor>".
 // wholeDisk names the disk a partition belongs to, or "" when name is not a partition.

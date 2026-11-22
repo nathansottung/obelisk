@@ -19,10 +19,19 @@ import (
 // whose keystores are all on one temp drive, can treat folders as devices.
 var keystoreDeviceOf = realKeystoreDevice
 
+// keystoreDisks and keystoreOnNetwork read the disks under a folder and whether it is
+// on a network share. Variables so tests can present a failed lookup.
+var (
+	keystoreDisks     = physicalDisksOf
+	keystoreOnNetwork = pathOnNetwork
+)
+
 // realKeystoreDevice is the device of the nearest existing folder holding path:
-// the physical disks under its volume where they can be read (so two partitions
-// of one disk are one device), otherwise the volume, read from a handle on it. A
-// volume across several disks names each one, joined by deviceSeparator.
+// the physical disks under its volume (so two partitions of one disk are one device).
+// A volume across several disks names each one, joined by deviceSeparator. Where
+// disks can be read and this one could not be, that is an error: a failed lookup is
+// not proof of a separate device. A network share has no local disk and is placed by
+// its volume, as is everything on a system whose disks are not read.
 func realKeystoreDevice(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -36,8 +45,11 @@ func realKeystoreDevice(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if disks, ok := physicalDisksOf(dir); ok {
+	if disks, ok := keystoreDisks(dir); ok {
 		return strings.Join(disks, deviceSeparator), nil
+	}
+	if diskLookupSupported && !keystoreOnNetwork(dir) {
+		return "", fmt.Errorf("its disk could not be read, so Obelisk cannot show it is separate from the other keystores")
 	}
 	f, err := os.Open(dir)
 	if err != nil {

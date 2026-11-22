@@ -48,9 +48,12 @@ The check reads only. It writes nothing to the drive. Use a spare USB drive anyw
 The test prints two lines and passes:
 
 ```text
-Windows:  disk 2, serial "ABC123", size 500107862016, partition {...}
-Obelisk:  disk 2, serial "ABC123", size 500107862016, partition gpt:...
+Windows:  disk 2, serial "ABC123", size 500107862016, partition mbr:0a1b2c3d-01
+Obelisk:  disk 2, serial "ABC123", size 500107862016, partition mbr:0a1b2c3d-01
 ```
+
+A GPT drive shows `gpt:` and its partition GUID on both lines. An MBR drive, which
+most USB sticks are, shows `mbr:`, its disk signature, and the partition number.
 
 The disk number, serial, size, and partition must agree. The disk must not be the
 one that holds `C:`.
@@ -62,5 +65,11 @@ one that holds `C:`.
 - **"is on the system disk"**: the folder holds a partition of the system disk. Mount
   a different drive.
 - **An empty serial on both lines** is normal for some USB bridges.
-- **Any mismatch** is a bug. Keep the output and report it.
+- **"Windows reported no partition ID"**: the disk has no signature or an unknown
+  partition style, so there is nothing to compare. The check fails rather than pass
+  without comparing.
+- **An MBR number that differs by a little**: Windows skips empty partition slots and
+  counts logical partitions differently. If the signature matches and the drive has an
+  empty slot or logical partitions, report the output so it can be checked by hand.
+- **Any other mismatch** is a bug. Keep the output and report it.
 - **Access denied from `Get-Partition`**: run PowerShell as administrator.

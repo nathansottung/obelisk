@@ -72,7 +72,7 @@ func resolveLinux(abs string) (DeviceIdentity, error) {
 	if err != nil {
 		return DeviceIdentity{}, fmt.Errorf("lsblk: %v", err)
 	}
-	return parseLsblk(out, abs)
+	return parseLsblkDevice(out, abs, blockDeviceName(abs))
 }
 
 // ---- macOS: diskutil ----------------------------------------------------

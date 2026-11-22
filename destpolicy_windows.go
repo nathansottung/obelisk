@@ -153,9 +153,10 @@ func destGroupName(sid string) string {
 //   - a specific local or domain account or group that can change files but not
 //     permissions, which tools commonly add to folders such as a user's temp folder,
 //     is a finding the user decides about;
-//   - anything else — Everyone, Guests, Anonymous Logon, an account that can also
-//     change permissions or take ownership, or Authenticated Users or Users granted
-//     explicitly on this folder — refuses.
+//   - Authenticated Users or Users granted change rights directly on this folder,
+//     but not the right to change its permissions, is the same kind of finding;
+//   - anything else — Everyone, Guests, Anonymous Logon, or an account granted
+//     directly that can also change permissions or take ownership — refuses.
 func classifyDestGrant(sid, folder string, granted uint32, inherited, publication, volumeRoot bool) (*destFinding, error) {
 	if volumeRoot && publication && sid == sidAuthenticatedUsers && granted == windows.FILE_APPEND_DATA {
 		return &destFinding{Kind: destFindingDriveRoot, Folder: folder, Group: destGroupName(sid), SID: sid}, nil
@@ -164,6 +165,9 @@ func classifyDestGrant(sid, folder string, granted uint32, inherited, publicatio
 	if (sid == sidAuthenticatedUsers || sid == sidUsers) && inherited && !volumeRoot {
 		return &destFinding{Kind: destFindingSharedGroup, Folder: folder, Group: destGroupName(sid), SID: sid, Inherited: true,
 			Permissions: changesPermissions}, nil
+	}
+	if (sid == sidAuthenticatedUsers || sid == sidUsers) && !inherited && !changesPermissions {
+		return &destFinding{Kind: destFindingNamedAccount, Folder: folder, Group: destGroupName(sid), SID: sid}, nil
 	}
 	if specificAccountSID(sid) && !changesPermissions && !volumeRoot {
 		return &destFinding{Kind: destFindingNamedAccount, Folder: folder, Group: destGroupName(sid), SID: sid, Inherited: inherited}, nil

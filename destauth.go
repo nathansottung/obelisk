@@ -482,6 +482,21 @@ func (s *Store) CheckFileOutsideSources(path string) error {
 			return overlapError(d, r, path, canon, src.registered)
 		}
 	}
+	// The same object under another name (one share by two server names, say).
+	if o, err := fileOutputAt(abs); err == nil {
+		for _, src := range snap.srcs {
+			if src.offline || !src.fromHandle {
+				continue
+			}
+			id, err := sourceIdentityOf(src.canonical)
+			if err != nil {
+				continue // its real location was compared above
+			}
+			if o.blocks(gateFolderAt(src.canonical, id)) {
+				return fmt.Errorf("refusing: %s is inside registered source %s; Obelisk never writes into source data", path, src.registered)
+			}
+		}
+	}
 	// Sources whose drive is away, or attached somewhere else, as for a folder.
 	if err := snap.decideOffline(vol, abs, canon, path); err != nil {
 		return err
@@ -698,6 +713,13 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 		root.Close()
 		return nil, err
 	}
+	// Held and decided: now really try it, before any job writes here.
+	if err := proveRootWrite(root, canon, destWriteUse); err != nil {
+		unreserve()
+		release()
+		root.Close()
+		return nil, err
+	}
 	tok := make([]byte, 16)
 	if _, err := rand.Read(tok); err != nil {
 		unreserve()
@@ -875,6 +897,9 @@ func (s *Store) inspectDestination(path string) (*destInspection, error) {
 		if _, err := predictDestChild(anc, filepath.Join(ancCanon, missing[0]), 1); err != nil {
 			return fail(err)
 		}
+		if err := checkWriteAccess(intended, destWriteUse); err != nil {
+			return fail(err)
+		}
 		id, err := rootIdentity(anc)
 		if err != nil {
 			return fail(err)
@@ -897,6 +922,9 @@ func (s *Store) inspectDestination(path string) (*destInspection, error) {
 	}
 	for _, f := range pred {
 		findings = appendFinding(findings, f)
+	}
+	if err := checkWriteAccess(ancCanon, destWriteUse); err != nil {
+		return fail(err)
 	}
 	id, err := rootIdentity(anc)
 	if err != nil {
