@@ -88,6 +88,21 @@ func TestRegisterSource_RefusesTheDataFolder(t *testing.T) {
 	}
 }
 
+// The refusal must not send the user to a step that opens an empty catalog.
+func TestRegisterSource_DataFolderMessageIsSafe(t *testing.T) {
+	app := dockApp(t)
+	err := tryRegisterSource(app.Store, app.Store.AddCollection("Live").ID, app.DataDir)
+	if err == nil {
+		t.Fatal("the data folder was accepted")
+	}
+	if strings.Contains(err.Error(), "-data") {
+		t.Fatalf("the message suggests pointing Obelisk at another data folder: %v", err)
+	}
+	if !strings.Contains(err.Error(), "Choose a folder that does not include it") {
+		t.Fatalf("the message gives no way forward: %v", err)
+	}
+}
+
 // A catalog from before this rule keeps working: its source can still be scanned.
 func TestRegisterSource_ExistingRecordIsNotLockedOut(t *testing.T) {
 	app := dockApp(t)

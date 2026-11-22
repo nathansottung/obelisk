@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 
 	"golang.org/x/sys/windows"
@@ -62,9 +63,14 @@ var volumeDiskSet = func(path string) ([]uint32, error) {
 		return nil, fmt.Errorf("opening the volume of %s: %w", path, err)
 	}
 	defer windows.CloseHandle(h)
-	var buf [512]byte
+	buf := make([]byte, 512)
 	var n uint32
-	if err := windows.DeviceIoControl(h, ioctlVolumeGetVolumeDiskExtents, nil, 0, &buf[0], uint32(len(buf)), &n, nil); err != nil {
+	err = windows.DeviceIoControl(h, ioctlVolumeGetVolumeDiskExtents, nil, 0, &buf[0], uint32(len(buf)), &n, nil)
+	if errors.Is(err, windows.ERROR_MORE_DATA) { // the answer starts with how many there are
+		buf = make([]byte, extentBufferFor(buf[:8]))
+		err = windows.DeviceIoControl(h, ioctlVolumeGetVolumeDiskExtents, nil, 0, &buf[0], uint32(len(buf)), &n, nil)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("reading the disks of %s: %w", path, err)
 	}
 	return disksFromExtents(buf[:n])

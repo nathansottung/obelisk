@@ -30,6 +30,17 @@ func diskFromExtents(b []byte) (uint32, error) {
 	return disks[0], nil
 }
 
+// extentBufferFor is the size of buffer that holds the extents a partial
+// VOLUME_DISK_EXTENTS answer counts, within a sane limit.
+func extentBufferFor(header []byte) int {
+	const most = 1 << 16 // extents
+	count := uint64(binary.LittleEndian.Uint32(header))
+	if count > most {
+		count = most
+	}
+	return int(8 + 24*count)
+}
+
 // disksFromExtents is every distinct disk in a VOLUME_DISK_EXTENTS answer.
 func disksFromExtents(b []byte) ([]uint32, error) {
 	if len(b) < 8 {

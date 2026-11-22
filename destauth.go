@@ -129,6 +129,11 @@ type sourceRef struct {
 	offline    bool   // the source's volume is not where the source was registered
 	volumeID   string // recorded volume identity, for offline sources
 	abs        string // absolute registered path, for offline sources
+	// unavailable: its path is still here but the drive behind it is not ready (a
+	// mount point with no card, say). What holds that path is compared even from
+	// another volume. viaParent is the path by its parent's real location.
+	unavailable bool
+	viaParent   string
 }
 
 // sourceSnapshot is the set of registered sources an authorization decided
@@ -197,8 +202,14 @@ func (s *Store) sourceSnapshot() (*sourceSnapshot, error) {
 		}
 		// A card reader with no card or an unreachable share: the source is away, so
 		// it blocks only a destination that could be it (decideOffline).
-		if sourceUnavailable(oerr) {
-			snap.srcs = append(snap.srcs, sourceRef{registered: r, offline: true, volumeID: folder.VolumeID, abs: abs})
+		// With no recorded volume, an unreachable share could be the same place under
+		// another name, so that case still refuses below.
+		if sourceUnavailable(oerr) && (folder.VolumeID != "" || !sourceNetworkError(oerr)) {
+			ref := sourceRef{registered: r, offline: true, volumeID: folder.VolumeID, abs: abs, unavailable: true}
+			if parent := canonicalOfMissing(filepath.Dir(abs)); parent != "" {
+				ref.viaParent = filepath.Join(parent, filepath.Base(abs))
+			}
+			snap.srcs = append(snap.srcs, ref)
 			continue
 		}
 		if !errors.Is(oerr, fs.ErrNotExist) {
@@ -318,6 +329,18 @@ func (snap *sourceSnapshot) decideOffline(destVolumeID, requested, canonical, di
 	for _, s := range snap.srcs {
 		if !s.offline {
 			continue
+		}
+		if s.unavailable {
+			for _, src := range []string{s.abs, s.viaParent} {
+				if src == "" {
+					continue
+				}
+				for _, p := range []string{requested, canonical} {
+					if err := overlapError(normPath(p), normPath(src), display, p, s.registered+" (its drive is not available)"); err != nil {
+						return err
+					}
+				}
+			}
 		}
 		if s.volumeID != "" && destVolumeID != "" {
 			if s.volumeID == destVolumeID {

@@ -173,7 +173,7 @@ func (s *Store) refuseDataFolder(path string, where gateFolder) error {
 		return fmt.Errorf("cannot add %s as a source: could not establish where Obelisk's data folder is: %w", path, err)
 	}
 	if where.overlaps(data) {
-		return fmt.Errorf("cannot add %s as a source: it overlaps Obelisk's own data folder %s, which Obelisk writes to all the time. Nothing was added. Choose a folder that does not include it, or start Obelisk with -data set to a folder outside this one", path, data.canonical)
+		return fmt.Errorf("cannot add %s as a source: it overlaps Obelisk's own data folder %s, which Obelisk writes to all the time. Nothing was added. Choose a folder that does not include it", path, data.canonical)
 	}
 	return nil
 }
