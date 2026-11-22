@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -19,20 +20,33 @@ var errVolumeSpansDisks = fmt.Errorf("the volume spans more than one disk")
 // diskFromExtents reads a VOLUME_DISK_EXTENTS answer: a count, then 24-byte
 // DISK_EXTENT entries (disk number, offset, length) from byte 8.
 func diskFromExtents(b []byte) (uint32, error) {
+	disks, err := disksFromExtents(b)
+	if err != nil {
+		return 0, err
+	}
+	if len(disks) != 1 {
+		return 0, errVolumeSpansDisks
+	}
+	return disks[0], nil
+}
+
+// disksFromExtents is every distinct disk in a VOLUME_DISK_EXTENTS answer.
+func disksFromExtents(b []byte) ([]uint32, error) {
 	if len(b) < 8 {
-		return 0, fmt.Errorf("the volume reported no disk")
+		return nil, fmt.Errorf("the volume reported no disk")
 	}
 	count := uint64(binary.LittleEndian.Uint32(b))
 	if count == 0 || uint64(len(b)) < 8+24*count {
-		return 0, fmt.Errorf("the volume reported no complete list of disks")
+		return nil, fmt.Errorf("the volume reported no complete list of disks")
 	}
-	disk := binary.LittleEndian.Uint32(b[8:])
-	for i := uint64(1); i < count; i++ {
-		if binary.LittleEndian.Uint32(b[8+24*i:]) != disk {
-			return 0, errVolumeSpansDisks
+	var disks []uint32
+	for i := uint64(0); i < count; i++ {
+		d := binary.LittleEndian.Uint32(b[8+24*i:])
+		if !slices.Contains(disks, d) {
+			disks = append(disks, d)
 		}
 	}
-	return disk, nil
+	return disks, nil
 }
 
 // flexInt unmarshals a JSON number OR a quoted number (lsblk -b emits either

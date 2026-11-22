@@ -42,6 +42,11 @@ func TestBuild_StagingCannotBecomeASourceMidBuild(t *testing.T) {
 // The real escrow fetch holds its cache folder.
 func TestEscrowFetch_CacheCannotBecomeASourceMidFetch(t *testing.T) {
 	app := dockApp(t)
+	cfg := mustConfig(t, app)
+	cfg.EscrowCacheDir = filepath.Join(t.TempDir(), "escrow-cache") // outside the data folder
+	if err := writeConfigForTest(app, cfg); err != nil {
+		t.Fatal(err)
+	}
 	coll := app.Store.AddCollection("Live")
 	var regErr error
 	held := ""
@@ -54,8 +59,8 @@ func TestEscrowFetch_CacheCannotBecomeASourceMidFetch(t *testing.T) {
 	if held == "" {
 		t.Fatal("the fetch did not reach its cache folder")
 	}
-	if regErr == nil {
-		t.Fatal("the escrow cache became a source during a fetch")
+	if regErr == nil || !strings.Contains(regErr.Error(), "live output") {
+		t.Fatalf("the escrow cache could become a source during a fetch: %v", regErr)
 	}
 }
 
@@ -187,11 +192,14 @@ func TestQuarantine_TargetCannotBecomeASourceMidMove(t *testing.T) {
 	coll := app.Store.AddCollection("Live")
 	target := filepath.Join(root, "raw")
 	var regErr error
-	quarantineBeforeMove = func() { regErr = tryRegisterSource(app.Store, coll.ID, target) }
+	ran := false
+	quarantineBeforeMove = func() { ran = true; regErr = tryRegisterSource(app.Store, coll.ID, target) }
 	t.Cleanup(func() { quarantineBeforeMove = nil })
-	_, err := app.Quarantine(target, "user", "test")
-	if regErr == nil && err == nil {
-		t.Fatal("the folder became a source and was still moved to quarantine")
+	if _, err := app.Quarantine(target, "user", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if !ran || regErr == nil {
+		t.Fatalf("ran %v: the folder became a source and was still moved to quarantine (%v)", ran, regErr)
 	}
 }
 
@@ -204,11 +212,14 @@ func TestUnQuarantine_TargetCannotBecomeASourceMidMove(t *testing.T) {
 		t.Fatal(err)
 	}
 	var regErr error
-	quarantineBeforeMove = func() { regErr = tryRegisterSource(app.Store, coll.ID, root) }
+	ran := false
+	quarantineBeforeMove = func() { ran = true; regErr = tryRegisterSource(app.Store, coll.ID, root) }
 	t.Cleanup(func() { quarantineBeforeMove = nil })
-	_, err = app.UnQuarantine(e.ID)
-	if regErr == nil && err == nil {
-		t.Fatal("a folder was moved back into a source registered during the move")
+	if _, err := app.UnQuarantine(e.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !ran || regErr == nil {
+		t.Fatalf("ran %v: a folder was moved back into a source registered during the move (%v)", ran, regErr)
 	}
 }
 

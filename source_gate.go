@@ -128,10 +128,18 @@ func (a gateFolder) heldBy(b gateFolder) bool {
 func (s *Store) RegisterSource(collectionID int, path string) (*Folder, error) {
 	s.srcGate.mu.Lock()
 	defer s.srcGate.mu.Unlock()
-	if len(s.srcGate.live) > 0 {
+	recorded := s.folderRecorded(collectionID, path)
+	if len(s.srcGate.live) > 0 || !recorded {
 		where, err := locateForGate(path)
 		if err != nil {
-			return nil, fmt.Errorf("cannot add %s as a source while Obelisk is writing: could not establish where it really is: %w", path, err)
+			return nil, fmt.Errorf("cannot add %s as a source: could not establish where it really is: %w", path, err)
+		}
+		// A source already in the catalog stays scannable, so an older catalog with
+		// a source around the data folder is not locked out of its own records.
+		if !recorded {
+			if err := s.refuseDataFolder(path, where); err != nil {
+				return nil, err
+			}
 		}
 		for o := range s.srcGate.live {
 			if o.blocks(where) {
@@ -140,6 +148,34 @@ func (s *Store) RegisterSource(collectionID int, path string) (*Folder, error) {
 		}
 	}
 	return s.addFolderRecord(collectionID, path), nil
+}
+
+// folderRecorded reports whether this archive already has path as a source.
+func (s *Store) folderRecorded(collectionID int, path string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, f := range s.c.Folders {
+		if f.CollectionID == collectionID && f.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+// refuseDataFolder refuses a source that is Obelisk's data folder, is inside it, or
+// holds it: Obelisk writes there all the time, so it would be writing into a source.
+func (s *Store) refuseDataFolder(path string, where gateFolder) error {
+	if s.path == "" {
+		return nil
+	}
+	data, err := locateForGate(filepath.Dir(s.path))
+	if err != nil {
+		return fmt.Errorf("cannot add %s as a source: could not establish where Obelisk's data folder is: %w", path, err)
+	}
+	if where.overlaps(data) {
+		return fmt.Errorf("cannot add %s as a source: it overlaps Obelisk's own data folder %s, which Obelisk writes to all the time. Nothing was added. Choose a folder that does not include it, or start Obelisk with -data set to a folder outside this one", path, data.canonical)
+	}
+	return nil
 }
 
 // addFolderRecord adds the catalog record. Only RegisterSource calls it.

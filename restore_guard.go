@@ -247,6 +247,12 @@ func (a *App) newRestoreFolder(outputDir string) (*restoreTarget, error) {
 	if err := a.Store.checkNewRestoreFolder(abs, outputDir); err != nil {
 		return nil, err
 	}
+	// Held by path while it is created; the reservation below holds it by identity.
+	releaseCreate, err := a.Store.reserveOutputPath(abs)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseCreate()
 	if err := os.Mkdir(abs, 0o700); err != nil {
 		return nil, fmt.Errorf("cannot create the restore folder %s: %w", outputDir, err)
 	}

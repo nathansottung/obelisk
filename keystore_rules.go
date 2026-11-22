@@ -20,8 +20,9 @@ import (
 var keystoreDeviceOf = realKeystoreDevice
 
 // realKeystoreDevice is the device of the nearest existing folder holding path:
-// the physical disk under its volume where that can be read (so two partitions
-// of one disk are one device), otherwise the volume, read from a handle on it.
+// the physical disks under its volume where they can be read (so two partitions
+// of one disk are one device), otherwise the volume, read from a handle on it. A
+// volume across several disks names each one, joined by deviceSeparator.
 func realKeystoreDevice(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -35,8 +36,8 @@ func realKeystoreDevice(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if disk, ok := physicalDiskOf(dir); ok {
-		return disk, nil
+	if disks, ok := physicalDisksOf(dir); ok {
+		return strings.Join(disks, deviceSeparator), nil
 	}
 	f, err := os.Open(dir)
 	if err != nil {
@@ -88,13 +89,22 @@ func checkKeystorePaths(paths []string) error {
 		if err != nil {
 			return fmt.Errorf("keystore_paths: cannot tell which device %q is on: %w", p, err)
 		}
-		if prev, ok := seenDev[dev]; ok {
-			return fmt.Errorf("keystore_paths: %q and %q are on the same device; keep each keystore on a different device, so losing one loses no key", prev, p)
+		// Sharing any one disk means losing that disk loses both.
+		parts := strings.Split(dev, deviceSeparator)
+		for _, d := range parts {
+			if prev, ok := seenDev[d]; ok {
+				return fmt.Errorf("keystore_paths: %q and %q are on the same device; keep each keystore on a different device, so losing one loses no key", prev, p)
+			}
 		}
-		seenDev[dev] = p
+		for _, d := range parts {
+			seenDev[d] = p
+		}
 	}
 	return nil
 }
+
+// deviceSeparator joins the disks of a volume that lies on more than one.
+const deviceSeparator = "\x00"
 
 // keystoreRootOf is the drive a path is under, for a keystore whose device
 // cannot be read: its volume name (a drive letter or share), or its top folder

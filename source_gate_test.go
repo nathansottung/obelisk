@@ -1,3 +1,5 @@
+//go:build !guionly
+
 package main
 
 // source_gate_test.go: a folder cannot be a source and a live output at once.
@@ -255,9 +257,10 @@ func TestLiveOutput_OfflineSourceBlocksOnlyItsOwnVolume(t *testing.T) {
 		t.Fatalf("an output on another volume was blocked by an offline source: %v", err)
 	}
 	d.Close()
-	setFolderVolumeForTest(app.Store, f.ID, here)
-	if d, err := app.Store.AuthorizeDestination(other); err == nil {
-		d.Close()
+	// The same source recorded on this output's volume blocks it. Decided directly:
+	// on Linux, a path under / cannot be made to look like a detached drive.
+	own := &sourceSnapshot{srcs: []sourceRef{{registered: f.Path, offline: true, volumeID: here, abs: f.Path}}}
+	if err := own.decideOffline(here, other, other, other); err == nil {
 		t.Fatal("an output on the offline source's own volume was allowed")
 	}
 }

@@ -147,6 +147,10 @@ type sourceSnapshot struct {
 	srcs []sourceRef
 }
 
+// openSourceRoot opens a registered source. A variable so a test can present a
+// drive that is not ready.
+var openSourceRoot = os.Open
+
 // sourceSnapshot resolves every registered source root to a canonical name,
 // preferring the identity of the OPEN OBJECT over the spelling of its name.
 //
@@ -170,7 +174,7 @@ func (s *Store) sourceSnapshot() (*sourceSnapshot, error) {
 		if err != nil {
 			return nil, fmt.Errorf("cannot resolve registered source %s: %w", r, err)
 		}
-		f, oerr := os.Open(abs)
+		f, oerr := openSourceRoot(abs)
 		if oerr == nil {
 			c, cerr := handleCanonicalPath(f)
 			vid, verr := volumeIDOf(f)
@@ -189,6 +193,12 @@ func (s *Store) sourceSnapshot() (*sourceSnapshot, error) {
 				// the source: protect it too.
 				snap.srcs = append(snap.srcs, sourceRef{registered: r, offline: true, volumeID: folder.VolumeID, abs: abs})
 			}
+			continue
+		}
+		// A card reader with no card or an unreachable share: the source is away, so
+		// it blocks only a destination that could be it (decideOffline).
+		if sourceUnavailable(oerr) {
+			snap.srcs = append(snap.srcs, sourceRef{registered: r, offline: true, volumeID: folder.VolumeID, abs: abs})
 			continue
 		}
 		if !errors.Is(oerr, fs.ErrNotExist) {

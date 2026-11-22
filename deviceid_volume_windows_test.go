@@ -1,4 +1,4 @@
-//go:build windows
+//go:build windows && !guionly
 
 package main
 
@@ -199,7 +199,8 @@ func TestManual_FolderMountedDrive(t *testing.T) {
 	}
 }
 
-// The real lookup follows a junction to the volume of the folder it points at.
+// The real lookup answers through a junction and for a path not there yet. Both are
+// on one volume here, so crossing to another volume is left to the manual check.
 func TestVolumeDevicePath_FollowsTheOpenedObject(t *testing.T) {
 	target := t.TempDir()
 	link := filepath.Join(t.TempDir(), "link")

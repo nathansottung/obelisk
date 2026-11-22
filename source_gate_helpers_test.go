@@ -1,11 +1,8 @@
 package main
 
-// AddFolder registers a source for test setup, where nothing is expected to refuse.
-// It is test-only so that no production path can add a source around the gate.
+// AddFolder puts a source in the catalog for test setup, as an older catalog may
+// already hold it (a whole drive, say). It is test-only so that no production path
+// can add a source around the gate; tests of the gate call RegisterSource.
 func (s *Store) AddFolder(collectionID int, path string) *Folder {
-	f, err := s.RegisterSource(collectionID, path)
-	if err != nil {
-		panic(err)
-	}
-	return f
+	return s.addFolderRecord(collectionID, path)
 }

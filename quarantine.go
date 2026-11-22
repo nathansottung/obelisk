@@ -959,25 +959,12 @@ func moveWithinRoot(rootReal, from, to string) error {
 }
 
 // checkUnquarantineTarget decides the folder an entry returns to by its real
-// location, as resolveQuarantine decides the way in.
+// location, as resolveQuarantine decides the way in. It creates nothing: folders that
+// are missing are made by the move, once this has passed and the target is held.
 func (s *Store) checkUnquarantineTarget(rootReal, rel, display string) error {
-	r, err := os.OpenRoot(rootReal)
-	if err != nil {
-		return err
-	}
-	defer r.Close()
-	dir := filepath.FromSlash(path.Dir(rel))
-	if err := r.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	pr, err := r.OpenRoot(dir)
-	if err != nil {
-		return err
-	}
-	pc, err := rootCanonicalPath(pr)
-	pr.Close()
-	if err != nil {
-		return fmt.Errorf("cannot establish the real location of %s: %w", display, err)
+	pc := canonicalOfMissing(filepath.Join(rootReal, filepath.FromSlash(path.Dir(rel))))
+	if pc == "" {
+		return fmt.Errorf("cannot establish the real location of %s", display)
 	}
 	snap, err := s.sourceSnapshot()
 	if err != nil {

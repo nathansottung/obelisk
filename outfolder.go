@@ -91,6 +91,15 @@ func (a *App) openOutFolderUnguarded(p string) (*outFolder, error) {
 	if err := a.Store.CheckOutsideSources(abs); err != nil {
 		return nil, err
 	}
+	// Held by path while it is created; the reservation below holds it by identity.
+	releaseCreate, err := a.Store.reserveOutputPath(abs)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseCreate()
+	if afterPathReserved != nil {
+		afterPathReserved(abs)
+	}
 	if err := os.MkdirAll(abs, 0o755); err != nil {
 		return nil, err
 	}
