@@ -376,6 +376,13 @@ func (s *Store) ApplyMakePrivate(path, token string, confirmed bool) (*Destinati
 	if err != nil || id != p.change.id {
 		return nil, fmt.Errorf("that permission change was shown for %s, not %s", p.path, path)
 	}
+	// It may have become a source since the change was shown. Obelisk never changes
+	// a source, so this is decided on the sources now and held during the change.
+	releasePrivate, err := s.reserveOutputPath(p.path)
+	if err != nil {
+		return nil, err
+	}
+	defer releasePrivate()
 	if err := applyPrivateFolder(p.path, p.change); err != nil {
 		return nil, err
 	}
@@ -527,6 +534,9 @@ func destContains(list []string, s string) bool {
 	return false
 }
 
+// destBeforeCreate is a test seam: it runs after the check and before folders are made.
+var destBeforeCreate func()
+
 // CreateDestination creates a destination that does not exist yet, once the user
 // has confirmed "Create <folder>", and then checks it like any other: its real
 // permissions are read and, when they need it, the user is asked about them.
@@ -553,7 +563,17 @@ func (s *Store) CreateDestination(path, folder string, confirmed bool) (*Destina
 		in.anchor.Close()
 		return nil, fmt.Errorf("confirm Create %s before Obelisk makes the folder", in.intended)
 	}
-	root, _, created, err := createDestComponents(in.anchor, in.anchorCanon, in.missing, in.snap, in.display)
+	if destBeforeCreate != nil {
+		destBeforeCreate()
+	}
+	// Decided on the sources as they are now, and held while the folders are made.
+	snap, releaseCreate, err := s.reserveOutputPathSnap(in.intended)
+	if err != nil {
+		in.anchor.Close()
+		return nil, err
+	}
+	defer releaseCreate()
+	root, _, created, err := createDestComponents(in.anchor, in.anchorCanon, in.missing, snap, in.display)
 	if err != nil {
 		return nil, withCreatedNote(err, created)
 	}

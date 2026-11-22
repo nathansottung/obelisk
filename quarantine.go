@@ -608,6 +608,9 @@ func quarantineWarning(label string, copiesAfter int) string {
 
 // ---- the moves ---------------------------------------------------------
 
+// quarantineBeforeMove is a test seam: it runs just before bytes are moved.
+var quarantineBeforeMove func()
+
 // Quarantine stages absPath into <root>/_deleted/<rel>, records the move (who/when/
 // reason) and the catalog copies it pulls from protection accounting, and writes an
 // audit line. It is the ONLY way this tool "removes" anything — and even this only
@@ -618,6 +621,12 @@ func (a *App) Quarantine(absPath, by, reason string) (*QuarantineEntry, error) {
 		return nil, err
 	}
 	root, destVol, rel := t.root, t.destVol, t.rel
+	// Until the move is done, neither end may become a source.
+	releaseMove, err := a.Store.reserveOutputPaths(t.real, filepath.Join(t.rootReal, QuarantineDir))
+	if err != nil {
+		return nil, err
+	}
+	defer releaseMove()
 	info, err := os.Lstat(t.real)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read %s: %w", absPath, err)
@@ -641,6 +650,9 @@ func (a *App) Quarantine(absPath, by, reason string) (*QuarantineEntry, error) {
 		size, fileCount = info.Size(), 1
 	}
 
+	if quarantineBeforeMove != nil {
+		quarantineBeforeMove()
+	}
 	// The move is made inside the managed root's real location, through a handle
 	// on it: both names are relative to that root, so the move cannot reach
 	// anything outside it.
@@ -711,6 +723,14 @@ func (a *App) UnQuarantine(id int) (*QuarantineEntry, error) {
 	// there since).
 	if err := a.Store.checkUnquarantineTarget(rootReal, e.OriginalRel, dst); err != nil {
 		return nil, err
+	}
+	releaseMove, err := a.Store.reserveOutputPaths(filepath.Join(rootReal, filepath.FromSlash(e.OriginalRel)), filepath.Join(rootReal, QuarantineDir))
+	if err != nil {
+		return nil, err
+	}
+	defer releaseMove()
+	if quarantineBeforeMove != nil {
+		quarantineBeforeMove()
 	}
 	if err := moveWithinRoot(rootReal, path.Join(QuarantineDir, e.OriginalRel), e.OriginalRel); err != nil {
 		return nil, fmt.Errorf("restoring %s failed: %w", e.OriginalRel, err)

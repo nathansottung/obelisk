@@ -26,7 +26,20 @@ The check reads only. It writes nothing to the drive. Use a spare USB drive anyw
    Remove-Item Env:OBELISK_MANUAL_MOUNT
    ```
 
-5. To undo the mount, return to **Change Drive Letter and Paths**, select the folder
+5. Check a link that crosses to that drive. Make a junction elsewhere on `C:` that
+   points at the mount, and run the check through it:
+
+   ```powershell
+   cmd /c mklink /J "C:\Users\<you>\obelisk-test-tmp\usb-link" "C:\Users\<you>\obelisk-test-tmp\usb-mount"
+   $env:OBELISK_MANUAL_MOUNT = "C:\Users\<you>\obelisk-test-tmp\usb-mount"
+   $env:OBELISK_MANUAL_LINK = "C:\Users\<you>\obelisk-test-tmp\usb-link"
+   go test -count=1 -v -run '^TestManual_FolderMountedDrive$' .
+   Remove-Item Env:OBELISK_MANUAL_MOUNT, Env:OBELISK_MANUAL_LINK
+   cmd /c rmdir "C:\Users\<you>\obelisk-test-tmp\usb-link"
+   ```
+
+   `rmdir` removes only the junction. It does not touch the drive.
+6. To undo the mount, return to **Change Drive Letter and Paths**, select the folder
    path, and choose **Remove**. This removes the mount only. The data stays on the
    drive.
 

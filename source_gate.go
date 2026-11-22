@@ -42,6 +42,22 @@ type sourceGate struct {
 type liveOutput struct {
 	display string
 	where   gateFolder
+	// file: the output is one file (a keystore). A source may sit beside it, but may
+	// not be it or hold it. where.canonical is the file, and where.chain its folder
+	// and each folder above.
+	file bool
+}
+
+// blocks reports whether a source at src would overlap this output.
+func (o *liveOutput) blocks(src gateFolder) bool {
+	if !o.file {
+		return src.overlaps(o.where)
+	}
+	s, f := normPath(src.canonical), normPath(o.where.canonical)
+	if s != "" && f != "" && (s == f || canonicalWithin(s, f)) {
+		return true
+	}
+	return o.where.heldBy(src)
 }
 
 // gateFolder is where a folder really is. chain is the folder and each folder above
@@ -118,7 +134,7 @@ func (s *Store) RegisterSource(collectionID int, path string) (*Folder, error) {
 			return nil, fmt.Errorf("cannot add %s as a source while Obelisk is writing: could not establish where it really is: %w", path, err)
 		}
 		for o := range s.srcGate.live {
-			if where.overlaps(o.where) {
+			if o.blocks(where) {
 				return nil, fmt.Errorf("cannot add %s as a source: Obelisk is writing to %s right now, and a folder cannot be a source and a live output at once. Nothing was added. Wait for that job to finish, then scan again", path, o.display)
 			}
 		}
@@ -159,6 +175,11 @@ func (s *Store) reserveOutput(where gateFolder, display, requested, volumeID str
 	if err := snap.decideOffline(volumeID, requested, where.canonical, display); err != nil {
 		return nil, nil, err
 	}
+	if len(where.chain) == 0 { // not there yet: it must not become an away source's folder
+		if err := snap.decideCreate(where.canonical, display); err != nil {
+			return nil, nil, err
+		}
+	}
 	for _, src := range snap.srcs {
 		if src.offline || !src.fromHandle {
 			continue
@@ -186,23 +207,96 @@ func (s *Store) reserveOutput(where gateFolder, display, requested, volumeID str
 	}, nil
 }
 
-// reserveOutputPath reserves a folder written by path rather than through a held
-// handle (staging, the escrow cache). It may not exist yet.
+// afterPathReserved is a test seam: a by-path writer calls it once its folder is held.
+var afterPathReserved func(path string)
+
+// reserveOutputPath reserves a folder or file moved or written by path rather than
+// through a held handle (staging, the escrow cache, a quarantine move). It may not
+// exist yet.
 func (s *Store) reserveOutputPath(path string) (func(), error) {
+	_, release, err := s.reserveOutputPathSnap(path)
+	return release, err
+}
+
+// reserveOutputPathSnap is reserveOutputPath, also returning the sources it decided on.
+func (s *Store) reserveOutputPathSnap(path string) (*sourceSnapshot, func(), error) {
 	where, err := locateForGate(path)
 	if err != nil {
-		return nil, fmt.Errorf("refusing: could not establish the real location of %s: %w", path, err)
+		return nil, nil, fmt.Errorf("refusing: could not establish the real location of %s: %w", path, err)
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	vol := ""
-	if ancestor, _, derr := deepestExistingDir(abs); derr == nil {
-		vol = pathVolumeID(ancestor)
+	vol := pathVolumeID(abs)
+	if vol == "" {
+		if ancestor, _, derr := deepestExistingDir(abs); derr == nil {
+			vol = pathVolumeID(ancestor)
+		}
 	}
-	_, release, err := s.reserveOutput(where, path, abs, vol)
-	return release, err
+	return s.reserveOutput(where, path, abs, vol)
+}
+
+// reserveOutputPaths reserves every path or none. Empty paths are skipped.
+func (s *Store) reserveOutputPaths(paths ...string) (func(), error) {
+	var releases []func()
+	release := func() {
+		for _, r := range releases {
+			r()
+		}
+	}
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		r, err := s.reserveOutputPath(p)
+		if err != nil {
+			release()
+			return nil, err
+		}
+		releases = append(releases, r)
+	}
+	return release, nil
+}
+
+// reserveOutputFiles reserves files written by path (keystores), all or none: each
+// must not be, or be inside, a registered source, and until released no source may
+// be registered that is one of them or holds one.
+func (s *Store) reserveOutputFiles(paths []string) (func(), error) {
+	s.srcGate.mu.Lock()
+	defer s.srcGate.mu.Unlock()
+	outputs := make([]*liveOutput, 0, len(paths))
+	for _, p := range paths {
+		if err := s.CheckFileOutsideSources(p); err != nil {
+			return nil, err
+		}
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return nil, err
+		}
+		dir, err := locateForGate(filepath.Dir(abs))
+		if err != nil {
+			return nil, fmt.Errorf("refusing: could not establish the real location of %s: %w", p, err)
+		}
+		outputs = append(outputs, &liveOutput{display: p, file: true,
+			where: gateFolder{canonical: filepath.Join(dir.canonical, filepath.Base(abs)), chain: dir.chain}})
+	}
+	if s.srcGate.live == nil {
+		s.srcGate.live = map[*liveOutput]struct{}{}
+	}
+	for _, o := range outputs {
+		s.srcGate.live[o] = struct{}{}
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.srcGate.mu.Lock()
+			defer s.srcGate.mu.Unlock()
+			for _, o := range outputs {
+				delete(s.srcGate.live, o)
+			}
+		})
+	}, nil
 }
 
 // liveOutputCount is how many outputs running jobs hold.

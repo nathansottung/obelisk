@@ -58,6 +58,27 @@ func TestDestination_NamedAccountWarnsAndUserDecides(t *testing.T) {
 	if err := o.WriteFile("sub/f.txt", []byte("x"), 0o644); err != nil {
 		t.Fatalf("writing after Use it anyway: %v", err)
 	}
+	if notes := strings.Join(o.Notes(), "\n"); !strings.Contains(notes, otherAccountSID) {
+		t.Errorf("the job result does not mention the accepted account: %q", notes)
+	}
+}
+
+// A preview of Make private must not be applied to a folder that became a source.
+func TestMakePrivate_RefusedOnceTheFolderIsASource(t *testing.T) {
+	app := dockApp(t)
+	folder, _ := sharedFolder(t)
+	plan, err := app.Store.PreviewMakePrivate(folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.Store.AddFolder(app.Store.AddCollection("Live").ID, folder)
+	before := folderSDDLOf(t, folder)
+	if _, err := app.Store.ApplyMakePrivate(folder, plan.Token, true); err == nil {
+		t.Fatal("the permissions of a registered source were changed")
+	}
+	if got := folderSDDLOf(t, folder); got != before {
+		t.Fatalf("the source's permissions changed:\nbefore %s\nafter  %s", before, got)
+	}
 }
 
 // Grants beyond the common case still refuse.
@@ -68,6 +89,10 @@ func TestDestination_StrongerGrantsStillRefuse(t *testing.T) {
 		"an account that changes permissions": "(A;OICI;0x1701bf;;;" + otherAccountSID + ")",
 		"Everyone":                            "(A;OICI;0x1301bf;;;WD)",
 		"Guests":                              "(A;OICI;0x1301bf;;;BG)",
+		"the Guest account":                   "(A;OICI;0x1301bf;;;S-1-5-21-1111111111-2222222222-3333333333-501)",
+		"Domain Users, or None on a home PC":  "(A;OICI;0x1301bf;;;S-1-5-21-1111111111-2222222222-3333333333-513)",
+		"Domain Guests":                       "(A;OICI;0x1301bf;;;S-1-5-21-1111111111-2222222222-3333333333-514)",
+		"Domain Computers":                    "(A;OICI;0x1301bf;;;S-1-5-21-1111111111-2222222222-3333333333-515)",
 	} {
 		dir := folderWithGrant(t, ace)
 		if c := app.Store.CheckDestination(dir); c.Status != destStatusRefuse {

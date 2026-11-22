@@ -169,6 +169,15 @@ func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, 
 		return nil, errors.New(disc.Detail)
 	}
 
+	// The burn moves the private manifest out of the staged folder and back, and the
+	// disc's ECC is written there: neither folder may become a source meanwhile.
+	releaseStaging, err := a.Store.reserveOutputPaths(c.StagedDir, cfg.StagingDir)
+	if err != nil {
+		set("FAILED", err.Error())
+		return nil, errors.New(disc.Detail)
+	}
+	defer releaseStaging()
+
 	set("BURNING", "")
 	progress(0.05, "burning "+c.Name)
 	// Private media: the burn command copies the whole staged folder, so move the
@@ -303,6 +312,12 @@ func (a *App) carryEccToNextDisc(q *BurnQueue, current *BurnDisc, c *Chunk, eccP
 		a.Store.Log("ecc", c.Name+": next disc has no staged folder yet — ECC kept in staging")
 		return
 	}
+	releaseNext, err := a.Store.reserveOutputPath(nc.StagedDir)
+	if err != nil {
+		a.Store.Log("ecc", fmt.Sprintf("%s: could not carry ECC onto %s (%v) — kept in staging", c.Name, nc.Name, err))
+		return
+	}
+	defer releaseNext()
 	dst := filepath.Join(nc.StagedDir, filepath.Base(eccPath))
 	if err := copyFile(eccPath, dst); err != nil {
 		a.Store.Log("ecc", fmt.Sprintf("%s: could not carry ECC onto %s (%v) — kept in staging", c.Name, nc.Name, err))

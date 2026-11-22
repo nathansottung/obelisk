@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"unsafe"
@@ -164,7 +165,7 @@ func classifyDestGrant(sid, folder string, granted uint32, inherited, publicatio
 		return &destFinding{Kind: destFindingSharedGroup, Folder: folder, Group: destGroupName(sid), SID: sid, Inherited: true,
 			Permissions: changesPermissions}, nil
 	}
-	if strings.HasPrefix(sid, "S-1-5-21-") && !changesPermissions && !volumeRoot {
+	if specificAccountSID(sid) && !changesPermissions && !volumeRoot {
 		return &destFinding{Kind: destFindingNamedAccount, Folder: folder, Group: destGroupName(sid), SID: sid, Inherited: inherited}, nil
 	}
 	how := "set on this folder"
@@ -172,6 +173,17 @@ func classifyDestGrant(sid, folder string, granted uint32, inherited, publicatio
 		how = "inherited"
 	}
 	return nil, fmt.Errorf("unsafe destination namespace: %s lets %s change it (%s; mutation mask %#x to untrusted principal %s)", folder, destGroupName(sid), how, granted, sid)
+}
+
+// specificAccountSID reports whether sid is one account or group someone created.
+// Below 1000 are Windows' built-in ones, and some of those mean nearly everyone:
+// Guest (501), Domain Users or "None" on a home PC (513), Domain Guests (514).
+func specificAccountSID(sid string) bool {
+	if !strings.HasPrefix(sid, "S-1-5-21-") {
+		return false
+	}
+	rid, err := strconv.ParseUint(sid[strings.LastIndex(sid, "-")+1:], 10, 32)
+	return err == nil && rid >= 1000
 }
 
 // checkDestDACL refuses a directory whose owner is untrusted or whose DACL lets

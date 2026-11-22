@@ -408,6 +408,12 @@ func (a *App) GenerateKey(note string) (ref, passphrase, fpr string, err error) 
 	fpr = hex.EncodeToString(sum[:])
 	rec := map[string]any{"key_ref": ref, "algorithm": "GPG-AES256", "passphrase": passphrase,
 		"created_at": time.Now().UTC().Format(time.RFC3339), "note": note}
+	// A keystore's folder may have become a source since it was configured.
+	releaseKeystores, relErr := a.Store.reserveOutputFiles(cfg.KeystorePaths)
+	if relErr != nil {
+		return "", "", "", relErr
+	}
+	defer releaseKeystores()
 	for _, p := range cfg.KeystorePaths {
 		ks, e := readStore(p)
 		if e != nil {
@@ -479,6 +485,12 @@ func (a *App) SyncKeystores() (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	// A keystore's folder may have become a source since it was configured.
+	releaseKeystores, err := a.Store.reserveOutputFiles(paths)
+	if err != nil {
+		return 0, err
+	}
+	defer releaseKeystores()
 	for _, p := range paths {
 		if err := writeStoreObserved(p, out, a.keystoreMutationObserver); err != nil {
 			return 0, fmt.Errorf("keystore synchronization publication failed; earlier participants may already have been updated: %w", err)
@@ -1069,6 +1081,9 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 		return err
 	}
 	defer releaseStaging()
+	if afterPathReserved != nil {
+		afterPathReserved(cfg.StagingDir)
+	}
 	work := filepath.Join(cfg.StagingDir, c.Name)
 	// A build starts from an empty folder: nothing from an earlier build (its
 	// payload, par2 volumes, manifest, RESTORE.txt) can be shipped beside this

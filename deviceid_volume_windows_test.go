@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -67,6 +68,31 @@ func TestDeviceIdentity_SpanningVolumeRecordsNoPartition(t *testing.T) {
 	id, _ := resolveDeviceIdentity(`C:\`)
 	if id.Partition != "" {
 		t.Fatalf("a partition was recorded for a volume across disks: %q", id.Partition)
+	}
+}
+
+// Every caller of the direct partition lookup gets "unknown" for a spanning volume.
+func TestPartitionID_UnknownForASpanningVolume(t *testing.T) {
+	fakeVolumeDisk(t, 0, errVolumeSpansDisks)
+	if id, err := resolvePartitionID(`C:\`); err == nil || id != "" {
+		t.Fatalf("got %q, %v for a volume across disks", id, err)
+	}
+	if id := partitionIDAt(`C:\`); id != "" {
+		t.Fatalf("partitionIDAt got %q for a volume across disks", id)
+	}
+}
+
+func TestVolumeFromFinalPath(t *testing.T) {
+	const g = `\\?\Volume{0a1b2c3d-1111-2222-3333-444455556666}`
+	for in, want := range map[string]string{
+		g + `\`:             g,
+		g + `\folder\file`:  g,
+		`C:\folder`:         "",
+		`\\?\Volume{broken`: "",
+	} {
+		if got := volumeFromFinalPath(in); got != want {
+			t.Errorf("%q: got %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -160,5 +186,35 @@ func TestManual_FolderMountedDrive(t *testing.T) {
 	}
 	if g := strings.ToLower(strings.Trim(want.Guid, "{}")); g != "" && !strings.Contains(strings.ToLower(id.Partition), g) {
 		t.Errorf("partition: Obelisk %q, Windows %q", id.Partition, want.Guid)
+	}
+	if link := os.Getenv("OBELISK_MANUAL_LINK"); link != "" {
+		viaLink, err := resolveDeviceIdentity(link)
+		if err != nil {
+			t.Fatalf("Obelisk could not identify the link %s: %v", link, err)
+		}
+		t.Logf("Via link: serial %q, size %d, partition %s", viaLink.Serial, viaLink.SizeBytes, viaLink.Partition)
+		if viaLink.Serial != id.Serial || viaLink.SizeBytes != id.SizeBytes || viaLink.Partition != id.Partition {
+			t.Errorf("through the link Obelisk sees %+v, at the mount %+v", viaLink, id)
+		}
+	}
+}
+
+// The real lookup follows a junction to the volume of the folder it points at.
+func TestVolumeDevicePath_FollowsTheOpenedObject(t *testing.T) {
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	mustDirLink(t, link, target)
+	want, err := volumeDevicePath(target)
+	if err != nil {
+		t.Skipf("this folder reports no volume: %v", err)
+	}
+	if !strings.HasPrefix(want, `\\?\Volume{`) {
+		t.Fatalf("not a volume device: %q", want)
+	}
+	if got, err := volumeDevicePath(link); err != nil || got != want {
+		t.Fatalf("through a junction: %q, %v; want %q", got, err, want)
+	}
+	if got, err := volumeDevicePath(filepath.Join(target, "not", "there")); err != nil || got != want {
+		t.Fatalf("a path not there yet: %q, %v; want %q", got, err, want)
 	}
 }

@@ -1055,7 +1055,7 @@ func (d *DestRoot) Notes() []string {
 	var out []string
 	for _, f := range d.fs.findings {
 		switch f.Kind {
-		case destFindingSharedGroup:
+		case destFindingSharedGroup, destFindingNamedAccount:
 			out = append(out, fmt.Sprintf("%s can change %s (accepted by your choice)", f.Group, f.Folder))
 		case destFindingDriveRoot:
 			out = append(out, fmt.Sprintf("%s can create folders in the drive root %s (accepted by your choice)", f.Group, f.Folder))
