@@ -315,9 +315,10 @@ func TestParseLsblk_DeviceBeatsMountPath(t *testing.T) {
 }
 
 func TestMountSource_FromMountInfo(t *testing.T) {
-	const info = "21 1 0:30 / / rw - btrfs /dev/sda2 rw\n" +
-		"22 21 0:31 /home /home rw shared:1 - btrfs /dev/sdb1 rw\n" +
-		"23 21 0:32 / /run rw - tmpfs tmpfs rw\n"
+	// The root mount is listed last, so only the longest match can pick /home.
+	const info = "22 21 0:31 /home /home rw shared:1 - btrfs /dev/sdb1 rw\n" +
+		"23 21 0:32 / /run rw - tmpfs tmpfs rw\n" +
+		"21 1 0:30 / / rw - btrfs /dev/sda2 rw\n"
 	for abs, want := range map[string]string{"/home/me": "sdb1", "/var/x": "sda2", "/run/x": "", "/homely": "sda2"} {
 		if got := mountSourceFrom(info, abs); got != want {
 			t.Errorf("%s: got %q, want %q", abs, got, want)
