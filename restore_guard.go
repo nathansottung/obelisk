@@ -353,11 +353,11 @@ func (s *Store) outsideSourcesByIdentity(chain []idEntry, display string) error 
 		return err
 	}
 	for _, src := range snap.srcs {
-		if src.offline || !src.fromHandle {
+		if src.offline || src.gate == nil || len(src.gate.chain) == 0 {
 			continue
 		}
-		sid, err := pathIdentity(src.canonical)
-		if err != nil || sid.idx == 0 {
+		sid := src.gate.chain[0].id
+		if sid.idx == 0 {
 			continue
 		}
 		for _, e := range chain {

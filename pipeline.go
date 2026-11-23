@@ -1041,7 +1041,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 		return fmt.Errorf("package %d not found", id)
 	}
 	// One worker per package: a second build would clear the first one's folder.
-	releasePackage, err := a.Store.claimWork(packageWorkKey(id), fmt.Sprintf("package %s is already being built or burned; wait for that job to finish", c.Name))
+	releasePackage, err := a.Store.claimWork(packageWorkKey(id), fmt.Sprintf("package %s is already being built, written or burned; wait for that job to finish", c.Name))
 	if err != nil {
 		return err
 	}

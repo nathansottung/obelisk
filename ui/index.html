@@ -2911,6 +2911,7 @@ async function vKeys(){
   let h=`${hdr('Keys','secrets live only in keystore files — never in the catalog','keys')}`;
   h+=`<div class="panel"><h2>Keystores (${st.min_required} required, different devices)</h2>`;
   if(!st.ok)h+=`<div class="err" style="margin-bottom:10px">${esc(st.reason||'')}</div>`;
+  if(st.warning)h+=`<div class="err" style="margin-bottom:10px">Warning: ${esc(st.warning)}</div>`;
   h+='<table><tr><th>Path</th><th class="num">Keys</th><th>State</th></tr>';
   for(const s of st.stores||[])h+=`<tr><td class="mono">${esc(s.path)}</td><td class="num">${s.key_count}</td>
     <td>${s.reachable?'<span class="stamp VERIFIED">reachable</span>':'<span class="stamp FAILED">unreachable</span>'}</td></tr>`;

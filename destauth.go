@@ -134,6 +134,9 @@ type sourceRef struct {
 	// another volume. viaParent is the path by its parent's real location.
 	unavailable bool
 	viaParent   string
+	// gate is the source by identity, read with it, so a decision need not go back
+	// to a drive that may have stopped answering. nil when it could not be read.
+	gate *gateFolder
 }
 
 // sourceSnapshot is the set of registered sources an authorization decided
@@ -155,95 +158,6 @@ type sourceSnapshot struct {
 // openSourceRoot opens a registered source. A variable so a test can present a
 // drive that is not ready.
 var openSourceRoot = os.Open
-
-// sourceSnapshot resolves every registered source root to a canonical name,
-// preferring the identity of the OPEN OBJECT over the spelling of its name.
-//
-// A root that cannot be opened for a reason other than "does not exist" is a
-// refusal: authorizing a destination while a source location is unresolved would
-// be authorizing on a guess. A root that does not exist is one of three things:
-//
-//   - its folder was removed but its volume is still there: resolve the existing
-//     ancestor and protect the path the source would occupy;
-//   - its volume is not attached (no ancestor exists, or a different volume now
-//     answers at that path): it cannot hold the destination, so it is offline and
-//     only blocks a destination on the volume it was recorded on;
-//   - its volume identity was never recorded and nothing answers at its path: it
-//     is offline and blocks only a destination whose path could be its path.
-func (s *Store) sourceSnapshot() (*sourceSnapshot, error) {
-	folders := s.sourceFolders() // takes and RELEASES the Store mutex
-	snap := &sourceSnapshot{at: time.Now().UTC()}
-	for _, folder := range folders {
-		r := folder.Path
-		abs, err := filepath.Abs(r)
-		if err != nil {
-			return nil, fmt.Errorf("cannot resolve registered source %s: %w", r, err)
-		}
-		f, oerr := openSourceRoot(abs)
-		if oerr == nil {
-			c, cerr := handleCanonicalPath(f)
-			vid, verr := volumeIDOf(f)
-			f.Close()
-			if cerr != nil {
-				return nil, fmt.Errorf("cannot establish the real location of registered source root %s: %w — refusing to authorize a destination while a protected source is unresolved", r, cerr)
-			}
-			snap.srcs = append(snap.srcs, sourceRef{registered: r, canonical: c, fromHandle: true})
-			switch {
-			case verr != nil || vid == "":
-			case folder.VolumeID == "":
-				s.recordFolderVolume(folder.ID, vid)
-			case vid != folder.VolumeID:
-				// The path now answers on a different drive than the one the source
-				// was recorded on. That drive may be attached elsewhere, still holding
-				// the source: protect it too.
-				snap.srcs = append(snap.srcs, sourceRef{registered: r, offline: true, volumeID: folder.VolumeID, abs: abs})
-			}
-			continue
-		}
-		// A card reader with no card or an unreachable share: the source is away, so
-		// it blocks only a destination that could be it (decideOffline).
-		// With no recorded volume, an unreachable share could be the same place under
-		// another name, so that case still refuses below.
-		if sourceUnavailable(oerr) && (folder.VolumeID != "" || !sourceNetworkError(oerr)) {
-			ref := sourceRef{registered: r, offline: true, volumeID: folder.VolumeID, abs: abs, unavailable: true}
-			if parent := canonicalOfMissing(filepath.Dir(abs)); parent != "" {
-				ref.viaParent = filepath.Join(parent, filepath.Base(abs))
-			}
-			snap.srcs = append(snap.srcs, ref)
-			continue
-		}
-		if !errors.Is(oerr, fs.ErrNotExist) {
-			return nil, fmt.Errorf("cannot open registered source root %s to establish its real location: %w — refusing to authorize a destination on a guess", r, oerr)
-		}
-		offline := sourceRef{registered: r, offline: true, volumeID: folder.VolumeID, abs: abs}
-		ancestor, missing, err := deepestExistingDir(abs)
-		if errors.Is(err, errNoExistingParent) {
-			snap.srcs = append(snap.srcs, offline)
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("registered source %s is unresolved: %w; restore access to its parent or repair the alias before retrying", r, err)
-		}
-		if folder.VolumeID != "" {
-			if vid := pathVolumeID(ancestor); vid != "" && vid != folder.VolumeID {
-				snap.srcs = append(snap.srcs, offline)
-				continue
-			}
-		}
-		parent, err := os.OpenRoot(ancestor)
-		if err != nil {
-			return nil, fmt.Errorf("cannot open ancestor of registered source %s: %w", r, err)
-		}
-		canon, err := rootCanonicalPath(parent)
-		parent.Close()
-		if err != nil {
-			return nil, fmt.Errorf("cannot locate ancestor of registered source %s: %w", r, err)
-		}
-		canon = filepath.Join(append([]string{canon}, missing...)...)
-		snap.srcs = append(snap.srcs, sourceRef{registered: r, canonical: canon})
-	}
-	return snap, nil
-}
 
 // decide answers the source-overlap question in BOTH directions plus equality,
 // over canonical names, at path-segment boundaries.
@@ -485,14 +399,10 @@ func (s *Store) CheckFileOutsideSources(path string) error {
 	// The same object under another name (one share by two server names, say).
 	if o, err := fileOutputAt(abs); err == nil {
 		for _, src := range snap.srcs {
-			if src.offline || !src.fromHandle {
-				continue
-			}
-			id, err := sourceIdentityOf(src.canonical)
-			if err != nil {
+			if src.offline || src.gate == nil {
 				continue // its real location was compared above
 			}
-			if o.blocks(gateFolderAt(src.canonical, id)) {
+			if o.blocks(*src.gate) {
 				return fmt.Errorf("refusing: %s is inside registered source %s; Obelisk never writes into source data", path, src.registered)
 			}
 		}

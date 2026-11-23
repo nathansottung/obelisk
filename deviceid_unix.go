@@ -72,7 +72,11 @@ func resolveLinux(abs string) (DeviceIdentity, error) {
 	if err != nil {
 		return DeviceIdentity{}, fmt.Errorf("lsblk: %v", err)
 	}
-	return parseLsblkDevice(out, abs, blockDeviceName(abs))
+	kname := blockDeviceName(abs)
+	if len(btrfsMembers(sysFsBtrfs, kname)) > 1 {
+		return DeviceIdentity{}, errVolumeSpansDisks
+	}
+	return parseLsblkDevice(out, abs, kname)
 }
 
 // ---- macOS: diskutil ----------------------------------------------------

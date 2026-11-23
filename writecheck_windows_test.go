@@ -46,6 +46,27 @@ func TestWriteAccess_RealReadButNotChange(t *testing.T) {
 	assertWriteRefusal(t, err, "can read this folder but cannot change it")
 }
 
+// Windows stops at the first entries that settle the request, so an allow placed
+// before a deny wins, and the folder really can be written.
+func TestWriteAccess_DenyAfterAnAllowIsNotARefusal(t *testing.T) {
+	user, err := destUserSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "allowed")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	restoreFolderDACL(t, dir, user)
+	setDestFixtureDACL(t, dir, "D:P(A;OICI;FA;;;"+user+")(D;OICI;0x6;;;WD)")
+	if err := os.WriteFile(filepath.Join(dir, "real.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("the fixture cannot really be written: %v", err)
+	}
+	if err := checkWriteAccess(dir, "backup output"); err != nil {
+		t.Fatalf("a folder Windows lets this account write was refused: %v", err)
+	}
+}
+
 // Users or Authenticated Users granted directly: the same notice, and the user acts.
 func TestDestination_DirectUsersGrantWarnsAndUserDecides(t *testing.T) {
 	for sddl, group := range map[string]string{"AU": "Authenticated Users", "BU": "Users"} {

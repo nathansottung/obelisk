@@ -41,7 +41,14 @@ type sourceGate struct {
 	mu   sync.Mutex
 	live map[*liveOutput]struct{}
 	gen  uint64              // counts sources added, so a decision can tell it went stale
-	busy map[string]struct{} // packages and burn queues a job is working on
+	busy map[string]struct{} // packages and burn queues a job is working on alone
+	// readers counts write jobs reading a package. Several may run at once, but a
+	// build or burn may not start while any does.
+	readers map[string]int
+	// lookups are source reads under way, and lastRead what each last found
+	// (source_lookup.go).
+	lookups  map[sourceKey]*sourceLookup
+	lastRead map[sourceKey][]sourceRef
 }
 
 // gateRetries is how many times a decision is made again because a source was added
@@ -295,7 +302,7 @@ func (s *Store) insertSource(collectionID int, path, vid string, allowed func() 
 	}
 	s.mu.Lock()
 	for _, f := range s.c.Folders { // idempotent per (collection, path)
-		if f.CollectionID == collectionID && f.Path == path {
+		if f.CollectionID == collectionID && (f.Path == path || normPath(f.Path) == normPath(path)) {
 			s.mu.Unlock()
 			s.srcGate.mu.Unlock()
 			return f, nil
@@ -342,14 +349,10 @@ func (s *Store) decideOutput(where gateFolder, display, requested, volumeID stri
 		}
 	}
 	for _, src := range snap.srcs {
-		if src.offline || !src.fromHandle {
-			continue
-		}
-		id, err := sourceIdentityOf(src.canonical)
-		if err != nil {
+		if src.offline || src.gate == nil {
 			continue // its real location was compared above
 		}
-		if where.overlaps(gateFolderAt(src.canonical, id)) {
+		if where.overlaps(*src.gate) {
 			return nil, fmt.Errorf("refusing: %s overlaps registered source %s; Obelisk never writes into source data", display, src.registered)
 		}
 	}
@@ -406,7 +409,7 @@ func (s *Store) recordLive(gen uint64, outputs ...*liveOutput) (func(), bool) {
 func (s *Store) claimWork(key, busy string) (func(), error) {
 	s.srcGate.mu.Lock()
 	defer s.srcGate.mu.Unlock()
-	if _, taken := s.srcGate.busy[key]; taken {
+	if _, taken := s.srcGate.busy[key]; taken || s.srcGate.readers[key] > 0 {
 		return nil, errors.New(busy)
 	}
 	if s.srcGate.busy == nil {
@@ -419,6 +422,30 @@ func (s *Store) claimWork(key, busy string) (func(), error) {
 			s.srcGate.mu.Lock()
 			defer s.srcGate.mu.Unlock()
 			delete(s.srcGate.busy, key)
+		})
+	}, nil
+}
+
+// shareWork marks key as being read by a write job. Write jobs can share a package,
+// but none starts while it is claimed, and it cannot be claimed until they finish.
+func (s *Store) shareWork(key, busy string) (func(), error) {
+	s.srcGate.mu.Lock()
+	defer s.srcGate.mu.Unlock()
+	if _, taken := s.srcGate.busy[key]; taken {
+		return nil, errors.New(busy)
+	}
+	if s.srcGate.readers == nil {
+		s.srcGate.readers = map[string]int{}
+	}
+	s.srcGate.readers[key]++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.srcGate.mu.Lock()
+			defer s.srcGate.mu.Unlock()
+			if s.srcGate.readers[key]--; s.srcGate.readers[key] <= 0 {
+				delete(s.srcGate.readers, key)
+			}
 		})
 	}, nil
 }
@@ -497,15 +524,21 @@ func (s *Store) reserveOutputFiles(paths []string) (func(), error) {
 		if !ok {
 			continue
 		}
+		var undos []func()
 		for _, p := range paths {
 			abs, err := filepath.Abs(p)
+			var undo func()
 			if err == nil {
-				err = proveWriteAccess(filepath.Dir(abs), "a keystore")
+				undo, err = makeProvedFolder(filepath.Dir(abs), "a keystore")
 			}
 			if err != nil {
+				for i := len(undos) - 1; i >= 0; i-- {
+					undos[i]()
+				}
 				release()
 				return nil, err
 			}
+			undos = append(undos, undo)
 		}
 		return release, nil
 	}

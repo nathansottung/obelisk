@@ -575,20 +575,28 @@ func (s *Store) CreateDestination(path, folder string, confirmed bool) (*Destina
 	defer releaseCreate()
 	root, _, created, err := createDestComponents(in.anchor, in.anchorCanon, in.missing, snap, in.display)
 	if err != nil {
-		return nil, withCreatedNote(err, created)
+		return nil, withCreatedNote(err, removeMadeFolders(created))
 	}
 	root.Close()
 	s.Log("destination", "created "+strings.Join(created, ", "))
 	after, err := s.inspectDestination(path)
 	if err != nil {
-		return nil, withCreatedNote(err, created)
+		return nil, withCreatedNote(err, removeMadeFolders(created))
 	}
-	defer after.anchor.Close()
 	if len(after.missing) > 0 {
+		after.anchor.Close()
 		return nil, fmt.Errorf("%s still does not exist after creating it; check the destination again", in.intended)
 	}
 	after.created = created
-	return s.checkFromInspection(after), nil
+	check := s.checkFromInspection(after)
+	after.anchor.Close() // Windows will not remove a folder held open
+	if check.Status == destStatusRefuse {
+		// A refused folder is not kept. One that cannot be removed is named.
+		if left := removeMadeFolders(created); len(left) > 0 {
+			check.Reason = withCreatedNote(fmt.Errorf("%s", check.Reason), left).Error()
+		}
+	}
+	return check, nil
 }
 
 // destCreateNotice asks to create a destination that does not exist yet.

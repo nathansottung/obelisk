@@ -131,6 +131,15 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 	if !c.Spanned || len(c.Segments) == 0 {
 		return nil, fmt.Errorf("package %s is not a spanned package", c.Name)
 	}
+	// A rebuild would clear the folder this reads.
+	releasePackage, err := a.Store.shareWork(packageWorkKey(id), fmt.Sprintf("package %s is already being built or burned; wait for that job to finish", c.Name))
+	if err != nil {
+		return nil, err
+	}
+	defer releasePackage()
+	if c = a.Store.Chunk(id); c == nil || !c.Spanned || len(c.Segments) == 0 { // read again
+		return nil, fmt.Errorf("package %d is no longer a spanned package", id)
+	}
 	if err := chunkStagedForWrite(c); err != nil {
 		return nil, err
 	}

@@ -54,8 +54,25 @@ func physicalDisksOf(dir string) ([]string, bool) {
 	if name == "" {
 		return nil, false
 	}
-	disks, err := leafDisks(sysClassBlock, name, sysfsWholeDisk)
-	if err != nil || len(disks) == 0 {
+	devices := []string{name}
+	if members := btrfsMembers(sysFsBtrfs, name); len(members) > 1 {
+		devices = members
+	}
+	seen := map[string]bool{}
+	var disks []string
+	for _, dev := range devices {
+		leaves, err := leafDisks(sysClassBlock, dev, sysfsWholeDisk)
+		if err != nil {
+			return nil, false
+		}
+		for _, d := range leaves {
+			if !seen[d] {
+				seen[d] = true
+				disks = append(disks, d)
+			}
+		}
+	}
+	if len(disks) == 0 {
 		return nil, false
 	}
 	return disks, true

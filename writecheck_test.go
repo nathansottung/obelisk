@@ -16,10 +16,17 @@ import (
 // blockWrites makes the access check report facts for anything at or under dir.
 func blockWrites(t *testing.T, dir string, facts writeFacts) {
 	t.Helper()
+	// The checks see paths in full. A temp folder can be spelled with a short name.
+	full, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	prev := writeAccessFacts
 	writeAccessFacts = func(p string, newFolder bool) (writeFacts, error) {
-		if normPath(p) == normPath(dir) || canonicalWithin(normPath(dir), normPath(p)) {
-			return facts, nil
+		for _, d := range []string{dir, full} {
+			if normPath(p) == normPath(d) || canonicalWithin(normPath(d), normPath(p)) {
+				return facts, nil
+			}
 		}
 		return prev(p, newFolder)
 	}

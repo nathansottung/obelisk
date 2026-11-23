@@ -35,6 +35,34 @@ func mountSourceFrom(info, abs string) string {
 	return name
 }
 
+// sysFsBtrfs lists each mounted Btrfs volume and the devices under it.
+const sysFsBtrfs = "/sys/fs/btrfs"
+
+// btrfsMembers names every device of the Btrfs volume that device name belongs to,
+// sorted, or nil when it belongs to none. mountinfo names only one of them.
+func btrfsMembers(root, name string) []string {
+	volumes, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	for _, v := range volumes {
+		devices, err := os.ReadDir(filepath.Join(root, v.Name(), "devices"))
+		if err != nil {
+			continue
+		}
+		names := make([]string, 0, len(devices))
+		found := false
+		for _, d := range devices {
+			names = append(names, d.Name())
+			found = found || d.Name() == name
+		}
+		if found {
+			return names
+		}
+	}
+	return nil
+}
+
 // leafDisks walks /sys/class/block (root) from device name down through its "slaves"
 // (LVM, RAID, encryption) to the whole disks underneath, as "disk:<major:minor>".
 // wholeDisk names the disk a partition belongs to, or "" when name is not a partition.

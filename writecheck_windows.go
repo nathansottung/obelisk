@@ -83,10 +83,13 @@ func readWriteAccessFacts(dir string, newFolder bool) (writeFacts, error) {
 		return facts, err
 	}
 	defer token.Close()
-	facts.DeniedBy = deniedFor(sd, token, want)
-	if len(facts.DeniedBy) == 0 && !accessGranted(sd, token, want) {
-		facts.CannotChange = true
+	// Windows decides by the order of the entries, so it is asked first. A deny entry
+	// only names the cause of a real denial.
+	if accessGranted(sd, token, want) {
+		return facts, nil
 	}
+	facts.DeniedBy = deniedFor(sd, token, want)
+	facts.CannotChange = len(facts.DeniedBy) == 0
 	return facts, nil
 }
 

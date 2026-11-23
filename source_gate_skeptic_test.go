@@ -120,9 +120,14 @@ func sameObjectAs(t *testing.T, alias, real string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The gate looks paths up in full. A temp folder can be spelled with a short name.
+	full, err := filepath.EvalSymlinks(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
 	prev := sourceIdentityOf
 	sourceIdentityOf = func(p string) (fileIdent, error) {
-		if normPath(p) == normPath(alias) {
+		if normPath(p) == normPath(alias) || normPath(p) == normPath(full) {
 			return id, nil
 		}
 		return prev(p)

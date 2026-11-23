@@ -103,15 +103,18 @@ func (a *App) openOutFolderUnguarded(p string) (*outFolder, error) {
 	if err := checkWriteAccess(abs, destWriteUse); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(abs, 0o755); err != nil {
+	undoMade, err := makeFolderTracked(abs)
+	if err != nil {
 		return nil, err
 	}
 	r, err := os.OpenRoot(abs)
 	if err != nil {
+		undoMade()
 		return nil, err
 	}
 	fail := func(err error) (*outFolder, error) {
 		r.Close()
+		undoMade()
 		return nil, err
 	}
 	id, err := rootIdentity(r)

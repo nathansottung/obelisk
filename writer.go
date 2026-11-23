@@ -345,6 +345,15 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 	if c == nil {
 		return nil, fmt.Errorf("package %d not found", id)
 	}
+	// Other writes of this package may run too, but a rebuild would clear its folder.
+	releasePackage, err := a.Store.shareWork(packageWorkKey(id), fmt.Sprintf("package %s is already being built or burned; wait for that job to finish", c.Name))
+	if err != nil {
+		return nil, err
+	}
+	defer releasePackage()
+	if c = a.Store.Chunk(id); c == nil { // read again: a build may have just finished
+		return nil, fmt.Errorf("package %d not found", id)
+	}
 	if err := chunkWritable(c); err != nil {
 		return nil, err
 	}

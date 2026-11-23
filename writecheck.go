@@ -32,9 +32,14 @@ type WriteAccessError struct {
 	Cause  string
 	Fix    string
 	Err    error
+	Left   string // a test file that could not be removed
 }
 
 func (e *WriteAccessError) Error() string {
+	if e.Left != "" {
+		return fmt.Sprintf("Obelisk can't use %s for %s: %s. Its small test file %s could not be removed, so you can delete it. Obelisk wrote nothing else there and did not switch to another location. %s",
+			e.Folder, e.What, e.Cause, e.Left, e.Fix)
+	}
 	return fmt.Sprintf("Obelisk can't use %s for %s: %s. Nothing was written there, and Obelisk did not switch to another location. %s",
 		e.Folder, e.What, e.Cause, e.Fix)
 }
@@ -144,19 +149,39 @@ func proveRootWrite(r *os.Root, canon, what string) error {
 // prepareDataFolder makes sure dir can hold a catalog, creating it if needed. If it
 // cannot, the folders this call made are removed again.
 func prepareDataFolder(dir string) error {
-	const what = "the data folder"
+	_, err := makeProvedFolder(dir, "the data folder")
+	return err
+}
+
+// makeProvedFolder makes sure dir exists and really takes writes. If it does not, the
+// folders this call made are removed again. undo removes them later.
+func makeProvedFolder(dir, what string) (undo func(), err error) {
 	if err := checkWriteAccess(dir, what); err != nil {
-		return err
+		return nil, err
 	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	undo, err = makeFolderTracked(abs)
+	if err != nil {
+		return nil, probeResult(abs, what, err)
+	}
+	if err := proveWriteAccess(abs, what); err != nil {
+		undo()
+		return nil, err
+	}
+	return undo, nil
+}
+
+// makeFolderTracked creates abs and any missing folders above it. undo removes the
+// ones this call made, deepest first, and only while they are empty.
+func makeFolderTracked(abs string) (undo func(), err error) {
 	var made []string
 	if _, err := os.Stat(abs); errors.Is(err, fs.ErrNotExist) {
 		base, missing, derr := deepestExistingDir(abs)
 		if derr != nil {
-			return derr
+			return nil, derr
 		}
 		p := base
 		for _, m := range missing {
@@ -164,20 +189,24 @@ func prepareDataFolder(dir string) error {
 			made = append(made, p)
 		}
 	}
-	undo := func() {
-		for i := len(made) - 1; i >= 0; i-- {
-			_ = os.Remove(made[i]) // only ever an empty folder this call made
-		}
-	}
+	undo = func() { removeMadeFolders(made) }
 	if err := os.MkdirAll(abs, 0o755); err != nil {
 		undo()
-		return probeResult(abs, what, err)
+		return nil, err
 	}
-	if err := proveWriteAccess(abs, what); err != nil {
-		undo()
-		return err
+	return undo, nil
+}
+
+// removeMadeFolders removes empty folders Obelisk made, deepest first, and returns
+// those still there.
+func removeMadeFolders(made []string) []string {
+	var left []string
+	for i := len(made) - 1; i >= 0; i-- {
+		if err := os.Remove(made[i]); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			left = append([]string{made[i]}, left...)
+		}
 	}
-	return nil
+	return left
 }
 
 // probeFS is what the real attempt needs: a path-based folder or an *os.Root.
@@ -215,7 +244,10 @@ func runWriteProbe(fsys probeFS) (err error) {
 	current := name
 	defer func() {
 		if err != nil {
-			_ = retryTransientRename(func() error { return fsys.Remove(current) })
+			rerr := retryTransientRename(func() error { return fsys.Remove(current) })
+			if rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+				err = &probeLeftError{name: current, err: err}
+			}
 		}
 	}()
 	_, err = f.Write([]byte("obelisk write check\n"))
@@ -242,6 +274,15 @@ func runWriteProbe(fsys probeFS) (err error) {
 	return retryTransientRename(func() error { return fsys.Remove(moved) })
 }
 
+// probeLeftError is a failed attempt whose test file could not be removed.
+type probeLeftError struct {
+	name string
+	err  error
+}
+
+func (e *probeLeftError) Error() string { return e.err.Error() }
+func (e *probeLeftError) Unwrap() error { return e.err }
+
 // probeResult turns a failed real attempt into the refusal that names its cause.
 func probeResult(folder, what string, err error) error {
 	if err == nil {
@@ -261,5 +302,9 @@ func probeResult(folder, what string, err error) error {
 			Fix:   "Check the drive, or choose another folder."}
 	}
 	r.Err = err
+	var left *probeLeftError
+	if errors.As(err, &left) {
+		r.Left = filepath.Join(folder, left.name)
+	}
 	return r
 }

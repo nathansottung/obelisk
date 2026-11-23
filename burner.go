@@ -123,6 +123,10 @@ func (a *App) CreateBurnQueue(collectionID int, mediaKind, name string) (*BurnQu
 	return q, nil
 }
 
+// moveManifestAside moves the plaintext manifest out of a folder being burned. A
+// variable so a test can present a move that fails.
+var moveManifestAside = os.Rename
+
 // BurnNext burns the first PENDING disc: shell out to the configured burn
 // command (with {SRC}/{LABEL} substituted), then optionally hash-verify the
 // burned payload against the chunk's enc_hash before marking DONE.
@@ -165,7 +169,7 @@ func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, 
 		return nil, errors.New(disc.Detail)
 	}
 	// A build of this package would clear the folder being burned.
-	releasePackage, err := a.Store.claimWork(packageWorkKey(c.ID), fmt.Sprintf("package %s is already being built or burned; wait for that job to finish", c.Name))
+	releasePackage, err := a.Store.claimWork(packageWorkKey(c.ID), fmt.Sprintf("package %s is already being built, written or burned; wait for that job to finish", c.Name))
 	if err != nil {
 		return nil, err
 	}
@@ -197,11 +201,17 @@ func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, 
 	// then restore it. Kept on the same volume so the rename is atomic.
 	if c.PrivateManifest {
 		plain := filepath.Join(c.StagedDir, c.Name+".manifest.json")
-		if _, err := os.Stat(plain); err == nil {
+		_, err := os.Stat(plain)
+		if err == nil {
 			hidden := filepath.Join(cfg.StagingDir, "."+c.Name+".manifest.hidden")
-			if os.Rename(plain, hidden) == nil {
+			if err = moveManifestAside(plain, hidden); err == nil {
 				defer os.Rename(hidden, plain)
 			}
+		}
+		if err != nil && !os.IsNotExist(err) {
+			// The burn copies the whole folder: it must not run with this file in it.
+			set("FAILED", "the private manifest could not be moved out of the disc's folder, so nothing was burned: "+err.Error())
+			return nil, errors.New(disc.Detail)
 		}
 	}
 	argv, err := burnArgv(cfg.BurnCommand, c.StagedDir, c.Name)
