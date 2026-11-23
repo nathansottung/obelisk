@@ -281,7 +281,8 @@ fire.
     into a secure note. It holds the key or passphrase, its SHA-256 fingerprint, which packages it
     opens, and the hand-restore command.
   - A "Check my saved copy" action: the user pastes the note back and the app confirms the full
-    fingerprint. An export nobody has checked does not count as a copy.
+    fingerprint, the same way the paper-key check should work. An export nobody has checked does
+    not count as a copy.
   - Step two, optional: create the note through the Bitwarden command-line tool when it is
     installed and unlocked. Never pass the secret as a command-line argument, and never write it
     to a log, job record or app-state backup.
