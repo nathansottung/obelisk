@@ -408,6 +408,12 @@ func (a *App) GenerateKey(note string) (ref, passphrase, fpr string, err error) 
 	fpr = hex.EncodeToString(sum[:])
 	rec := map[string]any{"key_ref": ref, "algorithm": "GPG-AES256", "passphrase": passphrase,
 		"created_at": time.Now().UTC().Format(time.RFC3339), "note": note}
+	// A keystore's folder may have become a source since it was configured.
+	releaseKeystores, relErr := a.Store.reserveOutputFiles(cfg.KeystorePaths)
+	if relErr != nil {
+		return "", "", "", relErr
+	}
+	defer releaseKeystores()
 	for _, p := range cfg.KeystorePaths {
 		ks, e := readStore(p)
 		if e != nil {
@@ -479,6 +485,12 @@ func (a *App) SyncKeystores() (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	// A keystore's folder may have become a source since it was configured.
+	releaseKeystores, err := a.Store.reserveOutputFiles(paths)
+	if err != nil {
+		return 0, err
+	}
+	defer releaseKeystores()
 	for _, p := range paths {
 		if err := writeStoreObserved(p, out, a.keystoreMutationObserver); err != nil {
 			return 0, fmt.Errorf("keystore synchronization publication failed; earlier participants may already have been updated: %w", err)
@@ -515,7 +527,10 @@ func (a *App) ScanFolder(collectionID int, root string, progress func(float64, s
 	a.Store.BeginBatch()
 	defer endBatchInto(a.Store, &err)
 	a.Store.SetVersionsRetained(cfg.VersionsRetained) // cap file-version history per config
-	folder := a.Store.AddFolder(collectionID, root)
+	folder, err := a.Store.RegisterSource(collectionID, root)
+	if err != nil {
+		return 0, nil, err
+	}
 
 	// Problems are appended from both the WalkDir callback (single goroutine) and the
 	// parallelHash workers (many), so guard the slice.
@@ -1013,7 +1028,46 @@ func decryptRoundtripHash(gpgBin, ciphertext, pass string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// packageWorkKey names a package for claimWork.
+func packageWorkKey(id int) string { return fmt.Sprintf("package:%d", id) }
+
+// RebuildWarning stops a rebuild until the user accepts what it does to the copies
+// already on media. The catalog keeps one key and one hash per package.
+type RebuildWarning struct {
+	Package   string
+	Copies    int
+	Encrypted bool
+}
+
+func (e *RebuildWarning) Error() string {
+	if e.Encrypted {
+		return fmt.Sprintf("Rebuilding %s makes a new key and hash. Its %d existing copy(s) will stop verifying and restoring in the app. A hand restore of those copies with the kept key still works: follow RESTORE.txt on the medium.", e.Package, e.Copies)
+	}
+	return fmt.Sprintf("Rebuilding %s makes a new hash. Its %d existing copy(s) will stop verifying in the app. A hand restore of those copies still works: follow RESTORE.txt on the medium.", e.Package, e.Copies)
+}
+
+// chunkCanBuild is whether a build may start: a package not yet staged, one whose
+// build failed, or one whose copies all failed and whose staging is gone, which has
+// no other way forward.
+func chunkCanBuild(c *Chunk, staged bool) bool {
+	return c.Status == "PLANNED" || c.Status == "FAILED" || chunkNeedsRestaging(c) && !staged
+}
+
+func chunkNeedsRestaging(c *Chunk) bool {
+	return c.Status == "WRITTEN" && !c.Adopted && c.VerifiedCopyCount() == 0
+}
+
+// BuildChunk builds a package, stopping with a *RebuildWarning if copies of it exist.
 func (a *App) BuildChunk(id int, progress func(float64, string)) error {
+	return a.buildChunk(id, false, progress)
+}
+
+// BuildChunkOverCopies builds a package after the user accepted the RebuildWarning.
+func (a *App) BuildChunkOverCopies(id int, progress func(float64, string)) error {
+	return a.buildChunk(id, true, progress)
+}
+
+func (a *App) buildChunk(id int, acceptCopies bool, progress func(float64, string)) error {
 	cfg, cfgErr := a.LoadConfig()
 	if cfgErr != nil {
 		return cfgErr
@@ -1022,8 +1076,47 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	if c == nil {
 		return fmt.Errorf("package %d not found", id)
 	}
-	if c.Status != "PLANNED" && c.Status != "FAILED" {
+	// One worker per package: a second build would clear the first one's folder.
+	releasePackage, err := a.Store.claimWork(packageWorkKey(id), fmt.Sprintf("package %s is already being built, written or burned; wait for that job to finish", c.Name))
+	if err != nil {
+		return err
+	}
+	defer releasePackage()
+	staged := a.stagedPayloadPresent(c)
+	if !chunkCanBuild(c, staged) {
+		if chunkNeedsRestaging(c) {
+			return fmt.Errorf("package %s is still staged; write it to a volume again instead of rebuilding", c.Name)
+		}
 		return fmt.Errorf("package %s is %s; only PLANNED/FAILED can build", c.Name, c.Status)
+	}
+	warning := a.Store.rebuildWarning(id)
+	if warning != nil && !acceptCopies {
+		return warning
+	}
+	// If this build fails, copies on media still need the key and hash they were made with.
+	overCopies := warning != nil
+	oldKey, oldEncHash, oldTarHash, oldEncBytes := c.KeyRef, c.EncHash, c.TarHash, c.EncBytes
+	oldSegments := append([]Segment(nil), c.Segments...)
+	oldSidecars := c.Sidecars
+	notedFrom, noted := len(c.Copies), 0
+	var undoRetire func()
+	oldPrivate, oldBuildVerified := c.PrivateManifest, c.BuildVerified
+	restoreOld := func() {
+		if !overCopies {
+			return
+		}
+		c.KeyRef, c.EncHash, c.TarHash, c.EncBytes = oldKey, oldEncHash, oldTarHash, oldEncBytes
+		c.Sidecars = oldSidecars
+		// Only this build's own changes are undone: a check recorded on a copy while
+		// it ran stands.
+		if undoRetire != nil {
+			undoRetire()
+			undoRetire = nil
+		}
+		a.Store.dropNotedTapes(c, notedFrom, noted)
+		noted = 0
+		c.PrivateManifest, c.BuildVerified = oldPrivate, oldBuildVerified
+		_ = a.Store.SetChunkSegments(c, oldSegments)
 	}
 	if c.Encrypted {
 		// An encrypted build can be the first key-generation operation. Keep
@@ -1042,7 +1135,6 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 		return err
 	}
 	var gpgBin string
-	var err error
 	if c.Encrypted {
 		if gpgBin, err = a.tool("gpg"); err != nil {
 			return err
@@ -1061,6 +1153,19 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	if err := a.Store.CheckOutsideSources(cfg.StagingDir); err != nil {
 		return err
 	}
+	releaseStaging, err := a.Store.reserveOutputPath(cfg.StagingDir)
+	if err != nil {
+		return err
+	}
+	defer releaseStaging()
+	if afterPathReserved != nil {
+		afterPathReserved(cfg.StagingDir)
+	}
+	// Before the earlier build is cleared: a folder that cannot take the new one
+	// must not lose the old one.
+	if err := proveWriteAccess(cfg.StagingDir, "the staging folder"); err != nil {
+		return err
+	}
 	work := filepath.Join(cfg.StagingDir, c.Name)
 	// A build starts from an empty folder: nothing from an earlier build (its
 	// payload, par2 volumes, manifest, RESTORE.txt) can be shipped beside this
@@ -1074,11 +1179,15 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return err
 	}
-	c.StagedDir, c.Sidecars = "", nil
+	c.StagedDir = ""
+	if !overCopies { // old copies are still checked against these until the new ones exist
+		c.Sidecars = nil
+	}
 	// Pre-flight against this ONE package's build peak (shared with /api/space-advice
 	// so the pre-build advice and this refusal never disagree).
 	if free, err := diskFree(cfg.StagingDir); err == nil {
 		if need := packageStagingPeak(c.DataBytes, c.Par2, c.Encrypted, cfg.DeleteTarAfterEncrypt); free < need {
+			restoreOld()
 			return fmt.Errorf("not enough staging space: this package's build peaks at ~%.1f GB but %s has only %.1f GB free — staging is just a folder, point it at any drive with room (Settings)",
 				float64(need)/1e9, cfg.StagingDir, float64(free)/1e9)
 		}
@@ -1091,9 +1200,13 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	// Interim status writes (BUILDING/FAILED) are best-effort: they're progress
 	// signals, not durability guarantees, and losing one doesn't misrepresent the
 	// medium. Only the terminal STAGED write is gated below.
+	if overCopies {
+		noted = a.Store.noteOldTapes(c, oldSegments)
+	}
 	_ = setStatus("BUILDING", "")
 	fail := func(err error) error {
 		c.StagedDir, c.Sidecars = "", nil // nothing of a failed build is written
+		restoreOld()
 		_ = setStatus("FAILED", err.Error())
 		return err
 	}
@@ -1265,7 +1378,10 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	// Private media: the medium carries an ENCRYPTED manifest so filenames don't
 	// leak off a lost tape. The staged plaintext manifest stays for local use;
 	// medium-write paths skip it and ship the .gpg instead.
-	c.PrivateManifest = cfg.PrivateMedia && c.Encrypted
+	// Once private, always private: some medium may hold a private copy that no record
+	// still shows (a rebuild resets span segments), and seal and dock inventories
+	// decide from this flag.
+	c.PrivateManifest = c.Encrypted && (cfg.PrivateMedia || c.PrivateManifest)
 	if err := writeManifest(work, c, listed, fpr); err != nil {
 		return fail(err)
 	}
@@ -1299,10 +1415,17 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	}
 
 	c.StagedDir = work
+	if overCopies {
+		undoRetire = a.Store.retireCopies(c)
+	}
 	// Durability gate: the package is built on disk, but if the catalog can't record
 	// it as STAGED the next step (write) would never see it — worse, a reopen could
 	// leave it looking un-built. Surface the failure rather than reporting success.
 	if err := setStatus("STAGED", ""); err != nil {
+		if overCopies { // the rebuild did not happen: its copies keep their key and hash
+			_ = fail(err)
+			return fmt.Errorf("package built but catalog could not record it as staged (%w); its existing copies are unchanged. Run Build again once the catalog can save", err)
+		}
 		return fmt.Errorf("package built but catalog could not record it as staged (%w) — re-run Build once the catalog can save", err)
 	}
 	a.Store.Log("build", c.Name+" staged")
@@ -1472,11 +1595,23 @@ func segJoinList(c *Chunk) string {
 // requiredSidecars are the sidecars every medium copy carries: the manifest it
 // ships (the encrypted one on private media) and RESTORE.txt.
 func requiredSidecars(c *Chunk) []string {
-	manifest := c.Name + ".manifest.json"
+	return []string{mediumManifestName(c), "RESTORE.txt"}
+}
+
+// mediumManifestName is the manifest file this package's media carry.
+func mediumManifestName(c *Chunk) string {
 	if c.PrivateManifest {
-		manifest += ".gpg"
+		return c.Name + ".manifest.json.gpg"
 	}
-	return []string{manifest, "RESTORE.txt"}
+	return c.Name + ".manifest.json"
+}
+
+// fileListNote is RESTORE.txt's pointer to the manifest on this medium.
+func fileListNote(c *Chunk) string {
+	if c.PrivateManifest {
+		return mediumManifestName(c) + " (encrypted; see PRIVACY below)"
+	}
+	return mediumManifestName(c)
 }
 
 // checkStagedSidecars requires each of c's sidecars in its staged folder, and
@@ -1547,10 +1682,10 @@ printed key card labelled %[2]s).
      tar -xf %[1]s.tar path/to/one/file
 
 Integrity (%[3]s):  ciphertext %[4]s   tar %[5]s
-Full file list: %[1]s.manifest.json
+Full file list: %[7]s
 No compression anywhere — extracted bytes are the originals.
 ==========================================================
-`, c.Name, c.KeyRef, c.HashAlg, c.EncHash, c.TarHash, pl)
+`, c.Name, c.KeyRef, c.HashAlg, c.EncHash, c.TarHash, pl, fileListNote(c))
 	} else {
 		pl := payloadName(c) // <name>.tar
 		t = fmt.Sprintf(`HOW TO RESTORE %[1]s
@@ -1634,8 +1769,8 @@ func spannedRestoreTxt(c *Chunk) string {
 	return fmt.Sprintf(`HOW TO RESTORE %[1]s   (SPANNED across %[2]d media)
 ==========================================================
 This package's payload was byte-split across %[2]d tapes/drives as
-%[1]s.seg001 … %[1]s.seg%[3]03d. Every tape also carries this file
-and the manifest. The par2 set is %[4]s.
+%[1]s.seg001 … %[1]s.seg%03[3]d. Every tape also carries this file
+and %[12]s. The par2 set is %[4]s.
 
 STEP 0 — GATHER and REJOIN.
 Copy into ONE folder every tape's %[1]s.segNNN, and the par2 set
@@ -1654,8 +1789,8 @@ Now the normal restore, exactly as for a single-medium package:
 Integrity (%[7]s): payload %[8]s   tar %[9]s
 Custody chain: source file SHA-256s -> tar hash -> payload hash ->
 per-segment hashes (manifest / catalog) link every tape to the originals.
-Full file list: %[1]s.manifest.json
+Full file list: %[13]s
 No compression anywhere — extracted bytes are the originals.
 ==========================================================
-`, c.Name, n, n, par2Home, segJoinList(c), decrypt, c.HashAlg, c.EncHash, c.TarHash, pl, pl)
+`, c.Name, n, n, par2Home, segJoinList(c), decrypt, c.HashAlg, c.EncHash, c.TarHash, pl, pl, mediumManifestName(c), fileListNote(c))
 }

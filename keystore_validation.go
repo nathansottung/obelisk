@@ -192,7 +192,7 @@ func (a *App) keystoreStatus(paths []string, allowMissing bool) map[string]any {
 		}
 	}
 	reason := ""
-	rulesErr := checkKeystorePaths(paths)
+	warning, rulesErr := checkKeystoresInUse(paths)
 	switch {
 	case rulesErr != nil:
 		reason = rulesErr.Error()
@@ -205,5 +205,5 @@ func (a *App) keystoreStatus(paths []string, allowMissing bool) map[string]any {
 	case !consistent:
 		reason = "Keystores hold different key sets; run key sync."
 	}
-	return map[string]any{"ok": len(paths) >= MinKeystores && consistent && rulesErr == nil, "reason": reason, "min_required": MinKeystores, "stores": rows}
+	return map[string]any{"ok": len(paths) >= MinKeystores && consistent && rulesErr == nil, "reason": reason, "warning": warning, "min_required": MinKeystores, "stores": rows}
 }

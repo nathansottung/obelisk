@@ -319,22 +319,26 @@ func (a *App) AdoptMedia(mountPath string, collectionID, volumeID int, deep bool
 			}
 		}
 
+		// An encrypted manifest marks a private medium, even when no key here opens it:
+		// seal and dock inventories must not list what it hides.
+		_, gpgErr := os.Stat(filepath.Join(cand.dir, cand.name+".manifest.json.gpg"))
 		c := Chunk{
-			CollectionID: collectionID,
-			Name:         cand.name,
-			Status:       StatusAdoptedVerified,
-			MediaKind:    adoptMediaKind(vol),
-			EncBytes:     st.Size(),
-			EncHash:      h,
-			Encrypted:    cand.encrypted,
-			KeyRef:       keyRef,
-			HashAlg:      "SHA256",
-			TarHash:      tarHash,
-			Par2:         par2Pct,
-			Files:        files,
-			FileCount:    len(files),
-			Adopted:      true,
-			WrittenDest:  cand.dir,
+			CollectionID:    collectionID,
+			Name:            cand.name,
+			Status:          StatusAdoptedVerified,
+			MediaKind:       adoptMediaKind(vol),
+			EncBytes:        st.Size(),
+			EncHash:         h,
+			Encrypted:       cand.encrypted,
+			PrivateManifest: gpgErr == nil,
+			KeyRef:          keyRef,
+			HashAlg:         "SHA256",
+			TarHash:         tarHash,
+			Par2:            par2Pct,
+			Files:           files,
+			FileCount:       len(files),
+			Adopted:         true,
+			WrittenDest:     cand.dir,
 		}
 		if len(files) == 0 {
 			c.ListingUnknown = true

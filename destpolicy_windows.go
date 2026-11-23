@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"unsafe"
@@ -149,21 +150,44 @@ func destGroupName(sid string) string {
 //     folders and nothing else, is a finding the user decides about;
 //   - an INHERITED grant to Authenticated Users or Users, which is how Windows lays
 //     out folders made directly on a drive, is a finding the user decides about;
-//   - anything else — Everyone, Guests, Anonymous Logon, any other account or
-//     group, or a grant set explicitly on this folder — refuses.
+//   - a specific local or domain account or group that can change files but not
+//     permissions, which tools commonly add to folders such as a user's temp folder,
+//     is a finding the user decides about;
+//   - Authenticated Users or Users granted change rights directly on this folder,
+//     but not the right to change its permissions, is the same kind of finding;
+//   - anything else — Everyone, Guests, Anonymous Logon, or an account granted
+//     directly that can also change permissions or take ownership — refuses.
 func classifyDestGrant(sid, folder string, granted uint32, inherited, publication, volumeRoot bool) (*destFinding, error) {
 	if volumeRoot && publication && sid == sidAuthenticatedUsers && granted == windows.FILE_APPEND_DATA {
 		return &destFinding{Kind: destFindingDriveRoot, Folder: folder, Group: destGroupName(sid), SID: sid}, nil
 	}
+	changesPermissions := granted&(windows.WRITE_DAC|windows.WRITE_OWNER|windows.GENERIC_ALL) != 0
 	if (sid == sidAuthenticatedUsers || sid == sidUsers) && inherited && !volumeRoot {
 		return &destFinding{Kind: destFindingSharedGroup, Folder: folder, Group: destGroupName(sid), SID: sid, Inherited: true,
-			Permissions: granted&(windows.WRITE_DAC|windows.WRITE_OWNER|windows.GENERIC_ALL) != 0}, nil
+			Permissions: changesPermissions}, nil
+	}
+	if (sid == sidAuthenticatedUsers || sid == sidUsers) && !inherited && !changesPermissions {
+		return &destFinding{Kind: destFindingNamedAccount, Folder: folder, Group: destGroupName(sid), SID: sid}, nil
+	}
+	if specificAccountSID(sid) && !changesPermissions && !volumeRoot {
+		return &destFinding{Kind: destFindingNamedAccount, Folder: folder, Group: destGroupName(sid), SID: sid, Inherited: inherited}, nil
 	}
 	how := "set on this folder"
 	if inherited {
 		how = "inherited"
 	}
 	return nil, fmt.Errorf("unsafe destination namespace: %s lets %s change it (%s; mutation mask %#x to untrusted principal %s)", folder, destGroupName(sid), how, granted, sid)
+}
+
+// specificAccountSID reports whether sid is one account or group someone created.
+// Below 1000 are Windows' built-in ones, and some of those mean nearly everyone:
+// Guest (501), Domain Users or "None" on a home PC (513), Domain Guests (514).
+func specificAccountSID(sid string) bool {
+	if !strings.HasPrefix(sid, "S-1-5-21-") {
+		return false
+	}
+	rid, err := strconv.ParseUint(sid[strings.LastIndex(sid, "-")+1:], 10, 32)
+	return err == nil && rid >= 1000
 }
 
 // checkDestDACL refuses a directory whose owner is untrusted or whose DACL lets

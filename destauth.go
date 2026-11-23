@@ -129,6 +129,18 @@ type sourceRef struct {
 	offline    bool   // the source's volume is not where the source was registered
 	volumeID   string // recorded volume identity, for offline sources
 	abs        string // absolute registered path, for offline sources
+	// unavailable: its path is still here but the drive behind it is not ready (a
+	// mount point with no card, say). What holds that path is compared even from
+	// another volume. viaParent is the path by its parent's real location.
+	unavailable bool
+	viaParent   string
+	// gate is the source by identity, read with it, so a decision need not go back
+	// to a drive that may have stopped answering. nil when it could not be read.
+	gate *gateFolder
+	// gateErr is why gate, or the folders above it, could not be read.
+	gateErr error
+	// realAbs is where an away source's path really leads, read with it.
+	realAbs string
 }
 
 // sourceSnapshot is the set of registered sources an authorization decided
@@ -138,91 +150,18 @@ type sourceRef struct {
 // it before returning. The mutex is NOT held for the duration of the job — a
 // mirror can run for hours and needs the same mutex to record its results.
 //
-// RESIDUAL: a source registered AFTER authorization, or protected data moved INTO
-// the authorized tree afterwards, is not covered by this snapshot. The retained
-// handle still confines every write to the directory that was authorized; it does
-// not re-decide whether that directory has since become protected.
+// A source registered after authorization is refused while the output is live
+// (source_gate.go). RESIDUAL: protected data moved INTO the authorized tree by
+// something outside Obelisk is not covered. The retained handle still confines every
+// write to the directory that was authorized.
 type sourceSnapshot struct {
 	at   time.Time
 	srcs []sourceRef
 }
 
-// sourceSnapshot resolves every registered source root to a canonical name,
-// preferring the identity of the OPEN OBJECT over the spelling of its name.
-//
-// A root that cannot be opened for a reason other than "does not exist" is a
-// refusal: authorizing a destination while a source location is unresolved would
-// be authorizing on a guess. A root that does not exist is one of three things:
-//
-//   - its folder was removed but its volume is still there: resolve the existing
-//     ancestor and protect the path the source would occupy;
-//   - its volume is not attached (no ancestor exists, or a different volume now
-//     answers at that path): it cannot hold the destination, so it is offline and
-//     only blocks a destination on the volume it was recorded on;
-//   - its volume identity was never recorded and nothing answers at its path: it
-//     is offline and blocks only a destination whose path could be its path.
-func (s *Store) sourceSnapshot() (*sourceSnapshot, error) {
-	folders := s.sourceFolders() // takes and RELEASES the Store mutex
-	snap := &sourceSnapshot{at: time.Now().UTC()}
-	for _, folder := range folders {
-		r := folder.Path
-		abs, err := filepath.Abs(r)
-		if err != nil {
-			return nil, fmt.Errorf("cannot resolve registered source %s: %w", r, err)
-		}
-		f, oerr := os.Open(abs)
-		if oerr == nil {
-			c, cerr := handleCanonicalPath(f)
-			vid, verr := volumeIDOf(f)
-			f.Close()
-			if cerr != nil {
-				return nil, fmt.Errorf("cannot establish the real location of registered source root %s: %w — refusing to authorize a destination while a protected source is unresolved", r, cerr)
-			}
-			snap.srcs = append(snap.srcs, sourceRef{registered: r, canonical: c, fromHandle: true})
-			switch {
-			case verr != nil || vid == "":
-			case folder.VolumeID == "":
-				s.recordFolderVolume(folder.ID, vid)
-			case vid != folder.VolumeID:
-				// The path now answers on a different drive than the one the source
-				// was recorded on. That drive may be attached elsewhere, still holding
-				// the source: protect it too.
-				snap.srcs = append(snap.srcs, sourceRef{registered: r, offline: true, volumeID: folder.VolumeID, abs: abs})
-			}
-			continue
-		}
-		if !errors.Is(oerr, fs.ErrNotExist) {
-			return nil, fmt.Errorf("cannot open registered source root %s to establish its real location: %w — refusing to authorize a destination on a guess", r, oerr)
-		}
-		offline := sourceRef{registered: r, offline: true, volumeID: folder.VolumeID, abs: abs}
-		ancestor, missing, err := deepestExistingDir(abs)
-		if errors.Is(err, errNoExistingParent) {
-			snap.srcs = append(snap.srcs, offline)
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("registered source %s is unresolved: %w; restore access to its parent or repair the alias before retrying", r, err)
-		}
-		if folder.VolumeID != "" {
-			if vid := pathVolumeID(ancestor); vid != "" && vid != folder.VolumeID {
-				snap.srcs = append(snap.srcs, offline)
-				continue
-			}
-		}
-		parent, err := os.OpenRoot(ancestor)
-		if err != nil {
-			return nil, fmt.Errorf("cannot open ancestor of registered source %s: %w", r, err)
-		}
-		canon, err := rootCanonicalPath(parent)
-		parent.Close()
-		if err != nil {
-			return nil, fmt.Errorf("cannot locate ancestor of registered source %s: %w", r, err)
-		}
-		canon = filepath.Join(append([]string{canon}, missing...)...)
-		snap.srcs = append(snap.srcs, sourceRef{registered: r, canonical: canon})
-	}
-	return snap, nil
-}
+// openSourceRoot opens a registered source. A variable so a test can present a
+// drive that is not ready.
+var openSourceRoot = os.Open
 
 // decide answers the source-overlap question in BOTH directions plus equality,
 // over canonical names, at path-segment boundaries.
@@ -264,7 +203,7 @@ func (snap *sourceSnapshot) decideCreate(intended, display string) error {
 		// Compared as registered and as its real location: a registered spelling
 		// (an 8.3 short name, a junction, a different case) is not the real path
 		// the destination is named by.
-		for _, p := range []string{s.abs, canonicalOfMissing(s.abs)} {
+		for _, p := range []string{s.abs, s.realAbs} {
 			if p == "" {
 				continue
 			}
@@ -275,6 +214,10 @@ func (snap *sourceSnapshot) decideCreate(intended, display string) error {
 	}
 	return nil
 }
+
+// sourceCanonicalOfMissing is canonicalOfMissing for a source that is away. A variable
+// so a test can present a drive that stops answering.
+var sourceCanonicalOfMissing = canonicalOfMissing
 
 // canonicalOfMissing is the real location a path that does not exist would have:
 // its deepest existing folder, read back from a handle, with the missing names
@@ -308,6 +251,18 @@ func (snap *sourceSnapshot) decideOffline(destVolumeID, requested, canonical, di
 	for _, s := range snap.srcs {
 		if !s.offline {
 			continue
+		}
+		if s.unavailable {
+			for _, src := range []string{s.abs, s.viaParent} {
+				if src == "" {
+					continue
+				}
+				for _, p := range []string{requested, canonical} {
+					if err := overlapError(normPath(p), normPath(src), display, p, s.registered+" (its drive is not available)"); err != nil {
+						return err
+					}
+				}
+			}
 		}
 		if s.volumeID != "" && destVolumeID != "" {
 			if s.volumeID == destVolumeID {
@@ -449,6 +404,17 @@ func (s *Store) CheckFileOutsideSources(path string) error {
 			return overlapError(d, r, path, canon, src.registered)
 		}
 	}
+	// The same object under another name (one share by two server names, say).
+	if o, err := fileOutputAt(abs); err == nil {
+		for _, src := range snap.srcs {
+			if src.offline || src.gate == nil {
+				continue // its real location was compared above
+			}
+			if o.blocks(*src.gate) {
+				return fmt.Errorf("refusing: %s is inside registered source %s; Obelisk never writes into source data", path, src.registered)
+			}
+		}
+	}
 	// Sources whose drive is away, or attached somewhere else, as for a folder.
 	if err := snap.decideOffline(vol, abs, canon, path); err != nil {
 		return err
@@ -516,6 +482,9 @@ const (
 	// Other accounts on this PC can change the folder, through a group Windows
 	// grants by default (Authenticated Users or Users, inherited).
 	destFindingSharedGroup = "shared-group"
+	// A specific account or group can change the folder's files, but not its
+	// permissions. Windows does not add this by default; a person or a tool did.
+	destFindingNamedAccount = "named-account"
 	// The folder is a drive root with Windows' default "create folders" grant.
 	destFindingDriveRoot = "drive-root"
 	// The filesystem cannot record permissions, hard links or stable file IDs.
@@ -570,6 +539,7 @@ type DestRoot struct {
 	accepted  map[string]bool // findings the destination was accepted with (see findingKey)
 	token     string          // collision avoidance; object ownership is retained separately
 	release   func() error    // cooperative lease retained through the caller's catalog credit
+	unreserve func()          // ends this folder's reservation as a live output (source_gate.go)
 	volume    uint64
 	id        fileIdent // the authorized folder's identity
 	// fingerprint is the authorized folder's real permissions and those of every
@@ -608,7 +578,7 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 		in.anchor.Close()
 		return nil, &DestinationChoiceError{Check: s.checkFromInspection(in)}
 	}
-	display, snap := in.display, in.snap
+	display, firstSnap := in.display, in.snap
 	root := in.anchor
 
 	// Re-derive the canonical name from the handle actually retained, and take the
@@ -619,11 +589,11 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 		root.Close()
 		return nil, fmt.Errorf("cannot establish the real location of %s: %w — refusing rather than writing on a guess", display, err)
 	}
-	if err := snap.decide(canon, display); err != nil {
+	if err := firstSnap.decide(canon, display); err != nil {
 		root.Close()
 		return nil, err
 	}
-	if err := snap.decideOffline(rootVolumeID(root), in.abs, canon, display); err != nil {
+	if err := firstSnap.decideOffline(rootVolumeID(root), in.abs, canon, display); err != nil {
 		root.Close()
 		return nil, err
 	}
@@ -650,8 +620,27 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 		root.Close()
 		return nil, err
 	}
+	if destBeforeReserve != nil {
+		destBeforeReserve()
+	}
+	// The last decision: the sources as they are now, with the output recorded as
+	// live in the same step, so a source registered from here on is refused.
+	snap, unreserve, err := s.reserveOutput(gateFolderAt(canon, id), display, in.abs, rootVolumeID(root))
+	if err != nil {
+		release()
+		root.Close()
+		return nil, err
+	}
+	// Held and decided: now really try it, before any job writes here.
+	if err := proveRootWrite(root, canon, destWriteUse); err != nil {
+		unreserve()
+		release()
+		root.Close()
+		return nil, err
+	}
 	tok := make([]byte, 16)
 	if _, err := rand.Read(tok); err != nil {
+		unreserve()
 		release()
 		root.Close()
 		return nil, fmt.Errorf("cannot generate a staging token: %w", err)
@@ -671,7 +660,7 @@ func (s *Store) AuthorizeDestination(path string) (*DestRoot, error) {
 		}
 	}
 	return &DestRoot{root: root, canonical: canon, display: display, snap: snap, fs: destfs, accepted: accepted,
-		token: hex.EncodeToString(tok), release: release, volume: id.vol, id: id, fingerprint: fingerprint}, nil
+		token: hex.EncodeToString(tok), release: release, unreserve: unreserve, volume: id.vol, id: id, fingerprint: fingerprint}, nil
 }
 
 // DestinationChangedError stops a write because the destination is no longer the
@@ -826,6 +815,9 @@ func (s *Store) inspectDestination(path string) (*destInspection, error) {
 		if _, err := predictDestChild(anc, filepath.Join(ancCanon, missing[0]), 1); err != nil {
 			return fail(err)
 		}
+		if err := checkWriteAccess(intended, destWriteUse); err != nil {
+			return fail(err)
+		}
 		id, err := rootIdentity(anc)
 		if err != nil {
 			return fail(err)
@@ -848,6 +840,9 @@ func (s *Store) inspectDestination(path string) (*destInspection, error) {
 	}
 	for _, f := range pred {
 		findings = appendFinding(findings, f)
+	}
+	if err := checkWriteAccess(ancCanon, destWriteUse); err != nil {
+		return fail(err)
 	}
 	id, err := rootIdentity(anc)
 	if err != nil {
@@ -950,6 +945,10 @@ func rootVolumeID(r *os.Root) string {
 	return id
 }
 
+// destBeforeReserve is a test seam: it runs after a destination was checked and
+// before it is reserved.
+var destBeforeReserve func()
+
 // Test seam immediately before the actual single-component creation.
 var bootstrapMkdir = func(r *os.Root, component string) error { return r.Mkdir(component, 0o755) }
 
@@ -1035,7 +1034,7 @@ func (d *DestRoot) Notes() []string {
 	var out []string
 	for _, f := range d.fs.findings {
 		switch f.Kind {
-		case destFindingSharedGroup:
+		case destFindingSharedGroup, destFindingNamedAccount:
 			out = append(out, fmt.Sprintf("%s can change %s (accepted by your choice)", f.Group, f.Folder))
 		case destFindingDriveRoot:
 			out = append(out, fmt.Sprintf("%s can create folders in the drive root %s (accepted by your choice)", f.Group, f.Folder))
@@ -1075,6 +1074,9 @@ func (d *DestRoot) Close() error {
 	}
 	d.closeOnce.Do(func() {
 		d.closeErr = errors.Join(d.discardAll(), d.root.Close(), d.release())
+		if d.unreserve != nil {
+			d.unreserve()
+		}
 	})
 	return d.closeErr
 }

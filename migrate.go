@@ -103,6 +103,12 @@ func (a *App) migrateDataDir(legacy, target string) (map[string]any, error) {
 	if targetHoldsCatalog(target) {
 		return nil, fmt.Errorf("%s already holds a catalog. Refusing to overwrite it; move it aside first if you meant to replace it", target)
 	}
+	// The hold stops new sources, so this answer stands for the whole move.
+	releaseCheck, err := a.Store.reserveOutputPath(target)
+	if err != nil {
+		return nil, fmt.Errorf("cannot move the data folder to %s: %w. Nothing was changed", target, err)
+	}
+	releaseCheck()
 	// Both folders are this process's until the switch is done: the original one
 	// through its open catalog (and, for the server, from its start), the new one
 	// from here, before anything is copied into it (dataowner.go). The new folder

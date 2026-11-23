@@ -8,9 +8,57 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
+
+// errVolumeSpansDisks means a volume lies on more than one physical disk, so it
+// has no single disk or partition to record.
+var errVolumeSpansDisks = fmt.Errorf("the volume spans more than one disk")
+
+// diskFromExtents reads a VOLUME_DISK_EXTENTS answer: a count, then 24-byte
+// DISK_EXTENT entries (disk number, offset, length) from byte 8.
+func diskFromExtents(b []byte) (uint32, error) {
+	disks, err := disksFromExtents(b)
+	if err != nil {
+		return 0, err
+	}
+	if len(disks) != 1 {
+		return 0, errVolumeSpansDisks
+	}
+	return disks[0], nil
+}
+
+// extentBufferFor is the size of buffer that holds the extents a partial
+// VOLUME_DISK_EXTENTS answer counts, within a sane limit.
+func extentBufferFor(header []byte) int {
+	const most = 1 << 16 // extents
+	count := uint64(binary.LittleEndian.Uint32(header))
+	if count > most {
+		count = most
+	}
+	return int(8 + 24*count)
+}
+
+// disksFromExtents is every distinct disk in a VOLUME_DISK_EXTENTS answer.
+func disksFromExtents(b []byte) ([]uint32, error) {
+	if len(b) < 8 {
+		return nil, fmt.Errorf("the volume reported no disk")
+	}
+	count := uint64(binary.LittleEndian.Uint32(b))
+	if count == 0 || uint64(len(b)) < 8+24*count {
+		return nil, fmt.Errorf("the volume reported no complete list of disks")
+	}
+	var disks []uint32
+	for i := uint64(0); i < count; i++ {
+		d := binary.LittleEndian.Uint32(b[8+24*i:])
+		if !slices.Contains(disks, d) {
+			disks = append(disks, d)
+		}
+	}
+	return disks, nil
+}
 
 // flexInt unmarshals a JSON number OR a quoted number (lsblk -b emits either
 // depending on version) into an int64.
@@ -38,33 +86,34 @@ type lsblkNode struct {
 	Type       string      `json:"type"`
 	Tran       string      `json:"tran"` // transport: usb, sata, nvme, …
 	PartUUID   string      `json:"partuuid"`
+	KName      string      `json:"kname"`
 	Children   []lsblkNode `json:"children"`
 }
 
 // lsblkColumns are the columns parseLsblk reads.
-const lsblkColumns = "NAME,SERIAL,MODEL,SIZE,MOUNTPOINT,TYPE,TRAN,PARTUUID"
+const lsblkColumns = "NAME,KNAME,SERIAL,MODEL,SIZE,MOUNTPOINT,TYPE,TRAN,PARTUUID"
 
 // parseLsblk finds, in `lsblk -J -b -o lsblkColumns` output, the disk whose
 // subtree holds the longest mountpoint matching abs. The serial, model, size and
 // transport are the disk's; the partition is the partition UUID of the node
 // mounted there.
 func parseLsblk(out []byte, abs string) (DeviceIdentity, error) {
+	return parseLsblkDevice(out, abs, "")
+}
+
+// parseLsblkDevice is parseLsblk for the block device kname, the one that holds the
+// opened path. With no kname it goes by the longest mountpoint. A device under more
+// than one disk has no single disk to record.
+func parseLsblkDevice(out []byte, abs, kname string) (DeviceIdentity, error) {
 	var doc struct {
 		BlockDevices []lsblkNode `json:"blockdevices"`
 	}
 	if err := json.Unmarshal(out, &doc); err != nil {
 		return DeviceIdentity{}, fmt.Errorf("parsing lsblk JSON: %w", err)
 	}
-	best := -1
-	var pick lsblkNode
-	var mounted *lsblkNode
-	for i := range doc.BlockDevices {
-		if l, n := deepestMountMatch(&doc.BlockDevices[i], abs); l > best {
-			best, pick, mounted = l, doc.BlockDevices[i], n
-		}
-	}
-	if best < 0 {
-		return DeviceIdentity{}, fmt.Errorf("no block device mounts %s", abs)
+	pick, mounted, err := lsblkPick(doc.BlockDevices, abs, kname)
+	if err != nil {
+		return DeviceIdentity{}, err
 	}
 	id := DeviceIdentity{
 		Serial:    strings.TrimSpace(pick.Serial),
@@ -77,6 +126,62 @@ func parseLsblk(out []byte, abs string) (DeviceIdentity, error) {
 	}
 	id.Note = busCaveat(id.Bus)
 	return id, nil
+}
+
+// lsblkPick finds the one disk holding the device kname, or with no kname the longest
+// mountpoint over abs, and the node that is that device or mount.
+func lsblkPick(devs []lsblkNode, abs, kname string) (lsblkNode, *lsblkNode, error) {
+	if kname != "" {
+		var disk lsblkNode
+		var at *lsblkNode
+		for i := range devs {
+			n := findKName(&devs[i], kname)
+			if n == nil {
+				continue
+			}
+			if at != nil && devs[i].Name != disk.Name {
+				return lsblkNode{}, nil, errVolumeSpansDisks
+			}
+			disk, at = devs[i], n
+		}
+		if at == nil {
+			return lsblkNode{}, nil, fmt.Errorf("lsblk does not list device %s", kname)
+		}
+		return disk, at, nil
+	}
+	best := -1
+	spans := false
+	var pick lsblkNode
+	var mounted *lsblkNode
+	for i := range devs {
+		l, n := deepestMountMatch(&devs[i], abs)
+		switch {
+		case l > best:
+			best, pick, mounted, spans = l, devs[i], n, false
+		case l == best && l >= 0 && n.Name == mounted.Name && devs[i].Name != pick.Name:
+			spans = true
+		}
+	}
+	if best < 0 {
+		return lsblkNode{}, nil, fmt.Errorf("no block device mounts %s", abs)
+	}
+	if spans {
+		return lsblkNode{}, nil, errVolumeSpansDisks
+	}
+	return pick, mounted, nil
+}
+
+// findKName finds the node with this kernel name at or under node.
+func findKName(node *lsblkNode, kname string) *lsblkNode {
+	if node.KName == kname {
+		return node
+	}
+	for i := range node.Children {
+		if n := findKName(&node.Children[i], kname); n != nil {
+			return n
+		}
+	}
+	return nil
 }
 
 // deepestMountMatch returns the length of the longest mountpoint at or under

@@ -2236,8 +2236,20 @@ func api(mux routeRegistrar, app *App) {
 			jsonErr(w, 404, fmt.Errorf("package not found"))
 			return
 		}
+		accepted := body(r)["accept_existing_copies"] == true
+		if warning := app.Store.rebuildWarning(id); warning != nil && !accepted {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": warning.Error(), "warning": warning.Error(),
+				"needs_confirmation": true, "copies": warning.Copies})
+			return
+		}
 		startedOn(w).write(runJob(app, "build", "Build "+c.Name, func(p func(float64, string)) (map[string]any, error) {
-			if err := app.BuildChunk(id, p); err != nil {
+			build := app.BuildChunk
+			if accepted {
+				build = app.BuildChunkOverCopies
+			}
+			if err := build(id, p); err != nil {
 				return nil, err
 			}
 			// Re-read the freshly built chunk for its staged path and payload size, and

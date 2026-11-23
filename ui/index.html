@@ -502,7 +502,7 @@ const api=async(m,u,b)=>{
     else showOwnerSignIn();
     throw new Error('Sign-in required');
   }
-  if(!r.ok)throw new Error(j.error||r.statusText);
+  if(!r.ok){const e=new Error(j.error||r.statusText);e.body=j;throw e}
   return j;};
 const GB=n=>((n||0)/1e9).toFixed(2);
 
@@ -2131,6 +2131,7 @@ async function adoptFolderDlg(id,name){
     await api('POST','/api/collections/'+id+'/adopt-folder',{path,volume_id:parseInt(volId)});
     toast('Adopting drive — see Jobs');loc('jobs')});}
 function searchCopies(r){const cps=r.copies||[];
+  if(!cps.length&&(r.retired_copies||[]).length)return `<span style="font-size:11.5px">no current copy · older copies, restore by hand: ${r.retired_copies.map(cp=>`${esc(cp.volume_label||cp.path||'unregistered')}${cp.location?' ('+esc(cp.location)+')':''}`).join(' · ')}</span>`;
   if(!cps.length)return r.chunk?'<span class="dim">no copies recorded</span>':'<span class="dim">—</span>';
   const parts=cps.map(cp=>`${esc(cp.volume_label||'vol#'+cp.volume_id)}${cp.location?' ('+esc(cp.location)+')':''} — ${copyVerifyLabel(cp)}`);
   return `<span style="font-size:11.5px">${r.verified_copies}/${cps.length} B-verified · ${parts.join(' · ')}</span>`}
@@ -2271,7 +2272,7 @@ function segStr(c){if(!c.spanned||!c.segments)return '';
   return h+'</div>'}
 function actions(c){
   const b=[];
-  if(c.status==='PLANNED'||c.status==='FAILED')b.push(`<button class="btn" onclick="doBuild(${c.id})">Build package</button>`);
+  if(c.status==='PLANNED'||c.status==='FAILED'||(c.status==='WRITTEN'&&c.verify_ok===false&&!c.adopted))b.push(`<button class="btn" onclick="doBuild(${c.id})">Build package</button>`);
   if(c.spanned){
     if(c.staged_dir&&c.status==='STAGED')b.push(`<button class="btn" data-call="spanWriteDlg" data-args="${callArgs(c.id,c.name)}">Write next segment →</button>`);
   }else if(c.staged_dir&&c.status!=='PLANNED'&&c.status!=='BUILDING'){
@@ -2322,7 +2323,14 @@ async function doBuild(id){
       <div class="dim" style="font-size:11.5px;margin-top:6px">This scratch is freed once the package is written — the next build reuses it.</div>
     </div>
     <div class="row" style="margin-top:12px"><button class="btn" onclick="go()">Build now</button></div>`;
-  dlg(body,async()=>{await api('POST',`/api/chunks/${id}/build`);toast('Build started — see Jobs');loc('jobs')});
+  dlg(body,async()=>{
+    try{await api('POST',`/api/chunks/${id}/build`)}
+    catch(e){
+      if(!e.body||!e.body.needs_confirmation)throw e;
+      if(!confirm(e.body.warning+'\n\nRebuild anyway?'))throw new Error('Nothing was rebuilt. The existing copies are unchanged.');
+      await api('POST',`/api/chunks/${id}/build`,{accept_existing_copies:true});
+    }
+    toast('Build started — see Jobs');loc('jobs')});
 }
 async function writeDlg(id,name,payload){
   const [vols,tape]=await Promise.all([api('GET','/api/volumes'),api('GET','/api/tape/status').catch(()=>({}))]);
@@ -2911,6 +2919,7 @@ async function vKeys(){
   let h=`${hdr('Keys','secrets live only in keystore files — never in the catalog','keys')}`;
   h+=`<div class="panel"><h2>Keystores (${st.min_required} required, different devices)</h2>`;
   if(!st.ok)h+=`<div class="err" style="margin-bottom:10px">${esc(st.reason||'')}</div>`;
+  if(st.warning)h+=`<div class="err" style="margin-bottom:10px">Warning: ${esc(st.warning)}</div>`;
   h+='<table><tr><th>Path</th><th class="num">Keys</th><th>State</th></tr>';
   for(const s of st.stores||[])h+=`<tr><td class="mono">${esc(s.path)}</td><td class="num">${s.key_count}</td>
     <td>${s.reachable?'<span class="stamp VERIFIED">reachable</span>':'<span class="stamp FAILED">unreachable</span>'}</td></tr>`;
@@ -3076,7 +3085,13 @@ function perfStripHTML(s){
 }
 // Show-the-artifact backstop on the Jobs row: a finished job that produced an
 // artifact offers to show/open it (kit summary, mirror sidecar, drift, …).
+// A verify campaign leaves out a package that a build or burn holds; it says which.
+function jobSkippedNote(j){const r=(j&&j.result)||{};
+  if(typeof r.skipped!=='number'||!r.skipped||typeof r.checked!=='number')return '';
+  const names=(r.results||[]).filter(x=>x.skipped).map(x=>esc(x.chunk)).join(', ');
+  return ` <span class="dim" style="font-size:10.5px">Not checked, busy in another job: ${names}. Verify again when that job ends.</span>`}
 function jobArtifact(j){if(j.status!=='COMPLETED'||!j.result)return '';const r=j.result;
+  if(jobSkippedNote(j))return jobSkippedNote(j);
   if(j.kind==='recoverykit'&&r.output_dir)return ` <button class="btn ghost" style="font-size:11px;padding:1px 8px" onclick='showKitResult(${JSON.stringify(r)})'>Show kit</button>`;
   if(j.kind==='mirror'&&r.sidecar!=null)return ` <span class="dim" style="font-size:10.5px">${r.mirrored||0} files${r.failed?' · '+r.failed+' failed':''}${r.sidecar?' · sidecar written':''}</span>`;
   if(j.kind==='reconcile'&&r.collection_id)return ` <button class="btn ghost" style="font-size:11px;padding:1px 8px" onclick="vDrift(${r.collection_id},'')">View drift (${r.changes||0}${r.unknown?' · '+r.unknown+' unknown':''})</button>`;
@@ -3174,7 +3189,9 @@ function jobCheckOutcome(j){const r=(j&&j.result)||{};
   if(typeof r.all_ok==='boolean')return !r.all_ok?'fail':r.advisory?null:'pass';
   if(typeof r.checked==='number'&&typeof r.ok==='number'){
     const read=typeof r.passed==='number'?r.passed:r.ok;
-    if(read<r.checked)return 'fail';            // a check failed
+    const skipped=typeof r.skipped==='number'?r.skipped:0; // not read: neither a pass nor a failure
+    if(read+skipped<r.checked)return 'fail';    // a check failed
+    if(skipped)return null;
     return r.checked>0&&r.ok===r.checked?'pass':null; // read fine, but not every copy credited
   }
   return null;}
@@ -3268,7 +3285,7 @@ async function vJobDetail(id){
         <div><span class="stamp ${jobStamp(j)}">${esc(jobStampText(j))}</span> <span class="dim" style="font-size:12px;margin-left:6px">${esc(j.kind)}</span></div>
         <button class="btn ghost" style="font-size:11px;padding:2px 12px" onclick="loc('jobs')">← All jobs</button></div>
       <div class="dim" style="font-size:12px;margin-top:8px">Started ${esc((j.created_at||'').slice(0,19).replace('T',' '))} UTC${dur?` · ${running?'running for':'took'} ${dur}`:''}</div>
-      ${jobRecordingNote(j)}
+      ${jobSkippedNote(j)}${jobRecordingNote(j)}
       ${jobWrites(j,cfg)}
       ${running?`<div style="margin-top:10px"><div class="bar"><div style="width:${Math.round((j.progress||0)*100)}%"></div></div>${jobTelemetry(j)}</div>
       <div id="perfstrip" class="perfstrip" style="margin-top:12px;margin-bottom:0"></div>`:''}`;

@@ -712,15 +712,23 @@ func TestSecret_AppearsInNoLogJobRecordOrBackup(t *testing.T) {
 		t.Fatal(err)
 	}
 	call(http.MethodPost, fmt.Sprintf("/api/collections/%d/scan", created.ID), map[string]any{"path": src})
-	deadline := time.Now().Add(30 * time.Second)
-	for bytes.Contains(call(http.MethodGet, "/api/jobs", nil), []byte(`"RUNNING"`)) {
-		if time.Now().After(deadline) {
-			t.Fatal("the scan job did not finish")
+	waitForJobs := func() {
+		t.Helper()
+		deadline := time.Now().Add(30 * time.Second)
+		for bytes.Contains(call(http.MethodGet, "/api/jobs", nil), []byte(`"RUNNING"`)) {
+			if time.Now().After(deadline) {
+				t.Fatal("a job did not finish")
+			}
+			time.Sleep(20 * time.Millisecond)
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
+	waitForJobs()
 	backupDir := t.TempDir()
 	call(http.MethodPost, "/api/appbackup/export", map[string]any{"dest_dir": backupDir})
+	waitForJobs() // the backup is a job: what it wrote is what is checked below
+	if entries, err := os.ReadDir(backupDir); err != nil || len(entries) == 0 {
+		t.Fatalf("the backup is not there to check: %d entries, %v", len(entries), err)
+	}
 
 	secretRaw := string(auth.secret[:])
 	needles := map[string]string{

@@ -205,6 +205,9 @@ type restoreTarget struct {
 	created bool      // out was created by this restore
 	root    *os.Root  // a handle on the new folder (dest == nil)
 	id      fileIdent // the new folder's identity
+	// unreserve ends the new folder's reservation as a live output (dest == nil;
+	// a DestRoot holds its own).
+	unreserve func()
 }
 
 // openRestoreTarget prepares where a restore into outputDir writes.
@@ -244,6 +247,12 @@ func (a *App) newRestoreFolder(outputDir string) (*restoreTarget, error) {
 	if err := a.Store.checkNewRestoreFolder(abs, outputDir); err != nil {
 		return nil, err
 	}
+	// Held by path while it is created; the reservation below holds it by identity.
+	releaseCreate, err := a.Store.reserveOutputPath(abs)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseCreate()
 	if err := os.Mkdir(abs, 0o700); err != nil {
 		return nil, fmt.Errorf("cannot create the restore folder %s: %w", outputDir, err)
 	}
@@ -254,6 +263,9 @@ func (a *App) newRestoreFolder(outputDir string) (*restoreTarget, error) {
 	}
 	tgt := &restoreTarget{out: abs, into: abs, created: true, root: r}
 	fail := func(err error) (*restoreTarget, error) {
+		if tgt.unreserve != nil {
+			tgt.unreserve()
+		}
 		r.Close()
 		_ = syscall.Rmdir(abs) // still empty: removes only an empty folder, never a file
 		return nil, err
@@ -275,6 +287,11 @@ func (a *App) newRestoreFolder(outputDir string) (*restoreTarget, error) {
 	if err := newRestoreFolderPathCheck(a.Store, real); err != nil {
 		return fail(err)
 	}
+	_, unreserve, err := a.Store.reserveOutput(gateFolderAt(real, tgt.id), outputDir, abs, rootVolumeID(r))
+	if err != nil {
+		return fail(err)
+	}
+	tgt.unreserve = unreserve
 	if entries, err := fs.ReadDir(r.FS(), "."); err != nil || len(entries) != 0 {
 		return fail(fmt.Errorf("the restore folder %s is not empty: something else wrote into it", outputDir))
 	}
@@ -336,11 +353,11 @@ func (s *Store) outsideSourcesByIdentity(chain []idEntry, display string) error 
 		return err
 	}
 	for _, src := range snap.srcs {
-		if src.offline || !src.fromHandle {
+		if src.offline || src.gate == nil || len(src.gate.chain) == 0 {
 			continue
 		}
-		sid, err := pathIdentity(src.canonical)
-		if err != nil || sid.idx == 0 {
+		sid := src.gate.chain[0].id
+		if sid.idx == 0 {
 			continue
 		}
 		for _, e := range chain {
@@ -410,6 +427,9 @@ func (a *App) closeRestoreTarget(t *restoreTarget, succeeded bool) {
 		}
 		t.dest.Close()
 		return
+	}
+	if t.unreserve != nil {
+		defer t.unreserve()
 	}
 	defer t.root.Close()
 	_ = t.root.RemoveAll(t.work.rel)

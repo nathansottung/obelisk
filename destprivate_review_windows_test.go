@@ -75,7 +75,8 @@ func TestMakePrivate_UnshownEntryRefused(t *testing.T) {
 func TestMakePrivate_KeepsShownEntriesInOrder(t *testing.T) {
 	app := dockApp(t)
 	folder, _ := sharedFolder(t)
-	addFolderACEs(t, folder, "(D;;DC;;;WD)(A;OICI;FA;;;BA)")
+	// A deny on deleting children: it must keep its place, and does not stop writes.
+	addFolderACEs(t, folder, "(D;;DT;;;WD)(A;OICI;FA;;;BA)")
 	plan, err := app.Store.PreviewMakePrivate(folder)
 	if err != nil {
 		t.Fatal(err)

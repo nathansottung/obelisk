@@ -35,6 +35,9 @@ type outFolder struct {
 	dest *DestRoot // guard platforms
 	root *os.Root  // elsewhere: the folder, opened after its source checks
 	path string    // the folder as given, for messages and records
+	// unreserve ends the folder's reservation as a live output (elsewhere; a
+	// DestRoot holds its own).
+	unreserve func()
 
 	tok    string
 	seq    atomic.Uint64
@@ -88,15 +91,30 @@ func (a *App) openOutFolderUnguarded(p string) (*outFolder, error) {
 	if err := a.Store.CheckOutsideSources(abs); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(abs, 0o755); err != nil {
+	// Held by path while it is created; the reservation below holds it by identity.
+	releaseCreate, err := a.Store.reserveOutputPath(abs)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseCreate()
+	if afterPathReserved != nil {
+		afterPathReserved(abs)
+	}
+	if err := checkWriteAccess(abs, destWriteUse); err != nil {
+		return nil, err
+	}
+	undoMade, err := makeFolderTracked(abs)
+	if err != nil {
 		return nil, err
 	}
 	r, err := os.OpenRoot(abs)
 	if err != nil {
+		undoMade()
 		return nil, err
 	}
 	fail := func(err error) (*outFolder, error) {
 		r.Close()
+		undoMade()
 		return nil, err
 	}
 	id, err := rootIdentity(r)
@@ -117,11 +135,18 @@ func (a *App) openOutFolderUnguarded(p string) (*outFolder, error) {
 	if err := a.Store.CheckOutsideSources(real); err != nil {
 		return fail(err)
 	}
+	if err := proveRootWrite(r, real, destWriteUse); err != nil {
+		return fail(err)
+	}
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
 		return fail(err)
 	}
-	return &outFolder{root: r, path: p, tok: hex.EncodeToString(b), stages: map[string]*os.File{}}, nil
+	_, unreserve, err := a.Store.reserveOutput(gateFolderAt(real, id), p, abs, rootVolumeID(r))
+	if err != nil {
+		return fail(err)
+	}
+	return &outFolder{root: r, path: p, unreserve: unreserve, tok: hex.EncodeToString(b), stages: map[string]*os.File{}}, nil
 }
 
 // Name is the folder as given.
@@ -160,6 +185,9 @@ func (o *outFolder) Close() error {
 	o.mu.Unlock()
 	for _, t := range tmps {
 		o.Discard(t)
+	}
+	if o.unreserve != nil {
+		defer o.unreserve()
 	}
 	return o.root.Close()
 }

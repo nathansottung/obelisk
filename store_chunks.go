@@ -270,6 +270,94 @@ func (s *Store) UpdateSegment(c *Chunk, idx int, change func(*Segment)) error {
 	return s.save()
 }
 
+// rebuildWarning is the warning a build of this package needs accepted, or nil. It
+// counts every copy on record, including superseded and failed ones, and span
+// segments, since any of them may still be on a medium.
+func (s *Store) rebuildWarning(id int) *RebuildWarning {
+	live := s.Chunk(id)
+	if live == nil {
+		return nil
+	}
+	s.mu.Lock()
+	c := *live
+	c.Copies = append([]Copy(nil), live.Copies...)
+	c.Segments = append([]Segment(nil), live.Segments...)
+	s.mu.Unlock()
+	// The staging check reads a drive, so it runs outside the catalog lock.
+	if !chunkCanBuild(&c, c.StagedDir != "" && payloadPathIn(c.StagedDir, &c) != "") {
+		return nil
+	}
+	n := len(c.Copies)
+	if n == 0 {
+		for _, sg := range c.Segments {
+			if sg.VolumeID != 0 || sg.Dest != "" || sg.Status == "WRITTEN" || sg.Status == "VERIFIED" {
+				n++
+			}
+		}
+	}
+	if n == 0 {
+		return nil
+	}
+	return &RebuildWarning{Package: c.Name, Copies: n, Encrypted: c.Encrypted}
+}
+
+// retireCopies is the end of an accepted rebuild: nothing on media matches the new
+// key and hash, so no old copy counts as protecting it. Each stays on record, so it
+// can still be found and restored by hand.
+// The returned undo reverses only what this call changed.
+func (s *Store) retireCopies(c *Chunk) (undo func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var retired []int
+	for i := range c.Copies {
+		if !c.Copies[i].Superseded {
+			c.Copies[i].Superseded = true
+			retired = append(retired, i)
+		}
+	}
+	verifyOK, dest := c.VerifyOK, c.WrittenDest
+	c.VerifyOK, c.WrittenDest = nil, ""
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for _, i := range retired {
+			c.Copies[i].Superseded = false
+		}
+		c.VerifyOK, c.WrittenDest = verifyOK, dest
+	}
+}
+
+// dropNotedTapes removes the records noteOldTapes added, once the segments that
+// hold the same locations are back.
+func (s *Store) dropNotedTapes(c *Chunk, from, n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n > 0 && from+n <= len(c.Copies) {
+		c.Copies = append(c.Copies[:from:from], c.Copies[from+n:]...)
+	}
+}
+
+// noteOldTapes records where each tape of a spanned set is before a build replaces
+// the segments that say so. It runs first so a crash during the build loses none.
+func (s *Store) noteOldTapes(c *Chunk, oldSegments []Segment) (added int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	known := map[string]bool{}
+	for _, cp := range c.Copies {
+		known[fmt.Sprintf("%d|%s", cp.VolumeID, normPath(cp.Path))] = true
+	}
+	for _, sg := range oldSegments {
+		key := fmt.Sprintf("%d|%s", sg.VolumeID, normPath(sg.Dest))
+		if (sg.VolumeID == 0 && sg.Dest == "") || known[key] {
+			continue
+		}
+		known[key] = true
+		c.Copies = append(c.Copies, Copy{VolumeID: sg.VolumeID, Path: sg.Dest, Superseded: true})
+		added++
+	}
+	return added
+}
+
 // fileCopiesLocked maps each file listed by the packages keep selects, among those
 // not FAILED, to the verified physical copies its packages have (chunkPhysCopies).
 func (s *Store) fileCopiesLocked(vols map[int]*Volume, locs map[int]*Location, keep func(*Chunk) bool) (map[int]map[string]physCopy, error) {

@@ -93,7 +93,8 @@ Recovery Kit documents them per package. Nothing needs Obelisk.
   to hand off *to*. BagIt (RFC 8493) is a packaging standard; Archivematica is a
   full OAIS-style digital-preservation pipeline for institutions. Obelisk meets
   them where it counts: every package carries a **BagIt `manifest-sha256.txt`** —
-  as the first member inside its tar *and* as a sidecar on media — plus a
+  as the first member inside its tar *and* as a sidecar on media (inside the tar
+  only when private media is on) — plus a
   `bag-info.txt`-style metadata file, and there's a one-click **"Export as BagIt"**
   that materializes a fully conformant bag (`data/` layout + manifests) for ingest.
   The distinction Obelisk holds firmly: BagIt is a **description/handoff** layer

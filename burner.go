@@ -123,6 +123,13 @@ func (a *App) CreateBurnQueue(collectionID int, mediaKind, name string) (*BurnQu
 	return q, nil
 }
 
+// moveManifestAside moves the plaintext manifest out of a folder being burned. A
+// variable so a test can present a move that fails.
+var moveManifestAside = os.Rename
+
+// moveManifestBack puts it back. A variable for the same reason.
+var moveManifestBack = os.Rename
+
 // BurnNext burns the first PENDING disc: shell out to the configured burn
 // command (with {SRC}/{LABEL} substituted), then optionally hash-verify the
 // burned payload against the chunk's enc_hash before marking DONE.
@@ -138,6 +145,12 @@ func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, 
 	if q == nil {
 		return nil, fmt.Errorf("burn queue %d not found", id)
 	}
+	// One burn per queue, so two requests cannot pick the same disc.
+	releaseQueue, err := a.Store.claimWork(fmt.Sprintf("burn-queue:%d", id), fmt.Sprintf("%q is already burning a disc; wait for it to finish", q.Name))
+	if err != nil {
+		return nil, err
+	}
+	defer releaseQueue()
 	var disc *BurnDisc
 	for _, d := range q.Discs {
 		if d.Status == "PENDING" {
@@ -158,6 +171,12 @@ func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, 
 		set("FAILED", fmt.Sprintf("package %d not found in catalog", disc.ChunkID))
 		return nil, errors.New(disc.Detail)
 	}
+	// A build of this package would clear the folder being burned.
+	releasePackage, err := a.Store.claimWork(packageWorkKey(c.ID), fmt.Sprintf("package %s is already being built, written or burned; wait for that job to finish", c.Name))
+	if err != nil {
+		return nil, err
+	}
+	defer releasePackage()
 	// The same gate as a write: the package's last build succeeded and its payload
 	// and sidecars are in staging, unchanged.
 	if err := burnStagedCheck(c); err != nil {
@@ -169,20 +188,36 @@ func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, 
 		return nil, errors.New(disc.Detail)
 	}
 
+	// The burn moves the private manifest out of the staged folder and back, and the
+	// disc's ECC is written there: neither folder may become a source meanwhile.
+	releaseStaging, err := a.Store.reserveOutputPaths(c.StagedDir, cfg.StagingDir)
+	if err != nil {
+		set("FAILED", err.Error())
+		return nil, errors.New(disc.Detail)
+	}
+	defer releaseStaging()
+
 	set("BURNING", "")
 	progress(0.05, "burning "+c.Name)
-	// Private media: the burn command copies the whole staged folder, so move the
-	// plaintext manifest out of it during the burn (only the .gpg gets burned),
-	// then restore it. Kept on the same volume so the rename is atomic.
-	if c.PrivateManifest {
-		plain := filepath.Join(c.StagedDir, c.Name+".manifest.json")
-		if _, err := os.Stat(plain); err == nil {
-			hidden := filepath.Join(cfg.StagingDir, "."+c.Name+".manifest.hidden")
-			if os.Rename(plain, hidden) == nil {
-				defer os.Rename(hidden, plain)
-			}
-		}
+	// The burn command copies the whole staged folder, so what must stay off the disc
+	// is moved out of it during the burn, then restored. A disc already burned stays
+	// good if the move back fails, so that is reported on the disc, and the next burn
+	// of this package tries again.
+	putBack, err := holdStagedOnlyFiles(c)
+	if err != nil {
+		set("FAILED", "nothing was burned: "+err.Error())
+		return nil, errors.New(disc.Detail)
 	}
+	defer func() {
+		if err := putBack(); err != nil {
+			note := fmt.Sprintf("staged files of %s could not be put back in its folder: %v", c.Name, err)
+			a.Store.Log("burn", note)
+			if disc.Detail != "" { // keep why the burn itself failed
+				note = disc.Detail + "; " + note
+			}
+			set(disc.Status, note)
+		}
+	}()
 	argv, err := burnArgv(cfg.BurnCommand, c.StagedDir, c.Name)
 	if err != nil {
 		set("FAILED", "burn command refused: "+err.Error())
@@ -303,6 +338,12 @@ func (a *App) carryEccToNextDisc(q *BurnQueue, current *BurnDisc, c *Chunk, eccP
 		a.Store.Log("ecc", c.Name+": next disc has no staged folder yet — ECC kept in staging")
 		return
 	}
+	releaseNext, err := a.Store.reserveOutputPath(nc.StagedDir)
+	if err != nil {
+		a.Store.Log("ecc", fmt.Sprintf("%s: could not carry ECC onto %s (%v) — kept in staging", c.Name, nc.Name, err))
+		return
+	}
+	defer releaseNext()
 	dst := filepath.Join(nc.StagedDir, filepath.Base(eccPath))
 	if err := copyFile(eccPath, dst); err != nil {
 		a.Store.Log("ecc", fmt.Sprintf("%s: could not carry ECC onto %s (%v) — kept in staging", c.Name, nc.Name, err))

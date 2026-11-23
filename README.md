@@ -1053,7 +1053,9 @@ deliberate and exact:
   `sha256  relative/path` lines, two spaces between hash and path, over the
   original tree) is written **both as the
   first member inside the package's `tar`** — so a reader can stream-verify each
-  file as it extracts — **and as a sidecar on the media**. A
+  file as it extracts — **and as a sidecar on the media**. With private media on,
+  the sidecars stay off the medium because they name your files; the copy inside
+  the encrypted tar remains. A
   `bag-info.txt`-style metadata sidecar rides along too (source organization,
   bagging date, package name, byte/file counts, Obelisk version). These are a
   **description layer**: the payload is still a plain `tar` that extracts to your

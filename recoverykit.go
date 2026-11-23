@@ -485,16 +485,25 @@ which kind it is: **`+"`NAME.tar.gpg`"+`** (encrypted) or **`+"`NAME.tar`"+`**
       <payload>.vol*.par2           parity blocks (typically ~10%% redundancy)
       NAME.manifest.json            full file list, hashes, encrypted flag, key_ref,
                                     and payload_file (the exact payload filename)
+        or NAME.manifest.json.gpg   the same manifest, encrypted, on private media
       RESTORE.txt                   package-specific copy of these steps
+
+**Private media** carry `+"`NAME.manifest.json.gpg`"+` and no plaintext
+`+"`NAME.manifest.json`"+`, so a lost medium shows no file names. Read it with the
+package's passphrase:
+
+    gpg -d NAME.manifest.json.gpg
 
 There is **no compression anywhere** — what you extract is byte-identical to
 the originals.
 
 ## Encrypted vs plaintext packages — check first
 
-Open `+"`NAME.manifest.json`"+` (any text editor) and read the `+"`\"encrypted\"`"+` field
-(or `+"`\"payload_file\"`"+`), or check the **Encrypted** / **Payload file** columns in
-`+"`MEDIA_INVENTORY.md`"+`:
+Look at the payload's name in the package folder: `+"`NAME.tar.gpg`"+` is normally
+encrypted and `+"`NAME.tar`"+` is plaintext. To confirm, read the `+"`\"encrypted\"`"+`
+field (or `+"`\"payload_file\"`"+`) in the manifest (a text editor for
+`+"`NAME.manifest.json`"+`, `+"`gpg -d`"+` for `+"`NAME.manifest.json.gpg`"+`), or check
+the **Encrypted** / **Payload file** columns in `+"`MEDIA_INVENTORY.md`"+`:
 
 - **encrypted: true**  — the payload is `+"`NAME.tar.gpg`"+`, OpenPGP/AES-256
   ciphertext. Do all three steps: **repair → decrypt → extract**. You need the
@@ -559,10 +568,11 @@ The payload is a POSIX pax/ustar tar (IEEE 1003.1), readable by:
 
 ## Verifying integrity without restoring
 
-`+"`NAME.manifest.json`"+` records the SHA-256 of the payload (key `+"`ciphertext_hash`"+`,
-which for plaintext packages is simply the tar's hash) and the payload's exact
-filename (`+"`payload_file`"+`). Hash that file with any tool of the era — substitute
-`+"`NAME.tar`"+` below for a plaintext package:
+`+"`RESTORE.txt`"+` and the manifest record the SHA-256 of the payload (manifest key
+`+"`ciphertext_hash`"+`, which for plaintext packages is simply the tar's hash). On
+private media, use the hash in `+"`RESTORE.txt`"+`, which needs no passphrase. Hash the
+payload with any tool of the era — substitute `+"`NAME.tar`"+` below for a plaintext
+package:
 
     # Linux / macOS / Git Bash:
     sha256sum NAME.tar.gpg

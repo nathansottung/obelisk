@@ -3,7 +3,8 @@
 **Audience: anyone, decades from now, with no Obelisk installed.**
 
 Every package on every medium carries this same information in its own
-`RESTORE.txt` and `*.manifest.json`. Obelisk is a convenience, never a
+`RESTORE.txt` and manifest (`*.manifest.json`, or `*.manifest.json.gpg`
+on private media). Obelisk is a convenience, never a
 requirement — restoration depends on exactly three ubiquitous,
 open-source, standardized programs:
 
@@ -26,6 +27,14 @@ PHOTOS-C0003/
   PHOTOS-C0003.tar.gpg.vol*.par2  parity blocks (~10% redundancy)
   PHOTOS-C0003.manifest.json      full file list, sizes, hashes, key_ref
   RESTORE.txt                   these instructions, package-specific
+```
+
+Private media carry `PHOTOS-C0003.manifest.json.gpg` instead of the plaintext
+manifest, so a lost medium shows no file names. Read it with the package's
+passphrase:
+
+```bash
+gpg -d PHOTOS-C0003.manifest.json.gpg
 ```
 
 Parity is computed over the *ciphertext* deliberately: a damaged medium
@@ -66,12 +75,12 @@ run* unless two keystores are registered and in sync.
 
 ## Verifying without restoring
 
-`manifest.json` records SHA-256 (or BLAKE3) hashes of both the tar and
-the ciphertext. Any era's hashing tool can confirm medium integrity
-without touching a key:
+`RESTORE.txt` and the manifest record SHA-256 (or BLAKE3) hashes of both
+the tar and the ciphertext. Any era's hashing tool can confirm medium
+integrity without touching a key, using the hash in `RESTORE.txt`:
 
 ```bash
-sha256sum PHOTOS-C0003.tar.gpg     # compare to "ciphertext_hash" in the manifest
+sha256sum PHOTOS-C0003.tar.gpg     # compare to "ciphertext" in RESTORE.txt
 ```
 
 ## Media-specific notes

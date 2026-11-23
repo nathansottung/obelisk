@@ -209,21 +209,18 @@ func (s *Store) resolveQuarantine(absPath string) (quarantineTarget, error) {
 		if src.offline || !src.fromHandle {
 			continue // no object to match; the path checks below cover it
 		}
-		sid, err := pathIdentity(src.canonical)
-		if err != nil {
+		if src.gate == nil || src.gateErr != nil || len(src.gate.chain) == 0 {
 			// Without its identity the source cannot be matched, and the path
 			// check alone may not see another spelling of it: refuse.
-			return t, fmt.Errorf("refusing to quarantine %s: cannot establish what registered source %s is: %w", absPath, src.registered, err)
+			return t, fmt.Errorf("refusing to quarantine %s: cannot establish what registered source %s is: %v", absPath, src.registered, src.gateErr)
 		}
+		srcChain := src.gate.chain // read with the source, so a stalled drive is not asked again
+		sid := srcChain[0].id
 		switch {
 		case sid == id:
 			return t, fmt.Errorf("quarantine never moves source data: %s is registered source %s", absPath, src.registered)
 		case chainHas(chain[1:], sid):
 			return t, fmt.Errorf("quarantine never moves source data: %s is inside registered source %s", absPath, src.registered)
-		}
-		srcChain, err := identityChain(src.canonical, sid)
-		if err != nil {
-			return t, fmt.Errorf("refusing to quarantine %s: %w", absPath, err)
 		}
 		if chainHas(srcChain[1:], id) {
 			return t, fmt.Errorf("quarantine never moves source data: %s holds registered source %s, which would move with it", absPath, src.registered)
@@ -608,6 +605,9 @@ func quarantineWarning(label string, copiesAfter int) string {
 
 // ---- the moves ---------------------------------------------------------
 
+// quarantineBeforeMove is a test seam: it runs just before bytes are moved.
+var quarantineBeforeMove func()
+
 // Quarantine stages absPath into <root>/_deleted/<rel>, records the move (who/when/
 // reason) and the catalog copies it pulls from protection accounting, and writes an
 // audit line. It is the ONLY way this tool "removes" anything — and even this only
@@ -618,6 +618,12 @@ func (a *App) Quarantine(absPath, by, reason string) (*QuarantineEntry, error) {
 		return nil, err
 	}
 	root, destVol, rel := t.root, t.destVol, t.rel
+	// Until the move is done, neither end may become a source.
+	releaseMove, err := a.Store.reserveOutputPaths(t.real, filepath.Join(t.rootReal, QuarantineDir))
+	if err != nil {
+		return nil, err
+	}
+	defer releaseMove()
 	info, err := os.Lstat(t.real)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read %s: %w", absPath, err)
@@ -641,6 +647,9 @@ func (a *App) Quarantine(absPath, by, reason string) (*QuarantineEntry, error) {
 		size, fileCount = info.Size(), 1
 	}
 
+	if quarantineBeforeMove != nil {
+		quarantineBeforeMove()
+	}
 	// The move is made inside the managed root's real location, through a handle
 	// on it: both names are relative to that root, so the move cannot reach
 	// anything outside it.
@@ -711,6 +720,14 @@ func (a *App) UnQuarantine(id int) (*QuarantineEntry, error) {
 	// there since).
 	if err := a.Store.checkUnquarantineTarget(rootReal, e.OriginalRel, dst); err != nil {
 		return nil, err
+	}
+	releaseMove, err := a.Store.reserveOutputPaths(filepath.Join(rootReal, filepath.FromSlash(e.OriginalRel)), filepath.Join(rootReal, QuarantineDir))
+	if err != nil {
+		return nil, err
+	}
+	defer releaseMove()
+	if quarantineBeforeMove != nil {
+		quarantineBeforeMove()
 	}
 	if err := moveWithinRoot(rootReal, path.Join(QuarantineDir, e.OriginalRel), e.OriginalRel); err != nil {
 		return nil, fmt.Errorf("restoring %s failed: %w", e.OriginalRel, err)
@@ -939,25 +956,12 @@ func moveWithinRoot(rootReal, from, to string) error {
 }
 
 // checkUnquarantineTarget decides the folder an entry returns to by its real
-// location, as resolveQuarantine decides the way in.
+// location, as resolveQuarantine decides the way in. It creates nothing: folders that
+// are missing are made by the move, once this has passed and the target is held.
 func (s *Store) checkUnquarantineTarget(rootReal, rel, display string) error {
-	r, err := os.OpenRoot(rootReal)
-	if err != nil {
-		return err
-	}
-	defer r.Close()
-	dir := filepath.FromSlash(path.Dir(rel))
-	if err := r.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	pr, err := r.OpenRoot(dir)
-	if err != nil {
-		return err
-	}
-	pc, err := rootCanonicalPath(pr)
-	pr.Close()
-	if err != nil {
-		return fmt.Errorf("cannot establish the real location of %s: %w", display, err)
+	pc := canonicalOfMissing(filepath.Join(rootReal, filepath.FromSlash(path.Dir(rel))))
+	if pc == "" {
+		return fmt.Errorf("cannot establish the real location of %s", display)
 	}
 	snap, err := s.sourceSnapshot()
 	if err != nil {

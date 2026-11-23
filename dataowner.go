@@ -87,12 +87,21 @@ func dataOwnerKey(dir string) (string, error) {
 // returned release gives up this hold; the lock ends when the last hold in this
 // process is given up, or when the process ends.
 func acquireDataDir(dir string) (release func(), err error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
-	}
+	// A folder this process already holds was checked when it was first taken.
 	key, err := dataOwnerKey(dir)
 	if err != nil {
 		return nil, err
+	}
+	dataOwners.Lock()
+	_, held := dataOwners.held[key]
+	dataOwners.Unlock()
+	if !held {
+		if err := prepareDataFolder(dir); err != nil {
+			return nil, err
+		}
+		if key, err = dataOwnerKey(dir); err != nil { // it exists now, so links resolve
+			return nil, err
+		}
 	}
 	dataOwners.Lock()
 	defer dataOwners.Unlock()

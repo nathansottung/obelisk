@@ -575,6 +575,9 @@ func (a *App) writeVolumeInventoryTo(dest *DestRoot, vol *Volume) (string, error
 		Mirror    bool           `json:"mirror"`
 		Integrity *BuildVerified `json:"integrity,omitempty"` // built packages attest their effective integrity
 		Files     []invFile      `json:"files"`
+		// Private packages: the names are only in this encrypted manifest.
+		EncryptedList string `json:"encrypted_file_list,omitempty"`
+		FileCount     int    `json:"file_count"`
 	}
 	var archives []invArchive
 	var totalFiles int
@@ -591,6 +594,17 @@ func (a *App) writeVolumeInventoryTo(dest *DestRoot, vol *Volume) (string, error
 		if !on {
 			continue
 		}
+		name := ""
+		if coll := a.Store.Collection(c.CollectionID); coll != nil {
+			name = coll.Name
+		}
+		if c.PrivateManifest { // neither its names nor its file types go on the medium
+			totalFiles += c.FileCount
+			totalBytes += c.DataBytes
+			archives = append(archives, invArchive{ArchiveID: c.CollectionID, Archive: name, Chunk: c.Name, Integrity: c.BuildVerified,
+				Files: []invFile{}, EncryptedList: mediumManifestName(c), FileCount: c.FileCount})
+			continue
+		}
 		listed, err := a.Store.ChunkFiles(c.ID)
 		if err != nil {
 			return "", err
@@ -603,11 +617,7 @@ func (a *App) writeVolumeInventoryTo(dest *DestRoot, vol *Volume) (string, error
 		}
 		sort.Slice(files, func(i, j int) bool { return files[i].RelPath < files[j].RelPath })
 		totalFiles += len(files)
-		name := ""
-		if coll := a.Store.Collection(c.CollectionID); coll != nil {
-			name = coll.Name
-		}
-		archives = append(archives, invArchive{ArchiveID: c.CollectionID, Archive: name, Chunk: c.Name, Mirror: c.Mirror, Integrity: c.BuildVerified, Files: files})
+		archives = append(archives, invArchive{ArchiveID: c.CollectionID, Archive: name, Chunk: c.Name, Mirror: c.Mirror, Integrity: c.BuildVerified, Files: files, FileCount: len(files)})
 	}
 
 	census := a.censusFromTally(tally)
@@ -635,7 +645,10 @@ func (a *App) writeVolumeInventoryTo(dest *DestRoot, vol *Volume) (string, error
 		if ar.Mirror {
 			kind = "mirror"
 		}
-		b.WriteString(fmt.Sprintf("\n## %s — %s (%d file(s))\n\n", ar.Archive, kind, len(ar.Files)))
+		b.WriteString(fmt.Sprintf("\n## %s — %s (%d file(s))\n\n", ar.Archive, kind, ar.FileCount))
+		if ar.EncryptedList != "" {
+			b.WriteString(fmt.Sprintf("File names are encrypted in `%s`.\n", ar.EncryptedList))
+		}
 		for i, f := range ar.Files {
 			if i >= 2000 {
 				b.WriteString(fmt.Sprintf("_…and %d more (see catalog_snapshot.json)_\n", len(ar.Files)-i))
