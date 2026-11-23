@@ -44,7 +44,7 @@ Read the results for each package folder:
 | `NAME.tar` beside `NAME.tar.gpg` | **Plain copy of the contents.** The encryption does not protect this medium. |
 | `filelist.txt` | Plain file names. |
 | `.NAME.manifest.hidden` | Plain file names, left by an older burn. |
-| `catalog_snapshot.json` or `INVENTORY.md` in `OBELISK_SEAL`, `OBELISK_DOCK`, or an older `MNEMOSYNE_SEAL` or `MNEMOSYNE_DOCK` folder | Plain file names for every package on that medium, including private ones. |
+| `catalog_snapshot.json` or `INVENTORY.md` in `OBELISK_SEAL`, `OBELISK_DOCK`, or an older `MNEMOSYNE_SEAL` or `MNEMOSYNE_DOCK` folder | Open the file. If a private package lists file names, they are exposed. A package showing `encrypted_file_list`, or "File names are encrypted", is clean. |
 | `NAME.manifest.json`, `manifest-sha256.txt`, `tagmanifest-sha256.txt` or `bag-info.txt` beside `NAME.manifest.json.gpg` | Plain file names on a private medium. |
 | `NAME.manifest.json` or the BagIt files with no `.gpg` manifest | Normal for a package that was not private. Its file names are readable. |
 | `NAME.tar` with no `NAME.tar.gpg` | Normal for an unencrypted package. |
@@ -54,7 +54,7 @@ An older build may also have named an unencrypted payload `NAME.tar.gpg`. If `ta
 If a medium exposes something it should not, keep it physically secure. It may be your only copy, so do not erase or destroy it yet. Files on write-once media cannot be removed, and Obelisk cannot rebuild a package that is already written. Make a clean copy by hand instead:
 
 1. Confirm the payload is really encrypted. Run `tar -tf NAME.tar.gpg`, or `tar -tf NAME.seg001` for a spanned package. **If it lists any file, stop.** That payload is plain, so a copy of it would be too. It needs a new encrypted package made from the original files.
-2. Copy only these files to a new medium: `NAME.tar.gpg` (or every tape's `NAME.segNNN`), every `NAME.tar.gpg*.par2` file (on a spanned set, these are on the last tape), and `RESTORE.txt`.
+2. Copy only these files to a new medium: `NAME.tar.gpg` (or every tape's `NAME.segNNN`), every `NAME.tar.gpg*.par2` file (on a spanned set, these are on the last tape), and `RESTORE.txt`. A spanned package may need a new set of media. Put `RESTORE.txt` and the manifest on each one.
 3. Copy the manifest. For a private package, copy `NAME.manifest.json.gpg`. For a package that was not private, `NAME.manifest.json` shows file names but holds the per-file hashes. Keep it unless the names must be hidden. Without it, the list is still inside the encrypted tar.
 4. On the new medium, run `par2 verify NAME.tar.gpg.par2`. For a spanned package, first rejoin the segments in a temporary folder, as `RESTORE.txt` shows. On Windows, run its `copy /b` line in `cmd.exe`, not PowerShell.
 5. Test the passphrase and the contents in `cmd.exe` or a Unix shell, without writing the plain tar to disk: `gpg -d NAME.tar.gpg | tar -tf -`

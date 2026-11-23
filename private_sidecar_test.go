@@ -48,3 +48,44 @@ func TestSealAndDock_KeepPrivateFileNamesOffTheMedium(t *testing.T) {
 		}
 	}
 }
+
+// A rebuild after private mode is turned off must not expose a copy already written
+// as private: the next seal of that medium would list its names.
+func TestRebuild_StaysPrivateWhileAPrivateCopyExists(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	c, _ := privateChunk(t, app, "PRIV-REBUILD", false)
+	if _, err := app.WriteChunk(c.ID, t.TempDir(), 0, 0, 0, 0, noProg); err != nil {
+		t.Fatal(err)
+	}
+	c = app.Store.Chunk(c.ID)
+	c.Status = "FAILED"
+	app.Store.UpdateChunk(c)
+	if _, err := app.SaveConfig(map[string]any{"private_media": false}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.BuildChunk(c.ID, noProg); err != nil {
+		t.Fatal(err)
+	}
+	c = app.Store.Chunk(c.ID)
+	if !c.PrivateManifest {
+		t.Fatal("the rebuild cleared the private flag of a package with a private copy")
+	}
+	mustExist(t, filepath.Join(c.StagedDir, c.Name+".manifest.json.gpg"))
+}
+
+// With no copy written, a rebuild follows the current setting.
+func TestRebuild_FollowsTheSettingWhenNoCopyExists(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	c, _ := privateChunk(t, app, "PRIV-UNWRITTEN", false)
+	c.Status = "FAILED"
+	app.Store.UpdateChunk(c)
+	if _, err := app.SaveConfig(map[string]any{"private_media": false}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.BuildChunk(c.ID, noProg); err != nil {
+		t.Fatal(err)
+	}
+	if app.Store.Chunk(c.ID).PrivateManifest {
+		t.Fatal("a package with no private copy stayed private after the setting was turned off")
+	}
+}

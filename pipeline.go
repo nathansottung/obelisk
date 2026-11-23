@@ -1301,7 +1301,9 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	// Private media: the medium carries an ENCRYPTED manifest so filenames don't
 	// leak off a lost tape. The staged plaintext manifest stays for local use;
 	// medium-write paths skip it and ship the .gpg instead.
-	c.PrivateManifest = cfg.PrivateMedia && c.Encrypted
+	// A package with a copy already written as private stays private, whatever the
+	// setting is now: seal and dock inventories decide from this flag.
+	c.PrivateManifest = c.Encrypted && (cfg.PrivateMedia || (c.PrivateManifest && hasWrittenCopy(c)))
 	if err := writeManifest(work, c, listed, fpr); err != nil {
 		return fail(err)
 	}
@@ -1509,6 +1511,22 @@ func segJoinList(c *Chunk) string {
 // ships (the encrypted one on private media) and RESTORE.txt.
 func requiredSidecars(c *Chunk) []string {
 	return []string{mediumManifestName(c), "RESTORE.txt"}
+}
+
+// hasWrittenCopy reports whether any medium may still hold this package, whole or
+// as a spanned segment.
+func hasWrittenCopy(c *Chunk) bool {
+	for _, cp := range c.Copies {
+		if !cp.Superseded {
+			return true
+		}
+	}
+	for _, sg := range c.Segments {
+		if sg.VolumeID != 0 || sg.Dest != "" || sg.Status == "WRITTEN" || sg.Status == "VERIFIED" {
+			return true
+		}
+	}
+	return false
 }
 
 // mediumManifestName is the manifest file this package's media carry.
