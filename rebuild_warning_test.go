@@ -354,6 +354,13 @@ globalThis.__fetch=async(u,o)=>{
   const where=searchCopies({chunk:'P',copies:[],retired_copies:[{volume_label:'OLD-1',path:'E:/P'}]});
   ck(where.includes('OLD-1')&&where.includes('hand')&&!where.includes('no copies recorded'),'search must show where a retired copy is; got '+where);
   if(__fail.length){console.error('FAIL\n - '+__fail.join('\n - '));process.exit(1)}
+  const camp=(skipped,passed)=>({status:'COMPLETED',kind:'verify',result:{checked:3,ok:passed,passed,skipped,results:[{chunk:'BUSY-PKG',ok:false,skipped:'being built'}]}});
+  ck(jobStampText(camp(1,2))==='COMPLETED','a campaign whose only shortfall is a skipped package is not CHECK FAILED; got '+jobStampText(camp(1,2)));
+  ck(jobStamp(camp(1,2))!=='VERIFIED','a campaign with a skipped package is not VERIFIED');
+  ck(jobStampText(camp(1,1))==='CHECK FAILED','a real failure beside a skip is still CHECK FAILED; got '+jobStampText(camp(1,1)));
+  ck(jobSkippedNote(camp(1,2)).includes('BUSY-PKG')&&jobSkippedNote(camp(1,2)).includes('again'),'the job must name the skipped package and say to verify again');
+  ck(jobArtifact(camp(1,2)).includes('BUSY-PKG'),'the Jobs row must show the skipped package');
+  if(__fail.length){console.error('FAIL: '+__fail.join(' | '));process.exit(1)}
   console.log('PASS');process.exit(0);
 })();
 `

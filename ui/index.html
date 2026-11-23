@@ -3085,7 +3085,13 @@ function perfStripHTML(s){
 }
 // Show-the-artifact backstop on the Jobs row: a finished job that produced an
 // artifact offers to show/open it (kit summary, mirror sidecar, drift, …).
+// A verify campaign leaves out a package that a build or burn holds; it says which.
+function jobSkippedNote(j){const r=(j&&j.result)||{};
+  if(typeof r.skipped!=='number'||!r.skipped||typeof r.checked!=='number')return '';
+  const names=(r.results||[]).filter(x=>x.skipped).map(x=>esc(x.chunk)).join(', ');
+  return ` <span class="dim" style="font-size:10.5px">Not checked, busy in another job: ${names}. Verify again when that job ends.</span>`}
 function jobArtifact(j){if(j.status!=='COMPLETED'||!j.result)return '';const r=j.result;
+  if(jobSkippedNote(j))return jobSkippedNote(j);
   if(j.kind==='recoverykit'&&r.output_dir)return ` <button class="btn ghost" style="font-size:11px;padding:1px 8px" onclick='showKitResult(${JSON.stringify(r)})'>Show kit</button>`;
   if(j.kind==='mirror'&&r.sidecar!=null)return ` <span class="dim" style="font-size:10.5px">${r.mirrored||0} files${r.failed?' · '+r.failed+' failed':''}${r.sidecar?' · sidecar written':''}</span>`;
   if(j.kind==='reconcile'&&r.collection_id)return ` <button class="btn ghost" style="font-size:11px;padding:1px 8px" onclick="vDrift(${r.collection_id},'')">View drift (${r.changes||0}${r.unknown?' · '+r.unknown+' unknown':''})</button>`;
@@ -3183,7 +3189,9 @@ function jobCheckOutcome(j){const r=(j&&j.result)||{};
   if(typeof r.all_ok==='boolean')return !r.all_ok?'fail':r.advisory?null:'pass';
   if(typeof r.checked==='number'&&typeof r.ok==='number'){
     const read=typeof r.passed==='number'?r.passed:r.ok;
-    if(read<r.checked)return 'fail';            // a check failed
+    const skipped=typeof r.skipped==='number'?r.skipped:0; // not read: neither a pass nor a failure
+    if(read+skipped<r.checked)return 'fail';    // a check failed
+    if(skipped)return null;
     return r.checked>0&&r.ok===r.checked?'pass':null; // read fine, but not every copy credited
   }
   return null;}
@@ -3277,7 +3285,7 @@ async function vJobDetail(id){
         <div><span class="stamp ${jobStamp(j)}">${esc(jobStampText(j))}</span> <span class="dim" style="font-size:12px;margin-left:6px">${esc(j.kind)}</span></div>
         <button class="btn ghost" style="font-size:11px;padding:2px 12px" onclick="loc('jobs')">← All jobs</button></div>
       <div class="dim" style="font-size:12px;margin-top:8px">Started ${esc((j.created_at||'').slice(0,19).replace('T',' '))} UTC${dur?` · ${running?'running for':'took'} ${dur}`:''}</div>
-      ${jobRecordingNote(j)}
+      ${jobSkippedNote(j)}${jobRecordingNote(j)}
       ${jobWrites(j,cfg)}
       ${running?`<div style="margin-top:10px"><div class="bar"><div style="width:${Math.round((j.progress||0)*100)}%"></div></div>${jobTelemetry(j)}</div>
       <div id="perfstrip" class="perfstrip" style="margin-top:12px;margin-bottom:0"></div>`:''}`;
