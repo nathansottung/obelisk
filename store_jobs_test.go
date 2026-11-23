@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -714,7 +715,7 @@ func TestJobs_ReadOnlyDatabaseKeepsJobsInJobsJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := d.Write(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`UPDATE meta SET value='2' WHERE key='schema_version'`)
+		_, err := tx.Exec(`UPDATE meta SET value=? WHERE key='schema_version'`, strconv.Itoa(catalogDBSchemaVersion+1))
 		return err
 	}); err != nil {
 		t.Fatal(err)

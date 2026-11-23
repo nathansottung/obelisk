@@ -350,6 +350,14 @@ func (c *Chunk) spanSets() [][]Segment {
 	return sets
 }
 
+// withSegments is a private view of the package with the given tape layout. The
+// catalog's record is not changed.
+func (c *Chunk) withSegments(segs []Segment) *Chunk {
+	view := *c
+	view.Segments = segs
+	return &view
+}
+
 // CopyKeyRefs is every key any copy on record needs, sorted.
 func (s *Store) CopyKeyRefs() []string {
 	s.mu.Lock()

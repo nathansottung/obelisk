@@ -198,12 +198,11 @@ func (a *App) RefillStaging(id, volumeID int, sourceDir string, progress func(fl
 	}
 	defer os.RemoveAll(stage)
 
-	view := *c // the package as this copy recorded it
-	view.Segments = cp.Segments
+	view := c.withSegments(cp.Segments) // the package as this copy recorded it
 	progress(0.05, "reading the copy")
 	var payload string
 	if len(cp.Segments) > 0 {
-		if payload, _, err = rejoinSegments(src, stage, &view, progress); err != nil {
+		if payload, _, err = rejoinSegments(src, stage, view, progress); err != nil {
 			return nil, err
 		}
 		if err := copyNamedFrom(src, stage, vals.Sidecars); err != nil {

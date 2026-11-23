@@ -381,17 +381,14 @@ func spanViewFor(c *Chunk, sourceDir string) *Chunk {
 	if len(segs) == 0 {
 		segs, _ = filepath.Glob(filepath.Join(sourceDir, "*", c.Name+".seg*"))
 	}
-	view := *c
-	if dataSegmentCount(c.Segments) == len(segs) {
-		return &view
-	}
-	for i := range c.Copies {
-		if cs := c.Copies[i].Segments; len(cs) > 0 && dataSegmentCount(cs) == len(segs) {
-			view.Segments = cs
-			break
+	if dataSegmentCount(c.Segments) != len(segs) {
+		for i := range c.Copies {
+			if cs := c.Copies[i].Segments; len(cs) > 0 && dataSegmentCount(cs) == len(segs) {
+				return c.withSegments(cs)
+			}
 		}
 	}
-	return &view
+	return c.withSegments(c.Segments)
 }
 
 // rejoinSegments concatenates <chunk>.segNNN files found in sourceDir into
