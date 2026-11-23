@@ -16,47 +16,125 @@ import (
 	"testing"
 )
 
-// A backup made before this schema still restores, migrated, and its old copies work.
-func TestFrozenBackup_V1DatabaseRestores(t *testing.T) {
-	tools := nativeTools(t)
-	t.Setenv(catalogEngineEnv, "sqlite")
+// frozenBackupHome is a working copy of a frozen app backup and its media, with what
+// the backup's catalog recorded, read before anything opens it.
+func frozenBackupHome(t *testing.T, fixture string) (*frozenHome, string) {
+	t.Helper()
 	root := t.TempDir()
-	copyTree(t, filepath.Join(frozenRoot, "frozen", "catalog-v1-appbackup"), root)
+	copyTree(t, filepath.Join(frozenRoot, "frozen", fixture), root)
 	tars, _ := filepath.Glob(filepath.Join(root, "obelisk-appbackup-*.tar"))
 	if len(tars) != 1 {
 		t.Fatalf("backups in the fixture: %v", tars)
 	}
-	member := filepath.Join(t.TempDir(), catalogDBName)
-	extractTarMember(t, tars[0], "catalog.db", member)
-	h := &frozenHome{root: root, want: frozenDBValues(t, member)}
+	h := &frozenHome{root: root}
+	if strings.Contains(fixture, "v1") {
+		member := filepath.Join(t.TempDir(), catalogDBName)
+		extractTarMember(t, tars[0], "catalog.db", member)
+		h.want = frozenDBValues(t, member)
+	} else {
+		member := filepath.Join(t.TempDir(), "catalog.json")
+		extractTarMember(t, tars[0], "catalog.json", member)
+		h.want = frozenJSONValues(t, member)
+	}
+	if len(h.want) != 2 {
+		t.Fatalf("the backup holds %d packages, want 2", len(h.want))
+	}
 	b, err := os.ReadFile(filepath.Join(root, "restored.sha256"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	h.restored = strings.TrimSpace(string(b))
+	return h, tars[0]
+}
 
-	app, _ := newTestApp(t, tools)
-	h.data = app.DataDir
-	if _, err := app.RestoreAppBackup(tars[0]); err != nil {
-		t.Fatalf("restoring a backup from before the upgrade: %v", err)
+// Real app backups made before this schema restore on every engine that can hold
+// them. Every copy inherits its values, and old copies verify and restore, also
+// after a rebuild and a reopen.
+func TestFrozenBackups_RestoreOnBothEngines(t *testing.T) {
+	tools := nativeTools(t)
+	for _, tc := range []struct{ name, fixture, engine string }{
+		{"catalog.json backup on the JSON engine", "catalog-v8-appbackup", "json"},
+		{"catalog.json backup on the database engine", "catalog-v8-appbackup", "sqlite"},
+		{"catalog.db backup on the database engine", "catalog-v1-appbackup", "sqlite"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(catalogEngineEnv, tc.engine)
+			h, backup := frozenBackupHome(t, tc.fixture)
+			app, _ := newTestApp(t, tools)
+			h.data = app.DataDir
+			if _, err := app.RestoreAppBackup(backup); err != nil {
+				t.Fatalf("restoring a backup from before the upgrade: %v", err)
+			}
+			if got := app.Store.UsesDatabase(); got != (tc.engine == "sqlite") {
+				t.Fatalf("restored onto the wrong engine: database=%v", got)
+			}
+			ks1, ks2 := filepath.Join(t.TempDir(), "keystore1.json"), filepath.Join(t.TempDir(), "keystore2.json")
+			key, err := os.ReadFile(filepath.Join(h.root, "keystore.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, p := range []string{ks1, ks2} {
+				if err := os.WriteFile(p, key, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := app.SaveConfig(map[string]any{"staging_dir": t.TempDir(), "keystore_paths": []string{ks1, ks2},
+				"tools": tools, "private_media": true}); err != nil {
+				t.Fatal(err)
+			}
+			h.relocate(app)
+			h.checkInherited(t, app)
+			h.checkOldCopies(t, app)
+
+			for name, want := range h.want {
+				c := frozenChunk(t, app, name)
+				c.Status = "FAILED"
+				app.Store.UpdateChunk(c)
+				if err := app.BuildChunk(c.ID, noProg); err != nil {
+					t.Fatalf("rebuild %s: %v", name, err)
+				}
+				c = frozenChunk(t, app, name)
+				if c.KeyRef == want.KeyRef || c.Copies[0].KeyRef != want.KeyRef || c.Copies[0].PayloadHash != want.EncHash {
+					t.Fatalf("%s: the rebuild did not leave the old copy on its own values", name)
+				}
+			}
+			h.checkOldCopies(t, app)
+
+			if err := app.Store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			store, err := openTestStore(t, h.data)
+			if err != nil {
+				t.Fatalf("reopen: %v", err)
+			}
+			app.Store = store
+			h.checkOldCopies(t, app)
+		})
 	}
-	ks1, ks2 := filepath.Join(t.TempDir(), "keystore1.json"), filepath.Join(t.TempDir(), "keystore2.json")
-	key, err := os.ReadFile(filepath.Join(root, "keystore.json"))
+}
+
+// The JSON engine cannot hold a catalog.db backup: it says so and changes nothing.
+func TestFrozenBackups_DatabaseBackupIsRefusedOnTheJSONEngine(t *testing.T) {
+	t.Setenv(catalogEngineEnv, "json")
+	_, backup := frozenBackupHome(t, "catalog-v1-appbackup")
+	app, _ := newTestApp(t, nativeTools(t))
+	path := filepath.Join(app.DataDir, "catalog.json")
+	app.Store.Log("test", "a record that must survive a refused restore")
+	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{ks1, ks2} {
-		if err := os.WriteFile(p, key, 0o600); err != nil {
-			t.Fatal(err)
-		}
+	_, err = app.RestoreAppBackup(backup)
+	if err == nil || !strings.Contains(err.Error(), "nothing was changed") || !strings.Contains(err.Error(), "OBELISK_CATALOG_ENGINE=sqlite") {
+		t.Fatalf("got %v", err)
 	}
-	if _, err := app.SaveConfig(map[string]any{"staging_dir": t.TempDir(), "keystore_paths": []string{ks1, ks2},
-		"tools": tools, "private_media": true}); err != nil {
+	after, err := os.ReadFile(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	h.relocate(app)
-	h.checkInherited(t, app)
-	h.checkOldCopies(t, app)
+	if string(before) != string(after) {
+		t.Fatal("a refused restore changed the catalog")
+	}
 }
 
 func extractTarMember(t *testing.T, tarPath, name, to string) {

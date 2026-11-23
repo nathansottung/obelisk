@@ -1,6 +1,6 @@
-# Frozen catalog fixtures
+# Frozen catalog and app-backup fixtures
 
-These files are real catalogs of older formats, written by the code of that time.
+These files are real catalogs and app backups of older formats, written by the code of that time.
 **Never edit or rebuild them.** A schema change adds a new frozen fixture made by the
 old code. `CHECKSUMS.sha256` lists every file but this one, and `TestFrozenFixtures_BytesUnchanged`
 fails if one changes, goes missing, or appears unlisted.
@@ -11,6 +11,7 @@ fails if one changes, goes missing, or appears unlisted.
 | `catalog-v8-packages/` | `catalog.json` schema 8 | One single-medium and one spanned encrypted package, with their media |
 | `catalog-v1-db/` | `catalog.db` schema 1 | The same kind of packages on the database engine |
 | `catalog-v1-appbackup/` | App backup holding `catalog.db` schema 1 | A real backup, with the media of its packages |
+| `catalog-v8-appbackup/` | App backup holding `catalog.json` schema 8 | A real backup from the JSON engine, with the media of its packages |
 | `catalog-v8-upgrade-folder/` | `catalog.json` schema 8 | The data folder the upgrade tests start from |
 
 The generated fixtures were made by the code at commit `c9e5cfa`, the last main
