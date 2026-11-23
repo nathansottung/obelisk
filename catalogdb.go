@@ -53,9 +53,9 @@ const catalogDBFormat = "obelisk-catalog"
 
 // catalogDBSchemaVersion is the database schema this build understands. The
 // contract is the one catalog.json keeps (see currentSchemaVersion): equal opens
-// normally, newer opens read-only, and an older one will be migrated in place once
-// a later schema exists.
-const catalogDBSchemaVersion = 1
+// normally, newer opens read-only, and an older one is migrated in place, in one
+// transaction, after a backup (catalogdb_copy_values.go).
+const catalogDBSchemaVersion = 2
 
 // sqliteHeader is the first 16 bytes of every SQLite database file.
 const sqliteHeader = "SQLite format 3\x00"
@@ -196,6 +196,10 @@ func openCatalogDB(path string, create bool) (*catalogDB, error) {
 	if err := r.Ping(); err != nil {
 		d.Close()
 		return nil, catalogDBUnreadable(path, err)
+	}
+	if err := d.migrateIfOlder(); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("upgrading the catalog database %s: %w", path, err)
 	}
 	return d, nil
 }
@@ -347,6 +351,9 @@ func (d *catalogDB) createSchema() error {
 			return err
 		}
 		if _, err := tx.Exec(catalogDBSchemaV1); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(catalogDBSchemaV2); err != nil {
 			return err
 		}
 		for _, d := range catalogDBDocTables {

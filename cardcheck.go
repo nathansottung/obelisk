@@ -252,42 +252,45 @@ func (a *App) cardCopiesOnce(dev cardDevice) (*cardCopyIndex, error) {
 		}
 		if c.Spanned {
 			// One logical copy spread over its segment media: it counts only when every
-			// segment is verified and none is on the card.
-			var names, keys []string
-			var ids []int
-			reason := ""
-			done := len(c.Segments) > 0
-			for _, sg := range c.Segments {
-				if sg.Status != "VERIFIED" {
-					done = false
-				}
-				v := vols[sg.VolumeID]
-				if v == nil {
-					if sg.VolumeID == 0 {
-						reason = c.Name + ": a segment has no drive recorded"
-					} else {
-						reason = c.Name + ": a segment's drive is no longer registered"
+			// segment is verified and none is on the card. A rebuild leaves older sets
+			// standing, each its own copy.
+			for _, set := range c.spanSets() {
+				var names, keys []string
+				var ids []int
+				reason := ""
+				done := len(set) > 0
+				for _, sg := range set {
+					if sg.Status != "VERIFIED" {
+						done = false
 					}
-					continue
+					v := vols[sg.VolumeID]
+					if v == nil {
+						if sg.VolumeID == 0 {
+							reason = c.Name + ": a segment has no drive recorded"
+						} else {
+							reason = c.Name + ": a segment's drive is no longer registered"
+						}
+						continue
+					}
+					if onCard, known := dev.placeOf(v, sg.Dest); onCard {
+						reason = label(v) + ": a segment is on this card"
+					} else if !known && reason == "" {
+						reason = label(v) + ": could not tell its drive apart from this card"
+					}
+					names = append(names, label(v))
+					keys = append(keys, devKey(v))
+					ids = append(ids, v.ID)
 				}
-				if onCard, known := dev.placeOf(v, sg.Dest); onCard {
-					reason = label(v) + ": a segment is on this card"
-				} else if !known && reason == "" {
-					reason = label(v) + ": could not tell its drive apart from this card"
+				switch {
+				case reason != "":
+					pkg.notCounted = append(pkg.notCounted, reason)
+				case !done || c.VerifiedAt == nil:
+					pkg.notCounted = append(pkg.notCounted, c.Name+": not every segment is verified")
+				default:
+					sort.Strings(keys)
+					pkg.counted["span:"+strings.Join(keys, "+")] = CardCopy{Where: strings.Join(names, " + "),
+						Package: c.Name, Kind: kind, LastVerifiedAt: *c.VerifiedAt, vols: ids, devs: keys}
 				}
-				names = append(names, label(v))
-				keys = append(keys, devKey(v))
-				ids = append(ids, v.ID)
-			}
-			switch {
-			case reason != "":
-				pkg.notCounted = append(pkg.notCounted, reason)
-			case !done || c.VerifiedAt == nil:
-				pkg.notCounted = append(pkg.notCounted, c.Name+": not every segment is verified")
-			default:
-				sort.Strings(keys)
-				pkg.counted["span:"+strings.Join(keys, "+")] = CardCopy{Where: strings.Join(names, " + "),
-					Package: c.Name, Kind: kind, LastVerifiedAt: *c.VerifiedAt, vols: ids, devs: keys}
 			}
 		} else {
 			for _, cp := range c.Copies {

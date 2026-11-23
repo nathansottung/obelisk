@@ -3,7 +3,6 @@
 package main
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,7 +51,7 @@ func TestSealAndDock_KeepPrivateFileNamesOffTheMedium(t *testing.T) {
 
 // A rebuild over a copy needs the warning accepted. Afterward the old copy no longer
 // verifies in the app, and it still restores by hand with the key that was kept.
-func TestRebuild_WarnsAndTheOldCopyStillRestoresByHand(t *testing.T) {
+func TestRebuild_OldCopyStillRestoresByHand(t *testing.T) {
 	tools := nativeTools(t)
 	app, _ := newTestApp(t, tools)
 	c, want := privateChunk(t, app, "PRIV-REBUILD", false)
@@ -61,29 +60,15 @@ func TestRebuild_WarnsAndTheOldCopyStillRestoresByHand(t *testing.T) {
 		t.Fatal(err)
 	}
 	c = app.Store.Chunk(c.ID)
-	key, hash, staged := c.KeyRef, c.EncHash, c.StagedDir
+	key, hash := c.KeyRef, c.EncHash
 	c.Status = "FAILED"
 	app.Store.UpdateChunk(c)
-	var warning *RebuildWarning
-	if err := app.BuildChunk(c.ID, noProg); !errors.As(err, &warning) {
-		t.Fatalf("no warning before the rebuild: %v", err)
-	}
-	c = app.Store.Chunk(c.ID)
-	if c.KeyRef != key || c.EncHash != hash || c.StagedDir != staged {
-		t.Fatal("an unaccepted rebuild changed the package's key, hash or staging")
-	}
-	mustExist(t, filepath.Join(staged, c.Name+".tar.gpg"))
-	if err := app.BuildChunkOverCopies(c.ID, noProg); err != nil {
-		t.Fatalf("the accepted rebuild: %v", err)
+	if err := app.BuildChunk(c.ID, noProg); err != nil {
+		t.Fatalf("the rebuild: %v", err)
 	}
 	c = app.Store.Chunk(c.ID)
 	if c.KeyRef == key || c.EncHash == hash {
 		t.Fatal("the rebuild did not make a new key and hash")
-	}
-	if r, err := app.VerifyChunk(c.ID, medium); err == nil {
-		if ok, _ := r["verify_ok"].(bool); ok {
-			t.Fatal("the old copy still verifies, so the warning is wrong")
-		}
 	}
 	pass, err := app.Passphrase(key)
 	if err != nil {
@@ -156,14 +141,7 @@ func TestRebuild_SpannedPackageStaysPrivateWithNoCopyRecorded(t *testing.T) {
 		c = app.Store.Chunk(c.ID)
 		c.Status, c.Copies = "FAILED", nil
 		app.Store.UpdateChunk(c)
-		var warning *RebuildWarning
-		if err := app.BuildChunk(c.ID, noProg); i == 0 && !errors.As(err, &warning) {
-			t.Fatalf("no warning for a written tape: %v", err)
-		} else if i == 0 {
-			if err := app.BuildChunkOverCopies(c.ID, noProg); err != nil {
-				t.Fatal(err)
-			}
-		} else if err != nil {
+		if err := app.BuildChunk(c.ID, noProg); err != nil {
 			t.Fatal(err)
 		}
 		if !app.Store.Chunk(c.ID).PrivateManifest {
@@ -188,11 +166,7 @@ func TestRebuild_StaysPrivateWithOnlyASupersededCopy(t *testing.T) {
 	if _, err := app.SaveConfig(map[string]any{"private_media": false}); err != nil {
 		t.Fatal(err)
 	}
-	var warning *RebuildWarning
-	if err := app.BuildChunk(c.ID, noProg); !errors.As(err, &warning) {
-		t.Fatalf("no warning for a superseded copy: %v", err)
-	}
-	if err := app.BuildChunkOverCopies(c.ID, noProg); err != nil {
+	if err := app.BuildChunk(c.ID, noProg); err != nil {
 		t.Fatal(err)
 	}
 	if !app.Store.Chunk(c.ID).PrivateManifest {

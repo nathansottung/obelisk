@@ -34,19 +34,31 @@ func (a *App) ReadMediumManifest(chunkID int, mountPath string) (map[string]any,
 		if _, err := os.Stat(p); err != nil {
 			continue
 		}
-		pass, perr := a.Passphrase(c.KeyRef)
-		if perr != nil {
-			return nil, fmt.Errorf("found an ENCRYPTED manifest (%s) but no reachable keystore holds key %s. "+
-				"If the keystores are also gone, decrypt it by hand as RESTORE.txt on the medium says: "+
-				"gpg -d %s", filepath.Base(p), c.KeyRef, filepath.Base(p))
-		}
 		gpgBin, err := a.tool("gpg")
 		if err != nil {
 			return nil, err
 		}
-		plain, err := gpgDecryptToMem(gpgBin, pass, p)
-		if err != nil {
-			return nil, fmt.Errorf("decrypt failed: %w", err)
+		// This medium may hold an older build: each key a copy recorded is tried.
+		var plain []byte
+		var decErr error
+		reached := false
+		for _, ref := range c.keyRefs() {
+			pass, perr := a.Passphrase(ref)
+			if perr != nil {
+				continue
+			}
+			reached = true
+			if plain, decErr = gpgDecryptToMem(gpgBin, pass, p); decErr == nil {
+				break
+			}
+		}
+		if !reached {
+			return nil, fmt.Errorf("found an ENCRYPTED manifest (%s) but no reachable keystore holds key %s. "+
+				"If the keystores are also gone, decrypt it by hand as RESTORE.txt on the medium says: "+
+				"gpg -d %s", filepath.Base(p), strings.Join(c.keyRefs(), " or "), filepath.Base(p))
+		}
+		if decErr != nil {
+			return nil, fmt.Errorf("decrypt failed: %w", decErr)
 		}
 		var m map[string]any
 		if err := json.Unmarshal(plain, &m); err != nil {

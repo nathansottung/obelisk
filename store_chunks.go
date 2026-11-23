@@ -12,7 +12,13 @@ package main
 // and nothing changes a package's copies, segments or verify events except
 // through a method; TestPackages_OnlyTheStoreTouchesCatalogRecords checks both.
 
-import "fmt"
+import (
+	"fmt"
+	"reflect"
+	"sort"
+	"strings"
+	"time"
+)
 
 // The two listings of a package.
 const (
@@ -270,61 +276,256 @@ func (s *Store) UpdateSegment(c *Chunk, idx int, change func(*Segment)) error {
 	return s.save()
 }
 
-// rebuildWarning is the warning a build of this package needs accepted, or nil. It
-// counts every copy on record, including superseded and failed ones, and span
-// segments, since any of them may still be on a medium.
-func (s *Store) rebuildWarning(id int) *RebuildWarning {
-	live := s.Chunk(id)
-	if live == nil {
+// CopyValues is what one copy on a medium was written with.
+type CopyValues struct {
+	KeyRef      string
+	PayloadHash string
+	TarHash     string
+	Sidecars    map[string]string
+}
+
+// valuesOf is the values of cp: its own, or the package's for a copy that has none
+// recorded.
+func (c *Chunk) valuesOf(cp *Copy) CopyValues {
+	if cp.PayloadHash == "" && cp.KeyRef == "" {
+		return CopyValues{KeyRef: c.KeyRef, PayloadHash: c.EncHash, TarHash: c.TarHash, Sidecars: c.Sidecars}
+	}
+	return CopyValues{KeyRef: cp.KeyRef, PayloadHash: cp.PayloadHash, TarHash: cp.TarHash, Sidecars: cp.Sidecars}
+}
+
+// stampCopy records the package's current values on cp.
+func (c *Chunk) stampCopy(cp *Copy) {
+	cp.KeyRef, cp.PayloadHash, cp.TarHash = c.KeyRef, c.EncHash, c.TarHash
+	cp.Sidecars = cloneSidecars(c.Sidecars)
+}
+
+// stampIfBare records the package's values on a copy that has none yet.
+func (c *Chunk) stampIfBare(cp *Copy) {
+	if cp.PayloadHash == "" && cp.KeyRef == "" {
+		c.stampCopy(cp)
+	}
+}
+
+func cloneSidecars(m map[string]string) map[string]string {
+	if m == nil {
 		return nil
 	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+// keyRefs is every key a copy of this package or its current build needs, the
+// current build's first.
+func (c *Chunk) keyRefs() []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(ref string) {
+		if ref != "" && !seen[ref] {
+			seen[ref] = true
+			out = append(out, ref)
+		}
+	}
+	add(c.KeyRef)
+	for i := range c.Copies {
+		add(c.valuesOf(&c.Copies[i]).KeyRef)
+	}
+	return out
+}
+
+// spanSets is each tape set this package has on record as a whole verified copy,
+// plus its current segments when no copy records them.
+func (c *Chunk) spanSets() [][]Segment {
+	var sets [][]Segment
+	for i := range c.Copies {
+		if cp := &c.Copies[i]; !cp.Superseded && len(cp.Segments) > 0 {
+			sets = append(sets, cp.Segments)
+		}
+	}
+	if len(sets) == 0 && len(c.Segments) > 0 {
+		sets = append(sets, c.Segments)
+	}
+	return sets
+}
+
+// CopyKeyRefs is every key any copy on record needs, sorted.
+func (s *Store) CopyKeyRefs() []string {
 	s.mu.Lock()
-	c := *live
-	c.Copies = append([]Copy(nil), live.Copies...)
-	c.Segments = append([]Segment(nil), live.Segments...)
-	s.mu.Unlock()
-	// The staging check reads a drive, so it runs outside the catalog lock.
-	if !chunkCanBuild(&c, c.StagedDir != "" && payloadPathIn(c.StagedDir, &c) != "") {
-		return nil
-	}
-	n := len(c.Copies)
-	if n == 0 {
-		for _, sg := range c.Segments {
-			if sg.VolumeID != 0 || sg.Dest != "" || sg.Status == "WRITTEN" || sg.Status == "VERIFIED" {
-				n++
+	defer s.mu.Unlock()
+	seen := map[string]bool{}
+	for _, c := range s.c.Chunks {
+		for i := range c.Copies {
+			if ref := c.valuesOf(&c.Copies[i]).KeyRef; ref != "" {
+				seen[ref] = true
 			}
 		}
 	}
-	if n == 0 {
-		return nil
+	out := make([]string, 0, len(seen))
+	for ref := range seen {
+		out = append(out, ref)
 	}
-	return &RebuildWarning{Package: c.Name, Copies: n, Encrypted: c.Encrypted}
+	sort.Strings(out)
+	return out
 }
 
-// retireCopies is the end of an accepted rebuild: nothing on media matches the new
-// key and hash, so no old copy counts as protecting it. Each stays on record, so it
-// can still be found and restored by hand.
-// The returned undo reverses only what this call changed.
-func (s *Store) retireCopies(c *Chunk) (undo func()) {
+// pinCopyValues writes the package's current values onto any copy without its own,
+// before a build changes them.
+func (s *Store) pinCopyValues(c *Chunk) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var retired []int
+	changed := false
 	for i := range c.Copies {
-		if !c.Copies[i].Superseded {
-			c.Copies[i].Superseded = true
-			retired = append(retired, i)
+		if cp := &c.Copies[i]; cp.PayloadHash == "" && cp.KeyRef == "" && (c.EncHash != "" || c.KeyRef != "") {
+			c.stampCopy(cp)
+			changed = true
 		}
 	}
-	verifyOK, dest := c.VerifyOK, c.WrittenDest
-	c.VerifyOK, c.WrittenDest = nil, ""
-	return func() {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		for _, i := range retired {
-			c.Copies[i].Superseded = false
-		}
-		c.VerifyOK, c.WrittenDest = verifyOK, dest
+	if changed {
+		_ = s.save()
 	}
+}
+
+// copyValuesAt is the values of the copy a check at at reads, if one fits.
+func (s *Store) copyValuesAt(c *Chunk, at CopyAt) (CopyValues, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fit, _ := s.copiesReadLocked(c, at)
+	if len(fit) == 0 {
+		return CopyValues{}, false
+	}
+	return c.valuesOf(&c.Copies[fit[0]]), true
+}
+
+// NoteCopyRepairable records whether the damage a full check just found on the copy
+// at at can be repaired by its par2 set.
+func (s *Store) NoteCopyRepairable(c *Chunk, at CopyAt, repairable bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fit, _ := s.copiesReadLocked(c, at)
+	for _, i := range fit {
+		c.Copies[i].Repairable = repairable
+	}
+	if len(fit) > 0 {
+		_ = s.save()
+	}
+}
+
+// RetireOverwrittenCopy marks as history a current copy at path on the volume whose
+// bytes a write has just replaced with different ones. A copy of the same bytes is
+// still good and is left alone.
+func (s *Store) RetireOverwrittenCopy(c *Chunk, volumeID int, path string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range c.Copies {
+		cp := &c.Copies[i]
+		if cp.VolumeID == volumeID && !cp.Superseded && normPath(cp.Path) == normPath(path) &&
+			c.valuesOf(cp).PayloadHash != c.EncHash {
+			c.stampIfBare(cp)
+			cp.Superseded = true
+			_ = s.save()
+			return
+		}
+	}
+}
+
+// SupersedeCopyAt keeps the current copy at path on the volume as history, for a
+// re-write that has finished and is about to record its replacement.
+func (s *Store) SupersedeCopyAt(c *Chunk, volumeID int, path string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range c.Copies {
+		cp := &c.Copies[i]
+		if cp.VolumeID == volumeID && !cp.Superseded && normPath(cp.Path) == normPath(path) {
+			c.stampIfBare(cp)
+			cp.Superseded = true
+			_ = s.save()
+			return
+		}
+	}
+}
+
+// RetireOverwrittenSpan marks as history a current spanned copy whose segment index
+// on this tape a write has just replaced with different bytes.
+func (s *Store) RetireOverwrittenSpan(c *Chunk, volumeID int, dest string, index int, hash string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range c.Copies {
+		cp := &c.Copies[i]
+		if cp.Superseded {
+			continue
+		}
+		for _, sg := range cp.Segments {
+			if sg.Index == index && sg.VolumeID == volumeID && normPath(sg.Dest) == normPath(dest) && sg.Hash != hash {
+				cp.Superseded = true
+				_ = s.save()
+				return
+			}
+		}
+	}
+}
+
+// RecordSpanCopy records a whole spanned set as one verified copy with its tapes. The
+// same set written again refreshes its record; any other set is a new copy.
+func (s *Store) RecordSpanCopy(c *Chunk, volumeID int, path string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	ok := true
+	segs := append([]Segment(nil), c.Segments...)
+	for i := range c.Copies {
+		cp := &c.Copies[i]
+		if !cp.Superseded && c.valuesOf(cp).PayloadHash == c.EncHash && (len(cp.Segments) == 0 || reflect.DeepEqual(cp.Segments, segs)) {
+			cp.VolumeID, cp.Path, cp.LastVerifiedAt, cp.VerifyOK, cp.Segments, cp.Repairable = volumeID, path, &now, &ok, segs, false
+			c.stampCopy(cp)
+			_ = s.save()
+			return
+		}
+	}
+	fresh := Copy{VolumeID: volumeID, Path: path, WrittenAt: &now, LastVerifiedAt: &now, VerifyOK: &ok, Segments: segs}
+	c.stampCopy(&fresh)
+	c.Copies = append(c.Copies, fresh)
+	_ = s.save()
+}
+
+// verifiedCopyOn is a snapshot of the verified current copy on the volume.
+func (s *Store) verifiedCopyOn(c *Chunk, volumeID int) (Copy, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range c.Copies {
+		cp := c.Copies[i]
+		if cp.VolumeID == volumeID && !cp.Superseded && cp.VerifyOK != nil && *cp.VerifyOK {
+			cp.KeyRef, cp.PayloadHash, cp.TarHash = c.valuesOf(&cp).KeyRef, c.valuesOf(&cp).PayloadHash, c.valuesOf(&cp).TarHash
+			cp.Sidecars = cloneSidecars(c.valuesOf(&c.Copies[i]).Sidecars)
+			cp.Segments = append([]Segment(nil), cp.Segments...)
+			return cp, true
+		}
+	}
+	return Copy{}, false
+}
+
+// RefilledFrom makes the package describe staging refilled from a copy with values
+// vals. A spanned package gets that set's layout, with every tape still to write.
+func (s *Store) RefilledFrom(c *Chunk, vals CopyValues, encBytes int64, stagedDir string, segs []Segment) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c.KeyRef, c.EncHash, c.TarHash, c.EncBytes = vals.KeyRef, vals.PayloadHash, vals.TarHash, encBytes
+	c.Sidecars = cloneSidecars(vals.Sidecars)
+	c.StagedDir = stagedDir
+	for name := range vals.Sidecars {
+		if strings.HasSuffix(name, ".manifest.json.gpg") {
+			c.PrivateManifest = true
+		}
+	}
+	if len(segs) > 0 {
+		next := make([]Segment, len(segs))
+		for i, sg := range segs {
+			next[i] = Segment{Index: sg.Index, Bytes: sg.Bytes, Status: "PENDING", Par2: sg.Par2}
+		}
+		c.Segments = next
+	}
+	return s.save()
 }
 
 // dropNotedTapes removes the records noteOldTapes added, once the segments that
@@ -345,6 +546,9 @@ func (s *Store) noteOldTapes(c *Chunk, oldSegments []Segment) (added int) {
 	known := map[string]bool{}
 	for _, cp := range c.Copies {
 		known[fmt.Sprintf("%d|%s", cp.VolumeID, normPath(cp.Path))] = true
+		for _, sg := range cp.Segments { // a whole set is already on record as a copy
+			known[fmt.Sprintf("%d|%s", sg.VolumeID, normPath(sg.Dest))] = true
+		}
 	}
 	for _, sg := range oldSegments {
 		key := fmt.Sprintf("%d|%s", sg.VolumeID, normPath(sg.Dest))
@@ -352,7 +556,9 @@ func (s *Store) noteOldTapes(c *Chunk, oldSegments []Segment) (added int) {
 			continue
 		}
 		known[key] = true
-		c.Copies = append(c.Copies, Copy{VolumeID: sg.VolumeID, Path: sg.Dest, Superseded: true})
+		noted := Copy{VolumeID: sg.VolumeID, Path: sg.Dest, Superseded: true}
+		c.stampCopy(&noted)
+		c.Copies = append(c.Copies, noted)
 		added++
 	}
 	return added

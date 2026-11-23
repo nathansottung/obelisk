@@ -298,7 +298,7 @@ func (a *App) refreshChunkStatus(c *Chunk) {
 }
 
 func (a *App) WriteChunk(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string)) (map[string]any, error) {
-	return a.writeChunk(nil, id, destDir, bufferGB, blockMB, throttleMbps, volumeID, progress, nil)
+	return a.writeChunk(nil, id, destDir, bufferGB, blockMB, throttleMbps, volumeID, progress, false)
 }
 
 // chunkWritable is the check that a package can be written from staging now.
@@ -325,9 +325,9 @@ func chunkStagedForWrite(c *Chunk) error {
 
 // writeChunk is WriteChunk into out when the caller already holds the output
 // folder for destDir (a re-write), or into destDir opened here when out is nil.
-// beforeWrite, when set, runs once every check has passed, just before the
-// first byte is written (a re-write supersedes the old copy there).
-func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string), beforeWrite func()) (map[string]any, error) {
+// With rewrite, the copy at that folder becomes history only once the new one is
+// fully on the medium, or at once if its payload was replaced by different bytes.
+func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string), rewrite bool) (map[string]any, error) {
 	cfg, cfgErr := a.LoadConfig()
 	if cfgErr != nil {
 		return nil, cfgErr
@@ -393,9 +393,6 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 		return nil, fmt.Errorf("destination too small: need %.1f GB, free %.1f GB", float64(need)/1e9, float64(free)/1e9)
 	}
 
-	if beforeWrite != nil {
-		beforeWrite()
-	}
 	c.Status = "WRITING"
 	a.Store.UpdateChunk(c)
 	// mediumFail: a write/medium error. The staged artifact is fine, so the
@@ -455,6 +452,19 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 		}
 		ok, rb = false, "(differs from the staged payload)"
 	}
+	if ok {
+		if volumeID <= 0 {
+			volumeID = a.Store.EnsureUnregistered().ID
+		}
+		// The payload is on the medium. A copy at this folder holding other bytes is
+		// gone, whatever happens next; one holding these same bytes is still good.
+		a.Store.RetireOverwrittenCopy(c, volumeID, dest)
+		if writeAfterPayloadHook != nil {
+			if err := writeAfterPayloadHook(); err != nil {
+				return mediumFail(err)
+			}
+		}
+	}
 
 	progress(0.78, "writing sidecars")
 	for _, e := range entries {
@@ -487,6 +497,9 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 	// Record the result on THIS copy; derive package status from all copies. A
 	// bad read-back marks only this copy failed — the package stays healthy if
 	// the staged payload or another verified copy is intact.
+	if ok && rewrite {
+		a.Store.SupersedeCopyAt(c, volumeID, dest)
+	}
 	a.Store.RecordCopy(c, volumeID, dest, ok)
 	// Awareness: if this landed on a tape whose drive is actively encrypting (stenc),
 	// record it on the volume so kits/inventories shout about the drive-key risk.
@@ -509,9 +522,9 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 }
 
 // RewriteCopy re-writes the package's copy on volumeID from staging to the same
-// destination folder, superseding the existing (typically FAILED) copy. The old
-// record is retained in history (superseded=true); the write creates a fresh
-// Copy. This is the "Re-write this copy" affordance for a failed medium.
+// destination folder. Once the write succeeds the old record is retained in history
+// (superseded=true) beside a fresh Copy; a write that fails leaves a good copy
+// current. This is the "Re-write this copy" affordance for a failed medium.
 func (a *App) RewriteCopy(id, volumeID int, bufferGB float64, blockMB int, throttleMbps float64, progress func(float64, string)) (map[string]any, error) {
 	c := a.Store.Chunk(id)
 	if c == nil {
@@ -531,9 +544,8 @@ func (a *App) RewriteCopy(id, volumeID int, bufferGB float64, blockMB int, throt
 		return nil, fmt.Errorf("no current copy of %s on volume %d to re-write", c.Name, volumeID)
 	}
 	// Check the package and open the folder (deciding it and taking its lease)
-	// before the old copy is marked superseded, so a re-write that cannot run
-	// changes nothing. WriteChunk rebuilds dest as destDir/<name>, so the copy
-	// folder's parent is opened.
+	// first, so a re-write that cannot run changes nothing. WriteChunk rebuilds dest
+	// as destDir/<name>, so the copy folder's parent is opened.
 	if err := chunkWritable(c); err != nil {
 		return nil, err
 	}
@@ -542,10 +554,7 @@ func (a *App) RewriteCopy(id, volumeID int, bufferGB float64, blockMB int, throt
 		return nil, err
 	}
 	defer out.Close()
-	// The old copy is superseded only when the write starts: a re-write refused
-	// by a later check (free space, say) leaves it current.
-	return a.writeChunk(out, id, filepath.Dir(dest), bufferGB, blockMB, throttleMbps, volumeID, progress,
-		func() { a.Store.SupersedeCopy(c, volumeID) })
+	return a.writeChunk(out, id, filepath.Dir(dest), bufferGB, blockMB, throttleMbps, volumeID, progress, true)
 }
 
 // packageBeingBuilt is why a check of this package has to wait.
@@ -577,9 +586,17 @@ func (a *App) VerifyChunk(id int, destDir string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	ok := rb == c.EncHash
+	// The copy read is checked against what it was written with. A read that matches
+	// no recorded copy (the staging folder, say) is compared with the current build.
+	at := CopyAt{Path: filepath.Dir(enc), Serial: driveSerialAt(base), Partition: partitionIDAt(base)}
+	vals, found := a.Store.copyValuesAt(c, at)
+	if !found {
+		vals = CopyValues{KeyRef: c.KeyRef, PayloadHash: c.EncHash, TarHash: c.TarHash, Sidecars: c.Sidecars}
+	}
+	ok := rb == vals.PayloadHash
+	repairable := !ok && a.par2CanRepair(enc)
 	// A copy is the payload and its sidecars: they are read back too.
-	sideErr := checkSidecarsAt(c, filepath.Dir(enc))
+	sideErr := checkCopySidecarsAt(c, vals.Sidecars, filepath.Dir(enc))
 	if sideErr != nil {
 		ok = false
 	}
@@ -589,9 +606,12 @@ func (a *App) VerifyChunk(id int, destDir string) (map[string]any, error) {
 	// never marks the package FAILED while another copy or the staged payload is
 	// intact. A read that matches no recorded copy (the staging folder, say)
 	// credits nothing.
-	credited := a.Store.CreditCopyCheck(c, CopyAt{Path: filepath.Dir(enc), Serial: driveSerialAt(base), Partition: partitionIDAt(base)}, ok, VerifyB)
+	credited := a.Store.CreditCopyCheck(c, at, ok, VerifyB)
 	if ok && credited > 0 {
 		c.VerifiedAt = &now
+	}
+	if !ok && credited > 0 {
+		a.Store.NoteCopyRepairable(c, at, repairable)
 	}
 	note := "media verify"
 	switch {
@@ -600,14 +620,17 @@ func (a *App) VerifyChunk(id int, destDir string) (map[string]any, error) {
 	case !ok:
 		note = "media verify: hash mismatch medium=" + rb
 	}
+	if repairable {
+		note += " · repairable with the par2 set on the medium"
+	}
 	if credited == 0 {
 		note += " · no recorded copy at " + filepath.Dir(enc) + " (or the drive could not be told apart), so no copy was credited"
 	}
 	a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: ok, Path: enc, Note: note, Advisory: credited == 0})
 	a.refreshChunkStatus(c)
 	a.Store.UpdateChunk(c)
-	return map[string]any{"chunk": c.Name, "path": enc, "verify_ok": ok, "expected": c.EncHash, "actual": rb,
-		"credited": credited, "status": c.Status, "verified_copies": c.VerifiedCopyCount()}, nil
+	return map[string]any{"chunk": c.Name, "path": enc, "verify_ok": ok, "expected": vals.PayloadHash, "actual": rb,
+		"repairable": repairable, "credited": credited, "status": c.Status, "verified_copies": c.VerifiedCopyCount()}, nil
 }
 
 // VerifyCampaign scans dest_dir for chunk folders/payloads whose names match
@@ -685,21 +708,33 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 			continue
 		}
 		// Package payloads are ALWAYS level B — full content hash, no option.
+		at := CopyAt{Path: filepath.Dir(cd.path), Serial: serial, Partition: part}
+		vals, found := a.Store.copyValuesAt(cd.c, at)
+		if !found {
+			vals = CopyValues{KeyRef: cd.c.KeyRef, PayloadHash: cd.c.EncHash, TarHash: cd.c.TarHash, Sidecars: cd.c.Sidecars}
+		}
 		h, herr := hashFileHex(cd.path)
-		ok := herr == nil && h == cd.c.EncHash
+		ok := herr == nil && h == vals.PayloadHash
+		repairable := herr == nil && !ok && a.par2CanRepair(cd.path)
 		note := "campaign"
 		if herr != nil {
 			note = "campaign: " + herr.Error()
 		} else if !ok {
 			note = "campaign: hash mismatch"
-		} else if serr := checkSidecarsAt(cd.c, filepath.Dir(cd.path)); serr != nil {
+			if repairable {
+				note += " · repairable with the par2 set on the medium"
+			}
+		} else if serr := checkCopySidecarsAt(cd.c, vals.Sidecars, filepath.Dir(cd.path)); serr != nil {
 			ok, note = false, "campaign: "+serr.Error()
 		}
 		now := time.Now().UTC()
 		// Copy-level result, on the copy recorded where this payload was read and
 		// only there; package status derives from all copies (a bad medium on this
 		// campaign does not fail a package with other verified copies).
-		credited := a.Store.CreditCopyCheck(cd.c, CopyAt{Path: filepath.Dir(cd.path), Serial: serial, Partition: part}, ok, VerifyB)
+		credited := a.Store.CreditCopyCheck(cd.c, at, ok, VerifyB)
+		if !ok && credited > 0 {
+			a.Store.NoteCopyRepairable(cd.c, at, repairable)
+		}
 		if ok {
 			passed++
 		}
@@ -714,7 +749,7 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 		a.refreshChunkStatus(cd.c)
 		a.Store.UpdateChunk(cd.c)
 		release()
-		results = append(results, map[string]any{"chunk": cd.c.Name, "ok": ok, "path": cd.path, "level": VerifyB,
+		results = append(results, map[string]any{"chunk": cd.c.Name, "ok": ok, "repairable": repairable, "path": cd.path, "level": VerifyB,
 			"status": cd.c.Status, "verified_copies": cd.c.VerifiedCopyCount()})
 	}
 	// Mirrors: verified at the chosen level (A/C advisory, B satisfies COMPLETE).
@@ -811,7 +846,7 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 		// segment files are (all copied into one scratch dir), rejoin them —
 		// the same `cat seg* > payload` step RESTORE.txt documents by hand.
 		if c.Spanned {
-			joined, warns, jerr := rejoinSegments(sourceDir, work.abs, c, progress)
+			joined, warns, jerr := rejoinSegments(sourceDir, work.abs, spanViewFor(c, sourceDir), progress)
 			if jerr != nil {
 				return nil, jerr
 			}
@@ -838,7 +873,8 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	repaired := false
 	par2f := enc + ".par2"
 	progress(0.05, "par2 verify")
-	if _, err := os.Stat(par2f); err == nil {
+	_, par2Err := os.Stat(par2f)
+	if par2Err == nil {
 		if verr := run(par2Bin, "", "verify", par2f); verr != nil {
 			// Repair works on a copy in the restore's work folder. The medium (and
 			// whatever folder the package is read from, a source included) is only
@@ -855,8 +891,15 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 			enc = copied
 			repaired = true
 		}
-	} else if h, _ := hashFileHex(enc); h != c.EncHash {
-		return nil, fmt.Errorf("no par2 present and ciphertext hash mismatch — data damaged")
+	}
+	// Which copy this is decides the key. With no par2 set the hash is also the only
+	// check on the bytes.
+	vals, verr := valuesForPayload(c, enc, par2Err != nil)
+	if verr != nil {
+		if par2Err != nil {
+			return nil, fmt.Errorf("no par2 present and ciphertext hash mismatch — data damaged")
+		}
+		return nil, fmt.Errorf("the payload under %s is not a copy of %s on record: %w", sourceDir, c.Name, verr)
 	}
 
 	// A new restore folder (no destination guard) is unpacked into by path: it
@@ -886,7 +929,7 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 	}
 
 	progress(0.25, "decrypt + extract")
-	pass, err := a.Passphrase(c.KeyRef)
+	pass, err := a.Passphrase(vals.KeyRef)
 	if err != nil {
 		return nil, err
 	}

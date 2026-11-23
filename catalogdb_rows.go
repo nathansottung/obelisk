@@ -214,7 +214,7 @@ var catalogDBInserts = map[string]string{
 	"file_version":    `INSERT INTO file_version VALUES(?,?,?,?,?,?,?,?)`,
 	"chunk":           `INSERT INTO chunk VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 	"chunk_file":      `INSERT INTO chunk_file VALUES(?,?,?,?,?,?,?,?)`,
-	"copy":            `INSERT INTO copy VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+	"copy":            `INSERT INTO copy VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 	"segment":         `INSERT INTO segment VALUES(?,?,?,?,?,?,?,?,?)`,
 	"verify_event":    `INSERT INTO verify_event VALUES(?,?,?,?,?,?,?,?)`,
 	"volume":          `INSERT INTO volume VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -434,7 +434,8 @@ func (w *rowWriter) chunkChildren(ch *Chunk, what string) error {
 	e := &w.e
 	for k, cp := range ch.Copies {
 		if err := w.exec("copy", what, ch.ID, k, cp.VolumeID, cp.Path, e.tp(cp.WrittenAt), e.tp(cp.LastVerifiedAt),
-			bp(cp.VerifyOK), e.tp(cp.LastCheckAt), cp.LastCheckLevel, bp(cp.LastCheckOK), b(cp.Superseded)); err != nil {
+			bp(cp.VerifyOK), e.tp(cp.LastCheckAt), cp.LastCheckLevel, bp(cp.LastCheckOK), b(cp.Superseded),
+			cp.KeyRef, cp.PayloadHash, cp.TarHash, e.j(cp.Sidecars), e.j(cp.Segments), b(cp.Repairable)); err != nil {
 			return err
 		}
 	}
@@ -1078,12 +1079,20 @@ func exportCatalogTables(tx *sql.Tx, withFiles bool) (*catalog, error) {
 		}
 	}
 	if err := q("copy", `SELECT chunk_id, volume_id, path, written_at, last_verified_at, verify_ok, last_check_at,
-		last_check_level, last_check_ok, superseded FROM copy ORDER BY chunk_id, ord`, func(r *sql.Rows) error {
+		last_check_level, last_check_ok, superseded, key_ref, payload_hash, tar_hash, sidecars, segments, repairable
+		FROM copy ORDER BY chunk_id, ord`, func(r *sql.Rows) error {
 		var id int
 		var cp Copy
 		var written, verified, verifyOK, checkAt, checkOK nint
+		var sidecars, segments nstr
 		if err := r.Scan(&id, &cp.VolumeID, &cp.Path, &written, &verified, &verifyOK, &checkAt, &cp.LastCheckLevel,
-			&checkOK, &cp.Superseded); err != nil {
+			&checkOK, &cp.Superseded, &cp.KeyRef, &cp.PayloadHash, &cp.TarHash, &sidecars, &segments, &cp.Repairable); err != nil {
+			return err
+		}
+		if err := jget(sidecars, &cp.Sidecars); err != nil {
+			return err
+		}
+		if err := jget(segments, &cp.Segments); err != nil {
 			return err
 		}
 		cp.WrittenAt, cp.LastVerifiedAt, cp.VerifyOK = tpget(written), tpget(verified), bpget(verifyOK)

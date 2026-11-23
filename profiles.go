@@ -181,32 +181,35 @@ type physCopy struct {
 func chunkPhysCopies(ch *Chunk, vols map[int]*Volume, locs map[int]*Location) map[string]physCopy {
 	out := map[string]physCopy{}
 	if ch.Spanned {
-		// A spanned chunk is ONE logical copy spread across its segment media.
-		allVerified := len(ch.Segments) > 0
-		kinds := map[string]bool{}
-		locationSet := map[int]bool{}
-		offsite := false
-		var segVols []int
-		for _, sg := range ch.Segments {
-			if sg.Status != "VERIFIED" {
-				allVerified = false
-			}
-			if v := vols[sg.VolumeID]; v != nil {
-				kinds[v.Kind] = true
-				locationSet[v.LocationID] = true
-				if volumeOffsite(v, locs) {
-					offsite = true
+		// A spanned set is ONE logical copy spread across its segment media. A rebuild
+		// leaves older sets standing, each its own copy.
+		for _, set := range ch.spanSets() {
+			allVerified := len(set) > 0
+			kinds := map[string]bool{}
+			locationSet := map[int]bool{}
+			offsite := false
+			var segVols []int
+			for _, sg := range set {
+				if sg.Status != "VERIFIED" {
+					allVerified = false
 				}
-				segVols = append(segVols, sg.VolumeID)
+				if v := vols[sg.VolumeID]; v != nil {
+					kinds[v.Kind] = true
+					locationSet[v.LocationID] = true
+					if volumeOffsite(v, locs) {
+						offsite = true
+					}
+					segVols = append(segVols, sg.VolumeID)
+				}
 			}
-		}
-		if allVerified && len(kinds) > 0 {
-			sort.Ints(segVols)
-			parts := make([]string, len(segVols))
-			for i, id := range segVols {
-				parts[i] = strconv.Itoa(id)
+			if allVerified && len(kinds) > 0 {
+				sort.Ints(segVols)
+				parts := make([]string, len(segVols))
+				for i, id := range segVols {
+					parts[i] = strconv.Itoa(id)
+				}
+				out["span:"+strings.Join(parts, "-")] = physCopy{kinds: kinds, offsite: offsite, locations: locationSet, verifiedAt: ch.VerifiedAt}
 			}
-			out["span:"+strings.Join(parts, "-")] = physCopy{kinds: kinds, offsite: offsite, locations: locationSet, verifiedAt: ch.VerifiedAt}
 		}
 		return out
 	}

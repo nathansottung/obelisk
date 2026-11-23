@@ -382,7 +382,13 @@ func (a *App) KeystoreStatus() map[string]any {
 	if err != nil {
 		return map[string]any{"ok": false, "reason": err.Error(), "min_required": MinKeystores, "stores": []map[string]any{}}
 	}
-	return a.keystoreStatus(cfg.KeystorePaths, false)
+	st := a.keystoreStatus(cfg.KeystorePaths, false)
+	if a.Store != nil {
+		if missing := a.keysCopiesNeedMissing(); len(missing) > 0 {
+			st["copy_keys_missing"] = missing
+		}
+	}
+	return st
 }
 
 func (a *App) GenerateKey(note string) (ref, passphrase, fpr string, err error) {
@@ -1031,21 +1037,6 @@ func decryptRoundtripHash(gpgBin, ciphertext, pass string) (string, error) {
 // packageWorkKey names a package for claimWork.
 func packageWorkKey(id int) string { return fmt.Sprintf("package:%d", id) }
 
-// RebuildWarning stops a rebuild until the user accepts what it does to the copies
-// already on media. The catalog keeps one key and one hash per package.
-type RebuildWarning struct {
-	Package   string
-	Copies    int
-	Encrypted bool
-}
-
-func (e *RebuildWarning) Error() string {
-	if e.Encrypted {
-		return fmt.Sprintf("Rebuilding %s makes a new key and hash. Its %d existing copy(s) will stop verifying and restoring in the app. A hand restore of those copies with the kept key still works: follow RESTORE.txt on the medium.", e.Package, e.Copies)
-	}
-	return fmt.Sprintf("Rebuilding %s makes a new hash. Its %d existing copy(s) will stop verifying in the app. A hand restore of those copies still works: follow RESTORE.txt on the medium.", e.Package, e.Copies)
-}
-
 // chunkCanBuild is whether a build may start: a package not yet staged, one whose
 // build failed, or one whose copies all failed and whose staging is gone, which has
 // no other way forward.
@@ -1057,17 +1048,9 @@ func chunkNeedsRestaging(c *Chunk) bool {
 	return c.Status == "WRITTEN" && !c.Adopted && c.VerifiedCopyCount() == 0
 }
 
-// BuildChunk builds a package, stopping with a *RebuildWarning if copies of it exist.
+// BuildChunk builds a package. A rebuild gives the package a new key and hash; each
+// copy already on media keeps the ones it was written with.
 func (a *App) BuildChunk(id int, progress func(float64, string)) error {
-	return a.buildChunk(id, false, progress)
-}
-
-// BuildChunkOverCopies builds a package after the user accepted the RebuildWarning.
-func (a *App) BuildChunkOverCopies(id int, progress func(float64, string)) error {
-	return a.buildChunk(id, true, progress)
-}
-
-func (a *App) buildChunk(id int, acceptCopies bool, progress func(float64, string)) error {
 	cfg, cfgErr := a.LoadConfig()
 	if cfgErr != nil {
 		return cfgErr
@@ -1089,17 +1072,17 @@ func (a *App) buildChunk(id int, acceptCopies bool, progress func(float64, strin
 		}
 		return fmt.Errorf("package %s is %s; only PLANNED/FAILED can build", c.Name, c.Status)
 	}
-	warning := a.Store.rebuildWarning(id)
-	if warning != nil && !acceptCopies {
-		return warning
+	a.Store.pinCopyValues(c)
+	// If this build fails, the package goes back to describing what it did before.
+	overCopies := len(c.Copies) > 0
+	for _, sg := range c.Segments {
+		overCopies = overCopies || sg.VolumeID != 0 || sg.Dest != "" || sg.Status == "WRITTEN" || sg.Status == "VERIFIED"
 	}
-	// If this build fails, copies on media still need the key and hash they were made with.
-	overCopies := warning != nil
+	oldVerifyOK, oldDest := c.VerifyOK, c.WrittenDest
 	oldKey, oldEncHash, oldTarHash, oldEncBytes := c.KeyRef, c.EncHash, c.TarHash, c.EncBytes
 	oldSegments := append([]Segment(nil), c.Segments...)
 	oldSidecars := c.Sidecars
 	notedFrom, noted := len(c.Copies), 0
-	var undoRetire func()
 	oldPrivate, oldBuildVerified := c.PrivateManifest, c.BuildVerified
 	restoreOld := func() {
 		if !overCopies {
@@ -1107,12 +1090,7 @@ func (a *App) buildChunk(id int, acceptCopies bool, progress func(float64, strin
 		}
 		c.KeyRef, c.EncHash, c.TarHash, c.EncBytes = oldKey, oldEncHash, oldTarHash, oldEncBytes
 		c.Sidecars = oldSidecars
-		// Only this build's own changes are undone: a check recorded on a copy while
-		// it ran stands.
-		if undoRetire != nil {
-			undoRetire()
-			undoRetire = nil
-		}
+		c.VerifyOK, c.WrittenDest = oldVerifyOK, oldDest
 		a.Store.dropNotedTapes(c, notedFrom, noted)
 		noted = 0
 		c.PrivateManifest, c.BuildVerified = oldPrivate, oldBuildVerified
@@ -1180,7 +1158,7 @@ func (a *App) buildChunk(id int, acceptCopies bool, progress func(float64, strin
 		return err
 	}
 	c.StagedDir = ""
-	if !overCopies { // old copies are still checked against these until the new ones exist
+	if !overCopies { // a failed rebuild puts these back
 		c.Sidecars = nil
 	}
 	// Pre-flight against this ONE package's build peak (shared with /api/space-advice
@@ -1415,14 +1393,17 @@ func (a *App) buildChunk(id int, acceptCopies bool, progress func(float64, strin
 	}
 
 	c.StagedDir = work
-	if overCopies {
-		undoRetire = a.Store.retireCopies(c)
+	// Copies already on media still count: the status comes from them.
+	c.Status = "STAGED"
+	a.refreshChunkStatus(c)
+	if c.CurrentCopyCount() == 0 {
+		c.VerifyOK, c.WrittenDest = nil, ""
 	}
 	// Durability gate: the package is built on disk, but if the catalog can't record
 	// it as STAGED the next step (write) would never see it — worse, a reopen could
 	// leave it looking un-built. Surface the failure rather than reporting success.
-	if err := setStatus("STAGED", ""); err != nil {
-		if overCopies { // the rebuild did not happen: its copies keep their key and hash
+	if err := setStatus(c.Status, ""); err != nil {
+		if overCopies { // the rebuild did not happen: the package keeps its key and hash
 			_ = fail(err)
 			return fmt.Errorf("package built but catalog could not record it as staged (%w); its existing copies are unchanged. Run Build again once the catalog can save", err)
 		}

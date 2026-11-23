@@ -2229,6 +2229,22 @@ func api(mux routeRegistrar, app *App) {
 		}
 		jsonOut(w, c)
 	})
+	// Refill damaged or missing staging from a verified copy, checked against that
+	// copy's own hash before it is used.
+	register(mux, "POST /api/chunks/{id}/refill", func(w http.ResponseWriter, r *http.Request) {
+		id := pathID(r)
+		c := app.Store.Chunk(id)
+		if c == nil {
+			jsonErr(w, 404, fmt.Errorf("package not found"))
+			return
+		}
+		b := body(r)
+		volumeID := int(f(b, "volume_id"))
+		sourceDir := strings.TrimSpace(s(b, "source_dir"))
+		startedOn(w).write(runJob(app, "refill", "Refill staging "+c.Name, func(p func(float64, string)) (map[string]any, error) {
+			return app.RefillStaging(id, volumeID, sourceDir, p)
+		}))
+	})
 	register(mux, "POST /api/chunks/{id}/build", func(w http.ResponseWriter, r *http.Request) {
 		id := pathID(r)
 		c := app.Store.Chunk(id)
@@ -2236,20 +2252,8 @@ func api(mux routeRegistrar, app *App) {
 			jsonErr(w, 404, fmt.Errorf("package not found"))
 			return
 		}
-		accepted := body(r)["accept_existing_copies"] == true
-		if warning := app.Store.rebuildWarning(id); warning != nil && !accepted {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusConflict)
-			_ = json.NewEncoder(w).Encode(map[string]any{"error": warning.Error(), "warning": warning.Error(),
-				"needs_confirmation": true, "copies": warning.Copies})
-			return
-		}
 		startedOn(w).write(runJob(app, "build", "Build "+c.Name, func(p func(float64, string)) (map[string]any, error) {
-			build := app.BuildChunk
-			if accepted {
-				build = app.BuildChunkOverCopies
-			}
-			if err := build(id, p); err != nil {
+			if err := app.BuildChunk(id, p); err != nil {
 				return nil, err
 			}
 			// Re-read the freshly built chunk for its staged path and payload size, and

@@ -11,39 +11,6 @@ import (
 	"testing"
 )
 
-// The server starts no rebuild over existing copies until the user has accepted what
-// it does to them, and then it does start one: there is no dead end.
-func TestBuildAPI_WarnsThenRebuildsOverExistingCopies(t *testing.T) {
-	s := newIT(t)
-	s.setConfig(map[string]any{"keystore_paths": s.makeKeystores(2)})
-	src := s.makeSource(map[string][]byte{"a.txt": []byte("kept on the medium\n")})
-	c := s.scanPlanBuild(src, 1, true, 10)
-	pid := int(c["id"].(float64))
-	vid := s.addVolume("COPY-1", "vault")
-	s.job(s.obj("POST", fmt.Sprintf("/api/chunks/%d/write", pid), map[string]any{"dest_dir": t.TempDir(), "volume_id": vid}))
-	ch := s.app.Store.Chunk(pid)
-	oldKey := ch.KeyRef
-	ch.Status = "FAILED"
-	s.app.Store.UpdateChunk(ch)
-
-	m := s.obj("POST", fmt.Sprintf("/api/chunks/%d/build", pid), nil)
-	if s.status(m) != 409 || m["needs_confirmation"] != true {
-		t.Fatalf("no warning before the rebuild: %v", m)
-	}
-	warning, _ := m["warning"].(string)
-	if !strings.Contains(warning, "verifying") || !strings.Contains(warning, "hand restore") {
-		t.Fatalf("the warning does not say what happens: %q", warning)
-	}
-	if got := s.app.Store.Chunk(pid); got.KeyRef != oldKey || got.Status != "FAILED" {
-		t.Fatalf("an unaccepted rebuild changed the package: key changed=%v status=%s", got.KeyRef != oldKey, got.Status)
-	}
-
-	s.job(s.obj("POST", fmt.Sprintf("/api/chunks/%d/build", pid), map[string]any{"accept_existing_copies": true}))
-	if got := s.app.Store.Chunk(pid); got.KeyRef == oldKey || got.Status != "STAGED" && got.Status != "VERIFIED" {
-		t.Fatalf("the accepted rebuild did not run: key changed=%v status=%s", got.KeyRef != oldKey, got.Status)
-	}
-}
-
 // writtenThenFailed is a private package with one verified copy, marked FAILED.
 func writtenThenFailed(t *testing.T, app *App, name string) (*Chunk, string) {
 	t.Helper()
@@ -58,27 +25,6 @@ func writtenThenFailed(t *testing.T, app *App, name string) (*Chunk, string) {
 	return c, medium
 }
 
-// After an accepted rebuild no old copy may count as protecting the new build, and
-// the record of where it is must stay.
-func TestRebuild_AcceptedRetiresOldCopiesAndKeepsWhereTheyAre(t *testing.T) {
-	app, _ := newTestApp(t, nativeTools(t))
-	c, _ := writtenThenFailed(t, app, "RETIRED-COPY")
-	path := c.Copies[0].Path
-	if err := app.BuildChunkOverCopies(c.ID, noProg); err != nil {
-		t.Fatal(err)
-	}
-	c = app.Store.Chunk(c.ID)
-	if c.VerifiedCopyCount() != 0 || c.CurrentCopyCount() != 0 || c.VerifyOK != nil {
-		t.Fatalf("an old copy still counts: verified=%d current=%d", c.VerifiedCopyCount(), c.CurrentCopyCount())
-	}
-	if len(c.Copies) != 1 || c.Copies[0].Path != path || !c.Copies[0].Superseded {
-		t.Fatalf("the old copy's location was not kept: %+v", c.Copies)
-	}
-	if c.Status != "STAGED" {
-		t.Fatalf("status %s", c.Status)
-	}
-}
-
 // A rebuild that fails leaves the old copies usable: the old key and hash stay.
 func TestRebuild_FailedAfterKeyGenerationKeepsTheOldKeyAndHash(t *testing.T) {
 	app, _ := newTestApp(t, nativeTools(t))
@@ -91,7 +37,7 @@ func TestRebuild_FailedAfterKeyGenerationKeepsTheOldKeyAndHash(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() { buildAfterTarHook = prev })
-	if err := app.BuildChunkOverCopies(c.ID, noProg); err == nil {
+	if err := app.BuildChunk(c.ID, noProg); err == nil {
 		t.Fatal("the build did not fail")
 	}
 	c = app.Store.Chunk(c.ID)
@@ -132,21 +78,21 @@ func TestRebuild_SpannedKeepsEveryTapesLocation(t *testing.T) {
 	c = app.Store.Chunk(c.ID)
 	c.Status = "FAILED"
 	app.Store.UpdateChunk(c)
-	if err := app.BuildChunkOverCopies(c.ID, noProg); err != nil {
+	if err := app.BuildChunk(c.ID, noProg); err != nil {
 		t.Fatal(err)
 	}
 	c = app.Store.Chunk(c.ID)
+	if c.CurrentCopyCount() != 1 {
+		t.Fatalf("the spanned copy is no longer current: %+v", c.Copies)
+	}
 	for _, tape := range tapes {
 		found := false
-		for _, cp := range c.Copies {
-			found = found || (cp.Superseded && strings.Contains(normPath(cp.Path), normPath(tape)))
+		for _, sg := range c.Copies[0].Segments {
+			found = found || normPath(sg.Dest) == normPath(tape)
 		}
 		if !found {
 			t.Errorf("the record of %s was lost: %+v", filepath.Base(tape), c.Copies)
 		}
-	}
-	if c.CurrentCopyCount() != 0 {
-		t.Fatalf("%d old copies still count", c.CurrentCopyCount())
 	}
 }
 
@@ -170,7 +116,7 @@ func TestRebuild_OldTapesAreRecordedBeforeTheBuildReplacesThem(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() { buildAfterTarHook = prev })
-	if err := app.BuildChunkOverCopies(c.ID, noProg); err != nil {
+	if err := app.BuildChunk(c.ID, noProg); err != nil {
 		t.Fatal(err)
 	}
 	if !recorded {
@@ -185,7 +131,7 @@ func TestRebuild_UnsavedResultLeavesTheOldCopiesInPlace(t *testing.T) {
 	c, _ := writtenThenFailed(t, app, "UNSAVED-REBUILD")
 	key, hash, dest := c.KeyRef, c.EncHash, c.WrittenDest
 	app.Store.failSave = func() error { return errors.New("disk full (injected)") }
-	err := app.BuildChunkOverCopies(c.ID, noProg)
+	err := app.BuildChunk(c.ID, noProg)
 	clearFailSave(app.Store)
 	if err == nil || !strings.Contains(err.Error(), "catalog could not record it as staged") {
 		t.Fatalf("got %v", err)
@@ -194,7 +140,7 @@ func TestRebuild_UnsavedResultLeavesTheOldCopiesInPlace(t *testing.T) {
 	if c.KeyRef != key || c.EncHash != hash || c.WrittenDest != dest || c.VerifiedCopyCount() != 1 || c.Status != "FAILED" {
 		t.Fatalf("the unsaved rebuild changed the record: status=%s verified=%d", c.Status, c.VerifiedCopyCount())
 	}
-	if err := app.BuildChunkOverCopies(c.ID, noProg); err != nil {
+	if err := app.BuildChunk(c.ID, noProg); err != nil {
 		t.Fatalf("running Build again: %v", err)
 	}
 }
@@ -216,7 +162,7 @@ func TestRebuild_FailureKeepsAResultRecordedDuringTheBuild(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() { buildAfterTarHook = prev })
-	if err := app.BuildChunkOverCopies(c.ID, noProg); err == nil {
+	if err := app.BuildChunk(c.ID, noProg); err == nil {
 		t.Fatal("the build did not fail")
 	}
 	if !hadSidecars {
@@ -247,7 +193,7 @@ func TestVerify_DoesNotRunAgainstAPackageBeingBuilt(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() { buildAfterTarHook = prev })
-	if err := app.BuildChunkOverCopies(c.ID, noProg); err == nil {
+	if err := app.BuildChunk(c.ID, noProg); err == nil {
 		t.Fatal("the build did not fail")
 	}
 	if single == nil || !strings.Contains(single.Error(), "being built") {
@@ -261,7 +207,7 @@ func TestVerify_DoesNotRunAgainstAPackageBeingBuilt(t *testing.T) {
 	}
 }
 
-// After an accepted rebuild, search still says where the old copies are.
+// With no current copy, search still says where the old copies are.
 func TestSearch_ShowsRetiredCopiesWhenNoCurrentCopyExists(t *testing.T) {
 	s := newIT(t)
 	s.setConfig(map[string]any{"keystore_paths": s.makeKeystores(2)})
@@ -271,11 +217,7 @@ func TestSearch_ShowsRetiredCopiesWhenNoCurrentCopyExists(t *testing.T) {
 	vid := s.addVolume("OLD-1", "vault")
 	s.job(s.obj("POST", fmt.Sprintf("/api/chunks/%d/write", pid), map[string]any{"dest_dir": t.TempDir(), "volume_id": vid}))
 	ch := s.app.Store.Chunk(pid)
-	ch.Status = "FAILED"
-	s.app.Store.UpdateChunk(ch)
-	if err := s.app.BuildChunkOverCopies(pid, noProg); err != nil {
-		t.Fatal(err)
-	}
+	s.app.Store.SupersedeCopy(ch, vid)
 	rows, err := s.app.Store.Search(SearchQuery{Text: "find-me", Limit: 5})
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("rows %v, %v", rows, err)
@@ -283,22 +225,6 @@ func TestSearch_ShowsRetiredCopiesWhenNoCurrentCopyExists(t *testing.T) {
 	old, _ := rows[0]["retired_copies"].([]map[string]any)
 	if len(old) != 1 || old[0]["volume_label"] != "OLD-1" {
 		t.Fatalf("the old copy is not shown: %v", rows[0]["retired_copies"])
-	}
-}
-
-// The warning says what really stops working, and speaks of a key only if there is one.
-func TestRebuildWarning_MatchesThePackage(t *testing.T) {
-	app, _ := newTestApp(t, nativeTools(t))
-	ok := true
-	enc := app.Store.AddChunk(Chunk{Name: "ENC", Status: "FAILED", Encrypted: true, Copies: []Copy{{Path: "x", VerifyOK: &ok}}})
-	plain := app.Store.AddChunk(Chunk{Name: "PLAIN", Status: "FAILED", Copies: []Copy{{Path: "x", VerifyOK: &ok}}})
-	e := app.Store.rebuildWarning(enc.ID).Error()
-	if !strings.Contains(e, "restoring") || !strings.Contains(e, "kept key") {
-		t.Errorf("encrypted: %s", e)
-	}
-	p := app.Store.rebuildWarning(plain.ID).Error()
-	if strings.Contains(p, "key") || !strings.Contains(p, "hand restore") {
-		t.Errorf("unencrypted: %s", p)
 	}
 }
 
@@ -315,38 +241,29 @@ func TestRebuild_NoDeadEndWhenTheCopyFailedAndStagingIsGone(t *testing.T) {
 	if err := os.RemoveAll(c.StagedDir); err != nil {
 		t.Fatal(err)
 	}
-	var warning *RebuildWarning
-	if err := app.BuildChunk(c.ID, noProg); !errors.As(err, &warning) {
-		t.Fatalf("no warning: %v", err)
-	}
-	if err := app.BuildChunkOverCopies(c.ID, noProg); err != nil {
+	if err := app.BuildChunk(c.ID, noProg); err != nil {
 		t.Fatal(err)
 	}
-	if got := app.Store.Chunk(c.ID).Status; got != "STAGED" {
-		t.Fatalf("status %s", got)
+	if got := app.Store.Chunk(c.ID).Status; got != "WRITTEN" {
+		t.Fatalf("status %s: the failed copy is still on record, so the package is WRITTEN", got)
 	}
 }
 
 const rebuildWarningUI = `
 const __fail=[];const ck=(c,m)=>{if(!c)__fail.push(m)};
-const W='Rebuilding will stop its copies from verifying';
-let accept=false,posts=[],asked=[];
-globalThis.confirm=m=>{asked.push(m);return accept};
+let posts=[],asked=[];
+globalThis.confirm=m=>{asked.push(m);return false};
 const reply=(status,out)=>({status,ok:status<400,statusText:'x',json:async()=>out,text:async()=>JSON.stringify(out)});
 globalThis.__fetch=async(u,o)=>{
   if(u!=='/api/chunks/7/build')return reply(200,{});
   const b=o.body?JSON.parse(o.body):{};posts.push(b);
-  return b.accept_existing_copies?reply(200,{job_id:5}):reply(409,{error:W,needs_confirmation:true,warning:W,copies:1});
+  return reply(200,{job_id:5});
 };
 (async()=>{
   await doBuild(7);await dlgGo();
-  ck(posts.length===1,'declining the warning must not send a second build; got '+JSON.stringify(posts));
-  ck(asked.length===1&&asked[0].includes(W),'the user must be shown the warning; got '+JSON.stringify(asked));
-  ck(__toasts.some(t=>t.text.includes('Nothing was rebuilt')),'declining must say nothing was rebuilt; got '+JSON.stringify(__toasts));
-  posts=[];asked=[];accept=true;__toasts.length=0;
-  await doBuild(7);await dlgGo();
-  ck(posts.length===2&&posts[1].accept_existing_copies===true,'accepting must send the build again, accepted; got '+JSON.stringify(posts));
-  ck(__toasts.some(t=>t.text.includes('Build started')),'accepting must start the build; got '+JSON.stringify(__toasts));
+  ck(posts.length===1&&!posts[0].accept_existing_copies,'a build needs one request and no acceptance; got '+JSON.stringify(posts));
+  ck(asked.length===0,'a rebuild must not ask; got '+JSON.stringify(asked));
+  ck(__toasts.some(t=>t.text.includes('Build started')),'the build must start; got '+JSON.stringify(__toasts));
   const offers=c=>actions({id:7,name:'P',segments:[],...c}).includes('doBuild');
   ck(offers({status:'WRITTEN',verify_ok:false}),'a written package whose copy failed must offer Build');
   ck(!offers({status:'WRITTEN',verify_ok:false,adopted:true}),'an adopted package has no source to build from');
@@ -365,7 +282,7 @@ globalThis.__fetch=async(u,o)=>{
 })();
 `
 
-func TestBuildUI_AsksBeforeRebuildingOverCopies(t *testing.T) {
+func TestBuildUI_RebuildsWithoutAsking(t *testing.T) {
 	runUIHarness(t, "rebuild_warning_ui.js", rebuildWarningUI,
-		"SKIPPED, NOT PASSED: node is not on PATH, so the page's rebuild warning was not run.")
+		"SKIPPED, NOT PASSED: node is not on PATH, so the page's build flow was not run.")
 }

@@ -234,6 +234,7 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 			return fail(err)
 		}
 		seg.Hash = streamHash
+		a.Store.RetireOverwrittenSpan(c, volumeID, destDir, seg.Index, streamHash)
 		set("WRITTEN")
 		// par2 rides the last data tape when it wasn't given its own.
 		if seg.Index == dataSegmentCount(c.Segments) && !c.Segments[N-1].Par2 {
@@ -290,7 +291,7 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 				break
 			}
 		}
-		a.Store.RecordCopy(c, firstVol, fmt.Sprintf("spanned across %d media", N), true)
+		a.Store.RecordSpanCopy(c, firstVol, fmt.Sprintf("spanned across %d media", N))
 		a.Store.Log("span", fmt.Sprintf("%s fully written across %d media", c.Name, N))
 	} else {
 		a.Store.UpdateChunk(c)
@@ -370,6 +371,27 @@ func copySidecars(stagedDir string, out *outFolder, c *Chunk) error {
 		}
 	}
 	return nil
+}
+
+// spanViewFor is the package as the tape set under sourceDir recorded it: the set
+// whose number of data tapes matches the segment files found there. The bytes are
+// still checked after the rejoin.
+func spanViewFor(c *Chunk, sourceDir string) *Chunk {
+	segs, _ := filepath.Glob(filepath.Join(sourceDir, c.Name+".seg*"))
+	if len(segs) == 0 {
+		segs, _ = filepath.Glob(filepath.Join(sourceDir, "*", c.Name+".seg*"))
+	}
+	view := *c
+	if dataSegmentCount(c.Segments) == len(segs) {
+		return &view
+	}
+	for i := range c.Copies {
+		if cs := c.Copies[i].Segments; len(cs) > 0 && dataSegmentCount(cs) == len(segs) {
+			view.Segments = cs
+			break
+		}
+	}
+	return &view
 }
 
 // rejoinSegments concatenates <chunk>.segNNN files found in sourceDir into

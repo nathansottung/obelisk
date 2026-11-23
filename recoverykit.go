@@ -370,6 +370,12 @@ func copyResult(cp Copy) string {
 	if cp.LastVerifiedAt != nil {
 		res += " " + cp.LastVerifiedAt.UTC().Format("2006-01-02")
 	}
+	if cp.Repairable {
+		res = "repairable with par2"
+		if cp.LastVerifiedAt != nil {
+			res += " " + cp.LastVerifiedAt.UTC().Format("2006-01-02")
+		}
+	}
 	if cp.Superseded {
 		res += " (superseded — re-written)"
 	}
@@ -386,8 +392,8 @@ func writeCopiesTable(b *strings.Builder, c *Chunk, volm map[int]*Volume) {
 		return
 	}
 	b.WriteString("**Copies**\n\n")
-	b.WriteString("| Volume | Barcode | Kind | Location | Last verify | Path |\n")
-	b.WriteString("|--------|---------|------|----------|-------------|------|\n")
+	b.WriteString("| Volume | Barcode | Kind | Location | Last verify | Key ref | Payload SHA-256 | Path |\n")
+	b.WriteString("|--------|---------|------|----------|-------------|---------|-----------------|------|\n")
 	for _, cp := range c.Copies {
 		label, barcode, kind, loc := "(unregistered)", "—", "—", "—"
 		if v := volm[cp.VolumeID]; v != nil {
@@ -402,8 +408,13 @@ func writeCopiesTable(b *strings.Builder, c *Chunk, volm map[int]*Volume) {
 				loc = v.Location
 			}
 		}
-		b.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s |\n",
-			mdCell(label), mdCell(barcode), mdCell(kind), mdCell(loc), mdCell(copyResult(cp)), mdCell(cp.Path)))
+		vals := c.valuesOf(&cp)
+		key := vals.KeyRef
+		if key == "" {
+			key = "—"
+		}
+		b.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s |\n",
+			mdCell(label), mdCell(barcode), mdCell(kind), mdCell(loc), mdCell(copyResult(cp)), mdCell(key), mdCell(vals.PayloadHash), mdCell(cp.Path)))
 	}
 }
 

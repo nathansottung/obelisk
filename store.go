@@ -402,6 +402,19 @@ type Copy struct {
 	LastCheckLevel string     `json:"last_check_level,omitempty"`
 	LastCheckOK    *bool      `json:"last_check_ok,omitempty"`
 	Superseded     bool       `json:"superseded,omitempty"`
+	// What this copy was written with. A rebuild gives the package new values and
+	// changes none of these. Absent on a copy from before schema v9 until the
+	// migration fills it in; Chunk.valuesOf then reads the package's own values.
+	KeyRef      string            `json:"key_ref,omitempty"`
+	PayloadHash string            `json:"payload_hash,omitempty"`
+	TarHash     string            `json:"tar_hash,omitempty"`
+	Sidecars    map[string]string `json:"sidecars,omitempty"`
+	// Segments is the tapes of a spanned copy; empty for any other copy.
+	Segments []Segment `json:"segments,omitempty"`
+	// Repairable: the last full check found damage that the par2 set on the medium
+	// can repair. The copy earns no verified credit, but it is not lost. False by
+	// default, and cleared by a check that passes.
+	Repairable bool `json:"repairable,omitempty"`
 }
 
 // BuildVerified is the build-time attestation that the package faithfully
@@ -911,7 +924,7 @@ func (r *DriftReport) Changes() int {
 // Evolving the schema is governed by hard rules in docs/CONTRIBUTING.md
 // ("Schema versioning"): persisted fields are append-only, removal needs a
 // migration + a major bump, and every field must tolerate being absent.
-const currentSchemaVersion = 8
+const currentSchemaVersion = 9
 
 // schemaMigration transforms the in-memory catalog UP TO the version named by To.
 // Each MUST be idempotent (safe to run twice) and is applied in ascending To order.
@@ -965,6 +978,28 @@ var schemaMigrations = []schemaMigration{
 	// already-new values pass through unchanged. VIDEO maps to DELIVERABLES as the
 	// common case (a rescan re-derives roles by extension).
 	{To: 8, Fn: migrateRolesV8},
+	// 8 → 9: each copy records the key, hashes and tapes it was written with, so a
+	// rebuild no longer stops older copies from verifying. Each existing copy
+	// inherits its package's current values. Idempotent: a copy that already holds
+	// its own values is left alone.
+	{To: 9, Fn: migrateCopyValuesV9},
+}
+
+// migrateCopyValuesV9 gives each copy that has none its package's current key,
+// hashes and sidecar hashes, and a current spanned copy its package's segments.
+func migrateCopyValuesV9(c *catalog) {
+	for _, ch := range c.Chunks {
+		for i := range ch.Copies {
+			cp := &ch.Copies[i]
+			if cp.PayloadHash != "" || cp.KeyRef != "" {
+				continue
+			}
+			ch.stampCopy(cp)
+			if ch.Spanned && !cp.Superseded && len(cp.Segments) == 0 {
+				cp.Segments = append([]Segment(nil), ch.Segments...)
+			}
+		}
+	}
 }
 
 // remapLegacyRole maps a pre-v8 (photography-specific) role string to the neutral
@@ -1559,6 +1594,7 @@ func (s *Store) finishOpen(readFile func(string) ([]byte, error)) (*Store, error
 			v := s.ensureUnregisteredLocked()
 			c.Copies = append(c.Copies, Copy{VolumeID: v.ID, Path: c.WrittenDest,
 				WrittenAt: c.WrittenAt, LastVerifiedAt: c.VerifiedAt, VerifyOK: c.VerifyOK})
+			c.stampCopy(&c.Copies[len(c.Copies)-1])
 			recovered = true
 		}
 	}
@@ -3418,24 +3454,54 @@ func (s *Store) NextBarcode(prefix string) string {
 	return fmt.Sprintf("%s-%04d", prefix, max+1)
 }
 
-// RecordCopy adds or refreshes the current (non-superseded) copy of chunk c on
-// the given volume and persists. verifiedOK reflects the read-back that just
-// happened. A superseded copy on the same volume is left untouched as history.
+// RecordCopy records a write of chunk c's current build to path on the given
+// volume and persists. verifiedOK reflects the read-back that just happened.
+//   - A failed read-back published nothing, so a copy already at that path is
+//     left exactly as it was.
+//   - A current copy of the same bytes on the volume is refreshed.
+//   - A current copy at that path holding other bytes has just been overwritten:
+//     it is kept as history and a new copy is added.
+//   - A copy elsewhere on the volume holding other bytes is untouched.
+//
+// A superseded copy is always left untouched as history.
 func (s *Store) RecordCopy(c *Chunk, volumeID int, path string, verifiedOK bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
 	ok := verifiedOK
+	same := -1
 	for i := range c.Copies {
-		if c.Copies[i].VolumeID == volumeID && !c.Copies[i].Superseded {
-			c.Copies[i].Path = path
-			c.Copies[i].LastVerifiedAt = &now
-			c.Copies[i].VerifyOK = &ok
-			_ = s.save()
-			return
+		cp := &c.Copies[i]
+		if cp.VolumeID != volumeID || cp.Superseded {
+			continue
+		}
+		atPath := normPath(cp.Path) == normPath(path)
+		if !verifiedOK {
+			if atPath {
+				_ = s.save()
+				return
+			}
+			continue
+		}
+		if c.valuesOf(cp).PayloadHash == c.EncHash {
+			if same < 0 || atPath {
+				same = i
+			}
+		} else if atPath {
+			c.stampIfBare(cp)
+			cp.Superseded = true
 		}
 	}
-	c.Copies = append(c.Copies, Copy{VolumeID: volumeID, Path: path, WrittenAt: &now, LastVerifiedAt: &now, VerifyOK: &ok})
+	if same >= 0 {
+		cp := &c.Copies[same]
+		cp.Path, cp.LastVerifiedAt, cp.VerifyOK, cp.Repairable = path, &now, &ok, false
+		c.stampCopy(cp)
+		_ = s.save()
+		return
+	}
+	fresh := Copy{VolumeID: volumeID, Path: path, WrittenAt: &now, LastVerifiedAt: &now, VerifyOK: &ok}
+	c.stampCopy(&fresh)
+	c.Copies = append(c.Copies, fresh)
 	_ = s.save()
 }
 
@@ -3460,6 +3526,37 @@ type CopyAt struct {
 func (s *Store) CreditCopyCheck(c *Chunk, at CopyAt, ok bool, level string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	fit, moved := s.copiesReadLocked(c, at)
+	if len(fit) == 0 {
+		return 0
+	}
+	if moved {
+		c.Copies[fit[0]].Path = at.Path
+	}
+	now := time.Now().UTC()
+	for _, i := range fit {
+		v, lvl := ok, level
+		c.Copies[i].LastCheckAt, c.Copies[i].LastCheckLevel, c.Copies[i].LastCheckOK = &now, lvl, &v
+		switch {
+		case level == "B":
+			c.Copies[i].LastVerifiedAt, c.Copies[i].VerifyOK = &now, &v
+			if ok {
+				c.Copies[i].Repairable = false
+			}
+		case !ok:
+			// A copy found damaged loses its credit at once, whatever level of
+			// check found it. Only a full check can give the credit back.
+			c.Copies[i].VerifyOK = &v
+		}
+	}
+	_ = s.save()
+	return len(fit)
+}
+
+// copiesReadLocked finds the copies a check at at read (see CreditCopyCheck). It
+// returns nothing when no copy fits or copies on more than one volume do. moved
+// says the one copy found is on a drive now mounted somewhere else.
+func (s *Store) copiesReadLocked(c *Chunk, at CopyAt) (fit []int, moved bool) {
 	serialOf, partOf := map[int]string{}, map[int]string{}
 	for _, v := range s.c.Volumes {
 		serialOf[v.ID], partOf[v.ID] = v.Serial, v.PartitionID
@@ -3470,7 +3567,6 @@ func (s *Store) CreditCopyCheck(c *Chunk, at CopyAt, ok bool, level string) int 
 		same, known := partitionCompare(partOf[volID], at.Partition)
 		return known && !same
 	}
-	var fit []int
 	vols := map[int]bool{}
 	for i := range c.Copies {
 		cp := c.Copies[i]
@@ -3510,28 +3606,12 @@ func (s *Store) CreditCopyCheck(c *Chunk, at CopyAt, ok bool, level string) int 
 				vols[cp.VolumeID] = true
 			}
 		}
-		if len(fit) == 1 && len(vols) == 1 {
-			c.Copies[fit[0]].Path = at.Path
-		}
+		moved = len(fit) == 1 && len(vols) == 1
 	}
 	if len(fit) == 0 || len(vols) > 1 {
-		return 0
+		return nil, false
 	}
-	now := time.Now().UTC()
-	for _, i := range fit {
-		v, lvl := ok, level
-		c.Copies[i].LastCheckAt, c.Copies[i].LastCheckLevel, c.Copies[i].LastCheckOK = &now, lvl, &v
-		switch {
-		case level == "B":
-			c.Copies[i].LastVerifiedAt, c.Copies[i].VerifyOK = &now, &v
-		case !ok:
-			// A copy found damaged loses its credit at once, whatever level of
-			// check found it. Only a full check can give the credit back.
-			c.Copies[i].VerifyOK = &v
-		}
-	}
-	_ = s.save()
-	return len(fit)
+	return fit, moved
 }
 
 // SupersedeCopy marks the current (non-superseded) copy of c on volumeID as
