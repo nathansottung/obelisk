@@ -548,11 +548,22 @@ func (a *App) RewriteCopy(id, volumeID int, bufferGB float64, blockMB int, throt
 		func() { a.Store.SupersedeCopy(c, volumeID) })
 }
 
+// packageBeingBuilt is why a check of this package has to wait.
+func packageBeingBuilt(c *Chunk) string {
+	return fmt.Sprintf("package %s is being built or burned; verify it when that job finishes", c.Name)
+}
+
 func (a *App) VerifyChunk(id int, destDir string) (map[string]any, error) {
 	c := a.Store.Chunk(id)
 	if c == nil {
 		return nil, fmt.Errorf("package %d not found", id)
 	}
+	// A running build may change the hash this compares against, then take it back.
+	release, err := a.Store.shareWork(packageWorkKey(id), packageBeingBuilt(c))
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	base := destDir
 	if base == "" {
 		base = c.WrittenDest
@@ -662,10 +673,17 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 	if len(cands) == 0 && len(mirrorTargets) == 0 {
 		return nil, fmt.Errorf("no cataloged packages or mirrors found on %s (looked for NAME/<payload>, NAME.tar[.gpg], or a mirror rooted here)", destDir)
 	}
-	var okCount, passed int // credited to a copy; read correctly (credited or not)
+	var okCount, passed, skipped int // credited to a copy; read correctly (credited or not); not read
 	results := make([]map[string]any, 0, len(cands))
 	for i, cd := range cands {
 		progress(float64(i)/float64(len(cands)+len(mirrorTargets)), "verify "+cd.c.Name)
+		release, busy := a.Store.shareWork(packageWorkKey(cd.c.ID), packageBeingBuilt(cd.c))
+		if busy != nil { // neither a pass nor a failure: it was not read
+			skipped++
+			results = append(results, map[string]any{"chunk": cd.c.Name, "ok": false, "skipped": busy.Error(), "path": cd.path, "level": VerifyB,
+				"status": cd.c.Status, "verified_copies": cd.c.VerifiedCopyCount()})
+			continue
+		}
 		// Package payloads are ALWAYS level B — full content hash, no option.
 		h, herr := hashFileHex(cd.path)
 		ok := herr == nil && h == cd.c.EncHash
@@ -695,6 +713,7 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 		a.Store.AppendVerifyEvent(cd.c, VerifyEvent{At: now, OK: ok, Path: cd.path, Note: note, Level: VerifyB, Advisory: credited == 0})
 		a.refreshChunkStatus(cd.c)
 		a.Store.UpdateChunk(cd.c)
+		release()
 		results = append(results, map[string]any{"chunk": cd.c.Name, "ok": ok, "path": cd.path, "level": VerifyB,
 			"status": cd.c.Status, "verified_copies": cd.c.VerifiedCopyCount()})
 	}
@@ -747,7 +766,7 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 	total := len(cands) + len(mirrorTargets)
 	progress(1.0, fmt.Sprintf("verified %d/%d ok", okCount, total))
 	a.Store.Log("verify-campaign", fmt.Sprintf("%s: %d/%d ok (mirror level %s)", destDir, okCount, total, level))
-	return map[string]any{"dest_dir": destDir, "checked": total, "ok": okCount, "passed": passed, "level": level,
+	return map[string]any{"dest_dir": destDir, "checked": total, "ok": okCount, "passed": passed, "skipped": skipped, "level": level,
 		"results": results, "mirror_results": mirrorResults}, nil
 }
 

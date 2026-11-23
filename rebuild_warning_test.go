@@ -227,6 +227,40 @@ func TestRebuild_FailureKeepsAResultRecordedDuringTheBuild(t *testing.T) {
 	}
 }
 
+// A verify must not compare a copy with a hash a running build may yet take back:
+// it waits its turn, and a campaign reports the package as skipped.
+func TestVerify_DoesNotRunAgainstAPackageBeingBuilt(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	c, medium := writtenThenFailed(t, app, "VERIFY-DURING")
+	var single error
+	var campaign map[string]any
+	prev := buildAfterTarHook
+	buildAfterTarHook = func(tarPath string) {
+		live := app.Store.Chunk(c.ID)
+		good := live.EncHash
+		live.EncHash = "a hash this build may take back"
+		_, single = app.VerifyChunk(c.ID, medium)
+		campaign, _ = app.VerifyCampaign(medium, VerifyB, noProg)
+		live.EncHash = good
+		if err := os.MkdirAll(filepath.Join(filepath.Dir(tarPath), c.Name+".tar.gpg"), 0o755); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { buildAfterTarHook = prev })
+	if err := app.BuildChunkOverCopies(c.ID, noProg); err == nil {
+		t.Fatal("the build did not fail")
+	}
+	if single == nil || !strings.Contains(single.Error(), "being built") {
+		t.Fatalf("a verify ran during the build: %v", single)
+	}
+	if campaign == nil || campaign["skipped"] != 1 {
+		t.Fatalf("the campaign did not skip the package: %v", campaign)
+	}
+	if got := app.Store.Chunk(c.ID); got.VerifiedCopyCount() != 1 {
+		t.Fatalf("a check against the build's hash marked a good copy bad: %+v", got.Copies)
+	}
+}
+
 // After an accepted rebuild, search still says where the old copies are.
 func TestSearch_ShowsRetiredCopiesWhenNoCurrentCopyExists(t *testing.T) {
 	s := newIT(t)
