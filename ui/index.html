@@ -2131,6 +2131,7 @@ async function adoptFolderDlg(id,name){
     await api('POST','/api/collections/'+id+'/adopt-folder',{path,volume_id:parseInt(volId)});
     toast('Adopting drive — see Jobs');loc('jobs')});}
 function searchCopies(r){const cps=r.copies||[];
+  if(!cps.length&&(r.retired_copies||[]).length)return `<span style="font-size:11.5px">no current copy · older copies, restore by hand: ${r.retired_copies.map(cp=>`${esc(cp.volume_label||cp.path||'unregistered')}${cp.location?' ('+esc(cp.location)+')':''}`).join(' · ')}</span>`;
   if(!cps.length)return r.chunk?'<span class="dim">no copies recorded</span>':'<span class="dim">—</span>';
   const parts=cps.map(cp=>`${esc(cp.volume_label||'vol#'+cp.volume_id)}${cp.location?' ('+esc(cp.location)+')':''} — ${copyVerifyLabel(cp)}`);
   return `<span style="font-size:11.5px">${r.verified_copies}/${cps.length} B-verified · ${parts.join(' · ')}</span>`}

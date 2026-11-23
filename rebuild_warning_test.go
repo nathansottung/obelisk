@@ -101,6 +101,9 @@ func TestRebuild_FailedAfterKeyGenerationKeepsTheOldKeyAndHash(t *testing.T) {
 	if c.VerifiedCopyCount() != 1 {
 		t.Fatalf("a failed rebuild retired the copy: %+v", c.Copies)
 	}
+	if len(c.Sidecars) == 0 {
+		t.Fatal("a failed rebuild lost the sidecar hashes that check the old copy")
+	}
 	if m, err := app.ReadMediumManifest(c.ID, medium); err != nil || m == nil {
 		t.Fatalf("the old copy no longer reads: %v", err)
 	}
@@ -144,6 +147,80 @@ func TestRebuild_SpannedKeepsEveryTapesLocation(t *testing.T) {
 	}
 	if c.CurrentCopyCount() != 0 {
 		t.Fatalf("%d old copies still count", c.CurrentCopyCount())
+	}
+}
+
+// The tapes' locations are on record before the build replaces their segments, so a
+// crash during the build cannot lose them.
+func TestRebuild_OldTapesAreRecordedBeforeTheBuildReplacesThem(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	c, _ := privateChunk(t, app, "SPAN-EARLY", true)
+	tape := t.TempDir()
+	if _, err := app.SpanWriteNext(c.ID, tape, 0, 0, 0, 0, noProg); err != nil {
+		t.Fatal(err)
+	}
+	c = app.Store.Chunk(c.ID)
+	c.Status = "FAILED"
+	app.Store.UpdateChunk(c)
+	recorded := false
+	prev := buildAfterTarHook
+	buildAfterTarHook = func(string) {
+		for _, cp := range app.Store.Chunk(c.ID).Copies {
+			recorded = recorded || (cp.Superseded && strings.Contains(normPath(cp.Path), normPath(tape)))
+		}
+	}
+	t.Cleanup(func() { buildAfterTarHook = prev })
+	if err := app.BuildChunkOverCopies(c.ID, noProg); err != nil {
+		t.Fatal(err)
+	}
+	if !recorded {
+		t.Fatal("the tape was not on record while the build ran")
+	}
+}
+
+// A rebuild the catalog cannot record did not happen: the old copies stay as they
+// were, and running Build again works.
+func TestRebuild_UnsavedResultLeavesTheOldCopiesInPlace(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	c, _ := writtenThenFailed(t, app, "UNSAVED-REBUILD")
+	key, hash, dest := c.KeyRef, c.EncHash, c.WrittenDest
+	app.Store.failSave = func() error { return errors.New("disk full (injected)") }
+	err := app.BuildChunkOverCopies(c.ID, noProg)
+	clearFailSave(app.Store)
+	if err == nil || !strings.Contains(err.Error(), "catalog could not record it as staged") {
+		t.Fatalf("got %v", err)
+	}
+	c = app.Store.Chunk(c.ID)
+	if c.KeyRef != key || c.EncHash != hash || c.WrittenDest != dest || c.VerifiedCopyCount() != 1 || c.Status != "FAILED" {
+		t.Fatalf("the unsaved rebuild changed the record: status=%s verified=%d", c.Status, c.VerifiedCopyCount())
+	}
+	if err := app.BuildChunkOverCopies(c.ID, noProg); err != nil {
+		t.Fatalf("running Build again: %v", err)
+	}
+}
+
+// After an accepted rebuild, search still says where the old copies are.
+func TestSearch_ShowsRetiredCopiesWhenNoCurrentCopyExists(t *testing.T) {
+	s := newIT(t)
+	s.setConfig(map[string]any{"keystore_paths": s.makeKeystores(2)})
+	src := s.makeSource(map[string][]byte{"find-me.txt": []byte("still on the old medium\n")})
+	c := s.scanPlanBuild(src, 1, true, 10)
+	pid := int(c["id"].(float64))
+	vid := s.addVolume("OLD-1", "vault")
+	s.job(s.obj("POST", fmt.Sprintf("/api/chunks/%d/write", pid), map[string]any{"dest_dir": t.TempDir(), "volume_id": vid}))
+	ch := s.app.Store.Chunk(pid)
+	ch.Status = "FAILED"
+	s.app.Store.UpdateChunk(ch)
+	if err := s.app.BuildChunkOverCopies(pid, noProg); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.app.Store.Search(SearchQuery{Text: "find-me", Limit: 5})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows %v, %v", rows, err)
+	}
+	old, _ := rows[0]["retired_copies"].([]map[string]any)
+	if len(old) != 1 || old[0]["volume_label"] != "OLD-1" {
+		t.Fatalf("the old copy is not shown: %v", rows[0]["retired_copies"])
 	}
 }
 
@@ -212,6 +289,8 @@ globalThis.__fetch=async(u,o)=>{
   ck(offers({status:'WRITTEN',verify_ok:false}),'a written package whose copy failed must offer Build');
   ck(!offers({status:'WRITTEN',verify_ok:false,adopted:true}),'an adopted package has no source to build from');
   ck(!offers({status:'VERIFIED',verify_ok:true}),'a verified package must not offer Build');
+  const where=searchCopies({chunk:'P',copies:[],retired_copies:[{volume_label:'OLD-1',path:'E:/P'}]});
+  ck(where.includes('OLD-1')&&where.includes('hand')&&!where.includes('no copies recorded'),'search must show where a retired copy is; got '+where);
   if(__fail.length){console.error('FAIL\n - '+__fail.join('\n - '));process.exit(1)}
   console.log('PASS');process.exit(0);
 })();

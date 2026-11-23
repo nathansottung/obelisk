@@ -2588,21 +2588,26 @@ func (s *Store) Search(qr SearchQuery) ([]map[string]any, error) {
 			// The on-medium payload filename to look for (<name>.tar / <name>.tar.gpg).
 			row["payload"] = payloadName(ch)
 			// "which volumes, verified when?" — the whole point of the feature.
-			// Superseded copies are failed-then-rewritten history, not restore
-			// sources, so they are omitted here.
+			// Superseded copies are not app restore sources, so they are kept apart.
+			// With no current copy they are still where the data is, by hand.
 			copies := make([]map[string]any, 0, len(ch.Copies))
+			retired := []map[string]any{}
 			for _, cp := range ch.Copies {
-				if cp.Superseded {
-					continue
-				}
 				e := map[string]any{"path": cp.Path, "verify_ok": cp.VerifyOK, "last_verified_at": cp.LastVerifiedAt,
 					"last_check_level": cp.LastCheckLevel, "last_check_ok": cp.LastCheckOK, "last_check_at": cp.LastCheckAt}
 				if v := vol[cp.VolumeID]; v != nil {
 					e["volume_label"], e["location"], e["kind"], e["barcode"] = v.Label, v.Location, v.Kind, v.Barcode
 				}
+				if cp.Superseded {
+					retired = append(retired, e)
+					continue
+				}
 				copies = append(copies, e)
 			}
 			row["copies"] = copies
+			if len(copies) == 0 && len(retired) > 0 {
+				row["retired_copies"] = retired
+			}
 			row["verified_copies"] = ch.VerifiedCopyCount()
 		}
 		out = append(out, row)
