@@ -359,7 +359,7 @@ func TestCatalogMove_RefusesFaults(t *testing.T) {
 			}},
 		{name: "newer catalog", want: "newer version",
 			edit: func(raw []byte) []byte {
-				return bytes.Replace(raw, []byte(`"schema_version":8`), []byte(`"schema_version":9`), 1)
+				return bytes.Replace(raw, []byte(fmt.Sprintf(`"schema_version":%d`, currentSchemaVersion)), []byte(fmt.Sprintf(`"schema_version":%d`, currentSchemaVersion+1)), 1)
 			}},
 		{name: "data after the catalog", want: "more data", edit: func(raw []byte) []byte { return append(raw, `{}`...) }},
 		{name: "empty", want: "empty", edit: func([]byte) []byte { return []byte{} }},

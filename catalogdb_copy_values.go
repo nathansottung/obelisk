@@ -1,3 +1,5 @@
+//go:build !guionly
+
 package main
 
 // catalogdb_copy_values.go — catalog database schema v2: each copy keeps the key,

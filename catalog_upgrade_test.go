@@ -25,6 +25,49 @@ type v8Folder struct {
 	catalogRaw, jobsRaw []byte
 }
 
+// asSchemaV8 is a catalog.json as schema v8 wrote it: without the values v9 records
+// on each copy.
+func asSchemaV8(t *testing.T, raw []byte) []byte {
+	t.Helper()
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	var chunks []map[string]json.RawMessage
+	if err := json.Unmarshal(doc["chunks"], &chunks); err != nil {
+		t.Fatal(err)
+	}
+	for _, ch := range chunks {
+		var copies []map[string]json.RawMessage
+		if len(ch["copies"]) == 0 {
+			continue
+		}
+		if err := json.Unmarshal(ch["copies"], &copies); err != nil {
+			t.Fatal(err)
+		}
+		for _, cp := range copies {
+			for _, name := range []string{"key_ref", "payload_hash", "tar_hash", "sidecars", "segments", "repairable"} {
+				delete(cp, name)
+			}
+		}
+		b, err := json.Marshal(copies)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ch["copies"] = b
+	}
+	b, err := json.Marshal(chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc["chunks"], doc["schema_version"] = b, json.RawMessage("8")
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
 // makeV8DataFolder builds a real v8 data folder on the catalog.json engine: an
 // archive scanned twice (so a file has versions), a volume in a location, a
 // package with a verified copy and verify history, an event with files, a
@@ -75,6 +118,10 @@ func makeV8DataFolder(t *testing.T) v8Folder {
 	}
 	raw, err := os.ReadFile(filepath.Join(app.DataDir, "catalog.json"))
 	if err != nil {
+		t.Fatal(err)
+	}
+	raw = asSchemaV8(t, raw)
+	if err := os.WriteFile(filepath.Join(app.DataDir, "catalog.json"), raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var c catalog
