@@ -67,6 +67,21 @@ func TestWriteAccess_DenyAfterAnAllowIsNotARefusal(t *testing.T) {
 	}
 }
 
+// A new folder that inherits a grant Obelisk refuses is not left behind.
+func TestDestination_RefusedNewFolderIsRemoved(t *testing.T) {
+	app := dockApp(t)
+	parent := folderWithGrant(t, "(A;OICIIO;0x1301bf;;;WD)")
+	target := filepath.Join(parent, "new")
+	in := app.Store.CheckDestination(target)
+	c, err := app.Store.CreateDestination(target, in.Folder, true)
+	if err == nil && c.Status != destStatusRefuse {
+		t.Fatalf("status %q, want a refusal", c.Status)
+	}
+	if _, serr := os.Stat(target); !os.IsNotExist(serr) {
+		t.Fatalf("the refused folder is still there: %v (refusal: %v)", serr, err)
+	}
+}
+
 // Users or Authenticated Users granted directly: the same notice, and the user acts.
 func TestDestination_DirectUsersGrantWarnsAndUserDecides(t *testing.T) {
 	for sddl, group := range map[string]string{"AU": "Authenticated Users", "BU": "Users"} {
