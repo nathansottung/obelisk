@@ -73,10 +73,42 @@ func TestRebuild_StaysPrivateWhileAPrivateCopyExists(t *testing.T) {
 	mustExist(t, filepath.Join(c.StagedDir, c.Name+".manifest.json.gpg"))
 }
 
-// With no copy written, a rebuild follows the current setting.
-func TestRebuild_FollowsTheSettingWhenNoCopyExists(t *testing.T) {
+// A rebuild wipes a spanned package's segment records, and a failed set records no
+// copy, so its tapes leave no trace to decide from. It must stay private regardless,
+// through any number of rebuilds.
+func TestRebuild_SpannedPackageStaysPrivateWithNoCopyRecorded(t *testing.T) {
 	app, _ := newTestApp(t, nativeTools(t))
-	c, _ := privateChunk(t, app, "PRIV-UNWRITTEN", false)
+	c, _ := privateChunk(t, app, "PRIV-SPAN-REBUILD", true)
+	if _, err := app.SpanWriteNext(c.ID, t.TempDir(), 0, 0, 0, 0, noProg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.SaveConfig(map[string]any{"private_media": false}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		c = app.Store.Chunk(c.ID)
+		c.Status, c.Copies = "FAILED", nil
+		app.Store.UpdateChunk(c)
+		if err := app.BuildChunk(c.ID, noProg); err != nil {
+			t.Fatal(err)
+		}
+		if !app.Store.Chunk(c.ID).PrivateManifest {
+			t.Fatalf("rebuild %d cleared the private flag while tapes hold the package", i+1)
+		}
+	}
+}
+
+// A copy marked superseded may still be on its medium.
+func TestRebuild_StaysPrivateWithOnlyASupersededCopy(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	c, _ := privateChunk(t, app, "PRIV-SUPERSEDED", false)
+	if _, err := app.WriteChunk(c.ID, t.TempDir(), 0, 0, 0, 0, noProg); err != nil {
+		t.Fatal(err)
+	}
+	c = app.Store.Chunk(c.ID)
+	for i := range c.Copies {
+		c.Copies[i].Superseded = true
+	}
 	c.Status = "FAILED"
 	app.Store.UpdateChunk(c)
 	if _, err := app.SaveConfig(map[string]any{"private_media": false}); err != nil {
@@ -85,7 +117,7 @@ func TestRebuild_FollowsTheSettingWhenNoCopyExists(t *testing.T) {
 	if err := app.BuildChunk(c.ID, noProg); err != nil {
 		t.Fatal(err)
 	}
-	if app.Store.Chunk(c.ID).PrivateManifest {
-		t.Fatal("a package with no private copy stayed private after the setting was turned off")
+	if !app.Store.Chunk(c.ID).PrivateManifest {
+		t.Fatal("the rebuild cleared the private flag while a superseded copy may remain")
 	}
 }
