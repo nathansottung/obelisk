@@ -199,6 +199,34 @@ func TestRebuild_UnsavedResultLeavesTheOldCopiesInPlace(t *testing.T) {
 	}
 }
 
+// A check recorded while a rebuild runs survives that rebuild's failure, and the old
+// copy's sidecar hashes stay on record throughout, so a crash cannot lose them.
+func TestRebuild_FailureKeepsAResultRecordedDuringTheBuild(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	c, _ := writtenThenFailed(t, app, "CHECKED-DURING")
+	hadSidecars := false
+	prev := buildAfterTarHook
+	buildAfterTarHook = func(tarPath string) {
+		live := app.Store.Chunk(c.ID)
+		hadSidecars = len(live.Sidecars) > 0
+		bad := false
+		live.Copies[0].VerifyOK = &bad // a verify found the copy damaged
+		if err := os.MkdirAll(filepath.Join(filepath.Dir(tarPath), c.Name+".tar.gpg"), 0o755); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { buildAfterTarHook = prev })
+	if err := app.BuildChunkOverCopies(c.ID, noProg); err == nil {
+		t.Fatal("the build did not fail")
+	}
+	if !hadSidecars {
+		t.Error("the sidecar hashes were cleared while the old copy still depends on them")
+	}
+	if got := app.Store.Chunk(c.ID); got.VerifiedCopyCount() != 0 || len(got.Copies) != 1 {
+		t.Fatalf("the failed rebuild undid the damaged-copy result: verified=%d copies=%d", got.VerifiedCopyCount(), len(got.Copies))
+	}
+}
+
 // After an accepted rebuild, search still says where the old copies are.
 func TestSearch_ShowsRetiredCopiesWhenNoCurrentCopyExists(t *testing.T) {
 	s := newIT(t)

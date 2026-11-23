@@ -1091,18 +1091,42 @@ func (s *Store) rebuildWarning(id int) *RebuildWarning {
 // retireCopies is the end of an accepted rebuild: nothing on media matches the new
 // key and hash, so no old copy counts as protecting it. Each stays on record, so it
 // can still be found and restored by hand.
-func (s *Store) retireCopies(c *Chunk) {
+// The returned undo reverses only what this call changed.
+func (s *Store) retireCopies(c *Chunk) (undo func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var retired []int
 	for i := range c.Copies {
-		c.Copies[i].Superseded = true
+		if !c.Copies[i].Superseded {
+			c.Copies[i].Superseded = true
+			retired = append(retired, i)
+		}
 	}
+	verifyOK, dest := c.VerifyOK, c.WrittenDest
 	c.VerifyOK, c.WrittenDest = nil, ""
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for _, i := range retired {
+			c.Copies[i].Superseded = false
+		}
+		c.VerifyOK, c.WrittenDest = verifyOK, dest
+	}
+}
+
+// dropNotedTapes removes the records noteOldTapes added, once the segments that
+// hold the same locations are back.
+func (s *Store) dropNotedTapes(c *Chunk, from, n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n > 0 && from+n <= len(c.Copies) {
+		c.Copies = append(c.Copies[:from:from], c.Copies[from+n:]...)
+	}
 }
 
 // noteOldTapes records where each tape of a spanned set is before a build replaces
 // the segments that say so. It runs first so a crash during the build loses none.
-func (s *Store) noteOldTapes(c *Chunk, oldSegments []Segment) {
+func (s *Store) noteOldTapes(c *Chunk, oldSegments []Segment) (added int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	known := map[string]bool{}
@@ -1116,7 +1140,9 @@ func (s *Store) noteOldTapes(c *Chunk, oldSegments []Segment) {
 		}
 		known[key] = true
 		c.Copies = append(c.Copies, Copy{VolumeID: sg.VolumeID, Path: sg.Dest, Superseded: true})
+		added++
 	}
+	return added
 }
 
 // BuildChunk builds a package, stopping with a *RebuildWarning if copies of it exist.
@@ -1159,15 +1185,24 @@ func (a *App) buildChunk(id int, acceptCopies bool, progress func(float64, strin
 	overCopies := warning != nil
 	oldKey, oldEncHash, oldTarHash, oldEncBytes := c.KeyRef, c.EncHash, c.TarHash, c.EncBytes
 	oldSegments := append([]Segment(nil), c.Segments...)
-	oldCopies := append([]Copy(nil), c.Copies...)
-	oldVerifyOK, oldDest, oldSidecars := c.VerifyOK, c.WrittenDest, c.Sidecars
+	oldSidecars := c.Sidecars
+	notedFrom, noted := len(c.Copies), 0
+	var undoRetire func()
 	oldPrivate, oldBuildVerified := c.PrivateManifest, c.BuildVerified
 	restoreOld := func() {
 		if !overCopies {
 			return
 		}
 		c.KeyRef, c.EncHash, c.TarHash, c.EncBytes = oldKey, oldEncHash, oldTarHash, oldEncBytes
-		c.Copies, c.VerifyOK, c.WrittenDest, c.Sidecars = oldCopies, oldVerifyOK, oldDest, oldSidecars
+		c.Sidecars = oldSidecars
+		// Only this build's own changes are undone: a check recorded on a copy while
+		// it ran stands.
+		if undoRetire != nil {
+			undoRetire()
+			undoRetire = nil
+		}
+		a.Store.dropNotedTapes(c, notedFrom, noted)
+		noted = 0
 		c.PrivateManifest, c.BuildVerified = oldPrivate, oldBuildVerified
 		_ = a.Store.SetChunkSegments(c, oldSegments)
 	}
@@ -1232,7 +1267,10 @@ func (a *App) buildChunk(id int, acceptCopies bool, progress func(float64, strin
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return err
 	}
-	c.StagedDir, c.Sidecars = "", nil
+	c.StagedDir = ""
+	if !overCopies { // old copies are still checked against these until the new ones exist
+		c.Sidecars = nil
+	}
 	// Pre-flight against this ONE package's build peak (shared with /api/space-advice
 	// so the pre-build advice and this refusal never disagree).
 	if free, err := diskFree(cfg.StagingDir); err == nil {
@@ -1251,7 +1289,7 @@ func (a *App) buildChunk(id int, acceptCopies bool, progress func(float64, strin
 	// signals, not durability guarantees, and losing one doesn't misrepresent the
 	// medium. Only the terminal STAGED write is gated below.
 	if overCopies {
-		a.Store.noteOldTapes(c, oldSegments)
+		noted = a.Store.noteOldTapes(c, oldSegments)
 	}
 	_ = setStatus("BUILDING", "")
 	fail := func(err error) error {
@@ -1466,7 +1504,7 @@ func (a *App) buildChunk(id int, acceptCopies bool, progress func(float64, strin
 
 	c.StagedDir = work
 	if overCopies {
-		a.Store.retireCopies(c)
+		undoRetire = a.Store.retireCopies(c)
 	}
 	// Durability gate: the package is built on disk, but if the catalog can't record
 	// it as STAGED the next step (write) would never see it — worse, a reopen could
