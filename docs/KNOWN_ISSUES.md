@@ -17,7 +17,7 @@ not work.
 - Card Check no longer says a card is safe to format; it reports the number of verified copies and when they were last checked ([#25](https://github.com/nathansottung/obelisk/pull/25)).
 - One Obelisk process now owns a data folder; a second is refused ([#26](https://github.com/nathansottung/obelisk/pull/26)).
 - The local web interface now requires a signed-in session on every start ([#29](https://github.com/nathansottung/obelisk/pull/29)).
-- Private and encrypted media no longer receive a plain file list or plain tar, and restore notes name only files on the medium ([#31](https://github.com/nathansottung/obelisk/pull/31)). Media already written are not changed. See below.
+- Encrypted media no longer receive `filelist.txt` or a plain tar. Private media also keep every plain file list off the medium, and restore notes name only files on it ([#31](https://github.com/nathansottung/obelisk/pull/31)). Encrypted media with private media off still show file names in their manifest. Media already written are not changed. See below.
 
 ## Check media written before PR #31
 
@@ -28,13 +28,13 @@ These checks only read the medium. Mount a tape through LTFS read-only. Replace 
 On Windows, in PowerShell:
 
 ```powershell
-Get-ChildItem -LiteralPath E:\ -Recurse -File | Where-Object { $_.Name -match '(\.manifest\.json|^manifest-sha256\.txt|^tagmanifest-sha256\.txt|^bag-info\.txt|^filelist\.txt|\.tar)$' } | Select-Object -ExpandProperty FullName
+Get-ChildItem -LiteralPath E:\ -Recurse -File -Force | Where-Object { $_.Name -match '(\.manifest\.json|\.manifest\.hidden|^manifest-sha256\.txt|^tagmanifest-sha256\.txt|^bag-info\.txt|^filelist\.txt|\.tar)$' } | Select-Object -ExpandProperty FullName
 ```
 
 On Linux or macOS:
 
 ```bash
-find /path/to/medium -type f \( -name '*.manifest.json' -o -name manifest-sha256.txt -o -name tagmanifest-sha256.txt -o -name bag-info.txt -o -name filelist.txt -o -name '*.tar' \) -print
+find /path/to/medium -type f \( -name '*.manifest.json' -o -name '*.manifest.hidden' -o -name manifest-sha256.txt -o -name tagmanifest-sha256.txt -o -name bag-info.txt -o -name filelist.txt -o -name '*.tar' \) -print
 ```
 
 Read the results for each package folder:
@@ -43,13 +43,21 @@ Read the results for each package folder:
 |---|---|
 | `NAME.tar` beside `NAME.tar.gpg` | **Plain copy of the contents.** The encryption does not protect this medium. |
 | `filelist.txt` | Plain file names. |
+| `.NAME.manifest.hidden` | Plain file names, left by an older burn. |
 | `NAME.manifest.json`, `manifest-sha256.txt`, `tagmanifest-sha256.txt` or `bag-info.txt` beside `NAME.manifest.json.gpg` | Plain file names on a private medium. |
-| `NAME.manifest.json` with no `.gpg` manifest | Normal for a package that was not private. Its file names are readable. |
+| `NAME.manifest.json` or the BagIt files with no `.gpg` manifest | Normal for a package that was not private. Its file names are readable. |
 | `NAME.tar` with no `NAME.tar.gpg` | Normal for an unencrypted package. |
 
 An older build may also have named an unencrypted payload `NAME.tar.gpg`. If `tar -tf NAME.tar.gpg` lists files, that payload is a plain tar.
 
-If a medium exposes something it should not, keep it physically secure. Rebuild the package with a current build, write and verify a new medium, and only then decide what to do with the old one. Files on write-once media cannot be removed.
+If a medium exposes something it should not, keep it physically secure. It may be your only copy, so do not erase or destroy it yet. Files on write-once media cannot be removed, and Obelisk cannot rebuild a package that is already written. Make a clean copy by hand instead:
+
+1. Copy only these files from the package folder to a new medium: `NAME.tar.gpg`, every `NAME.tar.gpg*.par2` file, `NAME.manifest.json.gpg`, and `RESTORE.txt`. For a spanned package, copy each tape's `NAME.segNNN` files in place of `NAME.tar.gpg`.
+2. On the new medium, run `par2 verify NAME.tar.gpg.par2`. For a spanned package, first rejoin the segments in a temporary folder, as `RESTORE.txt` shows.
+3. Test the passphrase with `gpg -d NAME.manifest.json.gpg`.
+4. Label the new medium. Obelisk's catalog does not record this copy on its own.
+
+Decide what to do with the old medium only after the new one verifies.
 
 Older private media can also have a `RESTORE.txt` that names `NAME.manifest.json` when only `NAME.manifest.json.gpg` is there. Read the list with `gpg -d NAME.manifest.json.gpg`. Older spanned packages can show a garbled last segment name in `RESTORE.txt`. The rejoin commands in that file are still correct.
 
