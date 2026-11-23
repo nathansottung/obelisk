@@ -270,6 +270,7 @@ func (a *App) writeFinalizeSidecar(mountPath string, v *Volume, as finalizeAsses
 		LastVerifiedAt *time.Time     `json:"last_verified_at,omitempty"`
 		Integrity      *BuildVerified `json:"integrity,omitempty"` // effective integrity this package was built with
 		Files          []string       `json:"files"`
+		EncryptedList  string         `json:"encrypted_file_list,omitempty"` // private: the names are only here
 	}
 	pkgs := make([]invPkg, 0, len(chunks))
 	tally := newExtTally() // format census of what this sealed volume holds
@@ -279,6 +280,11 @@ func (a *App) writeFinalizeSidecar(mountPath string, v *Volume, as finalizeAsses
 			if !cp.Superseded && cp.VolumeID == v.ID {
 				lv = cp.LastVerifiedAt
 			}
+		}
+		if c.PrivateManifest { // neither its names nor its file types go on the medium
+			pkgs = append(pkgs, invPkg{Name: c.Name, Bytes: c.EncBytes, Encrypted: c.Encrypted, Spanned: c.Spanned,
+				LastVerifiedAt: lv, Integrity: c.BuildVerified, Files: []string{}, EncryptedList: mediumManifestName(c)})
+			continue
 		}
 		listed, err := a.Store.ChunkFiles(c.ID)
 		if err != nil {
@@ -339,6 +345,9 @@ func (a *App) writeFinalizeSidecar(mountPath string, v *Volume, as finalizeAsses
 	b.WriteString("\nThis medium is SEALED: the catalog refuses further writes to it until an explicit, audit-logged unseal.\n\n")
 	for _, p := range pkgs {
 		b.WriteString(fmt.Sprintf("## %s — %s%s\n\n", p.Name, humanBytes(p.Bytes), map[bool]string{true: " · encrypted", false: ""}[p.Encrypted]))
+		if p.EncryptedList != "" {
+			b.WriteString(fmt.Sprintf("File names are encrypted in `%s`.\n", p.EncryptedList))
+		}
 		for i, f := range p.Files {
 			if i >= 2000 {
 				b.WriteString(fmt.Sprintf("_…and %d more (see catalog_snapshot.json)_\n", len(p.Files)-i))

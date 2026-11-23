@@ -28,13 +28,13 @@ These checks only read the medium. Mount a tape through LTFS read-only. Replace 
 On Windows, in PowerShell:
 
 ```powershell
-Get-ChildItem -LiteralPath E:\ -Recurse -File -Force | Where-Object { $_.Name -match '(\.manifest\.json|\.manifest\.hidden|^manifest-sha256\.txt|^tagmanifest-sha256\.txt|^bag-info\.txt|^filelist\.txt|\.tar)$' } | Select-Object -ExpandProperty FullName
+Get-ChildItem -LiteralPath E:\ -Recurse -File -Force | Where-Object { $_.Name -match '(\.manifest\.json|\.manifest\.hidden|^catalog_snapshot\.json|^INVENTORY\.md|^manifest-sha256\.txt|^tagmanifest-sha256\.txt|^bag-info\.txt|^filelist\.txt|\.tar)$' } | Select-Object -ExpandProperty FullName
 ```
 
 On Linux or macOS:
 
 ```bash
-find /path/to/medium -type f \( -name '*.manifest.json' -o -name '*.manifest.hidden' -o -name manifest-sha256.txt -o -name tagmanifest-sha256.txt -o -name bag-info.txt -o -name filelist.txt -o -name '*.tar' \) -print
+find /path/to/medium -type f \( -name '*.manifest.json' -o -name '*.manifest.hidden' -o -name catalog_snapshot.json -o -name INVENTORY.md -o -name manifest-sha256.txt -o -name tagmanifest-sha256.txt -o -name bag-info.txt -o -name filelist.txt -o -name '*.tar' \) -print
 ```
 
 Read the results for each package folder:
@@ -44,6 +44,7 @@ Read the results for each package folder:
 | `NAME.tar` beside `NAME.tar.gpg` | **Plain copy of the contents.** The encryption does not protect this medium. |
 | `filelist.txt` | Plain file names. |
 | `.NAME.manifest.hidden` | Plain file names, left by an older burn. |
+| `catalog_snapshot.json` or `INVENTORY.md` in `OBELISK_SEAL`, `OBELISK_DOCK`, or an older `MNEMOSYNE_SEAL` or `MNEMOSYNE_DOCK` folder | Plain file names for every package on that medium, including private ones. |
 | `NAME.manifest.json`, `manifest-sha256.txt`, `tagmanifest-sha256.txt` or `bag-info.txt` beside `NAME.manifest.json.gpg` | Plain file names on a private medium. |
 | `NAME.manifest.json` or the BagIt files with no `.gpg` manifest | Normal for a package that was not private. Its file names are readable. |
 | `NAME.tar` with no `NAME.tar.gpg` | Normal for an unencrypted package. |
@@ -52,10 +53,12 @@ An older build may also have named an unencrypted payload `NAME.tar.gpg`. If `ta
 
 If a medium exposes something it should not, keep it physically secure. It may be your only copy, so do not erase or destroy it yet. Files on write-once media cannot be removed, and Obelisk cannot rebuild a package that is already written. Make a clean copy by hand instead:
 
-1. Copy only these files from the package folder to a new medium: `NAME.tar.gpg`, every `NAME.tar.gpg*.par2` file, `NAME.manifest.json.gpg`, and `RESTORE.txt`. For a spanned package, copy each tape's `NAME.segNNN` files in place of `NAME.tar.gpg`.
-2. On the new medium, run `par2 verify NAME.tar.gpg.par2`. For a spanned package, first rejoin the segments in a temporary folder, as `RESTORE.txt` shows.
-3. Test the passphrase with `gpg -d NAME.manifest.json.gpg`.
-4. Label the new medium. Obelisk's catalog does not record this copy on its own.
+1. Confirm the payload is really encrypted. Run `tar -tf NAME.tar.gpg`, or `tar -tf NAME.seg001` for a spanned package. **If it lists any file, stop.** That payload is plain, so a copy of it would be too. It needs a new encrypted package made from the original files.
+2. Copy only these files to a new medium: `NAME.tar.gpg` (or every tape's `NAME.segNNN`), every `NAME.tar.gpg*.par2` file (on a spanned set, these are on the last tape), and `RESTORE.txt`.
+3. Copy the manifest. For a private package, copy `NAME.manifest.json.gpg`. For a package that was not private, `NAME.manifest.json` shows file names but holds the per-file hashes. Keep it unless the names must be hidden. Without it, the list is still inside the encrypted tar.
+4. On the new medium, run `par2 verify NAME.tar.gpg.par2`. For a spanned package, first rejoin the segments in a temporary folder, as `RESTORE.txt` shows. On Windows, run its `copy /b` line in `cmd.exe`, not PowerShell.
+5. Test the passphrase and the contents in `cmd.exe` or a Unix shell, without writing the plain tar to disk: `gpg -d NAME.tar.gpg | tar -tf -`
+6. Label the new medium. Obelisk's catalog does not record this copy on its own.
 
 Decide what to do with the old medium only after the new one verifies.
 
