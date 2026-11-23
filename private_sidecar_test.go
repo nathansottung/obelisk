@@ -90,7 +90,7 @@ func TestAdopt_PrivateMediumStaysPrivateWhenSealed(t *testing.T) {
 	if _, err := app.WriteChunk(c.ID, medium, 0, 0, 0, 0, noProg); err != nil {
 		t.Fatal(err)
 	}
-	c.Name, c.EncHash = "RETIRED", "retired" // so the medium reads as one not in the catalog
+	c.Name, c.EncHash, c.Copies = "RETIRED", "retired", nil // so the medium reads as one not in the catalog
 	app.Store.UpdateChunk(c)
 	coll := app.Store.AddCollection("Adopted")
 	vol := app.Store.AddVolume(Volume{Label: "FOUND-01", Kind: "HDD"})
