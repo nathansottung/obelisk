@@ -583,20 +583,12 @@ func (s *Store) CreateDestination(path, folder string, confirmed bool) (*Destina
 	if err != nil {
 		return nil, withCreatedNote(err, removeMadeFolders(created))
 	}
+	defer after.anchor.Close()
 	if len(after.missing) > 0 {
-		after.anchor.Close()
 		return nil, fmt.Errorf("%s still does not exist after creating it; check the destination again", in.intended)
 	}
 	after.created = created
-	check := s.checkFromInspection(after)
-	after.anchor.Close() // Windows will not remove a folder held open
-	if check.Status == destStatusRefuse {
-		// A refused folder is not kept. One that cannot be removed is named.
-		if left := removeMadeFolders(created); len(left) > 0 {
-			check.Reason = withCreatedNote(fmt.Errorf("%s", check.Reason), left).Error()
-		}
-	}
-	return check, nil
+	return s.checkFromInspection(after), nil
 }
 
 // destCreateNotice asks to create a destination that does not exist yet.
