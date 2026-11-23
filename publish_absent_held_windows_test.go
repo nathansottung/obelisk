@@ -19,8 +19,11 @@ func TestPublishNoReplace_HeldStageNeverReplacesAnArrival(t *testing.T) {
 	mustWrite(t, stage, "OURS")
 	release := holdWithoutShareDelete(t, stage)
 	arrived := make(chan error, 1)
-	time.AfterFunc(250*time.Millisecond, func() { arrived <- os.WriteFile(final, []byte("RIVAL"), 0o600) })
-	time.AfterFunc(500*time.Millisecond, release)
+	time.AfterFunc(250*time.Millisecond, func() {
+		err := os.WriteFile(final, []byte("RIVAL"), 0o600)
+		release() // only after the arrival, whatever the timing
+		arrived <- err
+	})
 
 	err := publishNoReplace(stage, final)
 	if e := <-arrived; e != nil {
@@ -57,6 +60,24 @@ func TestConfigInit_FolderNameEndingInADot(t *testing.T) {
 		t.Fatalf("first-use setup: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(base, "data", "config.json")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The same, where the staging path is long enough to need the long-path prefix.
+func TestConfigInit_LongFolderNameEndingInADot(t *testing.T) {
+	parent := t.TempDir()
+	for len(parent) < 232 {
+		parent = filepath.Join(parent, "aaaaaaaaaa")
+	}
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	a := &App{DataDir: filepath.Join(parent, "data") + "."}
+	if _, err := a.InitializeConfig(); err != nil {
+		t.Fatalf("first-use setup: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(parent, "data", "config.json")); err != nil {
 		t.Fatal(err)
 	}
 }

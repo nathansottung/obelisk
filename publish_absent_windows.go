@@ -4,7 +4,6 @@ package main
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"unicode/utf16"
 
@@ -15,8 +14,8 @@ import (
 // a failure is final and never falls through to a replacing rename.
 const publishAbsentHasFallback = false
 
-// extendedPathFrom is the path length, in UTF-16 units, from which a path needs
-// the \\?\ prefix. It is the limit the os package uses.
+// extendedPathFrom is the full-path length, in UTF-16 units, from which a path
+// gets the \\?\ prefix.
 const extendedPathFrom = 248
 
 // publishAbsent moves the finished file from to the name final only if final does
@@ -45,20 +44,21 @@ func publishAbsent(from, final string) error {
 	})
 }
 
-// extendedPath gives a long absolute path the \\?\ prefix, so a data folder with a
-// long path works here as it does through the os package. A shorter path, a
-// relative path and one already in device form are returned unchanged, so Win32
-// normalizes them the same way it does for every other file call.
+// extendedPath gives a path whose full form is long the \\?\ prefix, so a data
+// folder with a long path works here as it does through the os package. The
+// prefix turns off Win32's normalizing, so it goes on the full path Win32 has
+// already normalized (a trailing dot dropped, a relative path resolved). A shorter
+// path and one already in device form are returned unchanged.
 func extendedPath(p string) string {
-	if len(utf16.Encode([]rune(p))) < extendedPathFrom || !filepath.IsAbs(p) {
+	full, err := windows.FullPath(p)
+	if err != nil || len(utf16.Encode([]rune(full))) < extendedPathFrom {
 		return p
 	}
-	clean := filepath.Clean(p)
-	if strings.HasPrefix(clean, `\\?\`) || strings.HasPrefix(clean, `\\.\`) {
+	if strings.HasPrefix(full, `\\?\`) || strings.HasPrefix(full, `\\.\`) {
 		return p
 	}
-	if strings.HasPrefix(clean, `\\`) {
-		return `\\?\UNC\` + clean[2:]
+	if strings.HasPrefix(full, `\\`) {
+		return `\\?\UNC\` + full[2:]
 	}
-	return `\\?\` + clean
+	return `\\?\` + full
 }
