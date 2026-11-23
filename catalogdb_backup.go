@@ -171,6 +171,9 @@ func checkDBCopy(path, pragma string) (*catalog, error) {
 		return nil, errors.New(strings.Replace(d.readOnlyReason, "Upgrade the app to change it — it is open read-only so newer records are never lost",
 			"Update the app first, then restore", 1))
 	}
+	if v := dbFileSchema(path); v > 0 && v < catalogDBSchemaVersion {
+		return checkOlderDBCopy(path, pragma)
+	}
 	r, err := sql.Open(catalogDBDriver, catalogDBReadOnlyDSN(path, "foreign_keys(1)"))
 	if err != nil {
 		return nil, err

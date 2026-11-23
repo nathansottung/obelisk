@@ -258,8 +258,11 @@ func (a *App) AdoptMedia(mountPath string, collectionID, volumeID int, deep bool
 	// Idempotency index: payload hash -> already-cataloged package name.
 	seen := map[string]string{}
 	for _, c := range a.Store.Chunks(0) {
-		if c.EncHash != "" {
-			seen[c.EncHash] = c.Name
+		// Every build on record counts: a medium may hold an older one.
+		for _, v := range recordedValues(c) {
+			if v.PayloadHash != "" {
+				seen[v.PayloadHash] = c.Name
+			}
 		}
 	}
 

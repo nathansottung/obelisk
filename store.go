@@ -2280,7 +2280,7 @@ func (s *Store) RemoveCollection(id int) (RemoveCounts, error) {
 				vols[cp.VolumeID] = true
 			}
 		}
-		for _, sg := range ch.Segments {
+		for _, sg := range ch.allTapes() {
 			if sg.VolumeID != 0 {
 				vols[sg.VolumeID] = true
 			}
@@ -3514,6 +3514,9 @@ type CopyAt struct {
 	VolumeID  int
 	Serial    string
 	Partition string
+	// Hash is the payload hash the check read, when it read one. It tells apart two
+	// builds that both fit a remounted drive.
+	Hash string
 }
 
 // CreditCopyCheck records a check's result on the copy it read, and only that
@@ -3606,12 +3609,32 @@ func (s *Store) copiesReadLocked(c *Chunk, at CopyAt) (fit []int, moved bool) {
 				vols[cp.VolumeID] = true
 			}
 		}
-		moved = len(fit) == 1 && len(vols) == 1
+		moved = true
 	}
 	if len(fit) == 0 || len(vols) > 1 {
 		return nil, false
 	}
-	return fit, moved
+	// Several builds can fit one remounted drive. The check belongs to the one whose
+	// bytes it read; if it cannot say which, it credits and blames none.
+	if len(fit) > 1 {
+		builds := map[string]bool{}
+		for _, i := range fit {
+			builds[c.valuesOf(&c.Copies[i]).PayloadHash] = true
+		}
+		if len(builds) > 1 {
+			var same []int
+			for _, i := range fit {
+				if at.Hash != "" && c.valuesOf(&c.Copies[i]).PayloadHash == at.Hash {
+					same = append(same, i)
+				}
+			}
+			fit = same
+		}
+	}
+	if len(fit) == 0 {
+		return nil, false
+	}
+	return fit, moved && len(fit) == 1
 }
 
 // SupersedeCopy marks the current (non-superseded) copy of c on volumeID as

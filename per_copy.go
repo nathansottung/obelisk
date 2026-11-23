@@ -198,7 +198,13 @@ func (a *App) RefillStaging(id, volumeID int, sourceDir string, progress func(fl
 		if from == "" {
 			return nil, fmt.Errorf("payload for %s not found under %s", c.Name, src)
 		}
-		if err := copyFolderInto(filepath.Dir(from), stage); err != nil {
+		// A package's own folder holds only its files. At a medium's root, other
+		// packages sit beside it, so only this package's files are taken.
+		if dir := filepath.Dir(from); filepath.Base(dir) == c.Name {
+			if err := copyFolderInto(dir, stage); err != nil {
+				return nil, err
+			}
+		} else if err := copyOwnFiles(dir, stage, filepath.Base(from), vals.Sidecars); err != nil {
 			return nil, err
 		}
 		payload = filepath.Join(stage, filepath.Base(from))
@@ -271,6 +277,25 @@ func copyFolderInto(from, to string) error {
 		}
 	}
 	return nil
+}
+
+// copyOwnFiles copies a package's payload, its par2 set and its named sidecars from
+// a folder shared with other packages.
+func copyOwnFiles(from, to, payload string, sidecars map[string]string) error {
+	entries, err := os.ReadDir(from)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		n := e.Name()
+		if !e.Type().IsRegular() || (n != payload && !(strings.HasPrefix(n, payload+".") && strings.HasSuffix(n, ".par2"))) {
+			continue
+		}
+		if err := copyFile(filepath.Join(from, n), filepath.Join(to, n)); err != nil {
+			return fmt.Errorf("copying %s: %w", n, err)
+		}
+	}
+	return copyNamedFrom(from, to, sidecars)
 }
 
 // copyNamedFrom copies each named sidecar from src, or from a subfolder of src (one

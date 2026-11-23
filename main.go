@@ -1123,7 +1123,7 @@ func api(mux routeRegistrar, app *App) {
 					vols[cp.VolumeID] = true
 				}
 			}
-			for _, sg := range ch.Segments {
+			for _, sg := range ch.allTapes() {
 				if sg.VolumeID != 0 {
 					vols[sg.VolumeID] = true
 				}
@@ -2668,7 +2668,7 @@ func api(mux routeRegistrar, app *App) {
 					}
 				}
 			}
-			for _, sg := range c.Segments {
+			for _, sg := range c.allTapes() {
 				if a := st[sg.VolumeID]; sg.VolumeID != 0 && a != nil {
 					if !a.chunks[c.ID] {
 						a.chunks[c.ID] = true
@@ -2843,7 +2843,7 @@ func api(mux routeRegistrar, app *App) {
 					row["last_check_level"], row["last_check_ok"], row["last_check_at"] = cp.LastCheckLevel, cp.LastCheckOK, cp.LastCheckAt
 				}
 			}
-			for _, sg := range c.Segments {
+			for _, sg := range c.allTapes() {
 				if sg.VolumeID == v.ID {
 					on = true
 					row["holds_segment"] = sg.Index

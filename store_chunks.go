@@ -14,6 +14,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -373,6 +374,46 @@ func recordedValues(c *Chunk) []CopyValues {
 	return out
 }
 
+// tapeSets is the package's current segments and each distinct set a current copy
+// holds, so an older set's tapes stay findable after a rebuild.
+func (c *Chunk) tapeSets() [][]Segment {
+	var sets [][]Segment
+	add := func(set []Segment) {
+		if len(set) == 0 {
+			return
+		}
+		for _, have := range sets {
+			if reflect.DeepEqual(have, set) {
+				return
+			}
+		}
+		sets = append(sets, set)
+	}
+	add(c.Segments)
+	for i := range c.Copies {
+		if !c.Copies[i].Superseded {
+			add(c.Copies[i].Segments)
+		}
+	}
+	return sets
+}
+
+// allTapes is every segment of tapeSets, one entry for each tape's segment.
+func (c *Chunk) allTapes() []Segment {
+	var out []Segment
+	seen := map[string]bool{}
+	for _, set := range c.tapeSets() {
+		for _, sg := range set {
+			key := fmt.Sprintf("%d|%s|%d|%s", sg.VolumeID, normPath(sg.Dest), sg.Index, sg.Hash)
+			if !seen[key] {
+				seen[key] = true
+				out = append(out, sg)
+			}
+		}
+	}
+	return out
+}
+
 // CopyKeyRefs is every key any copy on record needs, sorted.
 func (s *Store) CopyKeyRefs() []string {
 	s.mu.Lock()
@@ -435,16 +476,29 @@ func (s *Store) NoteCopyRepairable(c *Chunk, at CopyAt, repairable bool) {
 	}
 }
 
-// RetireOverwrittenCopy marks as history a current copy at path on the volume whose
-// bytes a write has just replaced with different ones. A copy of the same bytes is
-// still good and is left alone.
-func (s *Store) RetireOverwrittenCopy(c *Chunk, volumeID int, path string) {
+// restoreNoteHash is the hash of the RESTORE.txt in a package folder on a medium, or
+// "". Each build's note is its own, so it says which build a folder holds wherever
+// the drive is mounted now, without reading the payload.
+func restoreNoteHash(dir string) string {
+	h, err := hashFileHex(filepath.Join(dir, "RESTORE.txt"))
+	if err != nil {
+		return ""
+	}
+	return h
+}
+
+// RetireOverwrittenCopy marks as history a current copy on the volume whose bytes a
+// write has just replaced with different ones: the copy recorded at path, or the
+// one whose RESTORE.txt was in that folder (priorNote) when the drive has moved. A
+// copy of the same bytes is still good and is left alone.
+func (s *Store) RetireOverwrittenCopy(c *Chunk, volumeID int, path, priorNote string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range c.Copies {
 		cp := &c.Copies[i]
-		if cp.VolumeID == volumeID && !cp.Superseded && normPath(cp.Path) == normPath(path) &&
-			c.valuesOf(cp).PayloadHash != c.EncHash {
+		vals := c.valuesOf(cp)
+		if cp.VolumeID == volumeID && !cp.Superseded && vals.PayloadHash != c.EncHash &&
+			(normPath(cp.Path) == normPath(path) || (priorNote != "" && vals.Sidecars["RESTORE.txt"] == priorNote)) {
 			c.stampIfBare(cp)
 			cp.Superseded = true
 			_ = s.save()
@@ -469,23 +523,30 @@ func (s *Store) SupersedeCopyAt(c *Chunk, volumeID int, path string) {
 	}
 }
 
-// RetireOverwrittenSpan marks as history a current spanned copy whose segment index
-// on this tape a write has just replaced with different bytes.
-func (s *Store) RetireOverwrittenSpan(c *Chunk, volumeID int, dest string, index int, hash string) {
+// RetireOverwrittenSpan marks as history each current spanned copy of another build
+// that held a tape a write has just written to. Its segment, par2 set or sidecars
+// there may be gone. The tape is known by where it was recorded, or by the RESTORE.txt
+// it held (priorNote) when it is now mounted somewhere else.
+func (s *Store) RetireOverwrittenSpan(c *Chunk, volumeID int, dest, priorNote string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	changed := false
 	for i := range c.Copies {
 		cp := &c.Copies[i]
-		if cp.Superseded {
+		vals := c.valuesOf(cp)
+		if cp.Superseded || len(cp.Segments) == 0 || vals.PayloadHash == c.EncHash {
 			continue
 		}
+		hit := priorNote != "" && vals.Sidecars["RESTORE.txt"] == priorNote
 		for _, sg := range cp.Segments {
-			if sg.Index == index && sg.VolumeID == volumeID && normPath(sg.Dest) == normPath(dest) && sg.Hash != hash {
-				cp.Superseded = true
-				_ = s.save()
-				return
-			}
+			hit = hit || (sg.VolumeID == volumeID && normPath(sg.Dest) == normPath(dest))
 		}
+		if hit {
+			cp.Superseded, changed = true, true
+		}
+	}
+	if changed {
+		_ = s.save()
 	}
 }
 

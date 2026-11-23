@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -50,7 +51,12 @@ func (d *catalogDB) migrateIfOlder() error {
 	}
 	// One transaction: an interrupted upgrade leaves the old schema and old rows,
 	// and the next open runs it again from the start.
-	return d.Write(func(tx *sql.Tx) error {
+	return d.Write(applyCatalogDBV2)
+}
+
+// applyCatalogDBV2 is the v1 to v2 upgrade, inside the caller's transaction.
+func applyCatalogDBV2(tx *sql.Tx) error {
+	{
 		if _, err := tx.Exec(catalogDBSchemaV2); err != nil {
 			return err
 		}
@@ -71,7 +77,65 @@ func (d *catalogDB) migrateIfOlder() error {
 		}
 		_, err := tx.Exec(`UPDATE meta SET value = ? WHERE key = 'schema_version'`, strconv.Itoa(catalogDBSchemaVersion))
 		return err
-	})
+	}
+}
+
+// dbFileSchema is the schema version recorded in a database file, or 0.
+func dbFileSchema(path string) int {
+	db, err := sql.Open(catalogDBDriver, catalogDBReadOnlyDSN(path))
+	if err != nil {
+		return 0
+	}
+	defer db.Close()
+	var value string
+	if err := db.QueryRow(`SELECT value FROM meta WHERE key='schema_version'`).Scan(&value); err != nil {
+		return 0
+	}
+	v, _ := strconv.Atoi(value)
+	return v
+}
+
+// checkOlderDBCopy checks a database copy of an older schema (an app backup made
+// before an upgrade, say) by upgrading a private copy of it. The file at path is not
+// changed: the normal open upgrades it, with its backup, once it is the catalog.
+func checkOlderDBCopy(path, pragma string) (*catalog, error) {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".check-*")
+	if err != nil {
+		return nil, err
+	}
+	tmp := f.Name()
+	f.Close()
+	defer removeDBFile(tmp)
+	if err := copyFile(path, tmp); err != nil {
+		return nil, err
+	}
+	if err := upgradeDBFile(tmp); err != nil {
+		return nil, fmt.Errorf("upgrading a copy of it: %w", err)
+	}
+	return checkDBCopy(tmp, pragma)
+}
+
+// upgradeDBFile runs the upgrade on a database file no one else has open.
+func upgradeDBFile(path string) error {
+	db, err := sql.Open(catalogDBDriver, catalogDBDSN(path, catalogDBWriterPragmas...)+"&_txlock=immediate")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	if err := applyCatalogDBV2(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	return err
 }
 
 // migrateSpanCopies gives each current copy of a spanned package its segments.
@@ -112,12 +176,19 @@ func migrateSpanCopies(tx *sql.Tx) error {
 // an upgrade that was interrupted is the same data, so it is kept and not repeated.
 func (d *catalogDB) backupBeforeMigrate(from int) error {
 	prefix := fmt.Sprintf("%s.pre-schema-v%d-", d.path, from)
-	if m, _ := filepath.Glob(prefix + "*"); len(m) > 0 {
-		return nil
+	m, _ := filepath.Glob(prefix + "*")
+	for _, p := range m {
+		// A stage is a backup a crash may have cut short: it never counts.
+		if strings.HasSuffix(p, ".stage") {
+			removeDBFile(p)
+			continue
+		}
+		if quickCheckFile(p) == nil && dbFileSchema(p) == from {
+			return nil
+		}
 	}
-	final := prefix + time.Now().UTC().Format("20060102-150405")
+	final := prefix + time.Now().UTC().Format("20060102-150405.000000000")
 	stage := final + ".stage"
-	_ = os.Remove(stage)
 	if _, err := d.w.Exec(`VACUUM INTO ?`, stage); err != nil {
 		_ = os.Remove(stage)
 		return err

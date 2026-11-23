@@ -172,7 +172,7 @@ func chunkVersionVolumes(ch *Chunk, vol map[int]*Volume) []FileVersionVolume {
 		}
 		add(cp.VolumeID, cp.VerifyOK != nil && *cp.VerifyOK)
 	}
-	for _, sg := range ch.Segments {
+	for _, sg := range ch.allTapes() {
 		add(sg.VolumeID, sg.Status == "VERIFIED")
 	}
 	return out

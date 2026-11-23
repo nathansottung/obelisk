@@ -42,7 +42,7 @@ func chunkVolumes(c *Chunk, volm map[int]*Volume) []string {
 		out = append(out, s)
 	}
 	seen := map[int]bool{}
-	for _, sg := range c.Segments {
+	for _, sg := range c.allTapes() {
 		if sg.VolumeID != 0 && !seen[sg.VolumeID] {
 			seen[sg.VolumeID] = true
 			if v := volm[sg.VolumeID]; v != nil {

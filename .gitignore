@@ -29,3 +29,4 @@ keystore*.json
 # (see testdata/frozen/README.md). The rules above still cover everything else.
 !testdata/frozen/**/catalog.json
 !testdata/frozen/**/keystore.json
+!testdata/frozen/**/obelisk-appbackup-*

@@ -422,25 +422,27 @@ func writeSegmentsTable(b *strings.Builder, c *Chunk, volm map[int]*Volume) {
 	b.WriteString("\n**Spanned segments** — the payload was byte-split across these media (rejoin per `RESTORE.txt`):\n\n")
 	b.WriteString("| Segment | Bytes | Hash (prefix) | Status | Volume | Destination |\n")
 	b.WriteString("|---------|------:|---------------|--------|--------|-------------|\n")
-	for _, sg := range c.Segments {
-		name := fmt.Sprintf("%d of %d", sg.Index, len(c.Segments))
-		if sg.Par2 {
-			name += " · par2 set"
-		}
-		hp := "—"
-		if sg.Hash != "" {
-			n := len(sg.Hash)
-			if n > 16 {
-				n = 16
+	for _, set := range c.tapeSets() {
+		for _, sg := range set {
+			name := fmt.Sprintf("%d of %d", sg.Index, len(set))
+			if sg.Par2 {
+				name += " · par2 set"
 			}
-			hp = "`" + sg.Hash[:n] + "…`"
+			hp := "—"
+			if sg.Hash != "" {
+				n := len(sg.Hash)
+				if n > 16 {
+					n = 16
+				}
+				hp = "`" + sg.Hash[:n] + "…`"
+			}
+			dest := sg.Dest
+			if dest == "" {
+				dest = "(not yet written)"
+			}
+			b.WriteString(fmt.Sprintf("| %s | %d | %s | %s | %s | %s |\n",
+				mdCell(name), sg.Bytes, hp, mdCell(sg.Status), mdCell(volDesc(volm, sg.VolumeID)), mdCell(dest)))
 		}
-		dest := sg.Dest
-		if dest == "" {
-			dest = "(not yet written)"
-		}
-		b.WriteString(fmt.Sprintf("| %s | %d | %s | %s | %s | %s |\n",
-			mdCell(name), sg.Bytes, hp, mdCell(sg.Status), mdCell(volDesc(volm, sg.VolumeID)), mdCell(dest)))
 	}
 }
 

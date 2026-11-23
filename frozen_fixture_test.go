@@ -65,7 +65,7 @@ func frozenProblems(root string) ([]string, error) {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		if _, ok := want[rel]; !ok && rel != frozenChecksums {
+		if _, ok := want[rel]; !ok && rel != frozenChecksums && rel != "frozen/README.md" {
 			problems = append(problems, rel+": not in the checksum list")
 		}
 		return nil

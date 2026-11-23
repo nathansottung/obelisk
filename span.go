@@ -179,6 +179,7 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 		return nil, err
 	}
 	destChunk := out.Join(c.Name)
+	priorNote := restoreNoteHash(destChunk) // which build this tape holds, before anything is written
 	set := func(status string) { seg.Status, seg.Dest = status, destDir; _ = putSeg() }
 	fail := func(err error) (map[string]any, error) {
 		seg.Status, seg.Dest = "FAILED", destDir
@@ -191,7 +192,10 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 	if seg.Par2 {
 		// Dedicated par2 tape.
 		progress(0.1, fmt.Sprintf("writing par2 set (tape %d/%d)", seg.Index, N))
-		if err := copyPar2Set(c.StagedDir, out, c); err != nil {
+		err := copyPar2Set(c.StagedDir, out, c)
+		// Even a failed copy may have replaced part of an older set's par2 files.
+		a.Store.RetireOverwrittenSpan(c, volumeID, destDir, priorNote)
+		if err != nil {
 			return fail(err)
 		}
 	} else {
@@ -234,7 +238,7 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 			return fail(err)
 		}
 		seg.Hash = streamHash
-		a.Store.RetireOverwrittenSpan(c, volumeID, destDir, seg.Index, streamHash)
+		a.Store.RetireOverwrittenSpan(c, volumeID, destDir, priorNote)
 		set("WRITTEN")
 		// par2 rides the last data tape when it wasn't given its own.
 		if seg.Index == dataSegmentCount(c.Segments) && !c.Segments[N-1].Par2 {

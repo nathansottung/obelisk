@@ -375,6 +375,7 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 		return nil, err
 	}
 	dest := out.Join(c.Name)
+	priorNote := restoreNoteHash(dest) // which build this folder holds, before anything is written
 	var need int64
 	entries, _ := os.ReadDir(c.StagedDir)
 	for _, e := range entries {
@@ -458,7 +459,7 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 		}
 		// The payload is on the medium. A copy at this folder holding other bytes is
 		// gone, whatever happens next; one holding these same bytes is still good.
-		a.Store.RetireOverwrittenCopy(c, volumeID, dest)
+		a.Store.RetireOverwrittenCopy(c, volumeID, dest, priorNote)
 		if writeAfterPayloadHook != nil {
 			if err := writeAfterPayloadHook(); err != nil {
 				return mediumFail(err)
@@ -588,7 +589,7 @@ func (a *App) VerifyChunk(id int, destDir string) (map[string]any, error) {
 	}
 	// The copy read is checked against what it was written with. A read that matches
 	// no recorded copy (the staging folder, say) is compared with the current build.
-	at := CopyAt{Path: filepath.Dir(enc), Serial: driveSerialAt(base), Partition: partitionIDAt(base)}
+	at := CopyAt{Path: filepath.Dir(enc), Serial: driveSerialAt(base), Partition: partitionIDAt(base), Hash: rb}
 	vals, found := a.Store.copyValuesAt(c, at)
 	if !found {
 		vals = CopyValues{KeyRef: c.KeyRef, PayloadHash: c.EncHash, TarHash: c.TarHash, Sidecars: c.Sidecars}
@@ -708,12 +709,12 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 			continue
 		}
 		// Package payloads are ALWAYS level B — full content hash, no option.
-		at := CopyAt{Path: filepath.Dir(cd.path), Serial: serial, Partition: part}
+		h, herr := hashFileHex(cd.path)
+		at := CopyAt{Path: filepath.Dir(cd.path), Serial: serial, Partition: part, Hash: h}
 		vals, found := a.Store.copyValuesAt(cd.c, at)
 		if !found {
 			vals = CopyValues{KeyRef: cd.c.KeyRef, PayloadHash: cd.c.EncHash, TarHash: cd.c.TarHash, Sidecars: cd.c.Sidecars}
 		}
-		h, herr := hashFileHex(cd.path)
 		ok := herr == nil && h == vals.PayloadHash
 		repairable := herr == nil && !ok && a.par2CanRepair(cd.path)
 		note := "campaign"
