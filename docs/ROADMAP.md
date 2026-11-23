@@ -240,6 +240,63 @@ In order. Each step starts only when the one before it is done.
 
 ---
 
+## After the beta
+
+Key handling that starts once the beta is out. Both items begin with a design pass that settles
+their open questions. Passphrase keystores remain a supported choice.
+
+### Hardware-key encryption (YubiKey)
+
+Encrypt packages to hardware keys, with a spare and a way back.
+
+- **Design to start from:**
+  - Encrypt each package to several public keys at once: one YubiKey for daily use, a second kept
+    elsewhere as a spare, and a recovery key printed on paper and kept offline. Any one of them
+    opens the package.
+  - Stock `gpg` reads OpenPGP keys on a YubiKey, so the hand restore stays `par2`, `gpg`, `tar`.
+    `RESTORE.txt` must say which keys can open the package and what a restore machine needs.
+  - The paper recovery key is not optional. It covers a lost or locked YubiKey and the day the
+    hardware no longer exists.
+- **Open questions:**
+  - Keystore files must be on two devices. The matching rule for hardware keys: at least two
+    hardware keys plus the offline recovery key, with no write until all of them are enrolled.
+  - Three wrong PINs lock a key. What does the app show, and how does the user recover?
+  - One key pair loaded onto both YubiKeys, or a separate pair on each? Separate pairs let a lost
+    key be revoked. One pair is simpler.
+  - Adding or retiring a key for packages already written means re-encrypting them, or accepting
+    that old media keep their old key list.
+  - A key that needs a touch for each decrypt blocks long unattended tape verifies. Encryption
+    needs only the public keys, so writes can stay hands-off.
+- **Depends on:** the beta.
+- **Done when:** the design pass has settled these questions, and a package encrypted to hardware
+  keys is restored by hand from each enrolled key and from the paper recovery key.
+
+### Key export to a password manager
+
+Keep a copy of each key in the user's password vault, as an off-site spare that survives a house
+fire.
+
+- **Design to start from:**
+  - Step one, no integration: an "Export for password manager" action shows one block to paste
+    into a secure note. It holds the key or passphrase, its SHA-256 fingerprint, which packages it
+    opens, and the hand-restore command.
+  - A "Check my saved copy" action: the user pastes the note back and the app confirms the full
+    fingerprint. An export nobody has checked does not count as a copy.
+  - Step two, optional: create the note through the Bitwarden command-line tool when it is
+    installed and unlocked. Never pass the secret as a command-line argument, and never write it
+    to a log, job record or app-state backup.
+- **Open questions:**
+  - Does a vault copy count toward the two devices keystores must be on? The starting answer is
+    no: it is a third, off-site copy on top of the two.
+  - The private key on a YubiKey cannot be exported, so the vault holds the recovery key instead.
+  - Clipboard handling: clear it after a short time, and say so on screen.
+  - The paste block should work in any password manager. Bitwarden is the first one tested.
+- **Depends on:** the beta.
+- **Done when:** the design pass has settled these questions, and a key exported to a vault passes
+  "Check my saved copy" and opens a package in a hand restore.
+
+---
+
 ## Not planned
 
 - **Two-way sync.** Obelisk copies one way. It never changes or deletes files on a source.
