@@ -141,10 +141,14 @@ func existingAncestors(abs string) []idEntry {
 	return gateFolderAt(canon, id).chain
 }
 
+// sourceIdentityChain reads a folder and those above it by identity. A variable so a
+// test can present a read that fails once.
+var sourceIdentityChain = identityChain
+
 // gateFolderAt is the folder at canon with identity id. A folder above it that cannot
 // be read shortens the chain; the real location is still compared.
 func gateFolderAt(canon string, id fileIdent) gateFolder {
-	chain, _ := identityChain(canon, id)
+	chain, _ := sourceIdentityChain(canon, id)
 	if len(chain) == 0 {
 		chain = []idEntry{{canon, id}}
 	}

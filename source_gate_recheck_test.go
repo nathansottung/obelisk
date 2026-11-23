@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -71,10 +72,10 @@ func TestGate_StalledSourceWithNothingKnownRefuses(t *testing.T) {
 	shortSourceLimit(t)
 	app := dockApp(t)
 	src := t.TempDir()
-	f := app.Store.addFolderRecord(app.Store.AddCollection("Live").ID, src)
-	app.Store.mu.Lock()
-	f.VolumeID = ""
-	app.Store.mu.Unlock()
+	// A recorded volume is not enough: the path may lead somewhere else through a link.
+	if f := app.Store.addFolderRecord(app.Store.AddCollection("Live").ID, src); f.VolumeID == "" {
+		t.Skip("no volume recorded here")
+	}
 	_, unblock := stallSource(t, src)
 	defer unblock()
 	var got error
@@ -219,6 +220,9 @@ func TestGate_NewFolderDecisionDoesNotTouchAStalledSource(t *testing.T) {
 	app.Store.mu.Lock()
 	f.VolumeID = "another-volume" // so the volume rule does not answer first
 	app.Store.mu.Unlock()
+	if _, err := app.Store.sourceSnapshot(); err != nil {
+		t.Fatal(err)
+	}
 	_, unblock := stallSource(t, src)
 	defer unblock()
 	release := make(chan struct{})
@@ -268,6 +272,76 @@ func TestQuarantine_DoesNotTouchAStalledSource(t *testing.T) {
 	t.Cleanup(func() { sourceIdentityOf = prev })
 	if !finishes(func() { _, _ = app.Store.resolveQuarantine(file) }) {
 		t.Fatal("quarantining an unrelated file waited on a stalled source")
+	}
+}
+
+// Staging set to the package's own folder must not leave the manifest in the burn.
+func TestBurn_ManifestLeavesTheFolderEvenWhenStagingIsThatFolder(t *testing.T) {
+	app, qid, _ := burnSetupForTest(t, "Disc")
+	c := app.Store.Chunk(app.Store.BurnQueue(qid).Discs[0].ChunkID)
+	c.PrivateManifest = true
+	app.Store.UpdateChunk(c)
+	cfg := mustConfig(t, app)
+	cfg.BurnCommand = `xorriso -outdev /dev/sr0 -volid "{LABEL}" -map "{SRC}" / -commit`
+	cfg.StagingDir = c.StagedDir
+	if err := writeConfigForTest(app, cfg); err != nil {
+		t.Fatal(err)
+	}
+	plain := filepath.Join(c.StagedDir, c.Name+".manifest.json")
+	if err := os.WriteFile(plain, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ran := false
+	prev := runBurnProgram
+	runBurnProgram = func([]string) error {
+		ran = true
+		entries, err := os.ReadDir(c.StagedDir)
+		if err != nil {
+			t.Error(err)
+		}
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".manifest.json") || strings.HasSuffix(e.Name(), ".manifest.hidden") {
+				t.Errorf("%s was in the folder being burned", e.Name())
+			}
+		}
+		return errStopBurnForTest
+	}
+	t.Cleanup(func() { runBurnProgram = prev })
+	_, _ = app.BurnNext(qid, func(float64, string) {})
+	if !ran {
+		t.Fatal("the burn did not run")
+	}
+	if _, err := os.Stat(plain); err != nil {
+		t.Fatalf("the manifest was not put back: %v", err)
+	}
+}
+
+// One failed read of the folders above a source is kept, not lost to a second read.
+func TestSnapshot_AFailedParentReadIsKept(t *testing.T) {
+	app := dockApp(t)
+	src := t.TempDir()
+	app.Store.AddFolder(app.Store.AddCollection("Live").ID, src)
+	full, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failed atomic.Bool
+	prev := sourceIdentityChain
+	sourceIdentityChain = func(p string, id fileIdent) ([]idEntry, error) {
+		if normPath(p) == normPath(full) && failed.CompareAndSwap(false, true) {
+			return []idEntry{{p, id}}, errors.New("a folder above it could not be read")
+		}
+		return prev(p, id)
+	}
+	t.Cleanup(func() { sourceIdentityChain = prev })
+	snap, err := app.Store.sourceSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range snap.srcs {
+		if s.fromHandle && s.gateErr == nil {
+			t.Fatalf("a shortened chain of %d was treated as complete", len(s.gate.chain))
+		}
 	}
 }
 

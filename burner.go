@@ -205,7 +205,9 @@ func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, 
 		if os.IsNotExist(err) {
 			err = nil // no plaintext manifest to keep off the disc
 		} else if err == nil {
-			hidden := filepath.Join(cfg.StagingDir, "."+c.Name+".manifest.hidden")
+			// Beside the burned folder: same volume, and never inside it, wherever
+			// the staging setting points.
+			hidden := filepath.Join(filepath.Dir(c.StagedDir), "."+c.Name+".manifest.hidden")
 			if err = moveManifestAside(plain, hidden); err == nil {
 				defer os.Rename(hidden, plain)
 			}

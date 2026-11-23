@@ -4,8 +4,9 @@ package main
 //
 // Each source is read on its own, with a time limit, so one drive or share that stops
 // answering cannot hold up a job writing somewhere else. A source that does not answer
-// in time is decided on what was last read about it. With nothing read yet and no
-// recorded volume there is nothing to decide on, and the job is refused.
+// in time is decided on what was last read about it. With nothing read yet, its path
+// may lead anywhere through a link, so there is nothing to decide on and the job is
+// refused.
 
 import (
 	"errors"
@@ -120,13 +121,6 @@ func (s *Store) stalledSourceRefs(folder Folder) ([]sourceRef, error) {
 	if ok {
 		return refs, nil
 	}
-	if folder.VolumeID != "" {
-		abs, err := filepath.Abs(folder.Path)
-		if err != nil {
-			return nil, fmt.Errorf("cannot resolve registered source %s: %w", folder.Path, err)
-		}
-		return []sourceRef{{registered: folder.Path, offline: true, volumeID: folder.VolumeID, abs: abs, unavailable: true}}, nil
-	}
 	return nil, fmt.Errorf("refusing: registered source %s is not answering, and Obelisk has no record of where it is. Nothing was changed. Reconnect it or wait for it, then try again", folder.Path)
 }
 
@@ -150,9 +144,12 @@ func (s *Store) resolveSource(folder Folder, open func(string) (*os.File, error)
 		if id, err := identity(c); err != nil {
 			ref.gateErr = err
 		} else {
-			g := gateFolderAt(c, id)
-			ref.gate = &g
-			_, ref.gateErr = identityChain(c, id)
+			// One read, so a failure cannot be lost to a second that succeeds.
+			chain, cerr := sourceIdentityChain(c, id)
+			if len(chain) == 0 {
+				chain = []idEntry{{c, id}}
+			}
+			ref.gate, ref.gateErr = &gateFolder{canonical: c, chain: chain}, cerr
 		}
 		refs := []sourceRef{ref}
 		switch {
