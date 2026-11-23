@@ -1508,11 +1508,23 @@ func segJoinList(c *Chunk) string {
 // requiredSidecars are the sidecars every medium copy carries: the manifest it
 // ships (the encrypted one on private media) and RESTORE.txt.
 func requiredSidecars(c *Chunk) []string {
-	manifest := c.Name + ".manifest.json"
+	return []string{mediumManifestName(c), "RESTORE.txt"}
+}
+
+// mediumManifestName is the manifest file this package's media carry.
+func mediumManifestName(c *Chunk) string {
 	if c.PrivateManifest {
-		manifest += ".gpg"
+		return c.Name + ".manifest.json.gpg"
 	}
-	return []string{manifest, "RESTORE.txt"}
+	return c.Name + ".manifest.json"
+}
+
+// fileListNote is RESTORE.txt's pointer to the manifest on this medium.
+func fileListNote(c *Chunk) string {
+	if c.PrivateManifest {
+		return mediumManifestName(c) + " (encrypted; see PRIVACY below)"
+	}
+	return mediumManifestName(c)
 }
 
 // checkStagedSidecars requires each of c's sidecars in its staged folder, and
@@ -1583,10 +1595,10 @@ printed key card labelled %[2]s).
      tar -xf %[1]s.tar path/to/one/file
 
 Integrity (%[3]s):  ciphertext %[4]s   tar %[5]s
-Full file list: %[1]s.manifest.json
+Full file list: %[7]s
 No compression anywhere — extracted bytes are the originals.
 ==========================================================
-`, c.Name, c.KeyRef, c.HashAlg, c.EncHash, c.TarHash, pl)
+`, c.Name, c.KeyRef, c.HashAlg, c.EncHash, c.TarHash, pl, fileListNote(c))
 	} else {
 		pl := payloadName(c) // <name>.tar
 		t = fmt.Sprintf(`HOW TO RESTORE %[1]s
@@ -1670,8 +1682,8 @@ func spannedRestoreTxt(c *Chunk) string {
 	return fmt.Sprintf(`HOW TO RESTORE %[1]s   (SPANNED across %[2]d media)
 ==========================================================
 This package's payload was byte-split across %[2]d tapes/drives as
-%[1]s.seg001 … %[1]s.seg%[3]03d. Every tape also carries this file
-and the manifest. The par2 set is %[4]s.
+%[1]s.seg001 … %[1]s.seg%03[3]d. Every tape also carries this file
+and %[12]s. The par2 set is %[4]s.
 
 STEP 0 — GATHER and REJOIN.
 Copy into ONE folder every tape's %[1]s.segNNN, and the par2 set
@@ -1690,8 +1702,8 @@ Now the normal restore, exactly as for a single-medium package:
 Integrity (%[7]s): payload %[8]s   tar %[9]s
 Custody chain: source file SHA-256s -> tar hash -> payload hash ->
 per-segment hashes (manifest / catalog) link every tape to the originals.
-Full file list: %[1]s.manifest.json
+Full file list: %[13]s
 No compression anywhere — extracted bytes are the originals.
 ==========================================================
-`, c.Name, n, n, par2Home, segJoinList(c), decrypt, c.HashAlg, c.EncHash, c.TarHash, pl, pl)
+`, c.Name, n, n, par2Home, segJoinList(c), decrypt, c.HashAlg, c.EncHash, c.TarHash, pl, pl, mediumManifestName(c), fileListNote(c))
 }
