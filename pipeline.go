@@ -1034,25 +1034,44 @@ func packageWorkKey(id int) string { return fmt.Sprintf("package:%d", id) }
 // RebuildWarning stops a rebuild until the user accepts what it does to the copies
 // already on media. The catalog keeps one key and one hash per package.
 type RebuildWarning struct {
-	Package string
-	Copies  int
+	Package   string
+	Copies    int
+	Encrypted bool
 }
 
 func (e *RebuildWarning) Error() string {
-	return fmt.Sprintf("Rebuilding %s will stop its %d existing copy(s) from verifying in the app, because a rebuild makes a new key and hash. A hand restore of those copies with the kept key still works: follow RESTORE.txt on the medium.", e.Package, e.Copies)
+	if e.Encrypted {
+		return fmt.Sprintf("Rebuilding %s makes a new key and hash. Its %d existing copy(s) will stop verifying and restoring in the app. A hand restore of those copies with the kept key still works: follow RESTORE.txt on the medium.", e.Package, e.Copies)
+	}
+	return fmt.Sprintf("Rebuilding %s makes a new hash. Its %d existing copy(s) will stop verifying in the app. A hand restore of those copies still works: follow RESTORE.txt on the medium.", e.Package, e.Copies)
+}
+
+// chunkCanBuild is whether a build may start: a package not yet staged, one whose
+// build failed, or one whose copies all failed and whose staging is gone, which has
+// no other way forward.
+func chunkCanBuild(c *Chunk, staged bool) bool {
+	return c.Status == "PLANNED" || c.Status == "FAILED" || chunkNeedsRestaging(c) && !staged
+}
+
+func chunkNeedsRestaging(c *Chunk) bool {
+	return c.Status == "WRITTEN" && !c.Adopted && c.VerifiedCopyCount() == 0
 }
 
 // rebuildWarning is the warning a build of this package needs accepted, or nil. It
 // counts every copy on record, including superseded and failed ones, and span
 // segments, since any of them may still be on a medium.
 func (s *Store) rebuildWarning(id int) *RebuildWarning {
-	c := s.Chunk(id)
-	if c == nil {
+	live := s.Chunk(id)
+	if live == nil {
 		return nil
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if c.Status != "PLANNED" && c.Status != "FAILED" {
+	c := *live
+	c.Copies = append([]Copy(nil), live.Copies...)
+	c.Segments = append([]Segment(nil), live.Segments...)
+	s.mu.Unlock()
+	// The staging check reads a drive, so it runs outside the catalog lock.
+	if !chunkCanBuild(&c, c.StagedDir != "" && payloadPathIn(c.StagedDir, &c) != "") {
 		return nil
 	}
 	n := len(c.Copies)
@@ -1066,7 +1085,29 @@ func (s *Store) rebuildWarning(id int) *RebuildWarning {
 	if n == 0 {
 		return nil
 	}
-	return &RebuildWarning{Package: c.Name, Copies: n}
+	return &RebuildWarning{Package: c.Name, Copies: n, Encrypted: c.Encrypted}
+}
+
+// retireCopies is the end of an accepted rebuild: nothing on media matches the new
+// key and hash, so no old copy counts as protecting it. Each stays on record, with
+// every tape of a spanned set, so it can still be found and restored by hand.
+func (s *Store) retireCopies(c *Chunk, oldSegments []Segment) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	known := map[string]bool{}
+	for i := range c.Copies {
+		c.Copies[i].Superseded = true
+		known[fmt.Sprintf("%d|%s", c.Copies[i].VolumeID, normPath(c.Copies[i].Path))] = true
+	}
+	for _, sg := range oldSegments {
+		key := fmt.Sprintf("%d|%s", sg.VolumeID, normPath(sg.Dest))
+		if (sg.VolumeID == 0 && sg.Dest == "") || known[key] {
+			continue
+		}
+		known[key] = true
+		c.Copies = append(c.Copies, Copy{VolumeID: sg.VolumeID, Path: sg.Dest, Superseded: true})
+	}
+	c.VerifyOK, c.WrittenDest = nil, ""
 }
 
 // BuildChunk builds a package, stopping with a *RebuildWarning if copies of it exist.
@@ -1094,14 +1135,21 @@ func (a *App) buildChunk(id int, acceptCopies bool, progress func(float64, strin
 		return err
 	}
 	defer releasePackage()
-	if c.Status != "PLANNED" && c.Status != "FAILED" {
+	staged := a.stagedPayloadPresent(c)
+	if !chunkCanBuild(c, staged) {
+		if chunkNeedsRestaging(c) {
+			return fmt.Errorf("package %s is still staged; write it to a volume again instead of rebuilding", c.Name)
+		}
 		return fmt.Errorf("package %s is %s; only PLANNED/FAILED can build", c.Name, c.Status)
 	}
-	if !acceptCopies {
-		if w := a.Store.rebuildWarning(id); w != nil {
-			return w
-		}
+	warning := a.Store.rebuildWarning(id)
+	if warning != nil && !acceptCopies {
+		return warning
 	}
+	// If this build fails, copies on media still need the key and hash they were made with.
+	overCopies := warning != nil
+	oldKey, oldEncHash, oldTarHash, oldEncBytes := c.KeyRef, c.EncHash, c.TarHash, c.EncBytes
+	oldSegments := append([]Segment(nil), c.Segments...)
 	if c.Encrypted {
 		// An encrypted build can be the first key-generation operation. Keep
 		// that initialization workflow separate from strict replica status/sync.
@@ -1183,6 +1231,10 @@ func (a *App) buildChunk(id int, acceptCopies bool, progress func(float64, strin
 	_ = setStatus("BUILDING", "")
 	fail := func(err error) error {
 		c.StagedDir, c.Sidecars = "", nil // nothing of a failed build is written
+		if overCopies {
+			c.KeyRef, c.EncHash, c.TarHash, c.EncBytes = oldKey, oldEncHash, oldTarHash, oldEncBytes
+			_ = a.Store.SetChunkSegments(c, oldSegments)
+		}
 		_ = setStatus("FAILED", err.Error())
 		return err
 	}
@@ -1391,6 +1443,9 @@ func (a *App) buildChunk(id int, acceptCopies bool, progress func(float64, strin
 	}
 
 	c.StagedDir = work
+	if overCopies {
+		a.Store.retireCopies(c, oldSegments)
+	}
 	// Durability gate: the package is built on disk, but if the catalog can't record
 	// it as STAGED the next step (write) would never see it — worse, a reopen could
 	// leave it looking un-built. Surface the failure rather than reporting success.

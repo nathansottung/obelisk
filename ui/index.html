@@ -2271,7 +2271,7 @@ function segStr(c){if(!c.spanned||!c.segments)return '';
   return h+'</div>'}
 function actions(c){
   const b=[];
-  if(c.status==='PLANNED'||c.status==='FAILED')b.push(`<button class="btn" onclick="doBuild(${c.id})">Build package</button>`);
+  if(c.status==='PLANNED'||c.status==='FAILED'||(c.status==='WRITTEN'&&c.verify_ok===false&&!c.adopted))b.push(`<button class="btn" onclick="doBuild(${c.id})">Build package</button>`);
   if(c.spanned){
     if(c.staged_dir&&c.status==='STAGED')b.push(`<button class="btn" data-call="spanWriteDlg" data-args="${callArgs(c.id,c.name)}">Write next segment →</button>`);
   }else if(c.staged_dir&&c.status!=='PLANNED'&&c.status!=='BUILDING'){

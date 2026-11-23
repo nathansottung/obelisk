@@ -66,9 +66,11 @@ Older private media can also have a `RESTORE.txt` that names `NAME.manifest.json
 
 ## Rebuilding a package that already has copies
 
-The catalog keeps one key and one hash per package, and a rebuild makes new ones. After a rebuild, copies already on media **stop verifying in the app**, and the app can no longer read their encrypted manifest or restore them. The copies themselves are not changed.
+The catalog keeps one key and one hash per package, and a rebuild makes new ones. After a rebuild, copies already on media **stop verifying in the app**. For encrypted packages, the app can also no longer read their encrypted manifest or restore them. The copies themselves are not changed.
 
-Obelisk warns before such a rebuild and runs it only if you accept. The old key stays in the keystore, so those copies still restore by hand with `par2`, `gpg` and `tar`. Use the key named in the `RESTORE.txt` on the medium. Keeping one key and hash per copy is planned as a separate change.
+Obelisk warns before such a rebuild and runs it only if you accept. The old copies then stay listed as superseded, with where they are, and no longer count as protecting the package, so write the new build to a medium. If the rebuild fails, the old key and hash stay in place.
+
+The old key stays in the keystore, so those copies still restore by hand with `par2`, `gpg` and `tar`. Use the key named in the `RESTORE.txt` on the medium. An unencrypted package needs no key. Keeping one key and hash per copy is planned as a separate change.
 
 ## Being fixed
 

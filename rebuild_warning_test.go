@@ -3,7 +3,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -41,6 +44,150 @@ func TestBuildAPI_WarnsThenRebuildsOverExistingCopies(t *testing.T) {
 	}
 }
 
+// writtenThenFailed is a private package with one verified copy, marked FAILED.
+func writtenThenFailed(t *testing.T, app *App, name string) (*Chunk, string) {
+	t.Helper()
+	c, _ := privateChunk(t, app, name, false)
+	medium := t.TempDir()
+	if _, err := app.WriteChunk(c.ID, medium, 0, 0, 0, 0, noProg); err != nil {
+		t.Fatal(err)
+	}
+	c = app.Store.Chunk(c.ID)
+	c.Status = "FAILED"
+	app.Store.UpdateChunk(c)
+	return c, medium
+}
+
+// After an accepted rebuild no old copy may count as protecting the new build, and
+// the record of where it is must stay.
+func TestRebuild_AcceptedRetiresOldCopiesAndKeepsWhereTheyAre(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	c, _ := writtenThenFailed(t, app, "RETIRED-COPY")
+	path := c.Copies[0].Path
+	if err := app.BuildChunkOverCopies(c.ID, noProg); err != nil {
+		t.Fatal(err)
+	}
+	c = app.Store.Chunk(c.ID)
+	if c.VerifiedCopyCount() != 0 || c.CurrentCopyCount() != 0 || c.VerifyOK != nil {
+		t.Fatalf("an old copy still counts: verified=%d current=%d", c.VerifiedCopyCount(), c.CurrentCopyCount())
+	}
+	if len(c.Copies) != 1 || c.Copies[0].Path != path || !c.Copies[0].Superseded {
+		t.Fatalf("the old copy's location was not kept: %+v", c.Copies)
+	}
+	if c.Status != "STAGED" {
+		t.Fatalf("status %s", c.Status)
+	}
+}
+
+// A rebuild that fails leaves the old copies usable: the old key and hash stay.
+func TestRebuild_FailedAfterKeyGenerationKeepsTheOldKeyAndHash(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	c, medium := writtenThenFailed(t, app, "FAILED-REBUILD")
+	key, hash, tarHash := c.KeyRef, c.EncHash, c.TarHash
+	prev := buildAfterTarHook
+	buildAfterTarHook = func(tarPath string) { // gpg cannot write its output over a folder
+		if err := os.MkdirAll(filepath.Join(filepath.Dir(tarPath), c.Name+".tar.gpg"), 0o755); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { buildAfterTarHook = prev })
+	if err := app.BuildChunkOverCopies(c.ID, noProg); err == nil {
+		t.Fatal("the build did not fail")
+	}
+	c = app.Store.Chunk(c.ID)
+	if c.KeyRef != key || c.EncHash != hash || c.TarHash != tarHash {
+		t.Fatal("a failed rebuild replaced the key or hash the old copy needs")
+	}
+	if c.VerifiedCopyCount() != 1 {
+		t.Fatalf("a failed rebuild retired the copy: %+v", c.Copies)
+	}
+	if m, err := app.ReadMediumManifest(c.ID, medium); err != nil || m == nil {
+		t.Fatalf("the old copy no longer reads: %v", err)
+	}
+}
+
+// A spanned set is recorded as one copy; every tape's location must survive.
+func TestRebuild_SpannedKeepsEveryTapesLocation(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	c, _ := privateChunk(t, app, "SPAN-TAPES", true)
+	root := t.TempDir()
+	var tapes []string
+	for i := 0; i < 50; i++ {
+		tape := filepath.Join(root, fmt.Sprintf("tape%02d", i))
+		if err := os.MkdirAll(tape, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		res, err := app.SpanWriteNext(c.ID, tape, 0, 0, 0, 0, noProg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tapes = append(tapes, tape)
+		if done, _ := res["complete"].(bool); done {
+			break
+		}
+	}
+	c = app.Store.Chunk(c.ID)
+	c.Status = "FAILED"
+	app.Store.UpdateChunk(c)
+	if err := app.BuildChunkOverCopies(c.ID, noProg); err != nil {
+		t.Fatal(err)
+	}
+	c = app.Store.Chunk(c.ID)
+	for _, tape := range tapes {
+		found := false
+		for _, cp := range c.Copies {
+			found = found || (cp.Superseded && strings.Contains(normPath(cp.Path), normPath(tape)))
+		}
+		if !found {
+			t.Errorf("the record of %s was lost: %+v", filepath.Base(tape), c.Copies)
+		}
+	}
+	if c.CurrentCopyCount() != 0 {
+		t.Fatalf("%d old copies still count", c.CurrentCopyCount())
+	}
+}
+
+// The warning says what really stops working, and speaks of a key only if there is one.
+func TestRebuildWarning_MatchesThePackage(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	ok := true
+	enc := app.Store.AddChunk(Chunk{Name: "ENC", Status: "FAILED", Encrypted: true, Copies: []Copy{{Path: "x", VerifyOK: &ok}}})
+	plain := app.Store.AddChunk(Chunk{Name: "PLAIN", Status: "FAILED", Copies: []Copy{{Path: "x", VerifyOK: &ok}}})
+	e := app.Store.rebuildWarning(enc.ID).Error()
+	if !strings.Contains(e, "restoring") || !strings.Contains(e, "kept key") {
+		t.Errorf("encrypted: %s", e)
+	}
+	p := app.Store.rebuildWarning(plain.ID).Error()
+	if strings.Contains(p, "key") || !strings.Contains(p, "hand restore") {
+		t.Errorf("unencrypted: %s", p)
+	}
+}
+
+// A written package whose only copy failed and whose staging is gone can be rebuilt.
+func TestRebuild_NoDeadEndWhenTheCopyFailedAndStagingIsGone(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	c, _ := writtenThenFailed(t, app, "NO-DEAD-END")
+	bad := false
+	c.Copies[0].VerifyOK, c.VerifyOK, c.Status = &bad, &bad, "WRITTEN"
+	app.Store.UpdateChunk(c)
+	if err := app.BuildChunk(c.ID, noProg); err == nil || !strings.Contains(err.Error(), "still staged") {
+		t.Fatalf("with staging present the answer should be to write it again: %v", err)
+	}
+	if err := os.RemoveAll(c.StagedDir); err != nil {
+		t.Fatal(err)
+	}
+	var warning *RebuildWarning
+	if err := app.BuildChunk(c.ID, noProg); !errors.As(err, &warning) {
+		t.Fatalf("no warning: %v", err)
+	}
+	if err := app.BuildChunkOverCopies(c.ID, noProg); err != nil {
+		t.Fatal(err)
+	}
+	if got := app.Store.Chunk(c.ID).Status; got != "STAGED" {
+		t.Fatalf("status %s", got)
+	}
+}
+
 const rebuildWarningUI = `
 const __fail=[];const ck=(c,m)=>{if(!c)__fail.push(m)};
 const W='Rebuilding will stop its copies from verifying';
@@ -61,6 +208,10 @@ globalThis.__fetch=async(u,o)=>{
   await doBuild(7);await dlgGo();
   ck(posts.length===2&&posts[1].accept_existing_copies===true,'accepting must send the build again, accepted; got '+JSON.stringify(posts));
   ck(__toasts.some(t=>t.text.includes('Build started')),'accepting must start the build; got '+JSON.stringify(__toasts));
+  const offers=c=>actions({id:7,name:'P',segments:[],...c}).includes('doBuild');
+  ck(offers({status:'WRITTEN',verify_ok:false}),'a written package whose copy failed must offer Build');
+  ck(!offers({status:'WRITTEN',verify_ok:false,adopted:true}),'an adopted package has no source to build from');
+  ck(!offers({status:'VERIFIED',verify_ok:true}),'a verified package must not offer Build');
   if(__fail.length){console.error('FAIL\n - '+__fail.join('\n - '));process.exit(1)}
   console.log('PASS');process.exit(0);
 })();
