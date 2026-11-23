@@ -848,11 +848,11 @@ func keepCatalogJSON(dataDir string, raw []byte, from int) (string, error) {
 }
 
 // publishNoReplace moves the finished file from to final, refusing when final
-// already exists. A hard link is the atomic no-replace publish where the
-// filesystem has links; elsewhere (FAT, exFAT) the absence is checked just before
-// the rename. The folder entry is then flushed.
+// already exists. publishAbsent is the atomic no-replace publish; where it is not
+// available (a filesystem without hard links, off Windows) the absence is checked
+// just before the rename. The folder entry is then flushed.
 func publishNoReplace(from, final string) error {
-	if err := os.Link(from, final); err == nil {
+	if err := publishAbsent(from, final); err == nil {
 		// final is in place. A staging name that cannot be removed now is only a
 		// second name for the same file; the next move sweeps it.
 		_ = os.Remove(from)

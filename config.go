@@ -39,8 +39,8 @@ type configHooks struct {
 	observe    func(string)
 	createTemp func(string, string) (configTempFile, error)
 	rename     func(string, string) error // nil uses renameReplacing
-	link       func(string, string) error // initialization only; nil uses os.Link
-	removeTemp func(string) error         // checked post-link cleanup; nil uses os.Remove
+	link       func(string, string) error // initialization only; nil uses publishAbsent
+	removeTemp func(string) error         // checked post-publish cleanup; nil uses os.Remove
 	syncDir    func(string) error
 }
 
@@ -372,22 +372,23 @@ func (a *App) publishConfig(b []byte, initialize bool) (published bool, err erro
 		return fail(e)
 	}
 	if initialize {
-		// Link gives the fully written, synced, closed file its final name ONLY if
-		// that directory entry is absent. Unlike Rename it never replaces an entry.
-		// This is the publication point. Unsupported hard links fail closed; there
-		// is no replacement fallback or placeholder written at the destination.
+		// publishAbsent gives the fully written, synced, closed file its final name
+		// ONLY if that directory entry is absent. It never replaces an entry.
+		// This is the publication point. A failure fails closed; there is no
+		// replacement fallback or placeholder written at the destination.
 		link := a.configIO.link
 		if link == nil {
-			link = os.Link
+			link = publishAbsent
 		}
 		if e := link(f.Name(), a.configPath()); e != nil {
-			return fail(fmt.Errorf("initialization refused: destination must remain absent and the filesystem must support hard links; inspect or restore the existing configuration: %w", e))
+			return fail(fmt.Errorf("initialization refused: the destination must remain absent and the file could not be published without replacing it; inspect or restore the existing configuration: %w", e))
 		}
 		remove := a.configIO.removeTemp
 		if remove == nil {
 			remove = os.Remove
 		}
-		if e := remove(f.Name()); e != nil {
+		// On Windows publishAbsent moved the file, so the staging name is already gone.
+		if e := remove(f.Name()); e != nil && !errors.Is(e, os.ErrNotExist) {
 			return true, &ConfigPublicationError{Published: true, Err: fmt.Errorf("remove initialization staging: %w", e)}
 		}
 	} else {
