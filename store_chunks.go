@@ -358,6 +358,21 @@ func (c *Chunk) withSegments(segs []Segment) *Chunk {
 	return &view
 }
 
+// recordedValues is every distinct set of values on record for this package: its
+// current build first, then its copies.
+func recordedValues(c *Chunk) []CopyValues {
+	out := []CopyValues{{KeyRef: c.KeyRef, PayloadHash: c.EncHash, TarHash: c.TarHash, Sidecars: c.Sidecars}}
+	seen := map[string]bool{c.EncHash: true}
+	for i := range c.Copies {
+		v := c.valuesOf(&c.Copies[i])
+		if !seen[v.PayloadHash] {
+			seen[v.PayloadHash] = true
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // CopyKeyRefs is every key any copy on record needs, sorted.
 func (s *Store) CopyKeyRefs() []string {
 	s.mu.Lock()

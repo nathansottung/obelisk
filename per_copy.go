@@ -44,21 +44,6 @@ func checkCopySidecarsAt(c *Chunk, sidecars map[string]string, dir string) error
 	return nil
 }
 
-// recordedValues is every distinct set of values on record for this package: its
-// current build first, then its copies.
-func recordedValues(c *Chunk) []CopyValues {
-	out := []CopyValues{{KeyRef: c.KeyRef, PayloadHash: c.EncHash, TarHash: c.TarHash, Sidecars: c.Sidecars}}
-	seen := map[string]bool{c.EncHash: true}
-	for i := range c.Copies {
-		v := c.valuesOf(&c.Copies[i])
-		if !seen[v.PayloadHash] {
-			seen[v.PayloadHash] = true
-			out = append(out, v)
-		}
-	}
-	return out
-}
-
 // valuesForPayload finds the recorded values of the payload at path. With one set on
 // record no read is needed unless verifyBytes is set.
 func valuesForPayload(c *Chunk, path string, verifyBytes bool) (CopyValues, error) {
