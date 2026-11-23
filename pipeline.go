@@ -1049,6 +1049,10 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	if c.Status != "PLANNED" && c.Status != "FAILED" {
 		return fmt.Errorf("package %s is %s; only PLANNED/FAILED can build", c.Name, c.Status)
 	}
+	// A build makes a new key and hash, and the catalog keeps one of each per package.
+	if n := c.VerifiedCopyCount(); n > 0 {
+		return fmt.Errorf("package %s has %d verified copy(s) on media; a rebuild would replace the key and hash they need to be read and verified, so it is refused. Restore from a verified copy instead", c.Name, n)
+	}
 	if c.Encrypted {
 		// An encrypted build can be the first key-generation operation. Keep
 		// that initialization workflow separate from strict replica status/sync.

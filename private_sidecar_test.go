@@ -49,28 +49,77 @@ func TestSealAndDock_KeepPrivateFileNamesOffTheMedium(t *testing.T) {
 	}
 }
 
-// A rebuild after private mode is turned off must not expose a copy already written
-// as private: the next seal of that medium would list its names.
-func TestRebuild_StaysPrivateWhileAPrivateCopyExists(t *testing.T) {
+// A rebuild makes a new key and hash. While a verified copy exists it is refused, so
+// that copy can still be read and verified, and its record is left as it was.
+func TestRebuild_RefusedWhileAVerifiedCopyExists(t *testing.T) {
 	app, _ := newTestApp(t, nativeTools(t))
 	c, _ := privateChunk(t, app, "PRIV-REBUILD", false)
-	if _, err := app.WriteChunk(c.ID, t.TempDir(), 0, 0, 0, 0, noProg); err != nil {
+	medium := t.TempDir()
+	if _, err := app.WriteChunk(c.ID, medium, 0, 0, 0, 0, noProg); err != nil {
 		t.Fatal(err)
 	}
 	c = app.Store.Chunk(c.ID)
+	key, hash, staged := c.KeyRef, c.EncHash, c.StagedDir
 	c.Status = "FAILED"
 	app.Store.UpdateChunk(c)
-	if _, err := app.SaveConfig(map[string]any{"private_media": false}); err != nil {
-		t.Fatal(err)
-	}
-	if err := app.BuildChunk(c.ID, noProg); err != nil {
-		t.Fatal(err)
+	err := app.BuildChunk(c.ID, noProg)
+	if err == nil || !strings.Contains(err.Error(), "verified") {
+		t.Fatalf("the rebuild was not refused: %v", err)
 	}
 	c = app.Store.Chunk(c.ID)
-	if !c.PrivateManifest {
-		t.Fatal("the rebuild cleared the private flag of a package with a private copy")
+	if c.KeyRef != key || c.EncHash != hash || c.StagedDir != staged {
+		t.Fatal("a refused rebuild changed the package's key, hash or staging")
 	}
-	mustExist(t, filepath.Join(c.StagedDir, c.Name+".manifest.json.gpg"))
+	mustExist(t, filepath.Join(staged, c.Name+".tar.gpg"))
+	if m, err := app.ReadMediumManifest(c.ID, medium); err != nil || m == nil {
+		t.Fatalf("the written copy's manifest no longer reads: %v", err)
+	}
+}
+
+// Adopting a private medium keeps it private, so sealing it lists no names.
+func TestAdopt_PrivateMediumStaysPrivateWhenSealed(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	if _, err := app.SaveConfig(map[string]any{"buffer_pct": 0}); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := privateChunk(t, app, "PRIV-ADOPT", false)
+	medium := t.TempDir()
+	if _, err := app.WriteChunk(c.ID, medium, 0, 0, 0, 0, noProg); err != nil {
+		t.Fatal(err)
+	}
+	c.Name, c.EncHash = "RETIRED", "retired" // so the medium reads as one not in the catalog
+	app.Store.UpdateChunk(c)
+	coll := app.Store.AddCollection("Adopted")
+	vol := app.Store.AddVolume(Volume{Label: "FOUND-01", Kind: "HDD"})
+	res, err := app.AdoptMedia(medium, coll.ID, vol.ID, false, noProg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := adoptedList(t, res, "adopted"); len(got) != 1 {
+		t.Fatalf("adopted %d packages: %v", len(got), res)
+	}
+	var adopted *Chunk
+	for _, ch := range app.Store.Chunks(0) {
+		if ch.Name == "PRIV-ADOPT" {
+			adopted = ch
+		}
+	}
+	if adopted == nil || !adopted.PrivateManifest {
+		t.Fatalf("the adopted package is not private: %+v", adopted)
+	}
+	mount := t.TempDir()
+	if _, err := app.FinalizeVolume(vol, mount, "NS", true, "test seal"); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"catalog_snapshot.json", "INVENTORY.md"} {
+		b, err := os.ReadFile(filepath.Join(mount, sealSidecarDir, f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), privateFileName) {
+			t.Errorf("%s lists a private file name", f)
+		}
+	}
 }
 
 // A rebuild wipes a spanned package's segment records, and a failed set records no
