@@ -848,17 +848,21 @@ func keepCatalogJSON(dataDir string, raw []byte, from int) (string, error) {
 }
 
 // publishNoReplace moves the finished file from to final, refusing when final
-// already exists. publishAbsent is the atomic no-replace publish; where it is not
-// available (a filesystem without hard links, off Windows) the absence is checked
-// just before the rename. The folder entry is then flushed.
+// already exists. publishAbsent is the atomic no-replace publish. Off Windows, on a
+// filesystem without hard links (FAT, exFAT), the absence is checked just before
+// the rename; on Windows the move needs no such fallback, so a failure is returned
+// and nothing can replace a file that arrived. The folder entry is then flushed.
 func publishNoReplace(from, final string) error {
 	if err := publishAbsent(from, final); err == nil {
-		// final is in place. A staging name that cannot be removed now is only a
-		// second name for the same file; the next move sweeps it.
+		// final is in place. Off Windows a staging name that cannot be removed now
+		// is only a second name for the same file; the next move sweeps it.
 		_ = os.Remove(from)
 	} else {
 		if _, serr := os.Lstat(final); !errors.Is(serr, fs.ErrNotExist) {
 			return fmt.Errorf("%s already exists; refusing to replace it", final)
+		}
+		if !publishAbsentHasFallback {
+			return err
 		}
 		if err := renameReplacing(from, final); err != nil {
 			return err
