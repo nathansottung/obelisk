@@ -61,7 +61,7 @@ func asSchemaV8(t *testing.T, raw []byte) []byte {
 		t.Fatal(err)
 	}
 	doc["chunks"], doc["schema_version"] = b, json.RawMessage("8")
-	out, err := json.Marshal(doc)
+	out, err := json.MarshalIndent(doc, "", " ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,6 +154,9 @@ func assertEveryRecordKept(t testing.TB, dir string, raw []byte) {
 	if err := decodeCatalogJSON(raw, &want); err != nil {
 		t.Fatal(err)
 	}
+	// The upgrade's one intended change: each copy records its package's values.
+	migrateCopyValuesV9(&want)
+	want.SchemaVersion = currentSchemaVersion
 	if len(got.Audit) < len(want.Audit) || !reflect.DeepEqual(canonAudit(got.Audit[:len(want.Audit)]), canonAudit(want.Audit)) {
 		t.Fatalf("the audit log was not kept: %d entries before, %d after", len(want.Audit), len(got.Audit))
 	}
