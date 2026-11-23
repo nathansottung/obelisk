@@ -145,9 +145,7 @@ func TestWrite_HoldsItsPackageAgainstARebuild(t *testing.T) {
 	after := app.Store.Chunk(c.ID)
 	after.Status = "FAILED"
 	app.Store.UpdateChunk(after)
-	// The hold is gone: what stops this rebuild now is the verified copy it would orphan.
-	err = app.BuildChunk(c.ID, noProg)
-	if err == nil || strings.Contains(err.Error(), "already") || !strings.Contains(err.Error(), "verified") {
+	if err := app.BuildChunkOverCopies(c.ID, noProg); err != nil {
 		t.Fatalf("a rebuild after the writes: %v", err)
 	}
 }

@@ -1031,7 +1031,55 @@ func decryptRoundtripHash(gpgBin, ciphertext, pass string) (string, error) {
 // packageWorkKey names a package for claimWork.
 func packageWorkKey(id int) string { return fmt.Sprintf("package:%d", id) }
 
+// RebuildWarning stops a rebuild until the user accepts what it does to the copies
+// already on media. The catalog keeps one key and one hash per package.
+type RebuildWarning struct {
+	Package string
+	Copies  int
+}
+
+func (e *RebuildWarning) Error() string {
+	return fmt.Sprintf("Rebuilding %s will stop its %d existing copy(s) from verifying in the app, because a rebuild makes a new key and hash. A hand restore of those copies with the kept key still works: follow RESTORE.txt on the medium.", e.Package, e.Copies)
+}
+
+// rebuildWarning is the warning a build of this package needs accepted, or nil. It
+// counts every copy on record, including superseded and failed ones, and span
+// segments, since any of them may still be on a medium.
+func (s *Store) rebuildWarning(id int) *RebuildWarning {
+	c := s.Chunk(id)
+	if c == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c.Status != "PLANNED" && c.Status != "FAILED" {
+		return nil
+	}
+	n := len(c.Copies)
+	if n == 0 {
+		for _, sg := range c.Segments {
+			if sg.VolumeID != 0 || sg.Dest != "" || sg.Status == "WRITTEN" || sg.Status == "VERIFIED" {
+				n++
+			}
+		}
+	}
+	if n == 0 {
+		return nil
+	}
+	return &RebuildWarning{Package: c.Name, Copies: n}
+}
+
+// BuildChunk builds a package, stopping with a *RebuildWarning if copies of it exist.
 func (a *App) BuildChunk(id int, progress func(float64, string)) error {
+	return a.buildChunk(id, false, progress)
+}
+
+// BuildChunkOverCopies builds a package after the user accepted the RebuildWarning.
+func (a *App) BuildChunkOverCopies(id int, progress func(float64, string)) error {
+	return a.buildChunk(id, true, progress)
+}
+
+func (a *App) buildChunk(id int, acceptCopies bool, progress func(float64, string)) error {
 	cfg, cfgErr := a.LoadConfig()
 	if cfgErr != nil {
 		return cfgErr
@@ -1049,9 +1097,10 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	if c.Status != "PLANNED" && c.Status != "FAILED" {
 		return fmt.Errorf("package %s is %s; only PLANNED/FAILED can build", c.Name, c.Status)
 	}
-	// A build makes a new key and hash, and the catalog keeps one of each per package.
-	if n := c.VerifiedCopyCount(); n > 0 {
-		return fmt.Errorf("package %s has %d verified copy(s) on media; a rebuild would replace the key and hash they need to be read and verified, so it is refused. Restore from a verified copy instead", c.Name, n)
+	if !acceptCopies {
+		if w := a.Store.rebuildWarning(id); w != nil {
+			return w
+		}
 	}
 	if c.Encrypted {
 		// An encrypted build can be the first key-generation operation. Keep

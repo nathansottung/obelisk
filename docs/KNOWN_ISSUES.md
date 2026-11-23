@@ -64,6 +64,12 @@ Decide what to do with the old medium only after the new one verifies.
 
 Older private media can also have a `RESTORE.txt` that names `NAME.manifest.json` when only `NAME.manifest.json.gpg` is there. Read the list with `gpg -d NAME.manifest.json.gpg`. Older spanned packages can show a garbled last segment name in `RESTORE.txt`. The rejoin commands in that file are still correct.
 
+## Rebuilding a package that already has copies
+
+The catalog keeps one key and one hash per package, and a rebuild makes new ones. After a rebuild, copies already on media **stop verifying in the app**, and the app can no longer read their encrypted manifest or restore them. The copies themselves are not changed.
+
+Obelisk warns before such a rebuild and runs it only if you accept. The old key stays in the keystore, so those copies still restore by hand with `par2`, `gpg` and `tar`. Use the key named in the `RESTORE.txt` on the medium. Keeping one key and hash per copy is planned as a separate change.
+
 ## Being fixed
 
 - Key handling and key backups

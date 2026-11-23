@@ -502,7 +502,7 @@ const api=async(m,u,b)=>{
     else showOwnerSignIn();
     throw new Error('Sign-in required');
   }
-  if(!r.ok)throw new Error(j.error||r.statusText);
+  if(!r.ok){const e=new Error(j.error||r.statusText);e.body=j;throw e}
   return j;};
 const GB=n=>((n||0)/1e9).toFixed(2);
 
@@ -2322,7 +2322,14 @@ async function doBuild(id){
       <div class="dim" style="font-size:11.5px;margin-top:6px">This scratch is freed once the package is written — the next build reuses it.</div>
     </div>
     <div class="row" style="margin-top:12px"><button class="btn" onclick="go()">Build now</button></div>`;
-  dlg(body,async()=>{await api('POST',`/api/chunks/${id}/build`);toast('Build started — see Jobs');loc('jobs')});
+  dlg(body,async()=>{
+    try{await api('POST',`/api/chunks/${id}/build`)}
+    catch(e){
+      if(!e.body||!e.body.needs_confirmation)throw e;
+      if(!confirm(e.body.warning+'\n\nRebuild anyway?'))throw new Error('Nothing was rebuilt. The existing copies are unchanged.');
+      await api('POST',`/api/chunks/${id}/build`,{accept_existing_copies:true});
+    }
+    toast('Build started — see Jobs');loc('jobs')});
 }
 async function writeDlg(id,name,payload){
   const [vols,tape]=await Promise.all([api('GET','/api/volumes'),api('GET','/api/tape/status').catch(()=>({}))]);
