@@ -1,8 +1,8 @@
 package main
 
-// burn_manifest.go — a burn copies its whole folder onto write-once media, so a
-// private package's plaintext manifest is moved out first, and no other package's
-// plaintext may be in there.
+// burn_manifest.go — what stays off the medium. A burn copies its whole folder onto
+// write-once media, so files that are only for staging are moved out first and put
+// back afterward, and nothing from another package may be in there.
 
 import (
 	"errors"
@@ -13,64 +13,128 @@ import (
 	"strings"
 )
 
-// hideBurnManifest makes c's staged folder safe to burn. putBack returns a moved
-// manifest afterward. An error means the burn must not run.
-func hideBurnManifest(c *Chunk) (putBack func() error, err error) {
-	putBack = func() error { return nil }
+// stagedOnlyFile reports whether a file in a staged folder stays off the medium: the
+// file list, the plaintext tar beside an encrypted payload, and on private media
+// everything that names the files. Restoring needs none of them: par2 covers the
+// payload, and the file list is inside the tar and in the encrypted manifest.
+func stagedOnlyFile(c *Chunk, name string) bool {
+	switch name {
+	case "filelist.txt":
+		return true
+	case c.Name + ".tar":
+		return name != payloadName(c)
+	}
+	if !c.PrivateManifest {
+		return false
+	}
+	return name == c.Name+".manifest.json" || isBagItTagFile(name)
+}
+
+// burnHoldDir is where a burn keeps staged-only files, beside the burned folder: same
+// volume, never inside it. Named by a hash, as a package name need not suit a path.
+func burnHoldDir(c *Chunk, parent string) string {
+	return filepath.Join(parent, ".obelisk-burn-hold-"+sha256Hex([]byte(c.Name))[:16])
+}
+
+// holdStagedOnlyFiles makes c's staged folder safe to burn. putBack returns what was
+// moved. An error means the burn must not run.
+func holdStagedOnlyFiles(c *Chunk) (putBack func() error, err error) {
 	dir := filepath.Clean(c.StagedDir)
 	parent := filepath.Dir(dir)
 	if parent == dir {
-		return nil, fmt.Errorf("%s is a drive root, so there is no place outside it for the private manifest", dir)
+		return nil, fmt.Errorf("%s is a drive root, so there is no place outside it for files that must stay off the disc", dir)
 	}
-	plain := filepath.Join(dir, c.Name+".manifest.json")
-	hidden := filepath.Join(parent, "."+c.Name+".manifest.hidden")
-	if c.PrivateManifest {
-		// A burn that crashed left it aside. If a newer build made another, the move
-		// below replaces the old copy.
-		if _, err := os.Stat(hidden); err == nil {
-			if _, perr := os.Stat(plain); errors.Is(perr, fs.ErrNotExist) {
-				if err := moveManifestBack(hidden, plain); err != nil {
-					return nil, fmt.Errorf("the manifest left by an earlier burn could not be put back: %w", err)
-				}
-			} else if perr != nil {
-				return nil, perr
-			}
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			return nil, err
-		}
-	}
-	if err := refuseForeignManifests(dir, plain); err != nil {
+	hold := burnHoldDir(c, parent)
+	if err := recoverBurnHold(c, dir, parent, hold); err != nil {
 		return nil, err
 	}
-	if !c.PrivateManifest {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		lower := strings.ToLower(e.Name())
+		switch {
+		case !e.IsDir() && stagedOnlyFile(c, e.Name()):
+			names = append(names, e.Name())
+		case e.IsDir(), strings.HasSuffix(lower, ".manifest.hidden"),
+			strings.HasSuffix(lower, ".manifest.json") && e.Name() != c.Name+".manifest.json":
+			return nil, fmt.Errorf("%s holds %s, which is not part of this package and would go on the disc. Move it out, or set the staging folder somewhere outside this package", dir, e.Name())
+		}
+	}
+	var moved []string
+	putBack = func() error {
+		var errs []error
+		for _, n := range moved {
+			if err := moveManifestBack(filepath.Join(hold, n), filepath.Join(dir, n)); err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", n, err))
+			}
+		}
+		if len(errs) == 0 && len(moved) > 0 {
+			_ = os.Remove(hold) // only ever removes an empty folder
+		}
+		return errors.Join(errs...)
+	}
+	if len(names) == 0 {
 		return putBack, nil
 	}
-	if _, err := os.Stat(plain); errors.Is(err, fs.ErrNotExist) {
-		return putBack, nil // no plaintext manifest to keep off the disc
-	} else if err != nil {
-		return nil, err
+	if err := os.MkdirAll(hold, 0o700); err != nil {
+		return nil, fmt.Errorf("the folder for files that must stay off the disc could not be made: %w", err)
 	}
-	if err := moveManifestAside(plain, hidden); err != nil {
-		return nil, fmt.Errorf("the private manifest could not be moved out of the disc's folder: %w", err)
+	for _, n := range names {
+		if err := moveManifestAside(filepath.Join(dir, n), filepath.Join(hold, n)); err != nil {
+			if perr := putBack(); perr != nil {
+				err = errors.Join(err, perr)
+			}
+			return nil, fmt.Errorf("%s could not be moved out of the disc's folder: %w", n, err)
+		}
+		moved = append(moved, n)
 	}
-	return func() error { return moveManifestBack(hidden, plain) }, nil
+	return putBack, nil
 }
 
-// refuseForeignManifests finds any plaintext manifest in dir other than own. A folder
-// that cannot be read fully is refused, since what it holds would be burned.
-func refuseForeignManifests(dir, own string) error {
-	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
+// recoverBurnHold puts back what a crashed burn left aside. A file that a newer build
+// has made again stays in the hold, and the move before the burn replaces it.
+func recoverBurnHold(c *Chunk, dir, parent, hold string) error {
+	// Earlier versions kept the private manifest here.
+	if c.PrivateManifest {
+		old := filepath.Join(parent, "."+c.Name+".manifest.hidden")
+		if _, err := os.Stat(old); err == nil {
+			if err := os.MkdirAll(hold, 0o700); err != nil {
+				return err
+			}
+			if err := os.Rename(old, filepath.Join(hold, c.Name+".manifest.json")); err != nil {
+				return fmt.Errorf("the manifest left by an earlier burn could not be recovered: %w", err)
+			}
+		} else if !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
-		if d.IsDir() {
-			return nil
-		}
-		name := strings.ToLower(d.Name())
-		if strings.HasSuffix(name, ".manifest.hidden") ||
-			(strings.HasSuffix(name, ".manifest.json") && p != own) {
-			return fmt.Errorf("%s holds another package's plaintext manifest (%s), which would go on the disc. Move it out, or set the staging folder somewhere outside this package", dir, p)
-		}
+	}
+	entries, err := os.ReadDir(hold)
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil
-	})
+	}
+	if err != nil {
+		return err
+	}
+	left := false
+	for _, e := range entries {
+		target := filepath.Join(dir, e.Name())
+		_, serr := os.Stat(target)
+		switch {
+		case errors.Is(serr, fs.ErrNotExist):
+			if err := moveManifestBack(filepath.Join(hold, e.Name()), target); err != nil {
+				return fmt.Errorf("%s, left by an earlier burn, could not be put back: %w", e.Name(), err)
+			}
+		case serr != nil:
+			return serr
+		default:
+			left = true
+		}
+	}
+	if !left {
+		_ = os.Remove(hold) // only ever removes an empty folder
+	}
+	return nil
 }

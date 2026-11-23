@@ -199,19 +199,22 @@ func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, 
 
 	set("BURNING", "")
 	progress(0.05, "burning "+c.Name)
-	// Private media: the burn command copies the whole staged folder, so the plaintext
-	// manifest is moved out of it during the burn (only the .gpg gets burned), then
-	// restored. A disc already burned stays good if the move back fails, so that is
-	// reported on the disc, and the next burn of this package tries again.
-	putBack, err := hideBurnManifest(c)
+	// The burn command copies the whole staged folder, so what must stay off the disc
+	// is moved out of it during the burn, then restored. A disc already burned stays
+	// good if the move back fails, so that is reported on the disc, and the next burn
+	// of this package tries again.
+	putBack, err := holdStagedOnlyFiles(c)
 	if err != nil {
 		set("FAILED", "nothing was burned: "+err.Error())
 		return nil, errors.New(disc.Detail)
 	}
 	defer func() {
 		if err := putBack(); err != nil {
-			note := fmt.Sprintf("the private manifest of %s could not be put back in its folder: %v", c.Name, err)
+			note := fmt.Sprintf("staged files of %s could not be put back in its folder: %v", c.Name, err)
 			a.Store.Log("burn", note)
+			if disc.Detail != "" { // keep why the burn itself failed
+				note = disc.Detail + "; " + note
+			}
 			set(disc.Status, note)
 		}
 	}()

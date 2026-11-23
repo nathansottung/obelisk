@@ -382,10 +382,7 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 		// Skip staging-only files: dirs, the filelist, and the intermediate tar
 		// that sits beside the ciphertext for encrypted packages. For a plaintext
 		// package the tar IS the payload (n == payloadBase), so it is counted.
-		if e.IsDir() || n == "filelist.txt" {
-			continue
-		}
-		if n == c.Name+".tar" && n != payloadBase {
+		if e.IsDir() || stagedOnlyFile(c, n) {
 			continue
 		}
 		if st, err := e.Info(); err == nil {
@@ -467,11 +464,8 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 		n := e.Name()
 		// Skip the payload (streamed above) and the staging-only intermediate tar
 		// and filelist; copy every real sidecar (par2 set, manifest, RESTORE.txt).
-		if e.IsDir() || n == payloadBase || n == c.Name+".tar" || n == "filelist.txt" {
-			continue
-		}
-		if c.PrivateManifest && n == c.Name+".manifest.json" {
-			continue // private: the ENCRYPTED manifest.json.gpg ships instead
+		if e.IsDir() || n == payloadBase || stagedOnlyFile(c, n) {
+			continue // on private media the ENCRYPTED manifest.json.gpg ships instead
 		}
 		sum, err := out.CopyIn(filepath.Join(c.StagedDir, n), c.Name+"/"+n, 0o644)
 		if err != nil {

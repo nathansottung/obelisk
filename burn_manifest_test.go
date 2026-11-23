@@ -19,7 +19,7 @@ func privateBurn(t *testing.T) (*App, int, *Chunk, string) {
 		t.Fatal(err)
 	}
 	c := app.Store.Chunk(app.Store.BurnQueue(qid).Discs[0].ChunkID)
-	c.PrivateManifest = true
+	c.PrivateManifest, c.Encrypted = true, true
 	app.Store.UpdateChunk(c)
 	plain := filepath.Join(c.StagedDir, c.Name+".manifest.json")
 	if err := os.WriteFile(plain, []byte("{}"), 0o600); err != nil {
@@ -123,5 +123,97 @@ func TestBurn_TrailingSeparatorStillMovesTheManifestOut(t *testing.T) {
 	_, _ = app.BurnNext(qid, func(float64, string) {})
 	if !ran {
 		t.Fatal("the burn did not run")
+	}
+}
+
+// What a private or encrypted disc must not carry: the plaintext tar, the file list,
+// and the BagIt tags that name the files. Each is back in staging afterward.
+func TestBurn_KeepsEveryPlaintextFileOffTheDisc(t *testing.T) {
+	app, qid, c, plain := privateBurn(t)
+	off := []string{c.Name + ".tar", "filelist.txt", "manifest-sha256.txt", "bagit.txt", "bag-info.txt", "tagmanifest-sha256.txt"}
+	for _, n := range off {
+		mustWrite(t, filepath.Join(c.StagedDir, n), "content of "+n)
+	}
+	kept := filepath.Join(c.StagedDir, c.Name+".manifest.json.gpg")
+	mustWrite(t, kept, "ciphertext")
+	ran := false
+	onBurn(t, func() {
+		ran = true
+		for _, n := range append(off, filepath.Base(plain)) {
+			if _, err := os.Stat(filepath.Join(c.StagedDir, n)); err == nil {
+				t.Errorf("%s was in the folder being burned", n)
+			}
+		}
+		if _, err := os.Stat(kept); err != nil {
+			t.Errorf("the encrypted manifest was not in the folder: %v", err)
+		}
+	})
+	if _, err := app.BurnNext(qid, func(float64, string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if !ran {
+		t.Fatal("the burn did not run")
+	}
+	for _, n := range off {
+		b, err := os.ReadFile(filepath.Join(c.StagedDir, n))
+		if err != nil || string(b) != "content of "+n {
+			t.Errorf("%s was not put back: %q, %v", n, b, err)
+		}
+	}
+	if _, err := os.Stat(burnHoldDir(c, filepath.Dir(c.StagedDir))); !os.IsNotExist(err) {
+		t.Errorf("the holding folder was left behind: %v", err)
+	}
+}
+
+// An encrypted package that is not private keeps its manifest, but not its plaintext tar.
+func TestBurn_EncryptedPackageLeavesItsTarBehind(t *testing.T) {
+	app, qid, c, plain := privateBurn(t)
+	c.PrivateManifest = false
+	app.Store.UpdateChunk(c)
+	tar := filepath.Join(c.StagedDir, c.Name+".tar")
+	mustWrite(t, tar, "plaintext")
+	onBurn(t, func() {
+		if _, err := os.Stat(tar); err == nil {
+			t.Error("the plaintext tar was in the folder being burned")
+		}
+		if _, err := os.Stat(plain); err != nil {
+			t.Errorf("a non-private manifest should be on the disc: %v", err)
+		}
+	})
+	if _, err := app.BurnNext(qid, func(float64, string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(tar); err != nil {
+		t.Fatalf("the tar was not put back: %v", err)
+	}
+}
+
+// The write path keeps the same files off private media.
+func TestWrite_PrivateMediaCarriesNoFileList(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	c := builtTestChunk(t, app, "PRIVATE-WRITE")
+	gpg := filepath.Join(c.StagedDir, c.Name+".manifest.json.gpg")
+	mustWrite(t, gpg, "ciphertext")
+	h, err := hashFileHex(gpg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.PrivateManifest = true
+	if c.Sidecars == nil {
+		c.Sidecars = map[string]string{}
+	}
+	c.Sidecars[c.Name+".manifest.json.gpg"] = h
+	app.Store.UpdateChunk(c)
+	dest := t.TempDir()
+	if _, err := app.WriteChunk(c.ID, dest, 0, 0, 0, 0, noProg2); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"manifest-sha256.txt", "tagmanifest-sha256.txt", "bag-info.txt", "bagit.txt", c.Name + ".manifest.json"} {
+		if _, err := os.Stat(filepath.Join(dest, c.Name, n)); err == nil {
+			t.Errorf("%s is on the private medium", n)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dest, c.Name, c.Name+".manifest.json.gpg")); err != nil {
+		t.Errorf("the encrypted manifest is missing: %v", err)
 	}
 }
