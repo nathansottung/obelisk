@@ -202,6 +202,77 @@ func TestKeystores_UnknownDiskInUseWarnsAndStillWorks(t *testing.T) {
 
 // If the private manifest cannot be moved aside, the burn must not run.
 func TestBurn_StopsWhenThePrivateManifestCannotBeMoved(t *testing.T) {
+	burnWithFailedMove(t, os.ErrPermission)
+}
+
+// A staging folder that is gone is a failed move, not a manifest that is not there.
+func TestBurn_StopsWhenTheManifestHasNowhereToGo(t *testing.T) {
+	burnWithFailedMove(t, os.ErrNotExist)
+}
+
+// Decisions never go back to a stalled drive, whichever path they take.
+func TestGate_NewFolderDecisionDoesNotTouchAStalledSource(t *testing.T) {
+	shortSourceLimit(t)
+	app := dockApp(t)
+	src := t.TempDir()
+	f := app.Store.addFolderRecord(app.Store.AddCollection("Live").ID, src)
+	app.Store.mu.Lock()
+	f.VolumeID = "another-volume" // so the volume rule does not answer first
+	app.Store.mu.Unlock()
+	_, unblock := stallSource(t, src)
+	defer unblock()
+	release := make(chan struct{})
+	defer close(release)
+	prev := sourceCanonicalOfMissing
+	sourceCanonicalOfMissing = func(p string) string {
+		if strings.EqualFold(p, src) {
+			<-release
+		}
+		return prev(p)
+	}
+	t.Cleanup(func() { sourceCanonicalOfMissing = prev })
+	if !finishes(func() {
+		if r, err := app.Store.reserveOutputPath(filepath.Join(t.TempDir(), "new")); err == nil {
+			r()
+		}
+	}) {
+		t.Fatal("deciding a new folder went back to the stalled source")
+	}
+}
+
+func TestQuarantine_DoesNotTouchAStalledSource(t *testing.T) {
+	shortSourceLimit(t)
+	app := dockApp(t)
+	src := t.TempDir()
+	app.Store.AddFolder(app.Store.AddCollection("Live").ID, src)
+	if _, err := app.Store.sourceSnapshot(); err != nil {
+		t.Fatal(err)
+	}
+	full, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "unrelated.txt")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	defer close(release)
+	prev := sourceIdentityOf
+	sourceIdentityOf = func(p string) (fileIdent, error) {
+		if normPath(p) == normPath(full) {
+			<-release
+		}
+		return prev(p)
+	}
+	t.Cleanup(func() { sourceIdentityOf = prev })
+	if !finishes(func() { _, _ = app.Store.resolveQuarantine(file) }) {
+		t.Fatal("quarantining an unrelated file waited on a stalled source")
+	}
+}
+
+func burnWithFailedMove(t *testing.T, moveErr error) {
+	t.Helper()
 	app, qid, _ := burnSetupForTest(t, "Disc")
 	cfg := mustConfig(t, app)
 	cfg.BurnCommand = `xorriso -outdev /dev/sr0 -volid "{LABEL}" -map "{SRC}" / -commit`
@@ -218,7 +289,7 @@ func TestBurn_StopsWhenThePrivateManifestCannotBeMoved(t *testing.T) {
 		}
 	}
 	prevMove, prevBurn := moveManifestAside, runBurnProgram
-	moveManifestAside = func(string, string) error { return os.ErrPermission }
+	moveManifestAside = func(string, string) error { return moveErr }
 	runBurnProgram = func([]string) error {
 		t.Error("the burn ran with the plaintext manifest in its folder")
 		return errStopBurnForTest

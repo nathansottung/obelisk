@@ -202,13 +202,15 @@ func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, 
 	if c.PrivateManifest {
 		plain := filepath.Join(c.StagedDir, c.Name+".manifest.json")
 		_, err := os.Stat(plain)
-		if err == nil {
+		if os.IsNotExist(err) {
+			err = nil // no plaintext manifest to keep off the disc
+		} else if err == nil {
 			hidden := filepath.Join(cfg.StagingDir, "."+c.Name+".manifest.hidden")
 			if err = moveManifestAside(plain, hidden); err == nil {
 				defer os.Rename(hidden, plain)
 			}
 		}
-		if err != nil && !os.IsNotExist(err) {
+		if err != nil {
 			// The burn copies the whole folder: it must not run with this file in it.
 			set("FAILED", "the private manifest could not be moved out of the disc's folder, so nothing was burned: "+err.Error())
 			return nil, errors.New(disc.Detail)

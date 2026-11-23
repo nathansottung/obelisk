@@ -209,21 +209,18 @@ func (s *Store) resolveQuarantine(absPath string) (quarantineTarget, error) {
 		if src.offline || !src.fromHandle {
 			continue // no object to match; the path checks below cover it
 		}
-		sid, err := pathIdentity(src.canonical)
-		if err != nil {
+		if src.gate == nil || src.gateErr != nil || len(src.gate.chain) == 0 {
 			// Without its identity the source cannot be matched, and the path
 			// check alone may not see another spelling of it: refuse.
-			return t, fmt.Errorf("refusing to quarantine %s: cannot establish what registered source %s is: %w", absPath, src.registered, err)
+			return t, fmt.Errorf("refusing to quarantine %s: cannot establish what registered source %s is: %v", absPath, src.registered, src.gateErr)
 		}
+		srcChain := src.gate.chain // read with the source, so a stalled drive is not asked again
+		sid := srcChain[0].id
 		switch {
 		case sid == id:
 			return t, fmt.Errorf("quarantine never moves source data: %s is registered source %s", absPath, src.registered)
 		case chainHas(chain[1:], sid):
 			return t, fmt.Errorf("quarantine never moves source data: %s is inside registered source %s", absPath, src.registered)
-		}
-		srcChain, err := identityChain(src.canonical, sid)
-		if err != nil {
-			return t, fmt.Errorf("refusing to quarantine %s: %w", absPath, err)
 		}
 		if chainHas(srcChain[1:], id) {
 			return t, fmt.Errorf("quarantine never moves source data: %s holds registered source %s, which would move with it", absPath, src.registered)

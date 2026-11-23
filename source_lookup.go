@@ -92,9 +92,14 @@ func (s *Store) startSourceLookup(folder Folder) *sourceLookup {
 	l := &sourceLookup{started: time.Now(), done: make(chan struct{})}
 	s.srcGate.lookups[key] = l
 	s.srcGate.mu.Unlock()
-	open, identity := openSourceRoot, sourceIdentityOf
+	open, identity, missing := openSourceRoot, sourceIdentityOf, sourceCanonicalOfMissing
 	go func() {
 		refs, err := s.resolveSource(folder, open, identity)
+		for i := range refs { // read here, so a decision never goes back to the drive
+			if refs[i].offline && refs[i].abs != "" {
+				refs[i].realAbs = missing(refs[i].abs)
+			}
+		}
 		s.srcGate.mu.Lock()
 		delete(s.srcGate.lookups, key)
 		if err == nil {
@@ -141,9 +146,13 @@ func (s *Store) resolveSource(folder Folder, open func(string) (*os.File, error)
 			return nil, fmt.Errorf("cannot establish the real location of registered source root %s: %w — refusing to authorize a destination while a protected source is unresolved", r, cerr)
 		}
 		ref := sourceRef{registered: r, canonical: c, fromHandle: true}
-		if id, err := identity(c); err == nil { // if not, its real location is still compared
+		// If this cannot be read, its real location is still compared.
+		if id, err := identity(c); err != nil {
+			ref.gateErr = err
+		} else {
 			g := gateFolderAt(c, id)
 			ref.gate = &g
+			_, ref.gateErr = identityChain(c, id)
 		}
 		refs := []sourceRef{ref}
 		switch {

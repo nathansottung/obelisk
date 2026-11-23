@@ -137,6 +137,10 @@ type sourceRef struct {
 	// gate is the source by identity, read with it, so a decision need not go back
 	// to a drive that may have stopped answering. nil when it could not be read.
 	gate *gateFolder
+	// gateErr is why gate, or the folders above it, could not be read.
+	gateErr error
+	// realAbs is where an away source's path really leads, read with it.
+	realAbs string
 }
 
 // sourceSnapshot is the set of registered sources an authorization decided
@@ -199,7 +203,7 @@ func (snap *sourceSnapshot) decideCreate(intended, display string) error {
 		// Compared as registered and as its real location: a registered spelling
 		// (an 8.3 short name, a junction, a different case) is not the real path
 		// the destination is named by.
-		for _, p := range []string{s.abs, canonicalOfMissing(s.abs)} {
+		for _, p := range []string{s.abs, s.realAbs} {
 			if p == "" {
 				continue
 			}
@@ -210,6 +214,10 @@ func (snap *sourceSnapshot) decideCreate(intended, display string) error {
 	}
 	return nil
 }
+
+// sourceCanonicalOfMissing is canonicalOfMissing for a source that is away. A variable
+// so a test can present a drive that stops answering.
+var sourceCanonicalOfMissing = canonicalOfMissing
 
 // canonicalOfMissing is the real location a path that does not exist would have:
 // its deepest existing folder, read back from a handle, with the missing names
