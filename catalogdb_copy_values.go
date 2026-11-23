@@ -15,9 +15,6 @@ import (
 	"time"
 )
 
-// catalogDBCopyColumns are the columns schema v2 adds to the copy table, in order.
-var catalogDBCopyColumns = []string{"key_ref", "payload_hash", "tar_hash", "sidecars", "segments", "repairable"}
-
 // catalogDBSchemaV2 adds them. Every column has a default, so old rows stay valid.
 const catalogDBSchemaV2 = `
 ALTER TABLE copy ADD COLUMN key_ref TEXT NOT NULL DEFAULT '';

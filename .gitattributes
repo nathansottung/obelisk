@@ -24,3 +24,6 @@
 # The Windows package launcher is committed byte-exact with CRLF: the package
 # builder copies committed blobs, which never get working-tree conversion.
 *.cmd -text
+
+# Frozen fixtures of old catalog formats are byte-exact: never normalize them.
+testdata/frozen/** -text

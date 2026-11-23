@@ -18,7 +18,7 @@ import (
 func TestCatalogCurrentRoundTrip(t *testing.T) {
 	jsonEngineOnly(t, "the move refuses the fixtures' placeholder hashes; catalogdb_migrate_test.go moves corrected copies")
 	dir := t.TempDir()
-	fixture, err := os.ReadFile(filepath.Join("testdata", "catalog_current.json"))
+	fixture, err := os.ReadFile(filepath.Join("testdata", "catalog_current_schema.json"))
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}

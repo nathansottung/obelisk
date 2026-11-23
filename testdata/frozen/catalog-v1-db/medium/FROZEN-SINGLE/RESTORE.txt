@@ -1,0 +1,33 @@
+HOW TO RESTORE FROZEN-SINGLE
+==========================================================
+You need exactly three ubiquitous open-source programs:
+  par2  (github.com/Parchive/par2cmdline)  - repair
+  gpg   (gnupg.org)                        - decrypt
+  tar   (POSIX standard, preinstalled)     - extract
+And the passphrase for key K-47D6E96E (Obelisk keystore, or the
+printed key card labelled K-47D6E96E).
+
+1) VERIFY / REPAIR (no passphrase needed):
+     par2 verify FROZEN-SINGLE.tar.gpg.par2
+     par2 repair FROZEN-SINGLE.tar.gpg.par2      (only if verify fails)
+2) DECRYPT (prompts for passphrase):
+     gpg -d -o FROZEN-SINGLE.tar FROZEN-SINGLE.tar.gpg
+3) EXTRACT all, or one file:
+     tar -xf FROZEN-SINGLE.tar
+     tar -xf FROZEN-SINGLE.tar path/to/one/file
+
+Integrity (SHA256):  ciphertext a58c188322c8c7c4517069329199aa62b652228761f8f6df8253e4b0d8088e8a   tar 1059752720160503a403a0c192b03dd037b868c20f194bce1a9f6258b49c8649
+Full file list: FROZEN-SINGLE.manifest.json.gpg (encrypted; see PRIVACY below)
+No compression anywhere — extracted bytes are the originals.
+==========================================================
+
+WINDOWS — the tar built into Windows writes each file name in the system's
+code page. A name that code page cannot hold (Japanese on a Western system,
+for example) is refused with "unreadable filename", and the other files are
+restored. The package keeps every name as UTF-8: to restore those files too,
+extract FROZEN-SINGLE.tar with a tar that keeps Unicode names, such as 7-Zip
+(7z x FROZEN-SINGLE.tar).
+
+PRIVACY — this medium's file listing is ENCRYPTED (FROZEN-SINGLE.manifest.json.gpg),
+so a lost tape reveals no filenames. To read it:
+     gpg -d FROZEN-SINGLE.manifest.json.gpg      (passphrase for key K-47D6E96E)

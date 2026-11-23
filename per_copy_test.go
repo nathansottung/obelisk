@@ -3,7 +3,6 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -210,53 +209,6 @@ func TestPerCopy_ValuesSurviveAReopen(t *testing.T) {
 	}
 }
 
-const perCopyV8Catalog = `{"schema_version":8,"next_id":{"volume":2,"chunk":3},
-"volumes":[{"id":1,"label":"V1","kind":"HDD"}],
-"chunks":[
- {"id":1,"name":"PKG-A","status":"VERIFIED","hash_alg":"SHA256","tar_hash":"tar-a","enc_hash":"enc-a","encrypted":true,"key_ref":"key-a",
-  "sidecars":{"PKG-A.manifest.json":"m-a","RESTORE.txt":"r-a"},
-  "copies":[{"volume_id":1,"path":"D:/PKG-A","verify_ok":true},{"volume_id":1,"path":"E:/PKG-A","superseded":true}]},
- {"id":2,"name":"PKG-S","status":"VERIFIED","hash_alg":"SHA256","tar_hash":"tar-s","enc_hash":"enc-s","encrypted":true,"key_ref":"key-s","spanned":true,
-  "segments":[{"index":1,"bytes":10,"hash":"s1","status":"VERIFIED","dest":"T:/1","volume_id":1},{"index":2,"bytes":5,"hash":"s2","status":"VERIFIED","dest":"T:/2","volume_id":1}],
-  "copies":[{"volume_id":1,"path":"spanned across 2 media","verify_ok":true}]}
-]}`
-
-func checkInherited(t *testing.T, s *Store) {
-	t.Helper()
-	a := s.Chunk(1)
-	for _, cp := range a.Copies {
-		if cp.KeyRef != "key-a" || cp.PayloadHash != "enc-a" || cp.TarHash != "tar-a" || cp.Sidecars["RESTORE.txt"] != "r-a" {
-			t.Fatalf("the copy at %s did not inherit: %+v", cp.Path, cp)
-		}
-	}
-	sp := s.Chunk(2)
-	if cp := sp.Copies[0]; cp.KeyRef != "key-s" || cp.PayloadHash != "enc-s" || len(cp.Segments) != 2 || cp.Segments[1].Hash != "s2" {
-		t.Fatalf("the spanned copy did not inherit: %+v", cp)
-	}
-}
-
-// A catalog from before this change: each copy inherits its package's values.
-func TestPerCopy_OldCatalogMigrates(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "catalog.json"), []byte(perCopyV8Catalog), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	s, err := openTestStore(t, dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	checkInherited(t, s)
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	s, err = openTestStore(t, dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	checkInherited(t, s)
-}
-
 // A value a copy already holds is never overwritten by running the migration again.
 func TestPerCopy_MigrationIsIdempotent(t *testing.T) {
 	c := catalog{Chunks: []*Chunk{{KeyRef: "new-key", EncHash: "new-hash", Copies: []Copy{
@@ -269,97 +221,6 @@ func TestPerCopy_MigrationIsIdempotent(t *testing.T) {
 	if cp := c.Chunks[0].Copies[1]; cp.KeyRef != "new-key" || cp.PayloadHash != "new-hash" {
 		t.Fatalf("a bare copy did not inherit: %+v", cp)
 	}
-}
-
-// oldCatalogDB turns a catalog database back into the schema before this change.
-func oldCatalogDB(t *testing.T, path string) {
-	t.Helper()
-	db, err := sql.Open(catalogDBDriver, catalogDBDSN(path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	for _, col := range catalogDBCopyColumns {
-		if _, err := db.Exec(`ALTER TABLE copy DROP COLUMN ` + col); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := db.Exec(`UPDATE meta SET value='1' WHERE key='schema_version'`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func migratedDBFixture(t *testing.T) string {
-	t.Helper()
-	if !sqliteEngineRun() {
-		t.Skip("database engine only")
-	}
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "catalog.json"), []byte(perCopyV8Catalog), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	s, err := openTestStore(t, dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	oldCatalogDB(t, filepath.Join(dir, catalogDBName))
-	return dir
-}
-
-func TestPerCopy_OldDatabaseMigrates(t *testing.T) {
-	dir := migratedDBFixture(t)
-	s, err := openTestStore(t, dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	checkInherited(t, s)
-	if m, _ := filepath.Glob(filepath.Join(dir, catalogDBName+".pre-schema-v1-*")); len(m) != 1 {
-		t.Fatalf("no backup was kept before the migration: %v", m)
-	}
-}
-
-// An interrupted migration changes nothing, and the next open finishes it.
-func TestPerCopy_InterruptedDatabaseMigrationRestartsCleanly(t *testing.T) {
-	dir := migratedDBFixture(t)
-	path := filepath.Join(dir, catalogDBName)
-	prev := catalogDBMigrateHook
-	catalogDBMigrateHook = func() error { return errors.New("interrupted (injected)") }
-	t.Cleanup(func() { catalogDBMigrateHook = prev })
-	if s, err := openTestStore(t, dir); err == nil {
-		s.Close()
-		t.Fatal("the interrupted migration reported success")
-	}
-	catalogDBMigrateHook = prev
-
-	db, err := sql.Open(catalogDBDriver, catalogDBReadOnlyDSN(path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var version string
-	var cols int
-	if err := db.QueryRow(`SELECT value FROM meta WHERE key='schema_version'`).Scan(&version); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info('copy') WHERE name='key_ref'`).Scan(&cols); err != nil {
-		t.Fatal(err)
-	}
-	db.Close()
-	if version != "1" || cols != 0 {
-		t.Fatalf("the interrupted migration left a change: version %s, new columns %d", version, cols)
-	}
-	s, err := openTestStore(t, dir)
-	if err != nil {
-		t.Fatalf("the next open: %v", err)
-	}
-	defer s.Close()
-	checkInherited(t, s)
 }
 
 // The old key stays readable from every keystore after a rebuild and a sync.

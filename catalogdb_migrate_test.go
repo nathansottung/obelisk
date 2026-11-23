@@ -279,9 +279,9 @@ func TestCatalogMove_IDSequencesContinue(t *testing.T) {
 // The shipped fixtures: their placeholder hashes are refused, and with real hashes
 // both move, the schema-v1 one through the in-memory migrations.
 func TestCatalogMove_Fixtures(t *testing.T) {
-	for _, name := range []string{"catalog_current.json", "catalog_schema1.json"} {
+	for _, name := range []string{"catalog_current_schema.json", "catalog_schema1.json", "frozen/catalog-v8-original.json"} {
 		t.Run(name, func(t *testing.T) {
-			raw, err := os.ReadFile(filepath.Join("testdata", name))
+			raw, err := os.ReadFile(filepath.Join("testdata", filepath.FromSlash(name)))
 			if err != nil {
 				t.Fatal(err)
 			}

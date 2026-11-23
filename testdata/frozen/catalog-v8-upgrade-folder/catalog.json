@@ -1,0 +1,335 @@
+{
+ "schema_version": 8,
+ "next_id": {
+  "chunk": 1,
+  "collection": 1,
+  "event": 1,
+  "file": 2,
+  "folder": 1,
+  "location": 1,
+  "template": 4,
+  "volume": 1
+ },
+ "collections": [
+  {
+   "id": 1,
+   "name": "Backup Me",
+   "created_at": "2026-11-23T21:53:33.0693116Z",
+   "kind": "SOURCED"
+  }
+ ],
+ "folders": [
+  {
+   "id": 1,
+   "collection_id": 1,
+   "path": "C:\\obelisk-fixture\\tmp\\TestZZFrozenUpgradeFolder1038220855\\004",
+   "volume_id": "win-vsn:CEA3AEDB"
+  }
+ ],
+ "files": [
+  {
+   "id": 1,
+   "collection_id": 1,
+   "folder_id": 1,
+   "rel_path": "sub/b.txt",
+   "size_bytes": 11,
+   "hash_alg": "SHA256",
+   "hash": "9835cca3a2be79aceb0211c11614f886b1e4c0a39df1170bac6d93d3c251f1f0",
+   "blake3": "2e38fe301a5fe1bc49adbf2be50f7bdd1c658266900ce235ab92782359a8c0cc",
+   "mtime": "2026-11-23T21:53:33.0693116Z",
+   "first_seen": "2026-11-23T21:53:33.0810687Z",
+   "shot_at": "0001-01-01T00:00:00Z",
+   "role": "OTHER",
+   "event_id": 1
+  },
+  {
+   "id": 2,
+   "collection_id": 1,
+   "folder_id": 1,
+   "rel_path": "a.txt",
+   "size_bytes": 14,
+   "hash_alg": "SHA256",
+   "hash": "c7351c42bd80cb5fbeb782a098966c9df52f88b8c51dfe241a59b046ffb7d4dd",
+   "blake3": "9ff4ef56f107645afb0a816a3364812499eb427bbf73f24b6b4b1d4c37f4b854",
+   "mtime": "2026-11-23T21:53:33.1879695Z",
+   "first_seen": "2026-11-23T21:53:33.1915265Z",
+   "versions": [
+    {
+     "hash": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8",
+     "hash_alg": "SHA256",
+     "size_bytes": 5,
+     "mtime": "2026-11-23T21:53:33.0687963Z",
+     "first_seen": "2026-11-23T21:53:33.0810687Z",
+     "superseded_at": "2026-11-23T21:53:33.1915265Z"
+    }
+   ],
+   "shot_at": "0001-01-01T00:00:00Z",
+   "role": "OTHER",
+   "event_id": 1
+  }
+ ],
+ "chunks": [
+  {
+   "id": 1,
+   "collection_id": 1,
+   "name": "AB-PKG",
+   "status": "VERIFIED",
+   "media_kind": "HDD",
+   "target_bytes": 0,
+   "data_bytes": 0,
+   "enc_bytes": 0,
+   "file_count": 2,
+   "src_root": "",
+   "hash_alg": "SHA256",
+   "tar_hash": "",
+   "enc_hash": "",
+   "encrypted": false,
+   "key_ref": "",
+   "par2_redundancy": 0,
+   "staged_dir": "",
+   "written_dest": "",
+   "verify_ok": null,
+   "error": "",
+   "files": [
+    {
+     "file_id": 2,
+     "rel_path": "a.txt",
+     "size_bytes": 5,
+     "hash": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+    },
+    {
+     "file_id": 1,
+     "rel_path": "sub/b.txt",
+     "size_bytes": 11,
+     "hash": "9835cca3a2be79aceb0211c11614f886b1e4c0a39df1170bac6d93d3c251f1f0"
+    }
+   ],
+   "verify_events": [
+    {
+     "at": "2026-11-23T21:53:33.1104846Z",
+     "ok": true,
+     "path": "",
+     "note": "campaign",
+     "level": "B"
+    }
+   ],
+   "spanned": false,
+   "copies": [
+    {
+     "volume_id": 1,
+     "path": "H:/AB-PKG",
+     "written_at": "2026-11-23T21:53:33.10358Z",
+     "last_verified_at": "2026-11-23T21:53:33.10358Z",
+     "verify_ok": true
+    }
+   ],
+   "created_at": "2026-11-23T21:53:33.0994757Z"
+  }
+ ],
+ "keys": null,
+ "burn_queues": null,
+ "volumes": [
+  {
+   "id": 1,
+   "label": "AB-VOL",
+   "barcode": "",
+   "kind": "HDD",
+   "location": "Shoe box",
+   "location_id": 1,
+   "offsite": true,
+   "notes": "",
+   "created_at": "2026-11-23T21:53:33.0918414Z",
+   "serial": "SERIAL-XYZ-123"
+  }
+ ],
+ "locations": [
+  {
+   "id": 1,
+   "name": "Shoe box",
+   "offsite": true,
+   "notes": "under the stairs",
+   "created_at": "2026-11-23T21:53:33.1433149Z"
+  }
+ ],
+ "drift": null,
+ "dock_sessions": null,
+ "events": [
+  {
+   "id": 1,
+   "name": "Wedding",
+   "event_type": "wedding",
+   "year": 2024,
+   "capture_start": "0001-01-01T00:00:00Z",
+   "capture_end": "0001-01-01T00:00:00Z",
+   "collection_id": 1,
+   "created_at": "2026-11-23T21:53:33.1576396Z"
+  }
+ ],
+ "templates": [
+  {
+   "id": 1,
+   "name": "Photographer",
+   "event_types": [
+    "wedding",
+    "engagement",
+    "baptism",
+    "boudoir",
+    "religious event",
+    "family",
+    "portrait",
+    "other"
+   ],
+   "routes": {
+    "DELIVERABLES": "Finalized Images/{year}/{event_type}/{event}/",
+    "ORIGINALS": "photos/{year}/{event_type}/{event}/",
+    "PROJECT-FILES": "photos/{year}/{event_type}/{event}/",
+    "SIDECARS": "photos/{year}/{event_type}/{event}/"
+   },
+   "group_noun": "Event",
+   "built_in": true,
+   "created_at": "0001-01-01T00:00:00Z"
+  },
+  {
+   "id": 2,
+   "name": "Musician",
+   "event_types": [
+    "album",
+    "single",
+    "ep",
+    "live",
+    "demo",
+    "remix",
+    "other"
+   ],
+   "routes": {
+    "DELIVERABLES": "music/{year}/{project}/masters/",
+    "ORIGINALS": "music/{year}/{project}/stems/",
+    "PROJECT-FILES": "music/{year}/{project}/project/",
+    "SIDECARS": "music/{year}/{project}/"
+   },
+   "group_noun": "Project",
+   "built_in": true,
+   "created_at": "0001-01-01T00:00:00Z"
+  },
+  {
+   "id": 3,
+   "name": "Filmmaker",
+   "event_types": [
+    "short",
+    "feature",
+    "documentary",
+    "commercial",
+    "music video",
+    "event",
+    "other"
+   ],
+   "routes": {
+    "DELIVERABLES": "deliverables/{year}/{project}/",
+    "ORIGINALS": "footage/{year}/{project}/",
+    "PROJECT-FILES": "projects/{year}/{project}/",
+    "SIDECARS": "footage/{year}/{project}/"
+   },
+   "group_noun": "Project",
+   "built_in": true,
+   "created_at": "0001-01-01T00:00:00Z"
+  },
+  {
+   "id": 4,
+   "name": "General",
+   "event_types": [
+    "personal",
+    "family",
+    "work",
+    "travel",
+    "project",
+    "other"
+   ],
+   "routes": {
+    "DELIVERABLES": "{year}/{category}/{collection}/",
+    "ORIGINALS": "{year}/{category}/{collection}/",
+    "PROJECT-FILES": "{year}/{category}/{collection}/",
+    "SIDECARS": "{year}/{category}/{collection}/"
+   },
+   "group_noun": "Collection",
+   "built_in": true,
+   "created_at": "0001-01-01T00:00:00Z"
+  }
+ ],
+ "tape_checks": null,
+ "profiles": [
+  {
+   "id": "single-copy",
+   "name": "Single Copy",
+   "description": "low-value / re-creatable data",
+   "required_copies": 1,
+   "required_distinct_media_kinds": 1,
+   "required_offsite_copies": 0,
+   "media_kinds_allowed": null,
+   "verify_due_months": 12,
+   "builtin": true
+  },
+  {
+   "id": "3-2-1-standard",
+   "name": "3-2-1 Standard",
+   "description": "the canonical rule; default for new Archives",
+   "required_copies": 3,
+   "required_distinct_media_kinds": 2,
+   "required_offsite_copies": 1,
+   "media_kinds_allowed": null,
+   "verify_due_months": 12,
+   "builtin": true
+  },
+  {
+   "id": "pre-deletion-hold",
+   "name": "Pre-Deletion Hold",
+   "description": "over-protect data whose SOURCE is about to be deleted",
+   "required_copies": 4,
+   "required_distinct_media_kinds": 2,
+   "required_offsite_copies": 1,
+   "media_kinds_allowed": null,
+   "verify_due_months": 6,
+   "builtin": true
+  },
+  {
+   "id": "keep-two",
+   "name": "Keep two",
+   "description": "",
+   "required_copies": 2,
+   "required_distinct_media_kinds": 0,
+   "required_offsite_copies": 0,
+   "media_kinds_allowed": null,
+   "verify_due_months": 0,
+   "builtin": false
+  }
+ ],
+ "assignments": [
+  {
+   "collection_id": 1,
+   "path": "",
+   "profile_id": "3-2-1-standard"
+  },
+  {
+   "collection_id": 1,
+   "path": "sub",
+   "profile_id": "keep-two"
+  }
+ ],
+ "protection": null,
+ "audit": [
+  {
+   "at": "2026-11-23T21:53:33.0810687Z",
+   "action": "scan",
+   "detail": "archive 1: C:\\obelisk-fixture\\tmp\\TestZZFrozenUpgradeFolder1038220855\\004 (2 files, 0 problems)"
+  },
+  {
+   "at": "2026-11-23T21:53:33.1915265Z",
+   "action": "scan",
+   "detail": "archive 1: C:\\obelisk-fixture\\tmp\\TestZZFrozenUpgradeFolder1038220855\\004 (2 files, 0 problems)"
+  },
+  {
+   "at": "2026-11-23T21:53:33.196195Z",
+   "action": "test",
+   "detail": "a record of the v8 era"
+  }
+ ]
+}
