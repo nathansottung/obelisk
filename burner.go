@@ -127,6 +127,9 @@ func (a *App) CreateBurnQueue(collectionID int, mediaKind, name string) (*BurnQu
 // variable so a test can present a move that fails.
 var moveManifestAside = os.Rename
 
+// moveManifestBack puts it back. A variable for the same reason.
+var moveManifestBack = os.Rename
+
 // BurnNext burns the first PENDING disc: shell out to the configured burn
 // command (with {SRC}/{LABEL} substituted), then optionally hash-verify the
 // burned payload against the chunk's enc_hash before marking DONE.
@@ -196,28 +199,22 @@ func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, 
 
 	set("BURNING", "")
 	progress(0.05, "burning "+c.Name)
-	// Private media: the burn command copies the whole staged folder, so move the
-	// plaintext manifest out of it during the burn (only the .gpg gets burned),
-	// then restore it. Kept on the same volume so the rename is atomic.
-	if c.PrivateManifest {
-		plain := filepath.Join(c.StagedDir, c.Name+".manifest.json")
-		_, err := os.Stat(plain)
-		if os.IsNotExist(err) {
-			err = nil // no plaintext manifest to keep off the disc
-		} else if err == nil {
-			// Beside the burned folder: same volume, and never inside it, wherever
-			// the staging setting points.
-			hidden := filepath.Join(filepath.Dir(c.StagedDir), "."+c.Name+".manifest.hidden")
-			if err = moveManifestAside(plain, hidden); err == nil {
-				defer os.Rename(hidden, plain)
-			}
-		}
-		if err != nil {
-			// The burn copies the whole folder: it must not run with this file in it.
-			set("FAILED", "the private manifest could not be moved out of the disc's folder, so nothing was burned: "+err.Error())
-			return nil, errors.New(disc.Detail)
-		}
+	// Private media: the burn command copies the whole staged folder, so the plaintext
+	// manifest is moved out of it during the burn (only the .gpg gets burned), then
+	// restored. A disc already burned stays good if the move back fails, so that is
+	// reported on the disc, and the next burn of this package tries again.
+	putBack, err := hideBurnManifest(c)
+	if err != nil {
+		set("FAILED", "nothing was burned: "+err.Error())
+		return nil, errors.New(disc.Detail)
 	}
+	defer func() {
+		if err := putBack(); err != nil {
+			note := fmt.Sprintf("the private manifest of %s could not be put back in its folder: %v", c.Name, err)
+			a.Store.Log("burn", note)
+			set(disc.Status, note)
+		}
+	}()
 	argv, err := burnArgv(cfg.BurnCommand, c.StagedDir, c.Name)
 	if err != nil {
 		set("FAILED", "burn command refused: "+err.Error())
