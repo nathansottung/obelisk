@@ -41,10 +41,13 @@ const (
 // copyIDNote is the line in RESTORE.txt about the file.
 const copyIDNote = copyIDFile + " beside these files only tells Obelisk which copy this is; it is not needed for a restore and holds no private data.\n"
 
-// CopyLocation is a place a copy's ID was seen.
+// CopyLocation is a place a copy's ID was seen, and the serial and partition of the
+// drive read there when they could be found.
 type CopyLocation struct {
-	VolumeID int    `json:"volume_id,omitempty"`
-	Path     string `json:"path"`
+	VolumeID  int    `json:"volume_id,omitempty"`
+	Path      string `json:"path"`
+	Serial    string `json:"serial,omitempty"`
+	Partition string `json:"partition,omitempty"`
 }
 
 // newCopyID is a fresh random ID for one write.
@@ -75,12 +78,10 @@ func readCopyID(dir string) (id, state string) {
 	return string(m[1]), "ok"
 }
 
-// copyIDAt is the ID state of what a check reads in dir. Only a package's own
-// folder carries an ID; a flat payload at a medium's root has none.
+// copyIDAt is the ID state of what a check reads: the ID file beside the payload,
+// in the package's own folder or, on a disc burned with its files at the root, at
+// the root.
 func copyIDAt(c *Chunk, dir string) (id, state string) {
-	if filepath.Base(dir) != c.Name {
-		return "", idMissing
-	}
 	return readCopyID(dir)
 }
 

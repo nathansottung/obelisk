@@ -149,6 +149,9 @@ func (a *App) identifyRead(c *Chunk, at *CopyAt) {
 	if p := a.Store.copyPathWithID(c, at.CopyID); p != "" && normPath(p) != normPath(at.Path) {
 		id, state := readCopyID(p)
 		at.RecordedHolds = state == "ok" && id == at.CopyID
+		if at.RecordedHolds {
+			at.RecordedSerial, at.RecordedPartition = driveSerialAt(p), partitionIDAt(p)
+		}
 	}
 }
 
@@ -416,7 +419,7 @@ func copyNamedFrom(src, to string, names map[string]string) error {
 	for name := range names {
 		from := filepath.Join(src, name)
 		if _, err := os.Stat(from); err != nil {
-			m, _ := filepath.Glob(filepath.Join(src, "*", name))
+			m := filesNamed(src, true, name, name)
 			if len(m) == 0 {
 				return fmt.Errorf("sidecar %s not found under %s", name, src)
 			}

@@ -379,6 +379,8 @@ func copyResult(cp Copy) string {
 	switch {
 	case cp.Unidentified == idConflict:
 		res = "two media hold its copy ID; choose which one is the copy"
+	case cp.Unidentified != "" && len(cp.Segments) > 0: // no check reads a whole set
+		res = "not identified, write the set again to confirm"
 	case cp.Unidentified != "":
 		res = "not identified, verify to confirm"
 		if cp.LastVerifiedAt != nil {

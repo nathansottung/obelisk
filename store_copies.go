@@ -327,6 +327,35 @@ func sameLocation(l CopyLocation, at CopyAt) bool {
 	return normPath(l.Path) == normPath(at.Path) && (l.VolumeID == 0 || at.VolumeID == 0 || l.VolumeID == at.VolumeID)
 }
 
+// sameDrive is whether the drive read at at is the one recorded in l, when both
+// serials are known.
+func sameDrive(l *CopyLocation, at CopyAt) (same, known bool) {
+	if l == nil || l.Serial == "" || at.Serial == "" {
+		return false, false
+	}
+	if !strings.EqualFold(l.Serial, at.Serial) {
+		return false, true
+	}
+	p, pk := partitionCompare(l.Partition, at.Partition)
+	return !pk || p, true
+}
+
+// keptByDrive says, for a copy whose conflict was settled, whether the drive read is
+// the medium the user kept. decided is false when the drives cannot be told apart by
+// serial (none known, or the one set aside shares it); then places decide.
+func keptByDrive(cp *Copy, at CopyAt) (kept, decided bool) {
+	if cp.Kept == nil || cp.Kept.Serial == "" || at.Serial == "" {
+		return false, false
+	}
+	for i := range cp.SetAside {
+		if same, known := sameDrive(&cp.SetAside[i], CopyAt{Serial: cp.Kept.Serial, Partition: cp.Kept.Partition}); known && same {
+			return false, false
+		}
+	}
+	same, _ := sameDrive(cp.Kept, at)
+	return same, true
+}
+
 // CreditPackageCheck records a full check of a package folder on the copy it read,
 // and returns how many copies it credited and, when none, why.
 //
@@ -392,11 +421,9 @@ func (s *Store) CreditPackageCheck(c *Chunk, at CopyAt, ok, repairable bool) (in
 			return 0, "this medium holds a copy that has since been replaced"
 		case len(match) == 0:
 			marked := false
-			for i := range c.Copies {
-				if cp := &c.Copies[i]; !cp.Superseded && fits(cp) {
-					mark(i, idMismatch)
-					marked = true
-				}
+			if here := onePlaceCopies(c, fits); len(here) == 1 {
+				mark(here[0], idMismatch)
+				marked = true
 			}
 			if !marked {
 				return 0, "this medium holds a copy ID the catalog has no record of"
@@ -410,9 +437,23 @@ func (s *Store) CreditPackageCheck(c *Chunk, at CopyAt, ok, repairable bool) (in
 		}
 		i := match[0]
 		cp := &c.Copies[i]
+		const setAside = "this medium was set aside as a duplicate of the copy; write a new copy to it to give it its own ID"
+		kept, decided := keptByDrive(cp, at)
+		switch {
+		case decided && !kept:
+			return 0, setAside
+		case decided && kept:
+			// The kept drive, wherever it is mounted: the folder elsewhere that holds
+			// the same ID is the medium set aside.
+			if !fits(cp) {
+				cp.Path = at.Path
+			}
+			credit(i)
+			return done(1, "")
+		}
 		for _, l := range cp.SetAside {
 			if sameLocation(l, at) {
-				return 0, "this medium was set aside as a duplicate of the copy; write a new copy to it to give it its own ID"
+				return 0, setAside
 			}
 		}
 		if cp.Conflict != nil {
@@ -423,7 +464,12 @@ func (s *Store) CreditPackageCheck(c *Chunk, at CopyAt, ok, repairable bool) (in
 			return done(1, "")
 		}
 		if at.RecordedHolds || contradicts(cp) {
-			cp.Conflict = &CopyLocation{VolumeID: at.VolumeID, Path: at.Path}
+			cp.Conflict = &CopyLocation{VolumeID: at.VolumeID, Path: at.Path, Serial: at.Serial, Partition: at.Partition}
+			recorded := CopyLocation{VolumeID: cp.VolumeID, Path: cp.Path, Serial: at.RecordedSerial, Partition: at.RecordedPartition}
+			if !at.RecordedHolds {
+				recorded.Serial, recorded.Partition = serialOf[cp.VolumeID], partOf[cp.VolumeID]
+			}
+			cp.ConflictRecorded = &recorded
 			mark(i, idConflict)
 			return done(0, "another medium holds this copy's ID; choose which one is the copy")
 		}
@@ -432,20 +478,28 @@ func (s *Store) CreditPackageCheck(c *Chunk, at CopyAt, ok, repairable bool) (in
 		return done(1, "")
 	}
 
-	// No readable ID in the folder.
+	// No readable ID in the folder. A copy with an ID is marked only when it is the
+	// one copy recorded here: a disc drive's mount holds each burned disc in turn.
 	var legacy []int
 	marked := false
+	withID := onePlaceCopies(c, fits)
 	for i := range c.Copies {
 		cp := &c.Copies[i]
 		if cp.Superseded || !fits(cp) {
 			continue
 		}
-		if cp.CopyID != "" || at.IDState == idUnreadable {
-			mark(i, nonEmpty(at.IDState, idMissing))
-			marked = true
-		} else {
+		switch {
+		case cp.CopyID != "" || at.IDState == idUnreadable:
+			if len(withID) <= 1 {
+				mark(i, nonEmpty(at.IDState, idMissing))
+				marked = true
+			}
+		default:
 			legacy = append(legacy, i)
 		}
+	}
+	if !marked && len(legacy) == 0 && len(withID) > 1 {
+		return 0, "more than one copy is recorded at this mount and the medium in it has no readable copy ID"
 	}
 	if marked && len(legacy) == 0 {
 		return done(0, "the copy ID file in this folder is "+nonEmpty(at.IDState, idMissing))
@@ -502,6 +556,17 @@ func (s *Store) CreditPackageCheck(c *Chunk, at CopyAt, ok, repairable bool) (in
 	return done(len(legacy), "")
 }
 
+// onePlaceCopies is the current copies with an ID that fit a check's place.
+func onePlaceCopies(c *Chunk, fits func(*Copy) bool) []int {
+	var out []int
+	for i := range c.Copies {
+		if cp := &c.Copies[i]; !cp.Superseded && cp.CopyID != "" && fits(cp) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
 // SettleCopyConflict settles a copy whose ID two media hold (see App.SettleCopyConflict).
 func (s *Store) SettleCopyConflict(c *Chunk, copyID, keep string) error {
 	s.mu.Lock()
@@ -514,19 +579,26 @@ func (s *Store) SettleCopyConflict(c *Chunk, copyID, keep string) error {
 		if cp.Conflict == nil {
 			return fmt.Errorf("the copy with ID %s has no conflict to settle", copyID)
 		}
+		recorded := CopyLocation{VolumeID: cp.VolumeID, Path: cp.Path}
+		if cp.ConflictRecorded != nil {
+			recorded = *cp.ConflictRecorded
+		}
+		found := *cp.Conflict
 		switch keep {
 		case "recorded":
-			cp.SetAside = append(cp.SetAside, *cp.Conflict)
+			cp.SetAside = append(cp.SetAside, found)
+			cp.Kept = &recorded
 		case "found":
-			cp.SetAside = append(cp.SetAside, CopyLocation{VolumeID: cp.VolumeID, Path: cp.Path})
-			cp.Path = cp.Conflict.Path
-			if cp.Conflict.VolumeID > 0 {
-				cp.VolumeID = cp.Conflict.VolumeID
+			cp.SetAside = append(cp.SetAside, recorded)
+			cp.Kept = &found
+			cp.Path = found.Path
+			if found.VolumeID > 0 {
+				cp.VolumeID = found.VolumeID
 			}
 		default:
 			return fmt.Errorf("keep must be \"recorded\" or \"found\", not %q", keep)
 		}
-		cp.Conflict, cp.Unidentified, cp.VerifyOK = nil, idUnchecked, nil
+		cp.Conflict, cp.ConflictRecorded, cp.Unidentified, cp.VerifyOK = nil, nil, idUnchecked, nil
 		return s.save()
 	}
 	return fmt.Errorf("no current copy of %s has ID %s", c.Name, copyID)

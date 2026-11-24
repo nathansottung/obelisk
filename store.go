@@ -429,6 +429,11 @@ type Copy struct {
 	// user settles which one is the copy. SetAside is each medium so set aside.
 	Conflict *CopyLocation  `json:"conflict,omitempty"`
 	SetAside []CopyLocation `json:"set_aside,omitempty"`
+	// ConflictRecorded is the medium at the copy's recorded place when the conflict was
+	// found; Kept is the medium the user chose. Their drive serials tell the kept
+	// medium from the one set aside wherever each is mounted later.
+	ConflictRecorded *CopyLocation `json:"conflict_recorded,omitempty"`
+	Kept             *CopyLocation `json:"kept,omitempty"`
 }
 
 // BuildVerified is the build-time attestation that the package faithfully
@@ -3563,6 +3568,8 @@ type CopyAt struct {
 	CopyID        string
 	IDState       string
 	RecordedHolds bool
+	// RecordedSerial and RecordedPartition are of the drive at that recorded folder.
+	RecordedSerial, RecordedPartition string
 }
 
 // CreditCopyCheck records a check's result on the copy it read, and only that

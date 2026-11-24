@@ -64,7 +64,7 @@ func scanAdoptCandidates(mount string) []adoptCand {
 // hasPar2Set reports whether a par2 set accompanies the payload (either name).
 func hasPar2Set(cand adoptCand) bool {
 	for _, n := range []string{cand.name + ".tar", cand.name + ".tar.gpg"} {
-		if m, _ := filepath.Glob(filepath.Join(cand.dir, n+"*.par2")); len(m) > 0 {
+		if m := filesNamed(cand.dir, false, n, ".par2"); len(m) > 0 {
 			return true
 		}
 	}

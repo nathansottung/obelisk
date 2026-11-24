@@ -61,8 +61,7 @@ func planSegments(payloadBytes, target int64) []Segment {
 // before the rename still resolves its <name>.tar.gpg.par2 set.
 func par2SetFiles(dir string, c *Chunk) []string {
 	for _, n := range payloadNameCandidates(c) {
-		if m, _ := filepath.Glob(filepath.Join(dir, n+"*.par2")); len(m) > 0 {
-			sort.Strings(m)
+		if m := filesNamed(dir, false, n, ".par2"); len(m) > 0 {
 			return m
 		}
 	}
@@ -409,10 +408,7 @@ func copySidecars(stagedDir string, out *outFolder, c *Chunk) error {
 // whose number of data tapes matches the segment files found there. The bytes are
 // still checked after the rejoin.
 func spanViewFor(c *Chunk, sourceDir string) *Chunk {
-	segs, _ := filepath.Glob(filepath.Join(sourceDir, c.Name+".seg*"))
-	if len(segs) == 0 {
-		segs, _ = filepath.Glob(filepath.Join(sourceDir, "*", c.Name+".seg*"))
-	}
+	segs := segmentFilesUnder(sourceDir, c.Name)
 	if dataSegmentCount(c.Segments) != len(segs) {
 		for i := range c.Copies {
 			if cs := c.Copies[i].Segments; len(cs) > 0 && dataSegmentCount(cs) == len(segs) {
@@ -423,6 +419,60 @@ func spanViewFor(c *Chunk, sourceDir string) *Chunk {
 	return c.withSegments(c.Segments)
 }
 
+// filesNamed is the plain files directly in dir (or, with sub, in dir's
+// subfolders) whose names start with prefix and end with suffix, sorted. Names are
+// compared as text: a medium's path may hold pattern characters such as '['.
+func filesNamed(dir string, sub bool, prefix, suffix string) []string {
+	var out []string
+	scan := func(d string) {
+		entries, _ := os.ReadDir(d)
+		for _, e := range entries {
+			if n := e.Name(); !e.IsDir() && strings.HasPrefix(n, prefix) && strings.HasSuffix(n, suffix) {
+				out = append(out, filepath.Join(d, n))
+			}
+		}
+	}
+	if !sub {
+		scan(dir)
+	} else {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if e.IsDir() {
+				scan(filepath.Join(dir, e.Name()))
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// segmentFilesUnder is the package's segment files in dir, or failing that in
+// dir's subfolders (one per tape), sorted. Names are matched as text, never as a
+// pattern: a mount path may hold pattern characters such as '['.
+func segmentFilesUnder(dir, name string) []string {
+	in := func(d string) []string {
+		var out []string
+		entries, _ := os.ReadDir(d)
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasPrefix(e.Name(), name+".seg") {
+				out = append(out, filepath.Join(d, e.Name()))
+			}
+		}
+		return out
+	}
+	segs := in(dir)
+	if len(segs) == 0 {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if e.IsDir() {
+				segs = append(segs, in(filepath.Join(dir, e.Name()))...)
+			}
+		}
+	}
+	sort.Strings(segs)
+	return segs
+}
+
 // rejoinSegments concatenates <chunk>.segNNN files found in sourceDir into
 // outputDir/<payload> and copies the par2 set beside it, so the existing restore
 // path (par2 -> gpg -> tar) runs unchanged. This is the automated form of the
@@ -431,11 +481,7 @@ func spanViewFor(c *Chunk, sourceDir string) *Chunk {
 // <name>.tar.gpg.par2 set) so `par2 verify <payload>.par2` matches either way.
 func rejoinSegments(sourceDir, outputDir string, c *Chunk, progress func(float64, string)) (string, []string, error) {
 	var warnings []string
-	segs, _ := filepath.Glob(filepath.Join(sourceDir, c.Name+".seg*"))
-	if len(segs) == 0 {
-		// maybe segments are in per-tape subfolders under sourceDir
-		segs, _ = filepath.Glob(filepath.Join(sourceDir, "*", c.Name+".seg*"))
-	}
+	segs := segmentFilesUnder(sourceDir, c.Name) // in sourceDir, or in per-tape subfolders
 	if len(segs) == 0 {
 		return "", nil, fmt.Errorf("no segment files (%s.segNNN) found under %s — copy every tape's segment into one folder first", c.Name, sourceDir)
 	}
@@ -447,11 +493,11 @@ func rejoinSegments(sourceDir, outputDir string, c *Chunk, progress func(float64
 	// Pick the payload base name from the par2 set actually on the media.
 	base := payloadName(c)
 	for _, cand := range payloadNameCandidates(c) {
-		if m, _ := filepath.Glob(filepath.Join(sourceDir, cand+"*.par2")); len(m) > 0 {
+		if m := filesNamed(sourceDir, false, cand, ".par2"); len(m) > 0 {
 			base = cand
 			break
 		}
-		if m, _ := filepath.Glob(filepath.Join(sourceDir, "*", cand+"*.par2")); len(m) > 0 {
+		if m := filesNamed(sourceDir, true, cand, ".par2"); len(m) > 0 {
 			base = cand
 			break
 		}
@@ -493,8 +539,8 @@ func rejoinSegments(sourceDir, outputDir string, c *Chunk, progress func(float64
 	// restore can no longer repair damage — a warning the operator must see (surfaced
 	// on the restore job and in the event log), not a silent omission.
 	par2Copied := 0
-	for _, glob := range []string{filepath.Join(sourceDir, base+"*.par2"), filepath.Join(sourceDir, "*", base+"*.par2")} {
-		if m, _ := filepath.Glob(glob); len(m) > 0 {
+	for _, sub := range []bool{false, true} {
+		if m := filesNamed(sourceDir, sub, base, ".par2"); len(m) > 0 {
 			for _, p := range m {
 				if err := copyFile(p, filepath.Join(outputDir, filepath.Base(p))); err != nil {
 					warnings = append(warnings, fmt.Sprintf("par2 file %s could not be placed beside the rejoined payload (%v) — the payload is intact, but it cannot be repaired if damaged", filepath.Base(p), err))

@@ -659,7 +659,7 @@ function levelSelectorHTML(id){return `<label>Verification level (only B satisfi
 function copyVerifyLabel(cp){const lvl=cp.last_check_level||'B';const ln=(VLEVELS[lvl]||{}).name||lvl;
   // A copy earns credit only once the medium is known to hold its copy ID.
   if(cp.unidentified==='conflict')return `<span style="color:var(--bad)">two media hold this copy's ID: choose which one is the copy</span>`;
-  if(cp.unidentified)return `<span style="color:var(--warn)" title="${esc(copyIDReason(cp.unidentified))}">not identified, verify to confirm${cp.last_verified_at?' · last verified '+cp.last_verified_at.slice(0,10):''}</span>`;
+  if(cp.unidentified)return `<span style="color:var(--warn)" title="${esc(copyIDReason(cp.unidentified))}">not identified, ${(cp.segments||[]).length?'write the set again to confirm':'verify to confirm'}${cp.last_verified_at?' · last verified '+cp.last_verified_at.slice(0,10):''}</span>`;
   const laterAdvisory=lvl!=='B'&&cp.last_check_at&&(!cp.last_verified_at||cp.last_check_at>cp.last_verified_at);
   if(cp.verify_ok===true){let s=`<span style="color:var(--ok)">✓ verified (B, full)${cp.last_verified_at?' · '+cp.last_verified_at.slice(0,10):''}</span>`;
     if(laterAdvisory)s+=` <span style="color:var(--warn)">· checked (${lvl}, ${esc(ln.toLowerCase())}) ${cp.last_check_at.slice(0,10)}</span>`;
@@ -2447,7 +2447,7 @@ function ageStr(iso){if(!iso)return 'never';const d=new Date(iso);const days=Mat
 function currentCopies(c){return (c.copies||[]).filter(x=>!x.superseded)}
 function verifiedCopies(c){return currentCopies(c).filter(x=>x.verify_ok===true).length}
 function copyMark(v){return v===true?'✓':v===false?'✗':'?'}
-function copyIDReason(why){return ({no_id:'Written before copy IDs. A full check of its folder confirms it.',
+function copyIDReason(why){return ({no_id:'Written before copy IDs.',
   missing:'Its folder holds no copy ID file.',unreadable:'Its copy ID file cannot be read.',
   mismatch:'Its folder holds another copy\'s ID.',unchecked:'You chose this medium. A full check confirms it.'})[why]||''}
 function copyTag(c,required){const total=currentCopies(c).length;if(!total)return '';
