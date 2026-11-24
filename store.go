@@ -3517,6 +3517,9 @@ type CopyAt struct {
 	// Hash is the payload hash the check read, when it read one. It tells apart two
 	// builds that both fit a remounted drive.
 	Hash string
+	// Note is the hash of the RESTORE.txt beside what was read. It names the build
+	// when the payload is too damaged to.
+	Note string
 }
 
 // CreditCopyCheck records a check's result on the copy it read, and only that
@@ -3529,8 +3532,14 @@ type CopyAt struct {
 func (s *Store) CreditCopyCheck(c *Chunk, at CopyAt, ok bool, level string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	fit, moved := s.copiesReadLocked(c, at)
+	fit, moved, unsure := s.copiesReadLocked(c, at)
 	if len(fit) == 0 {
+		// A failed check of one of several builds, with nothing to say which: none
+		// keeps a credit it may not deserve, and none is called failed.
+		if !ok && len(unsure) > 0 {
+			clearCopyCredit(c, unsure)
+			_ = s.save()
+		}
 		return 0
 	}
 	if moved {
@@ -3558,8 +3567,9 @@ func (s *Store) CreditCopyCheck(c *Chunk, at CopyAt, ok bool, level string) int 
 
 // copiesReadLocked finds the copies a check at at read (see CreditCopyCheck). It
 // returns nothing when no copy fits or copies on more than one volume do. moved
-// says the one copy found is on a drive now mounted somewhere else.
-func (s *Store) copiesReadLocked(c *Chunk, at CopyAt) (fit []int, moved bool) {
+// says the one copy found is on a drive now mounted somewhere else. unsure is the
+// copies of several builds that fit when nothing says which one was read.
+func (s *Store) copiesReadLocked(c *Chunk, at CopyAt) (fit []int, moved bool, unsure []int) {
 	serialOf, partOf := map[int]string{}, map[int]string{}
 	for _, v := range s.c.Volumes {
 		serialOf[v.ID], partOf[v.ID] = v.Serial, v.PartitionID
@@ -3612,10 +3622,10 @@ func (s *Store) copiesReadLocked(c *Chunk, at CopyAt) (fit []int, moved bool) {
 		moved = true
 	}
 	if len(fit) == 0 || len(vols) > 1 {
-		return nil, false
+		return nil, false, nil
 	}
 	// Several builds can fit one remounted drive. The check belongs to the one whose
-	// bytes it read; if it cannot say which, it credits and blames none.
+	// bytes it read, or failing that the one its RESTORE.txt names.
 	if len(fit) > 1 {
 		builds := map[string]bool{}
 		for _, i := range fit {
@@ -3628,13 +3638,20 @@ func (s *Store) copiesReadLocked(c *Chunk, at CopyAt) (fit []int, moved bool) {
 					same = append(same, i)
 				}
 			}
+			if len(same) == 0 && at.Note != "" {
+				for _, i := range fit {
+					if c.valuesOf(&c.Copies[i]).Sidecars["RESTORE.txt"] == at.Note {
+						same = append(same, i)
+					}
+				}
+			}
+			if len(same) == 0 {
+				return nil, false, fit
+			}
 			fit = same
 		}
 	}
-	if len(fit) == 0 {
-		return nil, false
-	}
-	return fit, moved && len(fit) == 1
+	return fit, moved && len(fit) == 1, nil
 }
 
 // SupersedeCopy marks the current (non-superseded) copy of c on volumeID as

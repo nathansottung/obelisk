@@ -78,6 +78,36 @@ func (a *App) par2CanRepair(payload string) bool {
 	return errors.As(helperCommand(bin, "verify", par2File).Run(), &exit) && exit.ExitCode() == 1
 }
 
+// priorBuildAt records which build a package folder on a medium holds, before a write
+// to it. The RESTORE.txt says so cheaply; only when it names no build on record are
+// the payload or segment files read.
+func priorBuildAt(c *Chunk, dir string) priorBuild {
+	p := priorBuild{Note: restoreNoteHash(dir)}
+	payload := payloadPathIn(dir, c)
+	segs, _ := filepath.Glob(filepath.Join(dir, c.Name+".seg*"))
+	par2s, _ := filepath.Glob(filepath.Join(dir, c.Name+"*.par2"))
+	p.Present = p.Note != "" || payload != "" || len(segs) > 0 || len(par2s) > 0
+	for _, v := range recordedValues(c) {
+		if p.Note != "" && v.Sidecars["RESTORE.txt"] == p.Note {
+			return p
+		}
+	}
+	if payload != "" {
+		if h, err := hashFileHex(payload); err == nil {
+			p.PayloadHash = h
+		}
+	}
+	for _, sp := range segs {
+		if h, err := hashFileHex(sp); err == nil {
+			if p.SegHashes == nil {
+				p.SegHashes = map[string]bool{}
+			}
+			p.SegHashes[h] = true
+		}
+	}
+	return p
+}
+
 // keysCopiesNeedMissing names each key a copy on record needs that no configured
 // keystore holds.
 func (a *App) keysCopiesNeedMissing() []string {
@@ -204,10 +234,16 @@ func (a *App) RefillStaging(id, volumeID int, sourceDir string, progress func(fl
 			if err := copyFolderInto(dir, stage); err != nil {
 				return nil, err
 			}
-		} else if err := copyOwnFiles(dir, stage, filepath.Base(from), vals.Sidecars); err != nil {
+		} else if err := copyOwnFiles(c, dir, stage, filepath.Base(from), vals.Sidecars); err != nil {
 			return nil, err
 		}
 		payload = filepath.Join(stage, filepath.Base(from))
+	}
+	// A refill that could not be written from is no refill.
+	for _, name := range requiredSidecars(view) {
+		if _, err := os.Stat(filepath.Join(stage, name)); err != nil {
+			return nil, fmt.Errorf("the copy at %s has no %s of its own for %s; staging was not changed", src, name, c.Name)
+		}
 	}
 	progress(0.75, "checking the refill against the copy's hash")
 	h, err := hashFileHex(payload)
@@ -279,9 +315,25 @@ func copyFolderInto(from, to string) error {
 	return nil
 }
 
-// copyOwnFiles copies a package's payload, its par2 set and its named sidecars from
-// a folder shared with other packages.
-func copyOwnFiles(from, to, payload string, sidecars map[string]string) error {
+// noteIsFor is whether a RESTORE.txt's title names this package.
+func noteIsFor(path, name string) bool {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	first, _, _ := strings.Cut(string(b), "\n")
+	for _, word := range strings.Fields(first) {
+		if word == name {
+			return true
+		}
+	}
+	return false
+}
+
+// copyOwnFiles copies a package's payload, its par2 set and its sidecars from a folder
+// shared with other packages. With no recorded sidecar hashes (an adopted package),
+// its manifest is known by name and its RESTORE.txt by the package named in its title.
+func copyOwnFiles(c *Chunk, from, to, payload string, sidecars map[string]string) error {
 	entries, err := os.ReadDir(from)
 	if err != nil {
 		return err
@@ -295,7 +347,19 @@ func copyOwnFiles(from, to, payload string, sidecars map[string]string) error {
 			return fmt.Errorf("copying %s: %w", n, err)
 		}
 	}
-	return copyNamedFrom(from, to, sidecars)
+	if len(sidecars) > 0 {
+		return copyNamedFrom(from, to, sidecars)
+	}
+	for _, name := range requiredSidecars(c) {
+		p := filepath.Join(from, name)
+		if _, err := os.Stat(p); err != nil || (name == "RESTORE.txt" && !noteIsFor(p, c.Name)) {
+			continue
+		}
+		if err := copyFile(p, filepath.Join(to, name)); err != nil {
+			return fmt.Errorf("copying %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 // copyNamedFrom copies each named sidecar from src, or from a subfolder of src (one

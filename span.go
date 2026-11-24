@@ -179,7 +179,7 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 		return nil, err
 	}
 	destChunk := out.Join(c.Name)
-	priorNote := restoreNoteHash(destChunk) // which build this tape holds, before anything is written
+	prior := priorBuildAt(c, destChunk) // which build this tape holds, before anything is written
 	set := func(status string) { seg.Status, seg.Dest = status, destDir; _ = putSeg() }
 	fail := func(err error) (map[string]any, error) {
 		seg.Status, seg.Dest = "FAILED", destDir
@@ -192,9 +192,12 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 	if seg.Par2 {
 		// Dedicated par2 tape.
 		progress(0.1, fmt.Sprintf("writing par2 set (tape %d/%d)", seg.Index, N))
-		err := copyPar2Set(c.StagedDir, out, c)
-		// Even a failed copy may have replaced part of an older set's par2 files.
-		a.Store.RetireOverwrittenSpan(c, volumeID, destDir, priorNote)
+		wrote, err := copyPar2Set(c.StagedDir, out, c)
+		// Even a failed copy may have replaced part of an older set's par2 files; one
+		// that replaced none has changed nothing.
+		if wrote > 0 {
+			a.Store.RetireOverwrittenSpan(c, volumeID, destDir, prior)
+		}
 		if err != nil {
 			return fail(err)
 		}
@@ -238,12 +241,12 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 			return fail(err)
 		}
 		seg.Hash = streamHash
-		a.Store.RetireOverwrittenSpan(c, volumeID, destDir, priorNote)
+		a.Store.RetireOverwrittenSpan(c, volumeID, destDir, prior)
 		set("WRITTEN")
 		// par2 rides the last data tape when it wasn't given its own.
 		if seg.Index == dataSegmentCount(c.Segments) && !c.Segments[N-1].Par2 {
 			progress(0.85, "writing par2 set alongside last segment")
-			if err := copyPar2Set(c.StagedDir, out, c); err != nil {
+			if _, err := copyPar2Set(c.StagedDir, out, c); err != nil {
 				return fail(err)
 			}
 		}
@@ -344,20 +347,21 @@ func spanSetMatches(c *Chunk, payload string) error {
 	return nil
 }
 
-func copyPar2Set(stagedDir string, out *outFolder, c *Chunk) error {
+func copyPar2Set(stagedDir string, out *outFolder, c *Chunk) (wrote int, err error) {
 	files := par2SetFiles(stagedDir, c)
 	if len(files) == 0 {
-		return fmt.Errorf("no par2 files found in staged dir for %s", c.Name)
+		return 0, fmt.Errorf("no par2 files found in staged dir for %s", c.Name)
 	}
 	for _, src := range files {
 		if _, err := out.CopyIn(src, c.Name+"/"+filepath.Base(src), 0o644); err != nil {
 			if errors.Is(err, errStageMismatch) {
-				return fmt.Errorf("par2 file %s read-back mismatch", filepath.Base(src))
+				return wrote, fmt.Errorf("par2 file %s read-back mismatch", filepath.Base(src))
 			}
-			return err
+			return wrote, err
 		}
+		wrote++
 	}
-	return nil
+	return wrote, nil
 }
 
 // copySidecars copies the package's sidecars (the manifest it ships, encrypted

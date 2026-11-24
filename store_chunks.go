@@ -13,7 +13,10 @@ package main
 // through a method; TestPackages_OnlyTheStoreTouchesCatalogRecords checks both.
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -455,7 +458,7 @@ func (s *Store) pinCopyValues(c *Chunk) {
 func (s *Store) copyValuesAt(c *Chunk, at CopyAt) (CopyValues, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	fit, _ := s.copiesReadLocked(c, at)
+	fit, _, _ := s.copiesReadLocked(c, at)
 	if len(fit) == 0 {
 		return CopyValues{}, false
 	}
@@ -467,7 +470,7 @@ func (s *Store) copyValuesAt(c *Chunk, at CopyAt) (CopyValues, bool) {
 func (s *Store) NoteCopyRepairable(c *Chunk, at CopyAt, repairable bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	fit, _ := s.copiesReadLocked(c, at)
+	fit, _, _ := s.copiesReadLocked(c, at)
 	for _, i := range fit {
 		c.Copies[i].Repairable = repairable
 	}
@@ -477,8 +480,8 @@ func (s *Store) NoteCopyRepairable(c *Chunk, at CopyAt, repairable bool) {
 }
 
 // restoreNoteHash is the hash of the RESTORE.txt in a package folder on a medium, or
-// "". Each build's note is its own, so it says which build a folder holds wherever
-// the drive is mounted now, without reading the payload.
+// "". Each build's note is its own, but every copy of a build has the same one, so
+// it names a build and never, alone, a medium.
 func restoreNoteHash(dir string) string {
 	h, err := hashFileHex(filepath.Join(dir, "RESTORE.txt"))
 	if err != nil {
@@ -487,24 +490,80 @@ func restoreNoteHash(dir string) string {
 	return h
 }
 
-// RetireOverwrittenCopy marks as history a current copy on the volume whose bytes a
-// write has just replaced with different ones: the copy recorded at path, or the
-// one whose RESTORE.txt was in that folder (priorNote) when the drive has moved. A
-// copy of the same bytes is still good and is left alone.
-func (s *Store) RetireOverwrittenCopy(c *Chunk, volumeID int, path, priorNote string) {
+// priorBuild is what a package folder on a medium held before a write to it.
+type priorBuild struct {
+	Present     bool // the folder held some file of this package
+	Note        string
+	PayloadHash string          // read only when the note names no build on record
+	SegHashes   map[string]bool // likewise, for a tape's segment files
+}
+
+func (p priorBuild) names(vals CopyValues) bool {
+	return (p.Note != "" && vals.Sidecars["RESTORE.txt"] == p.Note) ||
+		(p.PayloadHash != "" && vals.PayloadHash == p.PayloadHash)
+}
+
+// isUnregisteredLocked is whether the volume is the catch-all for media with no
+// volume of their own, which can stand for any number of physical drives.
+func (s *Store) isUnregisteredLocked(volumeID int) bool {
+	for _, v := range s.c.Volumes {
+		if v.ID == volumeID {
+			return v.Label == "(unregistered)"
+		}
+	}
+	return false
+}
+
+// clearCopyCredit takes the verified credit from copies a write may have replaced
+// when nothing says which it was. None is called failed: a full check settles it.
+func clearCopyCredit(c *Chunk, idx []int) {
+	for _, i := range idx {
+		c.Copies[i].VerifyOK, c.Copies[i].Repairable = nil, false
+	}
+}
+
+// RetireOverwrittenCopy marks as history the current copy on the volume whose bytes
+// a write has just replaced with different ones: the copy recorded at path, or, when
+// the drive has moved, the one copy of the build the folder held (prior). If several
+// could be it, or the folder's build cannot be told, those copies lose their verified
+// credit until checked. A copy of the same bytes is still good and is left alone.
+func (s *Store) RetireOverwrittenCopy(c *Chunk, volumeID int, path string, prior priorBuild) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var named, others []int
 	for i := range c.Copies {
 		cp := &c.Copies[i]
 		vals := c.valuesOf(cp)
-		if cp.VolumeID == volumeID && !cp.Superseded && vals.PayloadHash != c.EncHash &&
-			(normPath(cp.Path) == normPath(path) || (priorNote != "" && vals.Sidecars["RESTORE.txt"] == priorNote)) {
+		if cp.VolumeID != volumeID || cp.Superseded || vals.PayloadHash == c.EncHash {
+			continue
+		}
+		if normPath(cp.Path) == normPath(path) {
 			c.stampIfBare(cp)
 			cp.Superseded = true
 			_ = s.save()
 			return
 		}
+		if !prior.Present {
+			continue
+		}
+		if prior.names(vals) {
+			named = append(named, i)
+		} else if filepath.Base(cp.Path) == c.Name {
+			others = append(others, i)
+		}
 	}
+	switch {
+	case len(named) == 1:
+		c.stampIfBare(&c.Copies[named[0]])
+		c.Copies[named[0]].Superseded = true
+	case len(named) > 1:
+		clearCopyCredit(c, named)
+	case len(others) > 0 && !s.isUnregisteredLocked(volumeID):
+		clearCopyCredit(c, others)
+	default:
+		return
+	}
+	_ = s.save()
 }
 
 // SupersedeCopyAt keeps the current copy at path on the volume as history, for a
@@ -524,43 +583,106 @@ func (s *Store) SupersedeCopyAt(c *Chunk, volumeID int, path string) {
 }
 
 // RetireOverwrittenSpan marks as history each current spanned copy of another build
-// that held a tape a write has just written to. Its segment, par2 set or sidecars
-// there may be gone. The tape is known by where it was recorded, or by the RESTORE.txt
-// it held (priorNote) when it is now mounted somewhere else.
-func (s *Store) RetireOverwrittenSpan(c *Chunk, volumeID int, dest, priorNote string) {
+// recorded on the tape a write has just written to: its segment, par2 set or sidecars
+// there may be gone. When the tape has moved, it is the one set on that volume that
+// the tape's old contents (prior) name. If several could be it, or its contents cannot
+// be told, those sets lose their verified credit until checked. A replica on other
+// volumes is never touched.
+func (s *Store) RetireOverwrittenSpan(c *Chunk, volumeID int, dest string, prior priorBuild) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	changed := false
+	exact := false
+	var named, others []int
 	for i := range c.Copies {
 		cp := &c.Copies[i]
 		vals := c.valuesOf(cp)
 		if cp.Superseded || len(cp.Segments) == 0 || vals.PayloadHash == c.EncHash {
 			continue
 		}
-		hit := priorNote != "" && vals.Sidecars["RESTORE.txt"] == priorNote
+		onVolume, here, holds := false, false, false
 		for _, sg := range cp.Segments {
-			hit = hit || (sg.VolumeID == volumeID && normPath(sg.Dest) == normPath(dest))
+			if sg.VolumeID != volumeID {
+				continue
+			}
+			onVolume = true
+			here = here || normPath(sg.Dest) == normPath(dest)
+			holds = holds || (sg.Hash != "" && prior.SegHashes[sg.Hash])
 		}
-		if hit {
-			cp.Superseded, changed = true, true
+		switch {
+		case here:
+			cp.Superseded, exact = true, true
+		case !onVolume || !prior.Present:
+		case holds || prior.names(vals):
+			named = append(named, i)
+		default:
+			others = append(others, i)
 		}
 	}
-	if changed {
-		_ = s.save()
+	switch {
+	case exact:
+	case len(named) == 1:
+		c.Copies[named[0]].Superseded = true
+	case len(named) > 1:
+		clearCopyCredit(c, named)
+	case len(others) > 0 && !s.isUnregisteredLocked(volumeID):
+		clearCopyCredit(c, others)
+	default:
+		return
 	}
+	_ = s.save()
+}
+
+// sameTapes is whether two sets are the same segments on the same volumes, wherever
+// each tape is mounted now.
+func sameTapes(a, b []Segment) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Index != b[i].Index || a[i].Bytes != b[i].Bytes || a[i].Hash != b[i].Hash ||
+			a[i].Par2 != b[i].Par2 || a[i].VolumeID != b[i].VolumeID {
+			return false
+		}
+	}
+	return true
 }
 
 // RecordSpanCopy records a whole spanned set as one verified copy with its tapes. The
-// same set written again refreshes its record; any other set is a new copy.
+// same set written again refreshes its record, also from new mount points when the
+// old ones are gone and its volumes are registered. Any other set is a new copy.
 func (s *Store) RecordSpanCopy(c *Chunk, volumeID int, path string) {
+	s.mu.Lock()
+	gone := map[string]bool{}
+	for i := range c.Copies {
+		for _, sg := range c.Copies[i].Segments {
+			gone[sg.Dest] = false
+		}
+	}
+	s.mu.Unlock()
+	for dest := range gone { // reads a drive, so outside the catalog lock
+		_, err := os.Stat(dest)
+		gone[dest] = errors.Is(err, fs.ErrNotExist)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
 	ok := true
 	segs := append([]Segment(nil), c.Segments...)
+	remounted := func(old []Segment) bool {
+		if !sameTapes(old, segs) {
+			return false
+		}
+		for i := range old {
+			if s.isUnregisteredLocked(old[i].VolumeID) || (old[i].Dest != segs[i].Dest && !gone[old[i].Dest]) {
+				return false
+			}
+		}
+		return true
+	}
 	for i := range c.Copies {
 		cp := &c.Copies[i]
-		if !cp.Superseded && c.valuesOf(cp).PayloadHash == c.EncHash && (len(cp.Segments) == 0 || reflect.DeepEqual(cp.Segments, segs)) {
+		if !cp.Superseded && c.valuesOf(cp).PayloadHash == c.EncHash &&
+			(len(cp.Segments) == 0 || reflect.DeepEqual(cp.Segments, segs) || remounted(cp.Segments)) {
 			cp.VolumeID, cp.Path, cp.LastVerifiedAt, cp.VerifyOK, cp.Segments, cp.Repairable = volumeID, path, &now, &ok, segs, false
 			c.stampCopy(cp)
 			_ = s.save()

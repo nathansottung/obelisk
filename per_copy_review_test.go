@@ -249,8 +249,8 @@ func TestPerCopy_RemountedDriveDoesNotBlameTheOtherCopy(t *testing.T) {
 	if ok, _ := r["verify_ok"].(bool); ok {
 		t.Fatal("the damage was not found")
 	}
-	if got := app.Store.Chunk(c.ID); got.VerifiedCopyCount() < 1 {
-		t.Fatalf("damage to one copy failed the other: %+v", got.Copies)
+	if got := app.Store.Chunk(c.ID); got.VerifiedCopyCount() != 1 || got.Copies[0].VerifyOK == nil || !*got.Copies[0].VerifyOK {
+		t.Fatalf("damage to one copy must cost that copy its credit and no other: %+v", got.Copies)
 	}
 }
 
@@ -284,7 +284,9 @@ func TestPerCopy_NewPar2TapeRetiresTheSetItOverwrote(t *testing.T) {
 	}
 	tape := filepath.Join(h.root, "tapes", fmt.Sprintf("tape%02d", last))
 	// The other segments were only marked done, so the whole-set check refuses it.
-	_, _ = app.SpanWriteNext(c.ID, tape, 0, 0, 0, c.Copies[0].VolumeID, noProg)
+	if _, err := app.SpanWriteNext(c.ID, tape, 0, 0, 0, c.Copies[0].VolumeID, noProg); err == nil || !strings.Contains(err.Error(), "does not check") {
+		t.Fatalf("got %v, want the whole-set check's refusal after the par2 files were written", err)
+	}
 	if got := frozenChunk(t, app, c.Name); !got.Copies[0].Superseded {
 		t.Fatal("the old set still counts after its par2 tape was overwritten")
 	}
