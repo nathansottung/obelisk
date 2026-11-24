@@ -348,6 +348,17 @@ type KeptSummary struct {
 	KeptBytes int64 `json:"kept_bytes,omitempty"`
 	// Identical are files already there with the same content: left alone.
 	Identical int `json:"identical,omitempty"`
+	// KeptRunName is the run's folder name, as the gate's removal takes it.
+	KeptRunName string `json:"kept_run_name,omitempty"`
+}
+
+// addTo puts the summary into a job's result, as the job screen reads it.
+func (k KeptSummary) addTo(res map[string]any) {
+	if k.KeptRun == "" && k.Identical == 0 {
+		return
+	}
+	res["kept_run"], res["kept_run_name"], res["kept_bytes"] = k.KeptRun, k.KeptRunName, k.KeptBytes
+	res["kept_own"], res["kept_other"], res["identical"] = k.KeptOwn, k.KeptOther, k.Identical
 }
 
 // summary fills a run report's KeptSummary.
@@ -362,6 +373,7 @@ func (p *keepPlan) summary(dest *DestRoot) KeptSummary {
 	}
 	if len(p.kept) > 0 {
 		s.KeptRun = filepath.Join(dest.Canonical(), mirrorPreviousDir, p.run)
+		s.KeptRunName = p.run
 	}
 	return s
 }

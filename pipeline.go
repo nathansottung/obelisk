@@ -1038,6 +1038,18 @@ func decryptRoundtripHash(gpgBin, ciphertext, pass string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// cloneChunkForBuild is a copy of c a build may change freely: its slices and
+// maps are its own.
+func cloneChunkForBuild(c *Chunk) *Chunk {
+	nb := *c // its segments are replaced, never changed in place (SetChunkSegments)
+	nb.BuildWarnings = append([]string(nil), c.BuildWarnings...)
+	nb.Sidecars = map[string]string{}
+	for k, v := range c.Sidecars {
+		nb.Sidecars[k] = v
+	}
+	return &nb
+}
+
 // packageWorkKey names a package for claimWork.
 func packageWorkKey(id int) string { return fmt.Sprintf("package:%d", id) }
 
@@ -1212,8 +1224,14 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 		return err
 	}
 
-	tarPath := filepath.Join(buildDir, c.Name+".tar")
-	payloadPath := filepath.Join(buildDir, payloadName(c)) // <name>.tar.gpg (ciphertext) when encrypted, <name>.tar (the tar itself) when not
+	// The build is worked out on a copy of the record. The catalog writes the
+	// live record whole on any save, so nothing of this build reaches it until
+	// the build is in place: a crash part-way leaves the record describing the
+	// earlier build, whose files are untouched.
+	nb := cloneChunkForBuild(c)
+
+	tarPath := filepath.Join(buildDir, nb.Name+".tar")
+	payloadPath := filepath.Join(buildDir, payloadName(nb)) // <name>.tar.gpg (ciphertext) when encrypted, <name>.tar (the tar itself) when not
 	// Records name the files where they will be once this build is in place.
 	placedPath := func(p string) string { return filepath.Join(work, filepath.Base(p)) }
 
@@ -1239,7 +1257,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	// created, so the OBX-006 containment there and the attestation here cannot
 	// disagree about which tier this build ran at.
 	mode := iv.BuildVerify
-	bv := &BuildVerified{Mode: mode, Preset: iv.Preset, Par2Percent: c.Par2,
+	bv := &BuildVerified{Mode: mode, Preset: iv.Preset, Par2Percent: nb.Par2,
 		RoutineVerifyLevel: iv.RoutineVerifyLevel, VerifyDueMonths: iv.VerifyDueMonths, ReadbackAfterWrite: true}
 	if mode == BuildVerifyNone {
 		bv.Warning = fastBuildWarning
@@ -1266,7 +1284,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	// SOURCE READ-ONLY: the source files are only read; the tar is written only to
 	// tarPath in the (validated) staging dir. The manifest leads the archive, then
 	// each catalogued file under its catalogued name (see tarpkg.go).
-	if err := writePackageTar(tarPath, manifestPath, c.SrcRoot, listed); err != nil {
+	if err := writePackageTar(tarPath, manifestPath, nb.SrcRoot, listed); err != nil {
 		return fail(fmt.Errorf("writing the package tar: %w", err))
 	}
 	finish("tar", t, 0.28)
@@ -1275,7 +1293,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	}
 
 	t = time.Now()
-	if c.TarHash, err = hashFileHex(tarPath); err != nil {
+	if nb.TarHash, err = hashFileHex(tarPath); err != nil {
 		return fail(err)
 	}
 	finish("hash", t, 0.34)
@@ -1298,22 +1316,22 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 
 	var fpr string
 	var chunkPass string // held to also encrypt the medium manifest when private
-	if c.Encrypted {
+	if nb.Encrypted {
 		progress(0.40, strings.Join(summary, " · ")+" · encrypt…")
 		t = time.Now()
-		ref, pass, keyFpr, gerr := a.GenerateKey("package " + c.Name)
+		ref, pass, keyFpr, gerr := a.GenerateKey("package " + nb.Name)
 		if gerr != nil {
 			return fail(gerr)
 		}
-		c.KeyRef, fpr, chunkPass = ref, keyFpr, pass
+		nb.KeyRef, fpr, chunkPass = ref, keyFpr, pass
 		if err := gpgEncrypt(gpgBin, pass, payloadPath, tarPath); err != nil {
 			return fail(err)
 		}
-		if c.EncHash, err = hashFileHex(payloadPath); err != nil {
+		if nb.EncHash, err = hashFileHex(payloadPath); err != nil {
 			return fail(err)
 		}
 		if st, err := os.Stat(payloadPath); err == nil {
-			c.EncBytes = st.Size()
+			nb.EncBytes = st.Size()
 		}
 		finish("encrypt", t, 0.66)
 
@@ -1328,7 +1346,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 				pass = buildDecryptPassphraseHook(pass)
 			}
 			dh, derr := decryptRoundtripHash(gpgBin, payloadPath, pass)
-			if derr != nil || dh != c.TarHash {
+			if derr != nil || dh != nb.TarHash {
 				return fail(fmt.Errorf("ciphertext does not decrypt to the verified tar — encryption step corrupted"))
 			}
 			finish("crypt_verify", t, 0.72)
@@ -1342,14 +1360,14 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 			_ = removeOwnedByID(nil, []fileIdent{buildMade.id}, buildDir, filepath.Base(tarPath), kindIntermediateTar)
 		}
 	} else {
-		// No encryption requested: the tar IS the payload, and payloadName(c) is
+		// No encryption requested: the tar IS the payload, and payloadName(nb) is
 		// <name>.tar, so it already sits at payloadPath (== tarPath) — no rename,
 		// no misleading .gpg suffix on the medium. enc_hash/enc_bytes describe
 		// that tar as written to media.
 		t = time.Now()
-		c.EncHash = c.TarHash
+		nb.EncHash = nb.TarHash
 		if st, err := os.Stat(payloadPath); err == nil {
-			c.EncBytes = st.Size()
+			nb.EncBytes = st.Size()
 		}
 		finish("stage", t, 0.72)
 		// A plaintext package has no encryption step to corrupt: its payload IS the
@@ -1362,17 +1380,17 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 
 	progress(0.75, strings.Join(summary, " · ")+" · par2…")
 	t = time.Now()
-	if err := runPar2Create(par2Bin, cfg.Par2ExtraArgs, c.Par2,
+	if err := runPar2Create(par2Bin, cfg.Par2ExtraArgs, nb.Par2,
 		payloadPath+".par2", payloadPath); err != nil {
 		return fail(err)
 	}
 	finish("par2", t, 0.90)
-	c.BuildTimings = timings
-	c.BuildVerified = bv // build-time attestation, carried into the manifest below
-	if c.Spanned {
+	nb.BuildTimings = timings
+	nb.BuildVerified = bv // build-time attestation, carried into the manifest below
+	if nb.Spanned {
 		// Finalize the segment plan against the real payload + par2 size now
 		// that both exist, so the manifest/RESTORE.txt written below match.
-		if err := a.finalizeSegments(c, buildDir); err != nil {
+		if err := a.finalizeSegments(nb, buildDir); err != nil {
 			return fail(err)
 		}
 	}
@@ -1384,37 +1402,37 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	// Once private, always private: some medium may hold a private copy that no record
 	// still shows (a rebuild resets span segments), and seal and dock inventories
 	// decide from this flag.
-	c.PrivateManifest = c.Encrypted && (cfg.PrivateMedia || c.PrivateManifest)
-	if err := writeManifest(buildDir, c, listed, fpr); err != nil {
+	nb.PrivateManifest = nb.Encrypted && (cfg.PrivateMedia || nb.PrivateManifest)
+	if err := writeManifest(buildDir, nb, listed, fpr); err != nil {
 		return fail(err)
 	}
-	if c.PrivateManifest {
-		manPlain := filepath.Join(buildDir, c.Name+".manifest.json")
+	if nb.PrivateManifest {
+		manPlain := filepath.Join(buildDir, nb.Name+".manifest.json")
 		if err := gpgEncrypt(gpgBin, chunkPass, manPlain+".gpg", manPlain); err != nil {
 			return fail(fmt.Errorf("encrypting private manifest: %w", err))
 		}
 	}
-	if err := writeRestoreTxt(buildDir, c, cfg.eccIntended()); err != nil {
+	if err := writeRestoreTxt(buildDir, nb, cfg.eccIntended()); err != nil {
 		return fail(fmt.Errorf("writing RESTORE.txt: %w", err))
 	}
 	// Record the sidecars the medium must carry, so a write can require them in
 	// staging unchanged and a verify can read them back.
 	sidecars := map[string]string{}
-	for _, name := range requiredSidecars(c) {
+	for _, name := range requiredSidecars(nb) {
 		h, err := hashFileHex(filepath.Join(buildDir, name))
 		if err != nil {
 			return fail(fmt.Errorf("sidecar %s: %w", name, err))
 		}
 		sidecars[name] = h
 	}
-	c.Sidecars = sidecars
+	nb.Sidecars = sidecars
 	// BagIt tag files beside the package (institutional legibility). These are a
 	// description layer, not needed to restore — so a write failure does NOT fail the
 	// build, but it must not be swallowed: log it and record it on the package so the
 	// build's job result surfaces an "incomplete BagIt tags" warning to the operator.
-	if err := writeBagItTags(buildDir, c, listed); err != nil {
-		a.Store.Log("build", c.Name+": "+err.Error())
-		c.BuildWarnings = append(c.BuildWarnings, "BagIt tag files incomplete: "+err.Error())
+	if err := writeBagItTags(buildDir, nb, listed); err != nil {
+		a.Store.Log("build", nb.Name+": "+err.Error())
+		nb.BuildWarnings = append(nb.BuildWarnings, "BagIt tag files incomplete: "+err.Error())
 	}
 
 	// The build succeeded and verified: put it in place of the earlier one, which
@@ -1428,6 +1446,18 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 		return fail(fmt.Errorf("putting the new build in place: %w", err))
 	}
 	placed = true
+	// The build is in place: the record now describes it.
+	c.TarHash, c.EncHash, c.EncBytes, c.KeyRef = nb.TarHash, nb.EncHash, nb.EncBytes, nb.KeyRef
+	c.BuildTimings, c.BuildVerified, c.PrivateManifest = nb.BuildTimings, nb.BuildVerified, nb.PrivateManifest
+	c.Sidecars, c.BuildWarnings = nb.Sidecars, nb.BuildWarnings
+	if nb.Spanned {
+		if err := a.Store.SetChunkSegments(c, nb.Segments); err != nil {
+			if uerr := unswapBuild(buildMade, prev, work); uerr == nil {
+				_ = buildMade.Remove()
+			}
+			return fail(fmt.Errorf("recording the new build's tapes: %w", err))
+		}
+	}
 	c.StagedDir = work
 	// Copies already on media still count: the status comes from them.
 	c.Status = "STAGED"

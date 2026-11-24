@@ -108,6 +108,15 @@ func stagedFiles(t *testing.T, dir string) map[string]string {
 	return out
 }
 
+// sidecarsOf is the entries of files named in want.
+func sidecarsOf(files, want map[string]string) map[string]string {
+	out := map[string]string{}
+	for k := range want {
+		out[k] = files[k]
+	}
+	return out
+}
+
 // stagingEntries is the names directly in the staging folder.
 func stagingEntries(t *testing.T, staging string) []string {
 	t.Helper()
@@ -226,7 +235,14 @@ func TestRebuild_CrashDuringTheSwapKeepsTheEarlierBuild(t *testing.T) {
 				t.Fatal(err)
 			}
 			app.Store = st
-			recorded := app.Store.Chunk(c.ID).Sidecars
+			rec := app.Store.Chunk(c.ID)
+			recorded := rec.Sidecars
+			// Nothing of the unfinished build reached the catalog, though it saved
+			// during the build (its check results): the record still describes
+			// the earlier build.
+			if rec.EncHash != before[payloadName(rec)] || !sameFiles(recorded, sidecarsOf(before, recorded)) {
+				t.Errorf("after a crash at %s the catalog describes the unfinished build", step)
+			}
 			// The next build first recovers staging; make it fail so what is left
 			// is what recovery did.
 			buildAfterTarHook = func(tarPath string) { _ = os.Remove(tarPath) }

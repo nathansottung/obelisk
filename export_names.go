@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -58,7 +59,13 @@ func freshExportName(out *outFolder, base, ext string, now time.Time) string {
 // the bag's own base name, so any name with "-bag" matches it).
 func matchesExport(k exportKind, name string) bool {
 	if k.key == "bag" {
-		return strings.Contains(name, "-bag") && (k.prefix == "" || name == k.prefix || strings.HasPrefix(name, k.prefix+"-"))
+		// <name>-bag, or <name>-bag-<time>: a folder that merely has "-bag" in
+		// its name (travel-bags) is not one.
+		base, rest, ok := strings.Cut(name, "-bag")
+		if !ok || base == "" || (rest != "" && !exportStampRE.MatchString(rest)) {
+			return false
+		}
+		return k.prefix == "" || name == k.prefix || strings.HasPrefix(name, k.prefix+"-")
 	}
 	if k.ext != "" {
 		return strings.HasPrefix(name, k.prefix+"-") && strings.HasSuffix(name, k.ext)
@@ -102,6 +109,40 @@ func earlierExports(out *outFolder, k exportKind, except string) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+var (
+	exportStampRE = regexp.MustCompile(`(\d{8})(?:-(\d{6}))?(?:-(\d+))?(?:\.tar)?$`)
+	exportWeekRE  = regexp.MustCompile(`(\d{4})-W(\d{2})(?:\.tar)?$`)
+)
+
+// exportTime is when the export named name was made, read from its name, or
+// fallback when the name carries no time.
+func exportTime(name string, fallback time.Time) time.Time {
+	if m := exportStampRE.FindStringSubmatch(name); m != nil {
+		layout, v := "20060102", m[1]
+		if m[2] != "" {
+			layout, v = "20060102150405", m[1]+m[2]
+		}
+		if t, err := time.Parse(layout, v); err == nil {
+			if m[3] != "" { // -2, -3: made later within the same second
+				var n int
+				fmt.Sscanf(m[3], "%d", &n)
+				t = t.Add(time.Duration(n) * time.Millisecond)
+			}
+			return t
+		}
+	}
+	if m := exportWeekRE.FindStringSubmatch(name); m != nil {
+		var y, w int
+		fmt.Sscanf(m[1], "%d", &y)
+		fmt.Sscanf(m[2], "%d", &w)
+		// The Monday of ISO week w: 4 January is always in week 1.
+		jan4 := time.Date(y, 1, 4, 0, 0, 0, 0, time.UTC)
+		monday := jan4.AddDate(0, 0, -((int(jan4.Weekday())+6)%7)+(w-1)*7)
+		return monday
+	}
+	return fallback
 }
 
 // ExportEntry is one export in a folder, for the export screen.
@@ -155,9 +196,27 @@ func ExportsIn(dir, kind string) ([]ExportEntry, int64, error) {
 		out = append(out, ExportEntry{Name: n, Path: filepath.Join(dir, n), Made: fi.ModTime(), Bytes: size})
 		total += size
 	}
-	// Names sort by the time they were made; an older-style name without a time
-	// sorts before them.
-	sort.Slice(out, func(i, j int) bool { return out[i].Name > out[j].Name })
+	// Newest first, by the time each name says it was made (a time stamp, a
+	// day, or an ISO week for automatic backups); a name without one is placed
+	// by when it was last changed.
+	// Names in the older form, with no time, were all made before any with one.
+	stamped := map[string]bool{}
+	for i := range out {
+		t := exportTime(out[i].Name, time.Time{})
+		stamped[out[i].Name] = !t.IsZero()
+		if !t.IsZero() {
+			out[i].Made = t
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if stamped[out[i].Name] != stamped[out[j].Name] {
+			return stamped[out[i].Name]
+		}
+		if !out[i].Made.Equal(out[j].Made) {
+			return out[i].Made.After(out[j].Made)
+		}
+		return out[i].Name > out[j].Name
+	})
 	// The newest of each export: for bags, of each bag's own name.
 	seen := map[string]bool{}
 	for i := range out {

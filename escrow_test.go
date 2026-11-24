@@ -154,7 +154,8 @@ func TestWriteBundleAssemblesAndVerifies(t *testing.T) {
 	if !strings.HasPrefix(filepath.Base(root), escrowBundleDir+"-") {
 		t.Fatalf("bundle folder %q does not carry the time it was made", root)
 	}
-	if info := mustRead(t, filepath.Join(root, exportInfoName)); !strings.Contains(info, "Made:") || !strings.Contains(info, "Covers:") {
+	if b, _ := os.ReadFile(filepath.Join(root, exportInfoName)); !strings.Contains(string(b), "Made:") || !strings.Contains(string(b), "Covers:") {
+		info := string(b)
 		t.Errorf("EXPORT-INFO.txt does not say when it was made and what it covers: %s", info)
 	}
 

@@ -323,7 +323,7 @@ func init() {
 		targets: writeOverTargets,
 		run: func(a *App, p map[string]any) (any, error) {
 			id, dest := paramInt(p, "id"), paramString(p, "dest_dir")
-			vol := paramInt(p, "volume_id")
+			vol := resolveVolume(a, p) // the volume chosen, or the new one asked for
 			if err := sealGuard(a, vol); err != nil {
 				return nil, refuseDestructive(409, "%s", err.Error())
 			}
@@ -350,7 +350,25 @@ func writeOverTargets(a *App, p map[string]any) ([]destructiveTarget, error) {
 	if inspectWriteTarget(c, dir) == nil {
 		return nil, refuseDestructive(400, "%s holds nothing to write over; use a plain write", dir)
 	}
-	return treeTargets(dir, "replaced by a new copy of "+c.Name)
+	ts, err := treeTargets(dir, "")
+	if err != nil {
+		return nil, err
+	}
+	// Each file the new copy writes is replaced; anything else in the folder is
+	// left exactly as it is, and the list says so.
+	writes := packageWriteNames(c)
+	for i := range ts {
+		rel, _ := filepath.Rel(dir, ts[i].Path)
+		switch {
+		case rel == ".":
+			ts[i].Note = "the package's folder"
+		case writes[filepath.ToSlash(rel)]:
+			ts[i].Note = "replaced by the new copy of " + c.Name
+		default:
+			ts[i].Note = "left in place: not part of the new copy"
+		}
+	}
+	return ts, nil
 }
 
 func init() {
@@ -366,7 +384,7 @@ func init() {
 		targets: writeOverTargets,
 		run: func(a *App, p map[string]any) (any, error) {
 			id, dest := paramInt(p, "id"), paramString(p, "dest_dir")
-			vol := paramInt(p, "volume_id")
+			vol := resolveVolume(a, p) // the volume chosen, or the new one asked for
 			if err := sealGuard(a, vol); err != nil {
 				return nil, refuseDestructive(409, "%s", err.Error())
 			}

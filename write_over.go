@@ -90,6 +90,24 @@ func inspectWriteTarget(c *Chunk, dir string) *WriteOverError {
 	return wo
 }
 
+// packageWriteNames are the names a write of c puts in its folder: what its
+// staged build holds for the medium, and the copy ID.
+func packageWriteNames(c *Chunk) map[string]bool {
+	out := map[string]bool{copyIDFile: true}
+	entries, _ := os.ReadDir(c.StagedDir)
+	for _, e := range entries {
+		if !e.IsDir() && !stagedOnlyFile(c, e.Name()) {
+			out[e.Name()] = true
+		}
+	}
+	if c.Spanned {
+		for _, sg := range c.Segments {
+			out[fmt.Sprintf("%s.seg%03d", c.Name, sg.Index)] = true
+		}
+	}
+	return out
+}
+
 // spanTargetConflict reports a tape folder that holds another set of this
 // package (or files at its names that are not this set's), or nil.
 func (a *App) spanTargetConflict(c *Chunk, dir string) *WriteOverError {

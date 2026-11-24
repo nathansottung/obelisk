@@ -11,6 +11,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -52,6 +53,14 @@ func (a *App) Leftovers() []Leftover {
 		}
 	}
 	out = append(out, a.unreferencedScanFiles()...)
+	// A private temporary folder (a gpg home) whose removal stopped part-way.
+	if l, err := listLeftoversIn(os.TempDir()); err == nil {
+		for _, x := range l {
+			if strings.HasPrefix(x.Name, removingPrefix) {
+				out = append(out, x)
+			}
+		}
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out
 }

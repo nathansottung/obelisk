@@ -21,6 +21,11 @@ var removalFiles = map[string]bool{
 
 // removalFuncs remove, unlink or truncate.
 var removalFuncs = map[string]bool{
+	"main.removeEntryIn": true, "main.removeEntryInAs": true, "main.removeEntryInStep": true, "main.removeTreeIn": true,
+	"syscall.Ftruncate": true, "syscall.Truncate": true,
+	"golang.org/x/sys/unix.Ftruncate": true, "golang.org/x/sys/unix.Truncate": true,
+	"golang.org/x/sys/windows.SetEndOfFile":        true,
+	"golang.org/x/sys/windows.FileDispositionInfo": true, "golang.org/x/sys/windows.FileDispositionInfoEx": true,
 	"os.Remove": true, "os.RemoveAll": true, "os.Truncate": true,
 	"(*os.File).Truncate": true, "(*os.Root).Remove": true, "(*os.Root).RemoveAll": true,
 	"syscall.Unlink": true, "syscall.Rmdir": true, "syscall.DeleteFile": true, "syscall.RemoveDirectory": true,
@@ -41,7 +46,9 @@ var replaceFuncs = map[string]bool{
 	"golang.org/x/sys/windows.MOVEFILE_REPLACE_EXISTING": true,
 	"golang.org/x/sys/windows.CREATE_ALWAYS":             true, "golang.org/x/sys/windows.TRUNCATE_EXISTING": true,
 	"golang.org/x/sys/windows.FileRenameInformation": true, "golang.org/x/sys/windows.FileRenameInformationEx": true,
-	// This package's own replacing renames.
+	"golang.org/x/sys/windows.FileRenameInfo": true, "golang.org/x/sys/windows.FileRenameInfoEx": true,
+	// This package's own general removals: only the helper and the gate's own
+	// file may call them (gateOnly covers removeGatedEntry).
 	"main.renameReplacing": true, "main.renameFile": true, "main.atomicRename": true,
 }
 
@@ -106,6 +113,9 @@ var gateOnly = map[string]map[string]bool{
 	"(*main.App).RewriteCopy":       {},
 	"(*main.App).WriteChunkOver":    {},
 	"(*main.App).SpanWriteNextOver": {},
+	// The gate's own removal: only from its operations' run functions.
+	"main.removeGatedEntry":         {"leftovers.go:init": true, "export_gate.go:init": true},
+	"main.removeGatedEntryIn":       {"mirror_previous_gate.go:init": true},
 	"(*main.App).openOutFolderOver": {"writer.go:App.RewriteCopy": true, "writer.go:App.WriteChunkOver": true, "span.go:App.spanWriteNext": true},
 }
 

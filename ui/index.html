@@ -3130,7 +3130,7 @@ function jobSkippedNote(j){const r=(j&&j.result)||{};
 // apart from the routine ones.
 function keptNote(r){if(!r||!r.kept_run)return '';
   const own=(r.kept_own||[]).length,other=r.kept_other||[];
-  const run=String(r.kept_run).split(/[\/]/).pop();
+  const run=r.kept_run_name||'';
   return `<div style="font-size:11px;margin-top:3px">Kept ${own+other.length} earlier version(s) instead of replacing them, in <span class="mono">${esc(r.kept_run)}</span>. They use ${esc(humanBytesUI(r.kept_bytes||0))} on that drive until you remove them, and do not count as copies.`
     +(other.length?` <b>${other.length} of them were not Obelisk's own earlier copies</b>: ${other.slice(0,5).map(esc).join(', ')}${other.length>5?', …':''}.`:'')
     +` <button class="btn ghost" style="font-size:11px;padding:1px 8px" data-call="removeKeptRun" data-args="${callArgs(r.dest,run)}">Remove kept versions…</button></div>`}
@@ -4224,7 +4224,7 @@ async function saveCfg(){
    open it; the top text field stays editable so you can still type a path that
    doesn't exist yet (new staging/burn/restore folders). */
 let _pickCb=null,_pickPath='';
-function browseBtn(id){return `<button type="button" class="btn ghost" style="padding:4px 10px;font-size:12px;margin-top:4px" onclick="pickFolder((($('#${id}')||{}).value||'').trim(),p=>{const el=$('#${id}');if(el)el.value=p})">Browse…</button>`}
+function browseBtn(id){return `<button type="button" class="btn ghost" style="padding:4px 10px;font-size:12px;margin-top:4px" onclick="pickFolder((($('#${id}')||{}).value||'').trim(),p=>{const el=$('#${id}');if(el){el.value=p;el.dispatchEvent(new Event('input',{bubbles:true}))}})">Browse…</button>`}
 async function pickFolder(start,cb){_pickCb=cb;let d=$('#pick');if(!d){d=document.createElement('dialog');d.id='pick';document.body.append(d)}
   await pickRender(start||'');d.showModal()}
 async function pickRender(path){let data;

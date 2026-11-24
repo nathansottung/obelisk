@@ -1328,7 +1328,8 @@ func api(mux routeRegistrar, app *App) {
 				mr, err := app.MirrorToVolume(cid, folderIDs, dest, vol, throttle, scope, p)
 				var res map[string]any
 				if mr != nil {
-					res = map[string]any{"mirrored": mr.Mirrored, "bytes": mr.Bytes, "sidecar": mr.Sidecar, "failed": mr.Failed}
+					res = map[string]any{"mirrored": mr.Mirrored, "bytes": mr.Bytes, "sidecar": mr.Sidecar, "failed": mr.Failed, "dest": mr.Dest}
+					mr.KeptSummary.addTo(res)
 				}
 				return res, err
 			})
@@ -1448,9 +1449,11 @@ func api(mux routeRegistrar, app *App) {
 			if res == nil {
 				return nil, err
 			}
-			return map[string]any{"files": res.Files, "bytes": res.Bytes, "mode": res.Mode, "base": res.Base,
+			out := map[string]any{"files": res.Files, "bytes": res.Bytes, "mode": res.Mode, "base": res.Base,
 				"name": res.Name, "session_id": res.SessionID, "sidecar": res.Sidecar, "planned": res.Planned,
-				"message": res.Message, "dest": res.Dest, "changed": res.Changed, "failed": res.Failed}, err
+				"message": res.Message, "dest": res.Dest, "changed": res.Changed, "failed": res.Failed}
+			res.KeptSummary.addTo(out)
+			return out, err
 		})
 		if jerr != nil {
 			jsonErr(w, 503, jerr)
@@ -2310,17 +2313,18 @@ func api(mux routeRegistrar, app *App) {
 			jsonErr(w, 400, fmt.Errorf("dest_dir required (LTFS mount, archive drive, burn folder)"))
 			return
 		}
+		// What is already at the target is said first, before any volume is made
+		// or any job starts.
+		if wo := inspectWriteTarget(c, filepath.Join(dest, c.Name)); wo != nil {
+			writeOverResponse(w, wo)
+			return
+		}
 		vol := resolveVolume(app, b)
 		if err := sealGuard(app, vol); err != nil {
 			jsonErr(w, 409, err)
 			return
 		}
 		if !outFolderGate(w, app, dest) {
-			return
-		}
-		// What is already at the target is said first, before any job starts.
-		if wo := inspectWriteTarget(c, filepath.Join(dest, c.Name)); wo != nil {
-			writeOverResponse(w, wo)
 			return
 		}
 		startedOn(w).write(runJob(app, "write", "Write "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {
@@ -2345,16 +2349,16 @@ func api(mux routeRegistrar, app *App) {
 			jsonErr(w, 400, fmt.Errorf("dest_dir required (the mounted tape/drive for this segment)"))
 			return
 		}
+		if wo := app.spanTargetConflict(c, filepath.Join(dest, c.Name)); wo != nil {
+			writeOverResponse(w, wo)
+			return
+		}
 		vol := resolveVolume(app, b)
 		if err := sealGuard(app, vol); err != nil {
 			jsonErr(w, 409, err)
 			return
 		}
 		if !outFolderGate(w, app, dest) {
-			return
-		}
-		if wo := app.spanTargetConflict(c, filepath.Join(dest, c.Name)); wo != nil {
-			writeOverResponse(w, wo)
 			return
 		}
 		startedOn(w).write(runJob(app, "write", "Span-write next segment of "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {

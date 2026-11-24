@@ -81,8 +81,9 @@ func init() {
 				return nil, err
 			}
 			defer dest.Close()
+			top, terr := dest.root.Lstat(mirrorPreviousDir)
 			fi, err := dest.root.Lstat(filepath.Join(mirrorPreviousDir, run))
-			if err != nil || !fi.IsDir() || isLinkMode(fi.Mode()) {
+			if terr != nil || isLinkMode(top.Mode()) || err != nil || !fi.IsDir() || isLinkMode(fi.Mode()) {
 				return nil, refuseDestructive(400, "%s/%s is not a kept-version folder on %s", mirrorPreviousDir, run, paramString(p, "dest"))
 			}
 			return treeTargets(filepath.Join(dest.Canonical(), mirrorPreviousDir, run), "earlier version a mirror kept")
@@ -93,7 +94,7 @@ func init() {
 				return nil, err
 			}
 			defer dest.Close()
-			if err := removeGatedEntry(filepath.Join(dest.Canonical(), mirrorPreviousDir), paramString(p, "run")); err != nil {
+			if err := removeGatedEntryIn(dest.root, mirrorPreviousDir, paramString(p, "run")); err != nil {
 				return nil, err
 			}
 			a.Store.Log("mirror", fmt.Sprintf("removed the earlier versions kept in %s/%s on %s", mirrorPreviousDir, paramString(p, "run"), paramString(p, "dest")))

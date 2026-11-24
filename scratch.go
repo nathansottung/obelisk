@@ -435,7 +435,13 @@ func (m *madeEntry) Remove() error {
 		return err
 	}
 	defer root.Close()
-	return removeEntryIn(root, m.name, true, &m.id)
+	aside, err := removeEntryInAs(root, m.name, true, &m.id)
+	if aside != "" && aside != m.name {
+		// The folder was renamed out of the way before it was emptied: a retry
+		// carries on there, still checked by identity.
+		m.name = aside
+	}
+	return err
 }
 
 // removeMade removes the file f this operation created, by identity. For the
@@ -456,6 +462,18 @@ func isLinkMode(m fs.FileMode) bool { return m&(fs.ModeSymlink|fs.ModeIrregular)
 // tree allows one) is renamed to a removingPrefix name first, then emptied
 // without following links.
 func removeEntryIn(root *os.Root, name string, tree bool, want *fileIdent) error {
+	_, err := removeEntryInAs(root, name, tree, want)
+	return err
+}
+
+// removeEntryInAs is removeEntryIn that also returns the name the entry had
+// when its removal stopped (a folder's removingPrefix name), or "".
+func removeEntryInAs(root *os.Root, name string, tree bool, want *fileIdent) (string, error) {
+	err := removeEntryInStep(root, name, tree, want, &name)
+	return name, err
+}
+
+func removeEntryInStep(root *os.Root, name string, tree bool, want *fileIdent, at *string) error {
 	fi, err := root.Lstat(name)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -497,6 +515,7 @@ func removeEntryIn(root *os.Root, name string, tree bool, want *fileIdent) error
 		if err := root.Rename(name, aside); err != nil {
 			return err
 		}
+		*at = aside
 	}
 	return removeTreeIn(root, aside)
 }

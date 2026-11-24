@@ -123,7 +123,10 @@ func discardDestStage(s *destStage) error {
 	if !s.published {
 		err = stageEntryOwned(s)
 		if err == nil {
-			err = removeEntryIn(s.private, "payload"+mirrorTmpSuffix, false, nil) // checked as ours just above
+			var id fileIdent
+			if id, err = handleIdentity(s.file); err == nil {
+				err = removeMadeInRoot(s.private, "payload"+mirrorTmpSuffix, id) // the stage this operation made, by identity
+			}
 		}
 	}
 	if err == nil {
