@@ -22,7 +22,7 @@ import (
 // engines behind it. The GUI preview reader and inventory writer build their own
 // catalog documents (never the store's) and are listed separately.
 var storeFiles = map[string]bool{
-	"store.go": true, "store_files.go": true, "store_chunks.go": true, "store_drives.go": true, "store_plans.go": true,
+	"store.go": true, "store_files.go": true, "store_chunks.go": true, "store_copies.go": true, "store_drives.go": true, "store_plans.go": true,
 	"catalogdb_rows.go": true, "catalogdb_migrate.go": true, "catalogdb_store.go": true,
 	"catalogdb_files.go": true, "catalogdb_chunks.go": true, "catalogdb_drives.go": true,
 	"store_jobs.go": true, "catalogdb_jobs.go": true,
