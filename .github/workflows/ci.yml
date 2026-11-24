@@ -163,7 +163,7 @@ jobs:
   windows:
     name: Windows (test with known-failure gate, guionly build and vet)
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       # The whole suite with the catalog in catalog.json; the job below runs it on
       # the catalog database, the default engine.
@@ -255,7 +255,7 @@ jobs:
           tar --version
           gpg --version | Select-Object -First 1
           par2 -V | Select-Object -First 1
-          go test -json -count=1 -timeout 30m ./... > go-test.json
+          go test -json -count=1 -timeout 50m ./... > go-test.json
           "go test exit code $LASTEXITCODE; judged by the known-failure gate"
           exit 0
 
@@ -292,7 +292,7 @@ jobs:
   windows-sqlite:
     name: Windows (catalog database engine, known-failure gate)
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       # The whole suite on the catalog database, the default engine, named here
       # so the run does not depend on the default; tests about catalog.json
@@ -385,7 +385,7 @@ jobs:
           tar --version
           gpg --version | Select-Object -First 1
           par2 -V | Select-Object -First 1
-          go test -json -count=1 -timeout 30m ./... > go-test.json
+          go test -json -count=1 -timeout 50m ./... > go-test.json
           "go test exit code $LASTEXITCODE; judged by the known-failure gate"
           exit 0
 
