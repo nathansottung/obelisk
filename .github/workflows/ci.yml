@@ -17,10 +17,8 @@ env:
 
 jobs:
   linux:
-    name: Linux (vet, build, test, race)
+    name: Linux (vet, build, test)
     runs-on: ubuntu-latest
-    # The race step alone can take 20 minutes on a slow runner, after about 12 minutes
-    # of earlier steps; 30 cancelled the job mid-race.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -99,12 +97,6 @@ jobs:
       - name: catalog database million-file move and store
         run: OBELISK_SCALE=1 go test -run 'TestCatalogDBRoundTrip1M|TestCatalogEngineScale1M' -v -timeout 30m ./...
 
-      # The race detector needs cgo (a C toolchain), which the Ubuntu runner has but
-      # the CGO_ENABLED=0 release build deliberately does not. Run it here so every
-      # push/PR is checked for data races even though release binaries stay pure-Go.
-      - name: go test -race
-        run: CGO_ENABLED=1 go test -race -timeout 30m ./...
-
       # Prose lint: warns on print-worn, wordy, or passive phrasing in user-facing
       # UI strings and docs (the Writing standard in docs/CONTRIBUTING.md). Advisory
       # only — continue-on-error keeps it from blocking a merge; it surfaces findings
@@ -112,6 +104,59 @@ jobs:
       - name: prose-lint (advisory)
         continue-on-error: true
         run: bash scripts/prose-lint
+
+  # The race detector in its own job, beside the Linux job rather than after it. It
+  # needs cgo (a C toolchain), which the Ubuntu runner has but the CGO_ENABLED=0
+  # release build deliberately does not, so every push/PR is checked for data races
+  # even though release binaries stay pure-Go. The suite takes about 30 minutes under
+  # the race detector, which is what Go's old 30-minute limit cut off; the limit is
+  # now 50 minutes, and each run lists its slowest tests so the next limit is chosen
+  # from numbers.
+  linux-race:
+    name: Linux (race detector)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Go version from go.mod
+        id: go
+        run: bash scripts/ci/go-version.sh >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        timeout-minutes: 10
+        with:
+          go-version: ${{ steps.go.outputs.version }}
+
+      # The same tools as the Linux job, so the restore tests run rather than skip.
+      - name: Install restore tools
+        timeout-minutes: 10
+        run: sudo apt-get update && sudo apt-get install -y gnupg par2
+
+      - name: Test report script
+        run: node --test scripts/ci/slowest-tests.test.mjs
+
+      - name: go test -race
+        run: |
+          status=0
+          CGO_ENABLED=1 go test -race -json -timeout 50m ./... > go-test-race.json || status=$?
+          node scripts/ci/slowest-tests.mjs go-test-race.json 30
+          exit $status
+
+  # Branch protection requires this check by name. It passes only when both Linux
+  # jobs passed; it runs even when one failed or was cancelled, so a failure never
+  # shows here as a skip, which would count as passing.
+  linux-gate:
+    name: Linux (vet, build, test, race)
+    needs: [linux, linux-race]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Both Linux jobs passed
+        run: |
+          echo "tests: ${{ needs.linux.result }}, race detector: ${{ needs.linux-race.result }}"
+          test "${{ needs.linux.result }}" = success && test "${{ needs.linux-race.result }}" = success
 
   windows:
     name: Windows (test with known-failure gate, guionly build and vet)
