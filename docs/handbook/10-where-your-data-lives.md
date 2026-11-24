@@ -25,6 +25,7 @@ Some words you'll see:
 | **Staging** | A workspace for building packages. Each build is made in a folder of its own, and the package's earlier build stays, untouched, until the new one has been built and checked. It can't live inside a folder you back up. |
 | **Destinations you choose** | The tape, disc, or drive you pick for each copy. The tool writes the package there and then re-reads it to verify. On sealed media it also writes the recovery tools (escrow) so the media can rebuild itself years from now. |
 | **Inventory & seal sidecars** | Small folders (`OBELISK_SEAL` when sealing, `OBELISK_DOCK` on a mirror target) written **only to media this tool itself writes** — never to drives you adopt, never to your source folders. |
+| **Kept earlier versions** | `_obelisk-previous` on a mirror drive: a file a mirror would have replaced, kept at its old path under the run's time. It uses space on that drive until you remove it (the mirror's job says how much) and never counts as a copy. |
 | **Quarantine folders** | Reversible `_deleted` holding areas, created **only inside libraries this tool built**. Setting a file aside moves it here; nothing is ever destroyed, and it can always be put back. |
 
 ---

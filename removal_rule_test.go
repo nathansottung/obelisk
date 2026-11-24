@@ -78,16 +78,17 @@ var replaceAllowed = map[string]string{
 	"publish_absent_windows.go:publishAbsent": "MoveFileEx without MOVEFILE_REPLACE_EXISTING: never replaces",
 	"quarantine.go:moveWithinRoot":            "moves a file within its own root only when nothing is at the target (the gate's quarantine, and its undo)",
 	// The destination publish; it replaces only for DestRoot.Publish (publishReplaceCallers).
-	"deststage_windows.go:handleRename":     "the handle rename behind publishDestStage",
-	"deststage_unix.go:publishDestStage":    "replace only when DestRoot.Publish asks",
+	"deststage_windows.go:handleRename":  "the handle rename behind publishDestStage",
+	"deststage_unix.go:publishDestStage": "replace only when DestRoot.Publish asks",
 }
 
 // publishReplaceCallers are the only functions that may publish over an
 // existing name on a destination (DestRoot.Publish): Obelisk's own sidecars on
 // a volume it manages.
 var publishReplaceCallers = map[string]bool{
-	"destroot_stage.go:DestRoot.WriteFileAtomic": true,
-	"destroot_stage.go:DestRoot.Publish":         true,
+	"destroot_stage.go:DestRoot.WriteFileAtomic":  true,
+	"destroot_stage.go:DestRoot.Publish":          true,
+	"mirror_previous.go:keepPlan.keepThenPublish": true, // after keeping what is there
 }
 
 // copyFileOverCallers may replace a file with copyFileOver.

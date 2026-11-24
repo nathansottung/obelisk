@@ -678,6 +678,7 @@ func register(mux routeRegistrar, pattern string, h http.HandlerFunc) {
 func api(mux routeRegistrar, app *App) {
 	destructiveRoutes(mux, app)
 	leftoverRoutes(mux, app)
+	mirrorPreviousRoutes(mux, app)
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		out := map[string]any{"ok": true, "version": appVersion, "schema_version": currentSchemaVersion}
 		if ro, why := app.Store.ReadOnly(); ro {

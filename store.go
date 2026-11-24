@@ -868,6 +868,22 @@ type BackupSession struct {
 	At           time.Time `json:"at"`
 	Name         string    `json:"name"`
 	Dest         string    `json:"dest,omitempty"` // mirror destination path (mirror mode)
+	// A run that kept earlier versions instead of replacing them (Base "kept"):
+	// the folder they went to, whether the run finished, and each one. Kept
+	// versions never count as copies.
+	KeptRun      string        `json:"kept_run,omitempty"`
+	Status       string        `json:"status,omitempty"` // incomplete | complete
+	KeptVersions []KeptVersion `json:"kept_versions,omitempty"`
+}
+
+// KeptVersion is an earlier version a mirror kept instead of replacing.
+type KeptVersion struct {
+	FileID  int    `json:"file_id,omitempty"`
+	RelPath string `json:"rel_path"` // where it was, on the volume
+	KeptRel string `json:"kept_rel"` // where it went: _obelisk-previous/<run>/<rel_path>
+	Hash    string `json:"hash"`     // its SHA-256
+	Size    int64  `json:"size_bytes"`
+	OwnCopy bool   `json:"own_copy"` // Obelisk's own earlier copy of this file
 }
 
 // DriftItem is one file that differs between the source folders now and what
@@ -3307,13 +3323,44 @@ func (s *Store) AddBackupSession(b *BackupSession) *BackupSession {
 	return b
 }
 
-// BackupSessions returns the run history for a collection (0 = all), newest first.
+// UpdateBackupSession saves a changed run record.
+func (s *Store) UpdateBackupSession(b *BackupSession) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, x := range s.c.BackupSessions {
+		if x.ID == b.ID {
+			c := *b
+			s.c.BackupSessions[i] = &c
+			return s.save()
+		}
+	}
+	return fmt.Errorf("run record %d not found", b.ID)
+}
+
+// KeptVersionRuns returns the records of mirror runs that kept earlier versions
+// (Base "kept") for a collection (0 = all), newest first.
+func (s *Store) KeptVersionRuns(collectionID int) []*BackupSession {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []*BackupSession
+	for i := len(s.c.BackupSessions) - 1; i >= 0; i-- {
+		b := s.c.BackupSessions[i]
+		if b.Base == "kept" && (collectionID == 0 || b.CollectionID == collectionID) {
+			c := *b
+			out = append(out, &c)
+		}
+	}
+	return out
+}
+
+// BackupSessions returns the run history for a collection (0 = all), newest
+// first. Records of kept earlier versions are not runs (KeptVersionRuns).
 func (s *Store) BackupSessions(collectionID int) []*BackupSession {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []*BackupSession
 	for _, b := range s.c.BackupSessions {
-		if collectionID == 0 || b.CollectionID == collectionID {
+		if b.Base != "kept" && (collectionID == 0 || b.CollectionID == collectionID) {
 			out = append(out, b)
 		}
 	}

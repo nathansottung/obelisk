@@ -288,9 +288,9 @@ func runWriteProbe(fsys probeFS) (err error) {
 	defer func() {
 		if err != nil {
 			var rerr error
-			if _, serr := fsys.OpenFile(current, os.O_RDONLY, 0); serr != nil {
+			if g, serr := fsys.OpenFile(current, os.O_RDONLY, 0); serr != nil {
 				rerr = serr
-			} else if !stillMade(current) {
+			} else if g.Close(); !stillMade(current) {
 				rerr = fmt.Errorf("%s is no longer the file this check made", current)
 			} else {
 				rerr = retryTransientRename(func() error { return fsys.Remove(current) })

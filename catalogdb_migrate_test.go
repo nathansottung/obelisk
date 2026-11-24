@@ -397,7 +397,9 @@ func TestCatalogMove_RefusesFaults(t *testing.T) {
 }
 
 // A move stopped at any step, as if the process died there, is finished by the
-// next run, and a third run finds nothing to do.
+// next run, and a third run finds nothing to do. The stopped run's staging
+// database is not swept: it is listed to the user as a leftover, and goes only
+// when they remove it.
 func TestCatalogMove_ResumesAfterStop(t *testing.T) {
 	for _, step := range []string{"imported", "backup", "publish", "stub"} {
 		t.Run(step, func(t *testing.T) {
@@ -415,6 +417,20 @@ func TestCatalogMove_ResumesAfterStop(t *testing.T) {
 			}
 			if step == "stub" && !res.Finished || step != "stub" && !res.Moved {
 				t.Errorf("resume result %+v", res)
+			}
+			stages, _ := filepath.Glob(filepath.Join(dir, catalogStagePrefix+"*"))
+			left, _ := listLeftoversIn(dir)
+			listed := map[string]bool{}
+			for _, l := range left {
+				listed[l.Path] = true
+			}
+			for _, st := range stages {
+				if !listed[st] {
+					t.Errorf("the stopped run's %s is not listed as a leftover", filepath.Base(st))
+				}
+				if err := removeGatedEntry(dir, filepath.Base(st)); err != nil { // as the user would, through the gate
+					t.Fatal(err)
+				}
 			}
 			assertMoved(t, dir, raw)
 			if res, err := migrateCatalogToDB(dir, catalogMigrateOptions{}); err != nil || !res.Already {

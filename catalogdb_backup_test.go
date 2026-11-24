@@ -179,13 +179,17 @@ func TestDBBackup_AnExistingBackupIsNeverReplaced(t *testing.T) {
 }
 
 // fakeBackups writes n daily backups of size bytes ending the day before first+n,
-// and returns their names, oldest first.
+// each dated (modified) on its day, and returns their names, oldest first.
 func fakeBackups(t *testing.T, dir string, first time.Time, n int, size int) []string {
 	t.Helper()
 	var names []string
 	for i := 0; i < n; i++ {
 		name := catalogDBBackupPrefix + first.AddDate(0, 0, i).Format("20060102")
 		if err := os.WriteFile(filepath.Join(dir, name), make([]byte, size), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		day := first.AddDate(0, 0, i)
+		if err := os.Chtimes(filepath.Join(dir, name), day, day); err != nil {
 			t.Fatal(err)
 		}
 		names = append(names, name)
@@ -248,19 +252,21 @@ func TestDBBackup_TheSizeCapDropsTheOldestFirst(t *testing.T) {
 		t.Fatalf("backups = %v, want %s", got, want)
 	}
 
-	// A cap smaller than the newest copy still keeps it.
+	// A cap smaller than the newest copy still keeps it, and a copy made in the
+	// last day is never removed (the retention rule, retention.go).
 	catalogDBBackupCap = 1
 	*clock = time.Date(2026, 11, 4, 10, 0, 0, 0, time.Local)
 	s.AddCollection("More")
 	s.waitBackups()
-	if got := backupNames(t, dir); strings.Join(got, ",") != "catalog.db.bak-20261104" {
-		t.Fatalf("backups = %v, want only the newest", got)
+	if got := backupNames(t, dir); strings.Join(got, ",") != "catalog.db.bak-20261103,catalog.db.bak-20261104" {
+		t.Fatalf("backups = %v, want the newest and the one made in the last day", got)
 	}
 }
 
-// A stage a crash left behind is removed once it is old; a recent one may be
-// another copy of Obelisk's backup in progress and is left alone.
-func TestDBBackup_OldStagesAreSwept(t *testing.T) {
+// A stage a crash left behind is never swept: it is listed to the user as a
+// leftover, with its size and age. A recent one may be another copy of
+// Obelisk's backup in progress.
+func TestDBBackup_OldStagesAreListedNotSwept(t *testing.T) {
 	dir := t.TempDir()
 	clock := setBackupClock(t, time.Time{})
 	oldStage := filepath.Join(dir, "catalog.db.bak-20261001.stage-0123456789ab")
@@ -278,11 +284,18 @@ func TestDBBackup_OldStagesAreSwept(t *testing.T) {
 	*clock = time.Date(2026, 11, 3, 10, 0, 0, 0, time.Local)
 	s.AddCollection("Kept")
 	s.waitBackups()
-	if _, err := os.Stat(oldStage); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("an old stage was left (err=%v)", err)
+	for _, p := range []string{oldStage, newStage} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("a stage was removed without the user: %v", err)
+		}
 	}
-	if _, err := os.Stat(newStage); err != nil {
-		t.Errorf("a recent stage was removed: %v", err)
+	left, _ := listLeftoversIn(dir)
+	listed := false
+	for _, l := range left {
+		listed = listed || l.Path == oldStage && l.Size == int64(len("partial")) && l.AgeHours >= 2
+	}
+	if !listed {
+		t.Errorf("the old stage is not listed as a leftover with its size and age: %+v", left)
 	}
 }
 

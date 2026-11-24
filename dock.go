@@ -616,7 +616,11 @@ func (a *App) scanTree(root string, cfg Config, progress func(done, total int), 
 		}
 		if d.IsDir() {
 			if p != root && skipDockDir(d.Name()) {
-				gaps.skippedFolders = append(gaps.skippedFolders, ScanGap{RelPath: driveRel(root, p), Reason: "system folder, not scanned"})
+				reason := "system folder, not scanned"
+				if d.Name() == mirrorPreviousDir {
+					reason = "earlier versions a mirror kept, not scanned"
+				}
+				gaps.skippedFolders = append(gaps.skippedFolders, ScanGap{RelPath: driveRel(root, p), Reason: reason})
 				return filepath.SkipDir
 			}
 			return nil
@@ -1077,7 +1081,7 @@ func safeName(name string) string {
 // common OS bookkeeping that is unreadable or irrelevant.
 func skipDockDir(name string) bool {
 	switch name {
-	case dockSidecarDir, dockSidecarDirLegacy, sealSidecarDir, sealSidecarDirLegacy,
+	case dockSidecarDir, dockSidecarDirLegacy, sealSidecarDir, sealSidecarDirLegacy, mirrorPreviousDir,
 		"System Volume Information", "$RECYCLE.BIN", ".Trashes", ".Spotlight-V100", ".fseventsd":
 		return true
 	}

@@ -39,6 +39,10 @@ import (
 	"time"
 )
 
+// mirrorPreviousDir is where a mirror keeps, on its destination, the versions
+// it would otherwise replace (mirror_previous.go). Never removed on its own.
+const mirrorPreviousDir = "_obelisk-previous"
+
 // removingPrefix names a folder whose removal has begun.
 const removingPrefix = ".obelisk-removing-"
 
@@ -356,11 +360,11 @@ func removeOwnedByID(s *Store, owned []fileIdent, dir, name string, kind scratch
 	if !kind.match(name) {
 		return fmt.Errorf("refusing to remove %s: not a %s Obelisk makes", filepath.Join(dir, name), kind.label)
 	}
+	// The folder is checked: one that is a source, inside one or holding one is
+	// refused, so nothing in it (a single name, never a link) can be a source.
 	if s != nil {
-		for _, p := range []string{dir, filepath.Join(dir, name)} {
-			if err := s.CheckOutsideSources(p); err != nil {
-				return fmt.Errorf("refusing to remove %s: %w", filepath.Join(dir, name), err)
-			}
+		if err := s.CheckOutsideSources(dir); err != nil {
+			return fmt.Errorf("refusing to remove %s: %w", filepath.Join(dir, name), err)
 		}
 	}
 	root, err := os.OpenRoot(dir)

@@ -18,6 +18,7 @@ package main
 // shows in Backup History and feeds Home's periodic-backup recognition.
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -247,6 +248,8 @@ func (a *App) BackupDeltaPreview(collectionID int, folderIDs []int, volumeID int
 
 // BackupChangesResult is the outcome of a run (also the API/job return shape).
 type BackupChangesResult struct {
+	// What was kept instead of replaced (mirror_previous.go).
+	KeptSummary
 	SessionID int    `json:"session_id"`
 	Base      string `json:"base"`
 	Mode      string `json:"mode"`
@@ -398,6 +401,12 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 			earlier[r.FileID] = r
 		}
 	}
+	// What is there now: Obelisk's own earlier copy is kept as a previous version
+	// before its new copy takes the name; the same content is left alone.
+	plan, err := a.planMirrorKeeps(dest, collectionID, vol.ID, files, mrels, shared)
+	if err != nil {
+		return nil, err
+	}
 	for i, f := range files {
 		srcRoot := folderPath[f.FolderID]
 		srcPath := filepath.Join(srcRoot, filepath.FromSlash(f.RelPath))
@@ -421,7 +430,15 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 		if i%25 == 0 || len(files) < 50 {
 			report(fmt.Sprintf("backing up %d/%d — %s", i+1, len(files), f.RelPath))
 		}
-		streamHash, n, cerr := copyVerifyToRoot(dest, srcPath, mrel, th, func(d int64) {
+		if plan.same[mrel] { // its earlier copy is already this content
+			continue
+		}
+		if _, keep := plan.existing[mrel]; keep {
+			if err := a.startKeeping(dest, vol, collectionID, mode, plan); err != nil {
+				return nil, err
+			}
+		}
+		streamHash, n, cerr := copyVerifyKeeping(dest, plan, srcPath, mrel, f.ID, th, func(d int64) {
 			doneBytes += d
 			now := time.Now()
 			// Feed the Performance strip: the source root and destination volume rows
@@ -433,6 +450,9 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 				report(fmt.Sprintf("backing up %d/%d — %s", i+1, len(files), f.RelPath))
 			}
 		})
+		if errors.Is(cerr, errMirrorCrashed) {
+			return nil, cerr
+		}
 		if cerr != nil {
 			if stop := a.stopOnDestinationChange("backup", cerr, res.Files); stop != nil {
 				return nil, stop
@@ -453,6 +473,10 @@ func (a *App) BackupChanges(collectionID int, folderIDs []int, volumeID int, bas
 	if stop := a.stopOnDestinationChange("backup", dest.checkRoot(), res.Files); stop != nil {
 		return nil, stop
 	}
+	if err := a.finishKeeping(dest, vol, plan); err != nil {
+		return nil, err
+	}
+	res.KeptSummary = plan.summary(dest)
 	// The copies and this run's history entry are recorded together, before the
 	// inventory files are written, so a stop while writing them never leaves
 	// copies recorded without the backup that made them.

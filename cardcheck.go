@@ -365,7 +365,7 @@ func (a *App) cardCopiesOnce(dev cardDevice) (*cardCopyIndex, error) {
 // without counting: they hold the tool's records, not anyone's files.
 func cardSkipDir(name string) bool {
 	switch name {
-	case dockSidecarDir, sealSidecarDir, dockSidecarDirLegacy, sealSidecarDirLegacy:
+	case dockSidecarDir, sealSidecarDir, dockSidecarDirLegacy, sealSidecarDirLegacy, mirrorPreviousDir:
 		return true
 	}
 	return false

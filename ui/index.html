@@ -524,7 +524,7 @@ const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 // (input), and its arguments as JSON in data-args, built with callArgs (escaped
 // as an attribute value, so the browser hands back exactly the JSON). Only the
 // functions listed in UI_CALLS can be called this way.
-const UI_CALLS=new Set(['adoptFolderDlg','assignDlgArchive','backupChangesDlg','backupHistoryDlg','bagExportDlg','bagPackageDlg','censusDlg','doReconcile','doRefill','doRewriteCopy','doSettleCopy','dockIngest','dockIngestAnyway','dockReverifyDlg','driveEncDlg','exploreGo','finalizeDlg','integrityArchiveDlg','mirrorDlg','overrideFile','parkFile','planDlg','planExecFromDock','planTree','printLabel','readMediumDlg','removeDlg','removeLeftover','restoreDlg','restoreFileVersion','retireDlg','rmPickExport','rmToggle','scanDlg','snapTree','spanWriteDlg','tmZoom','toolBrowse','unsealDlg','vDrift','verifyMirrorDlg','writeDlg']);
+const UI_CALLS=new Set(['adoptFolderDlg','assignDlgArchive','backupChangesDlg','backupHistoryDlg','bagExportDlg','bagPackageDlg','censusDlg','doReconcile','doRefill','doRewriteCopy','doSettleCopy','dockIngest','dockIngestAnyway','dockReverifyDlg','driveEncDlg','exploreGo','finalizeDlg','integrityArchiveDlg','mirrorDlg','overrideFile','parkFile','planDlg','planExecFromDock','planTree','printLabel','readMediumDlg','removeDlg','removeKeptRun','removeLeftover','restoreDlg','restoreFileVersion','retireDlg','rmPickExport','rmToggle','scanDlg','snapTree','spanWriteDlg','tmZoom','toolBrowse','unsealDlg','vDrift','verifyMirrorDlg','writeDlg']);
 const callArgs=(...a)=>esc(JSON.stringify(a));
 function _uiDispatch(attr,e){
   const el=e&&e.target&&e.target.closest?e.target.closest('['+attr+']'):null;if(!el)return;
@@ -3104,10 +3104,24 @@ function jobSkippedNote(j){const r=(j&&j.result)||{};
   if(typeof r.skipped!=='number'||!r.skipped||typeof r.checked!=='number')return '';
   const names=(r.results||[]).filter(x=>x.skipped).map(x=>esc(x.chunk)).join(', ');
   return ` <span class="dim" style="font-size:10.5px">Not checked, busy in another job: ${names}. Verify again when that job ends.</span>`}
+// keptNote says what a mirror kept instead of replacing, and how much space it
+// uses until removed. Files that were not Obelisk's own earlier copies are named
+// apart from the routine ones.
+function keptNote(r){if(!r||!r.kept_run)return '';
+  const own=(r.kept_own||[]).length,other=r.kept_other||[];
+  const run=String(r.kept_run).split(/[\/]/).pop();
+  return `<div style="font-size:11px;margin-top:3px">Kept ${own+other.length} earlier version(s) instead of replacing them, in <span class="mono">${esc(r.kept_run)}</span>. They use ${esc(humanBytesUI(r.kept_bytes||0))} on that drive until you remove them, and do not count as copies.`
+    +(other.length?` <b>${other.length} of them were not Obelisk's own earlier copies</b>: ${other.slice(0,5).map(esc).join(', ')}${other.length>5?', …':''}.`:'')
+    +` <button class="btn ghost" style="font-size:11px;padding:1px 8px" data-call="removeKeptRun" data-args="${callArgs(r.dest,run)}">Remove kept versions…</button></div>`}
+function humanBytesUI(n){const u=['bytes','KB','MB','GB','TB'];let i=0;while(n>=1000&&i<u.length-1){n/=1000;i++}return (i?n.toFixed(1):n)+' '+u[i]}
+async function removeKeptRun(dest,run){
+  try{const r=await confirmDestructive('mirror-previous-remove',{dest,run});if(r)toast('Removed the kept versions in '+run)}
+  catch(e){toast(e.message,1)}}
 function jobArtifact(j){if(j.status!=='COMPLETED'||!j.result)return '';const r=j.result;
   if(jobSkippedNote(j))return jobSkippedNote(j);
   if(j.kind==='recoverykit'&&r.output_dir)return ` <button class="btn ghost" style="font-size:11px;padding:1px 8px" onclick='showKitResult(${JSON.stringify(r)})'>Show kit</button>`;
-  if(j.kind==='mirror'&&r.sidecar!=null)return ` <span class="dim" style="font-size:10.5px">${r.mirrored||0} files${r.failed?' · '+r.failed+' failed':''}${r.sidecar?' · sidecar written':''}</span>`;
+  if(j.kind==='mirror'&&r.sidecar!=null)return ` <span class="dim" style="font-size:10.5px">${r.mirrored||0} files${r.failed?' · '+r.failed+' failed':''}${r.sidecar?' · sidecar written':''}</span>`+keptNote(r);
+  if(j.kind==='incremental'&&r.kept_run)return keptNote(r);
   if(j.kind==='reconcile'&&r.collection_id)return ` <button class="btn ghost" style="font-size:11px;padding:1px 8px" onclick="vDrift(${r.collection_id},'')">View drift (${r.changes||0}${r.unknown?' · '+r.unknown+' unknown':''})</button>`;
   if(j.kind==='scan'&&r.files!=null)return ` <span class="dim" style="font-size:10.5px">${r.files} file(s) cataloged</span>`;
   return ''}
@@ -3123,7 +3137,7 @@ const JOB_WRITES={
   write:{writes:'the package copy to the destination volume you chose, then re-reads it to verify'},
   copy:{writes:'the package copy to the destination volume you chose, then re-reads it to verify'},
   span:{writes:'the package across the destination media you chose, one at a time, each re-read to verify'},
-  mirror:{reads:'your source folders (never changed)',writes:'plain files to the destination you chose, plus one inventory sidecar on that media'},
+  mirror:{reads:'your source folders (never changed)',writes:'plain files to the destination you chose, plus one inventory sidecar on that media. A different file already at a path is kept as an earlier version in _obelisk-previous, never replaced; kept versions use space until you remove them'},
   dock:{reads:'the drive (never changed)',writes:'an inventory snapshot to the catalog only'},
   finalize:{writes:'a seal sidecar (OBELISK_SEAL) onto the volume being sealed'},
   recoverykit:{writes:'the Recovery Kit to the output folder you chose'},
