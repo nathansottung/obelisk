@@ -7,7 +7,9 @@ package main
 // config (e.g. a tape user missing the LTFS step, or a non-tape user told to install it).
 
 import (
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -209,8 +211,37 @@ func TestApplySetup_PreservesUnrelated(t *testing.T) {
 	}
 }
 
-// The whole matrix: every combination of answers yields a self-consistent state.
-func TestApplySetup_MatrixCoherent(t *testing.T) {
+// The matrix lists every combination of answers once: 6 data kinds (5 and an
+// invalid one), 4 locations, 9 target sets, 4 modes and 4 presets.
+func TestApplySetup_MatrixListsEveryCombinationOnce(t *testing.T) {
+	cases := setupMatrixCases()
+	const want = 6 * 4 * 9 * 4 * 4
+	if len(cases) != want {
+		t.Fatalf("matrix has %d cases, want %d", len(cases), want)
+	}
+	names := map[string]bool{}
+	answers := map[string]bool{}
+	for _, c := range cases {
+		if names[c.name] {
+			t.Errorf("matrix case name %q appears twice", c.name)
+		}
+		names[c.name] = true
+		a := c.answers
+		key := fmt.Sprintf("%q|%q|%q|%q|%q", a.DataKind, a.PrimaryLocation, a.BackupTargets, a.UIMode, a.IntegrityPreset)
+		if answers[key] {
+			t.Errorf("matrix answers %s appear twice", key)
+		}
+		answers[key] = true
+	}
+}
+
+type setupMatrixCase struct {
+	name    string
+	answers SetupAnswers
+}
+
+// setupMatrixCases is every combination of interview answers, valid and invalid.
+func setupMatrixCases() []setupMatrixCase {
 	targetSets := [][]string{
 		{TargetDrives}, {TargetNAS}, {TargetTape}, {TargetOptical}, {TargetCloud},
 		{TargetDrives, TargetTape}, {TargetTape, TargetOptical, TargetCloud},
@@ -218,66 +249,98 @@ func TestApplySetup_MatrixCoherent(t *testing.T) {
 	}
 	modes := []string{UIModeGuided, UIModeStandard, UIModeComplete, "garbage"}
 	presets := []string{"ARCHIVAL", "BALANCED", "FAST", ""}
+	label := func(v, empty string) string {
+		if v == "" {
+			return empty
+		}
+		return v
+	}
+	var cases []setupMatrixCase
 	for _, kind := range append(append([]string{}, setupDataKinds...), "garbage") {
 		for _, loc := range append(append([]string{}, setupLocations...), "garbage") {
 			for _, tgs := range targetSets {
 				for _, mode := range modes {
 					for _, preset := range presets {
-						app := newSetupApp(t)
-						res, err := app.ApplySetup(SetupAnswers{
-							DataKind: kind, PrimaryLocation: loc, BackupTargets: tgs,
-							UIMode: mode, IntegrityPreset: preset,
+						cases = append(cases, setupMatrixCase{
+							name: strings.Join([]string{kind, loc, label(strings.Join(tgs, "+"), "no-targets"),
+								mode, label(preset, "no-preset")}, ","),
+							answers: SetupAnswers{
+								DataKind: kind, PrimaryLocation: loc, BackupTargets: tgs,
+								UIMode: mode, IntegrityPreset: preset,
+							},
 						})
-						if err != nil {
-							t.Fatalf("apply failed for %v/%v/%v/%v/%v: %v", kind, loc, tgs, mode, preset, err)
-						}
-						cfg := res.Config
-						// Always complete; never a blank/invalid persisted answer.
-						if !cfg.SetupComplete {
-							t.Fatal("matrix: SetupComplete must be set")
-						}
-						if !containsFold(setupDataKinds, cfg.DataKind) {
-							t.Errorf("matrix: invalid persisted data kind %q", cfg.DataKind)
-						}
-						if !containsFold(setupLocations, cfg.PrimaryLocation) {
-							t.Errorf("matrix: invalid persisted location %q", cfg.PrimaryLocation)
-						}
-						if len(cfg.BackupTargets) == 0 {
-							t.Error("matrix: backup targets must never persist empty")
-						}
-						if cfg.UIMode != UIModeGuided && cfg.UIMode != UIModeStandard && cfg.UIMode != UIModeComplete {
-							t.Errorf("matrix: invalid persisted ui_mode %q", cfg.UIMode)
-						}
-						// Archive kind is one of the two valid values and matches the location rule.
-						if res.ArchiveKind != archiveKindForLocation(cfg.PrimaryLocation) {
-							t.Errorf("matrix: archive kind %q inconsistent with location %q", res.ArchiveKind, cfg.PrimaryLocation)
-						}
-						// Requirements are exactly the selected targets — no extras, no omissions.
-						if len(res.Requirements) != len(cfg.BackupTargets) {
-							t.Errorf("matrix: %d requirements for %d targets", len(res.Requirements), len(cfg.BackupTargets))
-						}
-						for _, r := range res.Requirements {
-							if !cfg.wantsTarget(r.Target) {
-								t.Errorf("matrix: requirement %q for an unselected target", r.Target)
-							}
-						}
-						// The LTFS install step appears IFF tape is a target — the acceptance rule.
-						tapeStep := false
-						for _, r := range res.Requirements {
-							if r.ChecklistStep != "" && strings.Contains(strings.ToLower(r.ChecklistStep), "ltfs") {
-								tapeStep = true
-							}
-						}
-						if tapeStep != cfg.wantsTarget(TargetTape) {
-							t.Errorf("matrix: LTFS step presence %v != tape selected %v", tapeStep, cfg.wantsTarget(TargetTape))
-						}
-						// Integrity is a valid preset (never Custom out of a preset answer).
-						if _, ok := integrityPresets()[res.Integrity.Preset]; !ok {
-							t.Errorf("matrix: integrity preset %q is not a named preset", res.Integrity.Preset)
-						}
 					}
 				}
 			}
 		}
+	}
+	return cases
+}
+
+// The whole matrix: every combination of answers yields a self-consistent state.
+// Each case is a parallel subtest with its own data folder, closed and removed as
+// soon as the case finishes; the time is in opening a new catalog, not the checks.
+func TestApplySetup_MatrixCoherent(t *testing.T) {
+	cases := setupMatrixCases()
+	var ran atomic.Int64
+	t.Cleanup(func() { // runs after every parallel case has finished
+		if got := ran.Load(); got != int64(len(cases)) {
+			t.Errorf("matrix: %d of %d cases ran to the end", got, len(cases))
+		}
+	})
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			app := newSetupApp(t)
+			res, err := app.ApplySetup(c.answers)
+			if err != nil {
+				t.Fatalf("apply failed: %v", err)
+			}
+			cfg := res.Config
+			// Always complete; never a blank/invalid persisted answer.
+			if !cfg.SetupComplete {
+				t.Fatal("matrix: SetupComplete must be set")
+			}
+			if !containsFold(setupDataKinds, cfg.DataKind) {
+				t.Errorf("matrix: invalid persisted data kind %q", cfg.DataKind)
+			}
+			if !containsFold(setupLocations, cfg.PrimaryLocation) {
+				t.Errorf("matrix: invalid persisted location %q", cfg.PrimaryLocation)
+			}
+			if len(cfg.BackupTargets) == 0 {
+				t.Error("matrix: backup targets must never persist empty")
+			}
+			if cfg.UIMode != UIModeGuided && cfg.UIMode != UIModeStandard && cfg.UIMode != UIModeComplete {
+				t.Errorf("matrix: invalid persisted ui_mode %q", cfg.UIMode)
+			}
+			// Archive kind is one of the two valid values and matches the location rule.
+			if res.ArchiveKind != archiveKindForLocation(cfg.PrimaryLocation) {
+				t.Errorf("matrix: archive kind %q inconsistent with location %q", res.ArchiveKind, cfg.PrimaryLocation)
+			}
+			// Requirements are exactly the selected targets — no extras, no omissions.
+			if len(res.Requirements) != len(cfg.BackupTargets) {
+				t.Errorf("matrix: %d requirements for %d targets", len(res.Requirements), len(cfg.BackupTargets))
+			}
+			for _, r := range res.Requirements {
+				if !cfg.wantsTarget(r.Target) {
+					t.Errorf("matrix: requirement %q for an unselected target", r.Target)
+				}
+			}
+			// The LTFS install step appears IFF tape is a target — the acceptance rule.
+			tapeStep := false
+			for _, r := range res.Requirements {
+				if r.ChecklistStep != "" && strings.Contains(strings.ToLower(r.ChecklistStep), "ltfs") {
+					tapeStep = true
+				}
+			}
+			if tapeStep != cfg.wantsTarget(TargetTape) {
+				t.Errorf("matrix: LTFS step presence %v != tape selected %v", tapeStep, cfg.wantsTarget(TargetTape))
+			}
+			// Integrity is a valid preset (never Custom out of a preset answer).
+			if _, ok := integrityPresets()[res.Integrity.Preset]; !ok {
+				t.Errorf("matrix: integrity preset %q is not a named preset", res.Integrity.Preset)
+			}
+			ran.Add(1)
+		})
 	}
 }
