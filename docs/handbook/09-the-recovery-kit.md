@@ -31,14 +31,15 @@ Big reassurance: making a Recovery Kit only **reads** from your archive and **wr
    You should now see a job begin — check the **Jobs** tab for progress.
 
 6. When it finishes, open your chosen folder.
-   You should now see a new folder named **`obelisk-recovery-kit`** inside it.
+   You should now see a new folder named **`obelisk-recovery-kit-<date>-<time>`** inside it. Each kit gets its own folder named by when it was made, so a new kit never changes an earlier one.
 
 ---
 
 ## Part 2: What's inside
 
-Open the `obelisk-recovery-kit` folder. You should now see:
+Open the new `obelisk-recovery-kit-<date>-<time>` folder. You should now see:
 
+- **`EXPORT-INFO.txt`** — when this kit was made, what it covers (how many packages, volumes and keys), and which earlier kits in the same folder it supersedes.
 - **`MEDIA_INVENTORY.md`** — a plain list of every package and which volume (drive, disc, or tape) holds it. This is your map: "the 2019 photos are on the blue drive."
 - **`README_RECOVERY.md`** — a short "start here" note explaining what the kit is and what to do first.
 - **`RESTORE_RUNBOOK.md`** — the authoritative, long-form restore instructions, written to still make sense **30 years** from now. This is the deep, careful version of the by-hand method (par2 → gpg → tar).
@@ -87,13 +88,15 @@ Can they get the files back? **Yes.** Because:
 - Those steps use only **three free tools** that have existed for decades and run on Windows, Mac, and Linux: **`par2`** (checks and repairs damage), **`gpg`** (decrypts, if the data was encrypted), and **`tar`** (unpacks the files).
 - For any **encrypted** data, the **QR card** in the `keys/` folder hands over the passphrase `gpg` will ask for.
 
+**Older kits.** Making a new kit never changes an earlier one. The names sort by time, so the last one is the newest. The export screen lists every kit in the folder, marks the newest, labels the older ones **superseded**, and shows how much space they use; an old kit is removed only with **Remove…** and the typed word **Delete**. A printed or copied old kit is flagged as superseded without changing it: the newer kit's `EXPORT-INFO.txt` names it, so whoever holds both can tell which one to trust. The old kit still restores by hand with `par2`, `gpg` and `tar` for the media it lists.
+
 No special software, no account, no company that has to still be in business. Just the media, the kit, and three tools anyone can download. That is what "future-proof" really means, and it is why the Recovery Kit is the most important thing you will ever make with Obelisk.
 
 ---
 
 ## How to know it worked
 
-- Your chosen output folder now contains a **`obelisk-recovery-kit`** folder.
+- Your chosen output folder now contains a new **`obelisk-recovery-kit-<date>-<time>`** folder.
 - Inside it you can see `MEDIA_INVENTORY.md`, `README_RECOVERY.md`, `RESTORE_RUNBOOK.md`, and a `keys/` folder.
 - If you use encryption, the `keys/` folder holds one QR `.png` and one `.txt` card per key.
 - You have decided where the printed copy and the USB copies will physically live, in at least two separate places.

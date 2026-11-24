@@ -275,6 +275,41 @@ jobs:
           if ((Get-Command tar.exe).Source -ne "$env:SystemRoot\System32\tar.exe") { throw 'tar is not System32 tar' }
           node scripts/ci/hand-restore.mjs
 
+      # A mirror keeps the older version on a drive without hard links by copying
+      # it aside first. That runs here on a real exFAT volume: a small virtual
+      # disk made on this throwaway runner. If the disk cannot be made, or is not
+      # exFAT, the step fails; the test is required to run, never skipped.
+      - name: exFAT volume for the mirror keep test (fails if it cannot be made)
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $vhd = Join-Path $env:RUNNER_TEMP 'obelisk-exfat.vhdx'
+          $script = Join-Path $env:RUNNER_TEMP 'obelisk-exfat.txt'
+          @(
+            "create vdisk file=`"$vhd`" maximum=512 type=expandable",
+            "select vdisk file=`"$vhd`"",
+            'attach vdisk',
+            'create partition primary',
+            'format fs=exfat quick label=OBXEXFAT',
+            'assign letter=X'
+          ) | Set-Content -Path $script -Encoding ascii
+          diskpart /s $script
+          if ($LASTEXITCODE -ne 0) { throw "diskpart exit code ${LASTEXITCODE}: the exFAT test volume could not be made" }
+          $fs = (Get-Volume -DriveLetter X).FileSystem
+          if ($fs -ne 'exFAT') { throw "X: is $fs, not exFAT" }
+          "exFAT test volume ready at X:"
+
+      - name: mirror keep test on exFAT (no skips)
+        shell: pwsh
+        env:
+          OBELISK_EXFAT_TEST_DIR: 'X:\'
+          OBELISK_REQUIRE_EXFAT: '1'
+        run: |
+          $out = go test -count=1 -v -run '^TestMirrorKeep_OnExFAT$' . 2>&1
+          $out
+          if ($LASTEXITCODE -ne 0) { throw 'the exFAT mirror keep test failed' }
+          if (-not ($out -match '--- PASS: TestMirrorKeep_OnExFAT')) { throw 'the exFAT mirror keep test did not run' }
+
       - name: Upload go test JSON
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

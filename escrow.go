@@ -349,16 +349,33 @@ func (a *App) WriteEscrowBundle(destDir string, plan EscrowPlan, progress func(f
 		return nil, err
 	}
 	defer out.Close()
-	return a.writeEscrowBundleTo(out, "", plan, progress)
+	// A standalone bundle never meets an earlier one: its name sorts by when it
+	// was made, and it says what it covers and what it supersedes.
+	now := time.Now()
+	root := freshExportName(out, exportKinds["escrow"].prefix, "", now)
+	supersedes := earlierExports(out, exportKinds["escrow"], root)
+	res, err := a.writeEscrowBundleIn(out, root, plan, progress)
+	if err != nil {
+		return res, err
+	}
+	info := exportInfo(exportKinds["escrow"], root, now, []string{fmt.Sprintf("the escrow tools for this version of Obelisk (mode %s)", plan.Mode)}, supersedes)
+	if err := out.WriteFile(path.Join(root, exportInfoName), info, 0o644); err != nil {
+		return res, err
+	}
+	return res, nil
 }
 
 // writeEscrowBundleTo is WriteEscrowBundle into base/escrow-bundle inside out,
 // an output folder the caller already holds (the seal sidecar, the recovery kit).
 func (a *App) writeEscrowBundleTo(out *outFolder, base string, plan EscrowPlan, progress func(float64, string)) (map[string]any, error) {
+	return a.writeEscrowBundleIn(out, path.Join(base, escrowBundleDir), plan, progress)
+}
+
+// writeEscrowBundleIn writes the bundle into the folder root inside out.
+func (a *App) writeEscrowBundleIn(out *outFolder, root string, plan EscrowPlan, progress func(float64, string)) (map[string]any, error) {
 	if plan.Skipped || plan.Mode == EscrowOff {
 		return map[string]any{"skipped": true, "reason": "escrow_on_media=off"}, nil
 	}
-	root := path.Join(base, escrowBundleDir)
 	if err := out.MkdirAll(root); err != nil {
 		return nil, err
 	}

@@ -11,8 +11,12 @@ package main
 // explicit, audit-logged way back.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"path"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -249,12 +253,85 @@ func (a *App) UnsealVolume(v *Volume, by, reason string) error {
 // INVENTORY.md (the human trail). Written through the destination guard: the
 // medium is decided by where it really is, and each file is staged and named
 // once it reads back.
+//
+// isOwnSealFile reports whether existing, the file at rel, is a seal file
+// Obelisk wrote: each of the three is recognised by its own marker.
+func isOwnSealFile(out *outFolder, rel string, existing []byte) bool {
+	rel = filepath.ToSlash(rel)
+	// The escrow bundle inside the seal: a file is Obelisk's own when the
+	// bundle's own SHA-256SUMS lists it with exactly this content; the list
+	// itself when every line is a hash and a name.
+	if bundle := sealSidecarDir + "/" + escrowBundleDir + "/"; strings.HasPrefix(rel, bundle) {
+		inner := strings.TrimPrefix(rel, bundle)
+		if inner == "SHA-256SUMS" {
+			return sumsListLooksOwn(existing)
+		}
+		f, err := out.openRel(bundle + "SHA-256SUMS")
+		if err != nil {
+			return false
+		}
+		sums, err := io.ReadAll(io.LimitReader(f, 1<<20))
+		f.Close()
+		if err != nil || !sumsListLooksOwn(sums) {
+			return false
+		}
+		want := sha256Hex(existing) + "  " + inner
+		for _, line := range strings.Split(string(sums), "\n") {
+			if strings.TrimSpace(line) == want {
+				return true
+			}
+		}
+		return false
+	}
+	dir, name := path.Split(rel)
+	if strings.TrimSuffix(dir, "/") != sealSidecarDir {
+		return false
+	}
+	jsonHas := func(key string) bool {
+		var m map[string]any
+		if json.Unmarshal(existing, &m) != nil {
+			return false
+		}
+		_, ok := m[key]
+		return ok
+	}
+	switch name {
+	case "FINALIZATION.json":
+		return jsonHas("obelisk_finalization")
+	case "catalog_snapshot.json":
+		return jsonHas("obelisk_seal_snapshot")
+	case "INVENTORY.md":
+		return bytes.HasPrefix(existing, []byte("# Obelisk — sealed volume inventory")) || bytes.HasPrefix(existing, []byte("# Mnemosyne"))
+	}
+	return false
+}
+
+// sumsListLooksOwn reports a SHA-256SUMS file as Obelisk writes it: every line a
+// 64-digit hash, two spaces and a name.
+func sumsListLooksOwn(b []byte) bool {
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(lines) == 0 || len(b) == 0 {
+		return false
+	}
+	for _, l := range lines {
+		h, name, ok := strings.Cut(l, "  ")
+		if !ok || len(h) != 64 || name == "" || strings.Trim(h, "0123456789abcdef") != "" {
+			return false
+		}
+	}
+	return true
+}
+
 func (a *App) writeFinalizeSidecar(mountPath string, v *Volume, as finalizeAssessment, fin Finalization, cfg Config) (string, error) {
 	out, err := a.openOutFolder(mountPath)
 	if err != nil {
 		return "", err
 	}
 	defer out.Close()
+	// A seal written before is replaced (atomically: staged, read back, renamed)
+	// only when its content shows it is Obelisk's own seal; anything else at
+	// those names is left as it is and the seal is refused.
+	out.keepOwn = func(rel string, existing []byte) bool { return isOwnSealFile(out, rel, existing) }
 	if err := out.MkdirAll(sealSidecarDir); err != nil {
 		return "", err
 	}

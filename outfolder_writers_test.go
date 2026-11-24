@@ -73,9 +73,11 @@ func TestWriteChunk_DestinationDecidedByRealLocation(t *testing.T) {
 	})
 }
 
-// A package write gives each file its name only after it reads back as the
-// staged bytes, so a file already at that name (here a hard link to another
-// file) is replaced as a name and the other file keeps its bytes.
+// A package write never replaces files already in the package's folder: it
+// refuses and says what is there. Through the delete gate's write-over, each
+// file gets its name only after it reads back as the staged bytes, so a file
+// already at that name (here a hard link to another file) is replaced as a name
+// and the other file keeps its bytes.
 func TestWriteChunk_NeverWritesThroughExistingFiles(t *testing.T) {
 	app, _ := newTestApp(t, nativeTools(t))
 	c := builtTestChunk(t, app, "WRITE-LINKS")
@@ -86,7 +88,7 @@ func TestWriteChunk_NeverWritesThroughExistingFiles(t *testing.T) {
 	if err := os.Link(sidecar, filepath.Join(medium, c.Name, "RESTORE.txt")); err != nil {
 		t.Fatal(err)
 	}
-	res, err := app.WriteChunk(c.ID, medium, 0, 0, 0, 0, noProg)
+	res, err := writeOver(t, app, c.ID, medium, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,37 +126,40 @@ func TestSpanWrite_DestinationDecidedByRealLocation(t *testing.T) {
 	}
 
 	// A segment file already on the medium (a hard link to another file) is
-	// replaced as a name; the other file keeps its bytes.
+	// never written over by a plain span write; through the gate it is replaced
+	// as a name, and the other file keeps its bytes.
 	medium := t.TempDir()
 	victim := plantAtStageName(t, filepath.Join(medium, c.Name, c.Name+".seg001"))
-	if _, err := app.SpanWriteNext(c.ID, medium, 0, 0, 0, 0, noProg); err != nil {
+	if _, err := spanWriteOver(t, app, c.ID, medium, 0); err != nil {
 		t.Fatal(err)
 	}
 	assertFileBytes(t, victim, "SOMEONE ELSE'S")
 }
 
-// An escrow bundle stages each of its files and names it once it reads back,
-// so a file already in the bundle folder (a hard link to another file) is
-// replaced as a name and the other file keeps its bytes.
+// An escrow bundle goes into a new folder named by when it was made, so an
+// earlier bundle (here a hard link to another file at its README) is never
+// touched, and the new bundle is complete.
 func TestEscrowBundle_NeverWritesThroughExistingFiles(t *testing.T) {
 	a := escrowApp(t)
 	seedEscrowCache(t, a, struct{ binaries, toolchain, readers bool }{binaries: true})
 	dir := t.TempDir()
 	readme := plantAtStageName(t, filepath.Join(dir, escrowBundleDir, "ESCROW_README.md"))
 	plan := a.planEscrow(EscrowBinariesOnly, false, Census{}, mustConfig(t, a))
-	if _, err := a.WriteEscrowBundle(dir, plan, nil); err != nil {
+	sum, err := a.WriteEscrowBundle(dir, plan, nil)
+	if err != nil {
 		t.Fatal(err)
 	}
-	assertFileBytes(t, readme, "SOMEONE ELSE'S")
-	if b, err := os.ReadFile(filepath.Join(dir, escrowBundleDir, "ESCROW_README.md")); err != nil || len(b) == 0 || string(b) == "SOMEONE ELSE'S" {
-		t.Errorf("bundle README not written: %q %v", b, err)
+	requireUntouched(t, readme, filepath.Join(dir, escrowBundleDir, "ESCROW_README.md"))
+	root, _ := sum["dir"].(string)
+	if b, err := os.ReadFile(filepath.Join(root, "ESCROW_README.md")); err != nil || len(b) == 0 || string(b) == "SOMEONE ELSE'S" {
+		t.Errorf("bundle README not written in the new bundle %s: %q %v", root, b, err)
 	}
 }
 
 // Sealing a volume writes its sidecar into the mounted medium decided by where
 // it really is: a folder link to a source is refused before anything is sealed
-// or written. A sidecar file already on the medium (a hard link to another file)
-// is replaced as a name and the other file keeps its bytes.
+// or written. A file at a seal name that is not Obelisk's own seal (here a hard
+// link to another file) refuses the seal and keeps its bytes.
 func TestFinalize_SidecarDecidedByRealLocation(t *testing.T) {
 	app, vol, _, mount := finalizeApp(t)
 	_, link, untouched := sourceBehindLink(t, app)
@@ -166,14 +171,15 @@ func TestFinalize_SidecarDecidedByRealLocation(t *testing.T) {
 	}
 
 	victim := plantAtStageName(t, filepath.Join(mount, sealSidecarDir, "INVENTORY.md"))
-	if _, err := app.FinalizeVolume(vol, mount, "NS", false, ""); err != nil {
-		t.Fatal(err)
+	if _, err := app.FinalizeVolume(vol, mount, "NS", false, ""); err == nil {
+		t.Fatal("a seal replaced a file that is not Obelisk's own seal")
 	}
-	assertFileBytes(t, victim, "SOMEONE ELSE'S")
+	requireUntouched(t, victim, filepath.Join(mount, sealSidecarDir, "INVENTORY.md"))
 }
 
-// A BagIt export decides its output folder by where it really is, and a bag
-// file already there (a hard link to another file) is replaced as a name.
+// A BagIt export decides its output folder by where it really is, and goes into
+// a new bag named by when it was made: an earlier bag's file (a hard link to
+// another file) is never touched.
 func TestBagExport_OutputDecidedByRealLocation(t *testing.T) {
 	app, _ := newTestApp(t, nativeTools(t))
 	c := builtTestChunk(t, app, "BAG-GUARD")
@@ -187,12 +193,17 @@ func TestBagExport_OutputDecidedByRealLocation(t *testing.T) {
 	if _, err := app.ExportPackageBag(c.ID, out, noProg); err != nil {
 		t.Fatal(err)
 	}
-	assertFileBytes(t, victim, "SOMEONE ELSE'S")
+	requireUntouched(t, victim, filepath.Join(out, "BAG-GUARD-bag", "bagit.txt"))
+	list, _, err := ExportsIn(out, "bag")
+	if err != nil || len(list) != 2 || !list[0].Newest || !list[1].Superseded || list[1].Name != "BAG-GUARD-bag" {
+		t.Errorf("the new bag is not listed newest with the earlier one superseded: %+v %v", list, err)
+	}
 }
 
 // The recovery kit (which holds key cards) is written into an output folder
-// decided by where it really is, and a kit file already there (a hard link to
-// another file) is replaced as a name.
+// decided by where it really is, as a new kit named by when it was made: an
+// earlier kit (a hard link to another file at its README) is never touched, and
+// the new kit names it as superseded.
 func TestRecoveryKit_OutputDecidedByRealLocation(t *testing.T) {
 	app, _ := newTestApp(t, nativeTools(t))
 	_, link, untouched := sourceBehindLink(t, app)
@@ -202,10 +213,16 @@ func TestRecoveryKit_OutputDecidedByRealLocation(t *testing.T) {
 
 	out := t.TempDir()
 	victim := plantAtStageName(t, filepath.Join(out, "obelisk-recovery-kit", "README_RECOVERY.md"))
-	if _, err := app.BuildRecoveryKit(out, noProg); err != nil {
+	res, err := app.BuildRecoveryKit(out, noProg)
+	if err != nil {
 		t.Fatal(err)
 	}
-	assertFileBytes(t, victim, "SOMEONE ELSE'S")
+	requireUntouched(t, victim, filepath.Join(out, "obelisk-recovery-kit", "README_RECOVERY.md"))
+	kit, _ := res["output_dir"].(string)
+	info := mustRead(t, filepath.Join(kit, exportInfoName))
+	if !strings.Contains(info, "Made:") || !strings.Contains(info, "Covers:") || !strings.Contains(info, "obelisk-recovery-kit\n") && !strings.Contains(info, "- obelisk-recovery-kit") {
+		t.Errorf("the new kit does not say when it was made, what it covers and what it supersedes:\n%s", info)
+	}
 }
 
 // An app-backup export, manual or automatic, decides its folder by where it
@@ -234,10 +251,16 @@ func TestAppBackupExport_FolderDecidedByRealLocation(t *testing.T) {
 	if err := os.Link(victim, res.SidecarPath); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.exportAppBackupTo(res.TarPath, false); err != nil {
-		t.Fatal(err)
+	// The same name again is refused: an earlier backup is never replaced.
+	if _, err := app.exportAppBackupTo(res.TarPath, false); err == nil {
+		t.Fatal("an app backup replaced an earlier one")
 	}
 	assertFileBytes(t, victim, "SOMEONE ELSE'S")
+	// A manual export always gets a new name, even within the same second.
+	again, err := app.ExportAppBackup(dir, false)
+	if err != nil || again.TarPath == res.TarPath {
+		t.Fatalf("a second export did not get a new name: %v %v", again.TarPath, err)
+	}
 }
 
 // A docked drive is never a source: a folder link to a source is refused by

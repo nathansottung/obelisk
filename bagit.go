@@ -245,7 +245,14 @@ func (a *App) exportBagForChunks(bagBaseName string, chunks []*Chunk, outputDir 
 	if progress == nil {
 		progress = func(float64, string) {}
 	}
-	bagRel := fsSafe(bagBaseName) + "-bag"
+	// A new bag never meets an earlier one: its name sorts by when it was made,
+	// and its EXPORT-INFO.txt (a tag file, in the tag manifest) says what it
+	// covers and which earlier bags of the same name it supersedes.
+	now := time.Now()
+	bagKind := exportKinds["bag"]
+	bagKind.prefix = fsSafe(bagBaseName) + "-bag"
+	bagRel := freshExportName(out, bagKind.prefix, "", now)
+	supersedes := earlierExports(out, bagKind, bagRel)
 	if err := out.MkdirAll(bagRel + "/data"); err != nil {
 		return nil, err
 	}
@@ -314,6 +321,9 @@ func (a *App) exportBagForChunks(bagBaseName string, chunks []*Chunk, outputDir 
 		"bag-info.txt":         info,
 		bagPayloadManifestName: manifest,
 		"COMPARISON.md":        string(comparisonMD),
+		exportInfoName: string(exportInfo(bagKind, bagRel, now, []string{
+			fmt.Sprintf("%d file(s), %d bytes, from %d package(s)", payloadCount, payloadBytes, len(chunks)),
+		}, supersedes)),
 	}
 	names := make([]string, 0, len(tagFiles))
 	for n := range tagFiles {

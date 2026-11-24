@@ -232,12 +232,14 @@ func (a *App) startKeeping(dest *DestRoot, vol *Volume, collectionID int, mode s
 	if p.started {
 		return nil
 	}
-	p.session = a.Store.AddBackupSession(&BackupSession{CollectionID: collectionID, VolumeID: vol.ID, VolumeLabel: vol.Label,
-		Base: "kept", Mode: mode, Dest: dest.Name(), KeptRun: path.Join(mirrorPreviousDir, p.run), Status: "incomplete",
-		Name: fmt.Sprintf("Earlier versions kept on %s — %s (in progress)", vol.Label, p.run)})
+	// The drive first: a run that cannot mark its kept versions keeps nothing
+	// and replaces nothing.
 	if err := p.writeMarker(dest, vol, "incomplete"); err != nil {
 		return fmt.Errorf("marking the run's kept versions on the drive: %w", err)
 	}
+	p.session = a.Store.AddBackupSession(&BackupSession{CollectionID: collectionID, VolumeID: vol.ID, VolumeLabel: vol.Label,
+		Base: "kept", Mode: mode, Dest: dest.Name(), KeptRun: path.Join(mirrorPreviousDir, p.run), Status: "incomplete",
+		Name: fmt.Sprintf("Earlier versions kept on %s — %s (in progress)", vol.Label, p.run)})
 	p.started = true
 	return nil
 }

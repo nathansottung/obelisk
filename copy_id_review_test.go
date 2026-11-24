@@ -207,7 +207,7 @@ func TestCopyID_WritingToTheSetAsideMediumKeepsTheKeptCopy(t *testing.T) {
 				t.Fatal(err)
 			}
 			wantVerifies(t, app, c.ID, medium)
-			if _, err := app.WriteChunk(c.ID, clone, 0, 0, 0, app.Store.EnsureUnregistered().ID, noProg); err != nil {
+			if _, err := writeOver(t, app, c.ID, clone, app.Store.EnsureUnregistered().ID); err != nil {
 				t.Fatal(err)
 			}
 			got := app.Store.Chunk(c.ID)
@@ -257,7 +257,7 @@ func TestCopyID_RewriteAtTheSetAsidePlaceNeverCountsOneMediumTwice(t *testing.T)
 	if err := os.Rename(medium, clone); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.WriteChunk(c.ID, clone, 0, 0, 0, app.Store.EnsureUnregistered().ID, noProg); err != nil {
+	if _, err := writeOver(t, app, c.ID, clone, app.Store.EnsureUnregistered().ID); err != nil {
 		t.Fatal(err)
 	}
 	if got := app.Store.Chunk(c.ID); got.VerifiedCopyCount() != 1 {

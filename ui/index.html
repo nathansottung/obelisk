@@ -524,7 +524,7 @@ const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 // (input), and its arguments as JSON in data-args, built with callArgs (escaped
 // as an attribute value, so the browser hands back exactly the JSON). Only the
 // functions listed in UI_CALLS can be called this way.
-const UI_CALLS=new Set(['adoptFolderDlg','assignDlgArchive','backupChangesDlg','backupHistoryDlg','bagExportDlg','bagPackageDlg','censusDlg','doReconcile','doRefill','doRewriteCopy','doSettleCopy','dockIngest','dockIngestAnyway','dockReverifyDlg','driveEncDlg','exploreGo','finalizeDlg','integrityArchiveDlg','mirrorDlg','overrideFile','parkFile','planDlg','planExecFromDock','planTree','printLabel','readMediumDlg','removeDlg','removeKeptRun','removeLeftover','restoreDlg','restoreFileVersion','retireDlg','rmPickExport','rmToggle','scanDlg','snapTree','spanWriteDlg','tmZoom','toolBrowse','unsealDlg','vDrift','verifyMirrorDlg','writeDlg']);
+const UI_CALLS=new Set(['adoptFolderDlg','assignDlgArchive','backupChangesDlg','backupHistoryDlg','bagExportDlg','bagPackageDlg','censusDlg','doReconcile','doRefill','doRewriteCopy','doSettleCopy','dockIngest','dockIngestAnyway','dockReverifyDlg','driveEncDlg','exploreGo','finalizeDlg','integrityArchiveDlg','mirrorDlg','overrideFile','parkFile','planDlg','planExecFromDock','planTree','prevExports','printLabel','readMediumDlg','removeDlg','removeExport','removeKeptRun','removeLeftover','restoreDlg','restoreFileVersion','retireDlg','rmPickExport','rmToggle','scanDlg','snapTree','spanWriteDlg','tmZoom','toolBrowse','unsealDlg','vDrift','verifyMirrorDlg','writeDlg']);
 const callArgs=(...a)=>esc(JSON.stringify(a));
 function _uiDispatch(attr,e){
   const el=e&&e.target&&e.target.closest?e.target.closest('['+attr+']'):null;if(!el)return;
@@ -2197,7 +2197,8 @@ async function restoreFileVersion(fileId,index,label){
 function bagExportDlg(id,name){dlg(`<h1>Export a BagIt bag — “${esc(name)}”</h1>
   <div class="dim" style="font-size:11.5px;margin-bottom:8px">Writes a <b>conformant BagIt bag</b> (RFC 8493) for institutional handoff: a <span class="mono">data/</span> payload with each package's artifacts, <span class="mono">manifest-sha256.txt</span>, <span class="mono">bag-info.txt</span>, a tagmanifest, and <span class="mono">COMPARISON.md</span>. Your storage format is unchanged — the bag just <i>describes</i> it, and any <span class="mono">data/…/&lt;pkg&gt;.tar</span> still extracts your original tree with plain tar. Packages must be <b>staged locally</b> to be bagged (others are listed as skipped).</div>
   <label>Output folder (must be OUTSIDE any source root)</label>
-  <input id="d1" class="full" placeholder="D:\\exports or /mnt/handoff">${browseBtn('d1')}
+  <input id="d1" class="full" placeholder="D:\\exports or /mnt/handoff" data-input-call="prevExports" data-args="${callArgs('bag','d1')}">${browseBtn('d1')}
+  <div id="dprevexp"></div>
   <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Export bag</button></div>`,
   async()=>{const p=$('#d1').value.trim();if(!p)return;
     if(!(await destGate(p)))throw new Error('Nothing exported: choose what to do about '+p+' first');
@@ -2294,7 +2295,8 @@ function actions(c){
 function bagPackageDlg(id,name){dlg(`<h1>Export “${esc(name)}” as a BagIt bag</h1>
   <div class="dim" style="font-size:11.5px;margin-bottom:8px">Writes a <b>conformant BagIt bag</b> (RFC 8493) for this one package: a <span class="mono">data/</span> payload with its artifacts, <span class="mono">manifest-sha256.txt</span>, <span class="mono">bag-info.txt</span>, a tagmanifest, and <span class="mono">COMPARISON.md</span>. This is an <b>export</b>, not the storage format — your package on media is unchanged, and any <span class="mono">data/…/&lt;pkg&gt;.tar</span> still extracts your original tree with plain tar. The package must be <b>staged locally</b>.</div>
   <label>Output folder (must be OUTSIDE any source root)</label>
-  <input id="d1" class="full" placeholder="D:\\exports or /mnt/handoff">${browseBtn('d1')}
+  <input id="d1" class="full" placeholder="D:\\exports or /mnt/handoff" data-input-call="prevExports" data-args="${callArgs('bag','d1')}">${browseBtn('d1')}
+  <div id="dprevexp"></div>
   <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Export bag</button></div>`,
   async()=>{const p=$('#d1').value.trim();if(!p)return;
     if(!(await destGate(p)))throw new Error('Nothing exported: choose what to do about '+p+' first');
@@ -2315,7 +2317,8 @@ async function spanWriteDlg(id,name){
   async()=>{const d=$('#d1').value.trim();if(!d)return;
     const body={dest_dir:d,throttle_mbps:parseFloat($('#d5').value)||0};Object.assign(body,volChoice());
     if(!(await destGate(d)))throw new Error('Nothing written: choose what to do about '+d+' first');
-    await api('POST',`/api/chunks/${id}/span-write`,body);
+    try{await api('POST',`/api/chunks/${id}/span-write`,body)}
+    catch(e){if(e.body&&e.body.write_over){writeOverOffer(e.body.write_over,id,'span-write-over',body);return}throw e}
     toast('Segment write started — see Jobs. When it verifies, eject & label the tape, mount the next, then click again.',1);loc('jobs')})}
 async function doBuild(id){
   const adv=await api('GET','/api/space-advice?chunk_id='+id).catch(()=>null);
@@ -2348,8 +2351,25 @@ async function writeDlg(id,name,payload){
     const body={dest_dir:d,buffer_gb:parseFloat($('#d2').value)||0,block_mb:parseInt($('#d4').value)||0,throttle_mbps:parseFloat($('#d5').value)||0};
     Object.assign(body,volChoice());
     if(!(await destGate(d)))throw new Error('Nothing written: choose what to do about '+d+' first');
-    await api('POST',`/api/chunks/${id}/write`,body);
+    try{await api('POST',`/api/chunks/${id}/write`,body)}
+    catch(e){if(e.body&&e.body.write_over){writeOverOffer(e.body.write_over,id,'write-over',body);return}throw e}
     toast('Write started — see Jobs');loc('jobs')});}
+/* writeOverOffer: a write found files at its target. Say what is there (this
+   build intact, a partial earlier write, or something else); offer Verify for
+   an intact copy, and only then the gated Overwrite, which lists the files. */
+function writeOverOffer(wo,id,op,body){
+  let d=$('#dwriteover');if(!d){d=document.createElement('dialog');d.id='dwriteover';document.body.append(d)}
+  const head={intact:'This build is already there, intact',partial:'A partial write from an earlier run is there',other:'Other files are there'}[wo.state]||'Files are already there';
+  d.innerHTML=`<h1>${esc(head)}</h1><div style="margin:6px 0">${esc(wo.message)}</div>
+    <div class="mono" style="max-height:200px;overflow:auto;border:1px solid var(--line);padding:6px;font-size:11.5px">${(wo.files||[]).map(esc).join('<br>')}</div>
+    <div class="row" style="margin-top:12px">${wo.state==='intact'?'<button class="btn" id="dwoverify">Verify it</button> ':''}<button class="btn ghost" id="dwoover" style="color:var(--bad)">Overwrite…</button> <button class="btn ghost" id="dwono">Cancel</button></div>`;
+  d.querySelector('#dwono').onclick=()=>d.close();
+  const v=d.querySelector('#dwoverify');
+  if(v)v.onclick=async()=>{d.close();try{const r=await api('POST',`/api/chunks/${id}/verify`,{dest_dir:body.dest_dir});toast(r.verify_ok?'Medium verified ✓':'VERIFY FAILED — medium does not match catalog',!r.verify_ok);vChunks()}catch(e){toast(e.message,1)}};
+  d.querySelector('#dwoover').onclick=async()=>{d.close();
+    try{const r=await confirmDestructive(op,Object.assign({id},body));if(r){toast('Write started — see Jobs');loc('jobs')}}catch(e){toast(e.message,1)}};
+  d.showModal();
+}
 let destT;function checkDest(id){clearTimeout(destT);destT=setTimeout(async()=>{
   const p=$('#d1')&&$('#d1').value.trim();const el=$('#dwarn');if(!el)return;
   if(!p){el.innerHTML='';return}
@@ -2976,8 +2996,9 @@ async function keySheetCheck(){
 }
 function recoveryKitDlg(){dlg(`<h1>Export Recovery Kit</h1>
   <div class="err" style="margin-bottom:10px">Warning: The kit includes one QR code per key — each encodes a passphrase in the clear. Store the folder as securely as your keystores.</div>
-  <label>Output folder (a “obelisk-recovery-kit” subfolder is created here)</label>
-  <input id="d1" class="full" placeholder="E:\\safe or /mnt/vault/recovery">${browseBtn('d1')}
+  <label>Output folder (a new “obelisk-recovery-kit-&lt;date and time&gt;” subfolder is created here; an earlier kit is never changed)</label>
+  <input id="d1" class="full" placeholder="E:\\safe or /mnt/vault/recovery" data-input-call="prevExports" data-args="${callArgs('kit','d1')}">${browseBtn('d1')}
+  <div id="dprevexp"></div>
   <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Generate</button></div>`,
   async()=>{const d=$('#d1').value.trim();if(!d)return;
     if(!(await destGate(d)))throw new Error('No kit written: choose what to do about '+d+' first');
@@ -4104,6 +4125,21 @@ function bufCheck(){
     el.innerHTML=`Warning: ${v} GB is over 25% of your ${_memTotalGB.toFixed(0)} GB RAM — leave headroom for the OS and other apps. Consider <b>${Math.round(_memTotalGB*0.25)} GB</b> or less.`;}
   else el.style.display='none';
 }
+/* prevExports lists the exports of a kind already in the chosen folder: how
+   many, the space they use, the newest marked and every older one labelled
+   superseded, each removable only through the delete gate. A new export never
+   changes them. */
+let prevExpT;function prevExports(kind,inputId){clearTimeout(prevExpT);prevExpT=setTimeout(async()=>{
+  const el=$('#dprevexp'),inp=$('#'+inputId);if(!el||!inp)return;const dir=inp.value.trim();
+  if(!dir){el.innerHTML='';return}
+  let r;try{r=await api('GET',`/api/exports?kind=${encodeURIComponent(kind)}&dir=${encodeURIComponent(dir)}`)}catch(e){el.innerHTML='';return}
+  const l=r.exports||[];if(!l.length){el.innerHTML='<div class="dim" style="font-size:11.5px;margin:4px 0">No earlier export of this kind in that folder.</div>';return}
+  el.innerHTML=`<div class="dim" style="font-size:11.5px;margin:6px 0 2px">${l.length} earlier export(s) here, using ${esc(humanBytesUI(r.bytes||0))}. The new one will be newer than all of them; they are left as they are.</div>`
+    +l.map(x=>`<div class="row" style="align-items:center;gap:8px;margin:2px 0;font-size:11.5px"><span class="mono" style="flex:1">${esc(x.name)}</span><span class="${x.newest?'':'dim'}">${x.newest?'newest':'superseded'} · ${esc(humanBytesUI(x.bytes))}</span><button class="btn ghost" style="font-size:11px;padding:1px 8px" data-call="removeExport" data-args="${callArgs(kind,dir,x.name)}">Remove…</button></div>`).join('');
+},300)}
+async function removeExport(kind,dir,name){
+  try{const r=await confirmDestructive('export-remove',{kind,dir,name});if(r)toast('Removed '+name)}catch(e){toast(e.message,1)}
+  const inp=$('#d1')||$('#abdest');if(inp)prevExports(kind,inp.id)}
 async function loadLeftovers(){
   const el=$('#leftovers');if(!el)return;
   let r;try{r=await api('GET','/api/leftovers')}catch(e){el.textContent='Could not list leftovers: '+e.message;return}
@@ -4238,7 +4274,8 @@ function appBackupDlg(){
   dlg(`<h1>Back up this app's records</h1>
     <div class="help" style="margin-bottom:10px">Writes one <span class="mono">.tar</span> file (plus a <span class="mono">.sha256</span> checksum) holding the catalog, settings, and job history — everything the tool knows. Put it on a USB drive or NAS to carry to a new computer. It contains <b>no file content</b>.</div>
     <label>Destination folder</label>
-    <input id="abdest" class="full" placeholder="e.g. a USB drive or NAS folder">${browseBtn('abdest')}
+    <input id="abdest" class="full" placeholder="e.g. a USB drive or NAS folder" data-input-call="prevExports" data-args="${callArgs('appbackup','abdest')}">${browseBtn('abdest')}
+    <div id="dprevexp"></div>
     <label class="row" style="gap:8px;align-items:flex-start;margin-top:14px"><input id="abkeys" type="checkbox" style="width:auto;margin-top:3px"><span><b>Your encryption keys are NOT in this backup.</b> Copy your keystore files separately, or check this box to include them (they are secrets — only for a backup you keep private).</span></label>
     <div class="row" style="margin-top:16px"><button class="btn" onclick="go()">Create backup</button></div>`,
   async()=>{

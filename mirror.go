@@ -296,7 +296,14 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 		}
 		if _, keep := plan.existing[mrel]; keep {
 			if err := a.startKeeping(dest, vol, collectionID, "mirror", plan); err != nil {
-				return nil, err
+				// Nothing is kept or replaced for this file: it counts as failed,
+				// and the file there is left exactly as it was.
+				if stop := a.stopOnDestinationChange("mirror", err, -1); stop != nil {
+					return nil, stop
+				}
+				a.Store.Log("mirror", fmt.Sprintf("%s: not replaced: %v", mrel, err))
+				res.Failed++
+				continue
 			}
 		}
 		// One confined landing: parent creation, staging, read-back, publication and

@@ -110,6 +110,17 @@ func dataSegmentCount(segs []Segment) int {
 // (manifest + RESTORE.txt) land on every tape; the par2 set rides the last data
 // tape or its own, per the build-time plan.
 func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string)) (map[string]any, error) {
+	return a.spanWriteNext(id, destDir, bufferGB, blockMB, throttleMbps, volumeID, progress, false)
+}
+
+// SpanWriteNextOver is SpanWriteNext onto a tape that holds another set of this
+// package (or other files at its names), replacing them. Only the delete gate's
+// "span-write-over" runs it, after the typed word (removal_rule_test.go, gateOnly).
+func (a *App) SpanWriteNextOver(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string)) (map[string]any, error) {
+	return a.spanWriteNext(id, destDir, bufferGB, blockMB, throttleMbps, volumeID, progress, true)
+}
+
+func (a *App) spanWriteNext(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string), over bool) (map[string]any, error) {
 	cfg, cfgErr := a.LoadConfig()
 	if cfgErr != nil {
 		return nil, cfgErr
@@ -169,15 +180,27 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 	}
 	// The medium is decided by where it really is, and every file is written
 	// beneath the folder that was decided about (see outfolder.go).
-	out, err := a.openOutFolder(destDir)
+	openOut := a.openOutFolder
+	if over {
+		openOut = a.openOutFolderOver
+	}
+	out, err := openOut(destDir)
 	if err != nil {
 		return nil, err
 	}
 	defer out.Close()
+	destChunk := out.Join(c.Name)
+	// A tape holding another set of this package (or files at its names that are
+	// not this set's) is never written over by a plain span write: it says so,
+	// and replacing it is the delete gate's "span-write-over".
+	if !over {
+		if wo := a.spanTargetConflict(c, destChunk); wo != nil {
+			return nil, wo
+		}
+	}
 	if err := out.MkdirAll(c.Name); err != nil {
 		return nil, err
 	}
-	destChunk := out.Join(c.Name)
 	prior := priorBuildAt(c, destChunk) // which build this tape holds, before anything is written
 	prior.Gone = a.goneCopyFolders(c)
 	// One ID for the whole set write, on every tape: the one its written tapes hold,

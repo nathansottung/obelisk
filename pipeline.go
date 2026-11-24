@@ -1155,7 +1155,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	}
 	// A crash while an earlier build was being put in place is undone first: the
 	// build the catalog records goes back under its name. Nothing is removed.
-	if err := recoverStagedSwap(work, oldSidecars); err != nil {
+	if err := recoverStagedSwap(work, oldSidecars, payloadName(c), oldEncHash); err != nil {
 		return fmt.Errorf("putting the earlier build of %s back in staging: %w", c.Name, err)
 	}
 	// The build goes into a new folder of its own, so nothing from an earlier

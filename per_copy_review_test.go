@@ -284,7 +284,7 @@ func TestPerCopy_NewPar2TapeRetiresTheSetItOverwrote(t *testing.T) {
 	}
 	tape := filepath.Join(h.root, "tapes", fmt.Sprintf("tape%02d", last))
 	// The other segments were only marked done, so the whole-set check refuses it.
-	if _, err := app.SpanWriteNext(c.ID, tape, 0, 0, 0, c.Copies[0].VolumeID, noProg); err == nil || !strings.Contains(err.Error(), "does not check") {
+	if _, err := spanWriteOver(t, app, c.ID, tape, c.Copies[0].VolumeID); err == nil || !strings.Contains(err.Error(), "does not check") {
 		t.Fatalf("got %v, want the whole-set check's refusal after the par2 files were written", err)
 	}
 	if got := frozenChunk(t, app, c.Name); !got.Copies[0].Superseded {
@@ -301,7 +301,7 @@ func TestPerCopy_NewTapeOverAMovedOldTapeRetiresTheSet(t *testing.T) {
 	if err := os.Rename(from, to); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.SpanWriteNext(c.ID, to, 0, 0, 0, c.Copies[0].VolumeID, noProg); err != nil {
+	if _, err := spanWriteOver(t, app, c.ID, to, c.Copies[0].VolumeID); err != nil {
 		t.Fatal(err)
 	}
 	if got := frozenChunk(t, app, c.Name); !got.Copies[0].Superseded {
@@ -361,7 +361,7 @@ func TestPerCopy_OverwriteAfterARemountLeavesNoPhantomCopy(t *testing.T) {
 	if err := os.Rename(first, second); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.WriteChunk(c.ID, second, 0, 0, 0, vol.ID, noProg); err != nil {
+	if _, err := writeOver(t, app, c.ID, second, vol.ID); err != nil {
 		t.Fatal(err)
 	}
 	if got := app.Store.Chunk(c.ID); got.VerifiedCopyCount() != 1 || got.CurrentCopyCount() != 1 {

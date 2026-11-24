@@ -354,7 +354,8 @@ func (a *App) ExportAppBackup(destDir string, includeKeys bool) (ExportResult, e
 		return ExportResult{}, err
 	}
 	defer out.Close()
-	return a.exportAppBackupInto(out, appBackupBaseName(time.Now()), includeKeys)
+	// A new name that sorts by time and never meets an earlier backup.
+	return a.exportAppBackupInto(out, freshExportName(out, exportKinds["appbackup"].prefix, ".tar", time.Now()), includeKeys)
 }
 
 // ---- restore -------------------------------------------------------------

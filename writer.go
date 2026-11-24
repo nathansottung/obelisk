@@ -371,6 +371,14 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 	// <name>.tar.gpg, or the legacy .tar.gpg for a plaintext package built before
 	// the rename) so the on-medium payload stays consistent with its sidecars.
 	payloadBase := filepath.Base(enc)
+	// A plain write never replaces what is already in the package's folder: it
+	// says what is there (this build, intact; a partial earlier write; something
+	// else) and stops. Replacing it is the delete gate's "write-over".
+	if !out.replace {
+		if wo := inspectWriteTarget(c, out.Join(c.Name)); wo != nil {
+			return nil, wo
+		}
+	}
 	if err := out.MkdirAll(c.Name); err != nil {
 		return nil, err
 	}
@@ -563,7 +571,7 @@ func (a *App) RewriteCopy(id, volumeID int, bufferGB float64, blockMB int, throt
 	if err := chunkWritable(c); err != nil {
 		return nil, err
 	}
-	out, err := a.openOutFolder(filepath.Dir(dest))
+	out, err := a.openOutFolderOver(filepath.Dir(dest))
 	if err != nil {
 		return nil, err
 	}
@@ -1093,3 +1101,15 @@ var partitionIDAt = func(path string) string {
 // destFree is the free space at a write's destination. A variable so a test can
 // make a medium full.
 var destFree = diskFree
+
+// WriteChunkOver writes the package to destDir over what is already in its
+// folder there. Only the delete gate's "write-over" runs it, after the typed word
+// (removal_rule_test.go, gateOnly).
+func (a *App) WriteChunkOver(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string)) (map[string]any, error) {
+	out, err := a.openOutFolderOver(destDir)
+	if err != nil {
+		return nil, err
+	}
+	defer out.Close()
+	return a.writeChunk(out, id, destDir, bufferGB, blockMB, throttleMbps, volumeID, progress, true)
+}

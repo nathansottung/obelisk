@@ -95,10 +95,16 @@ func unswapBuild(build, prev *madeEntry, work string) error {
 	return nil
 }
 
-// sidecarsMatch reports whether dir holds every recorded sidecar unchanged.
-func sidecarsMatch(dir string, recorded map[string]string) bool {
+// sidecarsMatch reports whether dir holds every recorded sidecar unchanged, and
+// the payload the catalog records (when it records one).
+func sidecarsMatch(dir string, recorded map[string]string, payload, payloadHash string) bool {
 	if len(recorded) == 0 {
 		return false
+	}
+	if payload != "" && payloadHash != "" {
+		if got, err := hashFileHex(filepath.Join(dir, payload)); err != nil || !strings.EqualFold(got, payloadHash) {
+			return false
+		}
 	}
 	for name, want := range recorded {
 		got, err := hashFileHex(filepath.Join(dir, name))
@@ -113,7 +119,8 @@ func sidecarsMatch(dir string, recorded map[string]string) bool {
 // back under work after a crash part-way through swapInBuild. It only renames;
 // whatever is not the recorded build stays beside it and is listed to the user
 // as a leftover.
-func recoverStagedSwap(work string, recorded map[string]string) error {
+func recoverStagedSwap(work string, recorded map[string]string, payload, payloadHash string) error {
+	match := func(dir string) bool { return sidecarsMatch(dir, recorded, payload, payloadHash) }
 	dir, name := filepath.Dir(work), filepath.Base(work)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -135,7 +142,7 @@ func recoverStagedSwap(work string, recorded map[string]string) error {
 	// only one there is the earlier build.
 	pick := ""
 	for _, p := range aside {
-		if sidecarsMatch(p, recorded) {
+		if match(p) {
 			pick = p
 		}
 	}
@@ -150,7 +157,7 @@ func recoverStagedSwap(work string, recorded map[string]string) error {
 		}
 	case werr != nil:
 		return werr
-	case pick != "" && !sidecarsMatch(work, recorded):
+	case pick != "" && !match(work):
 		// The build under the name is one the catalog never recorded.
 		if err := renameNew(work, filepath.Join(dir, "."+name+".build-"+randomHex(4))); err != nil {
 			return err

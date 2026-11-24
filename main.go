@@ -679,6 +679,7 @@ func api(mux routeRegistrar, app *App) {
 	destructiveRoutes(mux, app)
 	leftoverRoutes(mux, app)
 	mirrorPreviousRoutes(mux, app)
+	exportRoutes(mux, app)
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		out := map[string]any{"ok": true, "version": appVersion, "schema_version": currentSchemaVersion}
 		if ro, why := app.Store.ReadOnly(); ro {
@@ -2317,6 +2318,11 @@ func api(mux routeRegistrar, app *App) {
 		if !outFolderGate(w, app, dest) {
 			return
 		}
+		// What is already at the target is said first, before any job starts.
+		if wo := inspectWriteTarget(c, filepath.Join(dest, c.Name)); wo != nil {
+			writeOverResponse(w, wo)
+			return
+		}
 		startedOn(w).write(runJob(app, "write", "Write "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {
 			return app.WriteChunk(id, dest, f(b, "buffer_gb"), int(f(b, "block_mb")), f(b, "throttle_mbps"), vol, p)
 		}))
@@ -2345,6 +2351,10 @@ func api(mux routeRegistrar, app *App) {
 			return
 		}
 		if !outFolderGate(w, app, dest) {
+			return
+		}
+		if wo := app.spanTargetConflict(c, filepath.Join(dest, c.Name)); wo != nil {
+			writeOverResponse(w, wo)
 			return
 		}
 		startedOn(w).write(runJob(app, "write", "Span-write next segment of "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {

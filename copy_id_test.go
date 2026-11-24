@@ -64,7 +64,7 @@ func TestCopyID_EachWriteHasItsOwnID(t *testing.T) {
 	if cp := currentCopyAt(t, got, filepath.Join(b, c.Name)); cp.CopyID != idB {
 		t.Fatalf("copy at b records %q, medium holds %q", cp.CopyID, idB)
 	}
-	if _, err := app.WriteChunk(c.ID, a, 0, 0, 0, vol, noProg); err != nil {
+	if _, err := writeOver(t, app, c.ID, a, vol); err != nil {
 		t.Fatal(err)
 	}
 	again := copyIDIn(t, filepath.Join(a, c.Name))
@@ -163,7 +163,7 @@ func TestCopyID_OverwriteRetiresOnlyTheCopyInThatFolder(t *testing.T) {
 	before := app.Store.Chunk(c.ID)
 	idA, idB := copyIDIn(t, filepath.Join(moved, "a", c.Name)), copyIDIn(t, filepath.Join(moved, "b", c.Name))
 	c = rebuildPackage(t, app, before)
-	if _, err := app.WriteChunk(c.ID, filepath.Join(moved, "a"), 0, 0, 0, vol.ID, noProg); err != nil {
+	if _, err := writeOver(t, app, c.ID, filepath.Join(moved, "a"), vol.ID); err != nil {
 		t.Fatal(err)
 	}
 	got := app.Store.Chunk(c.ID)
@@ -202,7 +202,7 @@ func TestCopyID_RewriteKeepsAnOlderBuildsCredit(t *testing.T) {
 		}
 	})
 	oldID := copyIDIn(t, filepath.Join(moved, "old", c.Name))
-	if _, err := app.WriteChunk(c.ID, filepath.Join(moved, "new"), 0, 0, 0, vol.ID, noProg); err != nil {
+	if _, err := writeOver(t, app, c.ID, filepath.Join(moved, "new"), vol.ID); err != nil {
 		t.Fatal(err)
 	}
 	got := app.Store.Chunk(c.ID)
@@ -242,7 +242,7 @@ func TestCopyID_SameSetRewrittenAfterARemountIsOneCopy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(other, "unrelated.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writeSpanSet(t, app, c.ID, second, "t", vol.ID)
+	writeSpanSetOver(t, app, c.ID, second, "t", vol.ID)
 	got := app.Store.Chunk(c.ID)
 	if got.CurrentCopyCount() != 1 || got.VerifiedCopyCount() != 1 {
 		t.Fatalf("one physical set, but current=%d verified=%d: %+v", got.CurrentCopyCount(), got.VerifiedCopyCount(), got.Copies)
@@ -272,7 +272,7 @@ func TestCopyID_CheckingARetiredBuildTouchesNoCurrentCopy(t *testing.T) {
 					t.Fatal(err)
 				}
 				c = rebuildPackage(t, app, app.Store.Chunk(c.ID))
-				if _, err := app.WriteChunk(c.ID, x, 0, 0, 0, vol.ID, noProg); err != nil {
+				if _, err := writeOver(t, app, c.ID, x, vol.ID); err != nil {
 					t.Fatal(err)
 				}
 			})
@@ -322,7 +322,7 @@ func TestCopyID_SpanOverwriteShowsNoVerifiedPackage(t *testing.T) {
 	root := t.TempDir()
 	tapes := writeSpanSet(t, app, c.ID, root, "t", vol.ID)
 	c = rebuildPackage(t, app, app.Store.Chunk(c.ID))
-	if _, err := app.SpanWriteNext(c.ID, tapes[0], 0, 0, 0, vol.ID, noProg); err != nil {
+	if _, err := spanWriteOver(t, app, c.ID, tapes[0], vol.ID); err != nil {
 		t.Fatal(err)
 	}
 	got := app.Store.Chunk(c.ID)

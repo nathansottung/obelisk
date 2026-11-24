@@ -43,6 +43,25 @@ type outFolder struct {
 	seq    atomic.Uint64
 	mu     sync.Mutex
 	stages map[string]*os.File // elsewhere: staging files this folder owns
+	// replace lets a publish give its name to a new file over an existing one.
+	// Only openOutFolderOver sets it, and only the delete gate's overwrite
+	// operations open a folder that way (removal_rule_test.go, gateOnly).
+	replace bool
+	// keepOwn, when set for a name, lets a publish replace the file there when
+	// the check says it is Obelisk's own (a seal sidecar, by its content).
+	keepOwn func(rel string, existing []byte) bool
+}
+
+// openOutFolderOver is openOutFolder for an overwrite the user confirmed with the
+// typed word: a file at a name being written is replaced (as a name, never
+// written through).
+func (a *App) openOutFolderOver(path string) (*outFolder, error) {
+	o, err := a.openOutFolder(path)
+	if err != nil {
+		return nil, err
+	}
+	o.replace = true
+	return o, nil
 }
 
 // openOutFolder opens path, an existing folder, for writing. On guard platforms
@@ -267,9 +286,20 @@ func (o *outFolder) Commit(tmp, rel string, perm fs.FileMode, sum string) error 
 		}
 		if err == nil {
 			// Publish reads the staged bytes back and checks them against this
-			// digest before giving the file its name (VerifyStage).
+			// digest before giving the file its name (VerifyStage). A name already
+			// holding exactly these bytes is left alone; any other file there is
+			// replaced only in an overwrite the user confirmed, or when it is
+			// Obelisk's own (keepOwn).
 			st.expected = sum
-			err = o.dest.PublishNew(tmp, v)
+			switch {
+			case o.sameAt(v, sum):
+				_ = o.dest.Discard(tmp)
+				return nil
+			case o.replace || o.ownAt(v):
+				err = o.dest.Publish(tmp, v)
+			default:
+				err = o.dest.PublishNew(tmp, v)
+			}
 		}
 		if err != nil {
 			o.Discard(tmp)
@@ -315,11 +345,62 @@ func (o *outFolder) Commit(tmp, rel string, perm fs.FileMode, sum string) error 
 		_ = removeMadeInRoot(o.root, tmp, id)
 		return fmt.Errorf("publish %s: %w", rel, err)
 	}
+	if o.sameAt(v, sum) {
+		_ = removeMadeInRoot(o.root, tmp, id)
+		return nil
+	}
+	if o.replace || o.ownAt(v) {
+		if err := o.root.Rename(tmp, v); err != nil {
+			_ = removeMadeInRoot(o.root, tmp, id)
+			return fmt.Errorf("publish %s: %w", rel, err)
+		}
+		return nil
+	}
 	if err := publishNewInRoot(o.root, tmp, v, id); err != nil {
 		_ = removeMadeInRoot(o.root, tmp, id)
 		return fmt.Errorf("publish %s: %w", rel, err)
 	}
 	return nil
+}
+
+// sameAt reports whether the file at rel holds exactly the bytes with SHA-256 sum.
+func (o *outFolder) sameAt(rel, sum string) bool {
+	f, err := o.openRel(rel)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return false
+	}
+	h, err := hashReader(f)
+	return err == nil && h == sum
+}
+
+// ownAt reports whether the file at rel is Obelisk's own by keepOwn's check of
+// its content.
+func (o *outFolder) ownAt(rel string) bool {
+	if o.keepOwn == nil {
+		return false
+	}
+	f, err := o.openRel(rel)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() || fi.Size() > 64<<20 {
+		return false
+	}
+	b, err := io.ReadAll(f)
+	return err == nil && o.keepOwn(rel, b)
+}
+
+// openRel opens rel inside the folder for reading, without following a link out.
+func (o *outFolder) openRel(rel string) (*os.File, error) {
+	if o.dest != nil {
+		return o.dest.Open(rel)
+	}
+	return o.root.Open(filepath.FromSlash(rel))
 }
 
 // Discard removes a staging file that is not to be published.

@@ -15,6 +15,12 @@ import (
 // source file changed since and a file of someone else's at the other's path.
 func keptScenario(t *testing.T) (app *App, collID int, vol *Volume, src, dest string) {
 	t.Helper()
+	return keptScenarioAt(t, t.TempDir())
+}
+
+// keptScenarioAt is keptScenario mirroring into dest.
+func keptScenarioAt(t *testing.T, dest string) (app *App, collID int, vol *Volume, src, _ string) {
+	t.Helper()
 	app = dockApp(t)
 	src = t.TempDir()
 	writeTree(t, src, map[string]string{"a.txt": "alpha v1\n", "sub/b.txt": "bravo\n"})
@@ -23,7 +29,6 @@ func keptScenario(t *testing.T) (app *App, collID int, vol *Volume, src, dest st
 		t.Fatal(err)
 	}
 	vol = app.Store.AddVolume(Volume{Label: "MIR-K", Kind: "HDD"})
-	dest = t.TempDir()
 	if _, err := app.MirrorToVolume(coll.ID, nil, dest, vol.ID, 0, "", noProgMirror); err != nil {
 		t.Fatal(err)
 	}

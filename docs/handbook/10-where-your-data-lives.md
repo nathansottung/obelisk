@@ -32,7 +32,7 @@ Some words you'll see:
 
 ## What it removes, and when
 
-Nothing you own is removed or overwritten unless you type **Delete** (or **Overwrite**) in the confirmation that lists exactly what would change. The tool removes on its own only files it made itself, inside its own folders: a save it did not finish, a build it replaced once the new build was checked, a temporary folder it made for one job. It never removes a finished package, an export you made, or anything outside its own folders, and exports and restores never replace a file that is already there.
+Nothing you own is removed or overwritten unless you type **Delete** (or **Overwrite**) in the confirmation that lists exactly what would change. The tool removes on its own only files it made itself, inside its own folders: a save it did not finish, a build it replaced once the new build was checked, a temporary folder it made for one job. It never removes a finished package, an export you made, or anything outside its own folders, and exports and restores never replace a file that is already there. Each Recovery Kit, escrow bundle, BagIt export and app backup is written under a new name that sorts by when it was made, and says inside when it was made and what it covers; the export screen marks the newest and labels older ones superseded.
 
 **Kept automatically.** The tool keeps a count of daily catalog backups, of each drive's scan lists and of saved comparisons, and removes the oldest beyond that count. Two rules hold over every count: the newest good copy is never removed (for scans, a drive's newest complete scan), and nothing made in the last day is removed, however many there are. Settings shows the same rule under **Kept automatically, and left behind**.
 

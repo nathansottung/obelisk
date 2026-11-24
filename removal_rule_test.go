@@ -74,6 +74,7 @@ var replaceAllowed = map[string]string{
 	// The two restores the gate runs after the typed word (gateOnly).
 	"appbackup.go:App.RestoreAppBackup": "the gate's appbackup-restore: restored members replace live ones",
 	"catalogdb_backup.go:swapCatalogDB": "the gate's appbackup-restore: the restored catalog database is swapped in",
+	"outfolder.go:outFolder.Commit":     "replaces only in a folder opened by openOutFolderOver (gateOnly), or Obelisk's own seal file checked by content",
 	// Moves that never replace.
 	"publish_absent_windows.go:publishAbsent": "MoveFileEx without MOVEFILE_REPLACE_EXISTING: never replaces",
 	"quarantine.go:moveWithinRoot":            "moves a file within its own root only when nothing is at the target (the gate's quarantine, and its undo)",
@@ -89,6 +90,7 @@ var publishReplaceCallers = map[string]bool{
 	"destroot_stage.go:DestRoot.WriteFileAtomic":  true,
 	"destroot_stage.go:DestRoot.Publish":          true,
 	"mirror_previous.go:keepPlan.keepThenPublish": true, // after keeping what is there
+	"outfolder.go:outFolder.Commit":               true, // only for openOutFolderOver (gateOnly), or Obelisk's own seal (keepOwn)
 }
 
 // copyFileOverCallers may replace a file with copyFileOver.
@@ -97,10 +99,14 @@ var copyFileOverCallers = map[string]bool{"burner.go:App.carryEccToNextDisc": tr
 // gateOnly are reached only from the delete gate's operations (destructive_ops.go),
 // or from the listed functions.
 var gateOnly = map[string]map[string]bool{
-	"(*main.App).RestoreAppBackup": {},
-	"(*main.App).Quarantine":       {},
-	"main.swapRestoredCatalogDB":   {"appbackup.go:App.RestoreAppBackup": true, "catalogdb_backup.go:init": true, "appbackup.go:swapRestoredCatalogDB": true},
-	"main.atomicRename":            {"appbackup.go:App.RestoreAppBackup": true},
+	"(*main.App).RestoreAppBackup":  {},
+	"(*main.App).Quarantine":        {},
+	"main.swapRestoredCatalogDB":    {"appbackup.go:App.RestoreAppBackup": true, "catalogdb_backup.go:init": true, "appbackup.go:swapRestoredCatalogDB": true},
+	"main.atomicRename":             {"appbackup.go:App.RestoreAppBackup": true},
+	"(*main.App).RewriteCopy":       {},
+	"(*main.App).WriteChunkOver":    {},
+	"(*main.App).SpanWriteNextOver": {},
+	"(*main.App).openOutFolderOver": {"writer.go:App.RewriteCopy": true, "writer.go:App.WriteChunkOver": true, "span.go:App.spanWriteNext": true},
 }
 
 // objKey names a package-level object the way removalFuncs does.

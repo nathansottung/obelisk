@@ -309,3 +309,71 @@ func paramFloat(p map[string]any, k string) float64 {
 	v, _ := p[k].(float64)
 	return v
 }
+
+func init() {
+	destructiveOps["write-over"] = &destructiveOp{
+		word: wordOverwrite,
+		title: func(a *App, p map[string]any) string {
+			name := fmt.Sprintf("package %d", paramInt(p, "id"))
+			if c := a.Store.Chunk(paramInt(p, "id")); c != nil {
+				name = c.Name
+			}
+			return fmt.Sprintf("Write %s over what is already in %s", name, paramString(p, "dest_dir"))
+		},
+		targets: writeOverTargets,
+		run: func(a *App, p map[string]any) (any, error) {
+			id, dest := paramInt(p, "id"), paramString(p, "dest_dir")
+			vol := paramInt(p, "volume_id")
+			if err := sealGuard(a, vol); err != nil {
+				return nil, refuseDestructive(409, "%s", err.Error())
+			}
+			c := a.Store.Chunk(id)
+			return runJob(a, "write", "Write "+c.Name+" over "+dest, func(pr func(float64, string)) (map[string]any, error) {
+				return a.WriteChunkOver(id, dest, paramFloat(p, "buffer_gb"), paramInt(p, "block_mb"), paramFloat(p, "throttle_mbps"), vol, pr)
+			})
+		},
+	}
+}
+
+// writeOverTargets lists exactly what is in the package's folder at dest_dir:
+// the files a write over it would replace.
+func writeOverTargets(a *App, p map[string]any) ([]destructiveTarget, error) {
+	c := a.Store.Chunk(paramInt(p, "id"))
+	if c == nil {
+		return nil, refuseDestructive(404, "package not found")
+	}
+	dest := paramString(p, "dest_dir")
+	if dest == "" {
+		return nil, refuseDestructive(400, "dest_dir required")
+	}
+	dir := filepath.Join(dest, c.Name)
+	if inspectWriteTarget(c, dir) == nil {
+		return nil, refuseDestructive(400, "%s holds nothing to write over; use a plain write", dir)
+	}
+	return treeTargets(dir, "replaced by a new copy of "+c.Name)
+}
+
+func init() {
+	destructiveOps["span-write-over"] = &destructiveOp{
+		word: wordOverwrite,
+		title: func(a *App, p map[string]any) string {
+			name := fmt.Sprintf("package %d", paramInt(p, "id"))
+			if c := a.Store.Chunk(paramInt(p, "id")); c != nil {
+				name = c.Name
+			}
+			return fmt.Sprintf("Write the next tape of %s over what is already in %s", name, paramString(p, "dest_dir"))
+		},
+		targets: writeOverTargets,
+		run: func(a *App, p map[string]any) (any, error) {
+			id, dest := paramInt(p, "id"), paramString(p, "dest_dir")
+			vol := paramInt(p, "volume_id")
+			if err := sealGuard(a, vol); err != nil {
+				return nil, refuseDestructive(409, "%s", err.Error())
+			}
+			c := a.Store.Chunk(id)
+			return runJob(a, "write", "Span-write next segment of "+c.Name+" over "+dest, func(pr func(float64, string)) (map[string]any, error) {
+				return a.SpanWriteNextOver(id, dest, paramFloat(p, "buffer_gb"), paramInt(p, "block_mb"), paramFloat(p, "throttle_mbps"), vol, pr)
+			})
+		},
+	}
+}
