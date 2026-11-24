@@ -87,3 +87,17 @@ test('shows why a subtest failed and why a test binary did not build', () => {
   assert.match(r.stdout, /child-reason-xyz/);
   assert.match(r.stdout, /undefined: undefinedThing/);
 });
+
+test('shows why a test binary crashed: an unfinished test, and the package output', () => {
+  const r = run([
+    ev({ Action: 'run', Test: 'TestExit' }),
+    ev({ Action: 'output', Test: 'TestExit', Output: 'exit-reason-xyz\n' }),
+    ev({ Action: 'output', Output: 'fatal error: concurrent map writes\n' }),
+    ev({ Action: 'output', Output: 'FAIL\texample/pkg\t0.1s\n' }),
+    ev({ Action: 'fail', Elapsed: 0.1 }),
+  ]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /exit-reason-xyz/);
+  assert.match(r.stdout, /concurrent map writes/);
+  assert.doesNotMatch(r.stdout, /FAIL\texample\/pkg/);
+});

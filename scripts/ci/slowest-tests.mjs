@@ -39,7 +39,8 @@ for (const e of events) {
     }
   }
   if (!e.Test) {
-    const p = packages.get(e.Package) ?? packages.set(e.Package, {}).get(e.Package);
+    const p = packages.get(e.Package) ?? packages.set(e.Package, { output: [] }).get(e.Package);
+    if (e.Action === 'output') p.output.push(e.Output ?? '');
     if (['pass', 'fail', 'skip'].includes(e.Action)) { p.action = e.Action; p.elapsed = e.Elapsed ?? 0; }
     continue;
   }
@@ -59,7 +60,14 @@ for (const t of top.slice(0, count)) lines.push(`${t.elapsed.toFixed(2).padStart
 for (const t of all.filter(t => t.action === 'fail')) lines.push('', `FAIL ${t.test}`, ...t.output.map(o => o.replace(/\n$/, '')));
 for (const [path, b] of builds) if (b.failed) lines.push('', `BUILD FAILED ${path}`, ...b.output.map(o => o.replace(/\n$/, '')));
 if (timeouts.length) lines.push('', ...timeouts);
-for (const t of all.filter(t => !t.action)) lines.push(`did not finish: ${t.test}`);
+for (const t of all.filter(t => !t.action)) lines.push('', `did not finish: ${t.test}`, ...t.output.map(o => o.replace(/\n$/, '')));
+// A crash outside any test (a fatal error, TestMain, a race found after the last
+// test) is only in the package's own output. go test's closing lines are left out.
+const frame = /^(PASS|FAIL|ok\s|FAIL\s|coverage:)/;
+for (const [pkg, p] of packages) {
+  const why = p.output.map(o => o.replace(/\n$/, '')).filter(o => o.trim() !== '' && !frame.test(o));
+  if (p.action === 'fail' && why.length) lines.push('', `${pkg} output:`, ...why);
+}
 
 const text = lines.join('\n') + '\n';
 process.stdout.write(text);
