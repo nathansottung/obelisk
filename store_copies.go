@@ -32,18 +32,20 @@ type priorBuild struct {
 }
 
 // setAsideHere is whether the folder written to is a medium the user set aside as a
-// duplicate of cp: it holds cp's ID, but it is not cp's medium.
-func setAsideHere(cp *Copy, volumeID int, path string, prior priorBuild) bool {
+// duplicate of cp: it holds cp's ID, but it is not cp's medium. bySerial says the
+// drive's serial shows it; when only the place does, the kept medium itself may be
+// mounted there now.
+func setAsideHere(cp *Copy, volumeID int, path string, prior priorBuild) (aside, bySerial bool) {
 	at := CopyAt{Path: path, VolumeID: volumeID, Serial: prior.Serial, Partition: prior.Partition}
 	if kept, decided := keptByDrive(cp, at); decided {
-		return !kept
+		return !kept, true
 	}
 	for _, l := range cp.SetAside {
 		if sameLocation(l, at) {
-			return true
+			return true, false
 		}
 	}
-	return false
+	return false, false
 }
 
 func (p priorBuild) names(vals CopyValues) bool {
@@ -81,8 +83,11 @@ func (s *Store) replacedByWriteLocked(c *Chunk, volumeID int, path string, prior
 			continue
 		}
 		if prior.CopyID != "" && cp.CopyID == prior.CopyID {
-			if !setAsideHere(cp, volumeID, path, prior) {
+			switch aside, bySerial := setAsideHere(cp, volumeID, path, prior); {
+			case !aside:
 				sure = append(sure, i)
+			case !bySerial:
+				unsure = append(unsure, i) // the write may have been to the kept medium
 			}
 			continue
 		}
