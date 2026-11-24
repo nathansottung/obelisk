@@ -84,8 +84,9 @@ var replaceAllowed = map[string]string{
 	"catalogdb_backup.go:swapCatalogDB": "the gate's appbackup-restore: the restored catalog database is swapped in",
 	"outfolder.go:outFolder.Commit":     "replaces only in a folder opened by openOutFolderOver (gateOnly), or Obelisk's own seal file checked by content",
 	// Moves that never replace.
-	"publish_absent_windows.go:publishAbsent": "MoveFileEx without MOVEFILE_REPLACE_EXISTING: never replaces",
-	"quarantine.go:moveWithinRoot":            "moves a file within its own root only when nothing is at the target (the gate's quarantine, and its undo)",
+	"publish_absent_windows.go:publishAbsent":      "MoveFileEx without MOVEFILE_REPLACE_EXISTING: never replaces",
+	"deststage_noreplace_linux.go:renameNoReplace": "renameat2 with RENAME_NOREPLACE: never replaces",
+	"quarantine.go:moveWithinRoot":                 "moves a file within its own root only when nothing is at the target (the gate's quarantine, and its undo)",
 	// The destination publish; it replaces only for DestRoot.Publish (publishReplaceCallers).
 	"deststage_windows.go:handleRename":  "the handle rename behind publishDestStage",
 	"deststage_unix.go:publishDestStage": "replace only when DestRoot.Publish asks",

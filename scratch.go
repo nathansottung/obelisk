@@ -259,9 +259,13 @@ func publishNewInRoot(root *os.Root, tmp, v string, id fileIdent) error {
 func publishNoReplace(from, final string) error {
 	if err := publishAbsent(from, final); err == nil {
 		// final is in place. Off Windows the staging name is a second name for the
-		// same file, made by this process; one that cannot be removed now is
-		// listed to the user as a leftover.
-		_ = removeStage(from)
+		// same file: it is removed while it still names the very file now at
+		// final (by identity), whoever made the stage. One that cannot be
+		// removed now is listed to the user as a leftover.
+		forgetMade(from)
+		if id, err := ownFileIdentity(final); err == nil {
+			_ = removeMadePath(from, id)
+		}
 	} else {
 		if _, serr := os.Lstat(final); !errors.Is(serr, fs.ErrNotExist) {
 			return fmt.Errorf("%s already exists; refusing to replace it", final)

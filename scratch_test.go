@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -158,9 +159,16 @@ func TestScratch_MadeEntryReplacedIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	m, err := madeFile(f)
-	f.Close()
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Off Windows a filesystem may give a freed inode number to the next new
+	// file at once; the original stays open while it is replaced, so the
+	// replacement is a different object, as it would be for anyone else's file.
+	if runtime.GOOS == "windows" {
+		f.Close()
+	} else {
+		defer f.Close()
 	}
 	if err := os.Remove(f.Name()); err != nil { // test setup: replace it
 		t.Fatal(err)

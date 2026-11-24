@@ -29,6 +29,13 @@ func keptScenarioAt(t *testing.T, dest string) (app *App, collID int, vol *Volum
 		t.Fatal(err)
 	}
 	vol = app.Store.AddVolume(Volume{Label: "MIR-K", Kind: "HDD"})
+	// A drive that cannot record who may change files (exFAT) needs the user's
+	// "Use it anyway" first, as in the app.
+	if c := app.Store.CheckDestination(dest); c != nil && c.Status == destStatusChoose {
+		if _, err := app.Store.ChooseUseAnyway(dest, c.Fingerprint, destUseAnywayWord); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := app.MirrorToVolume(coll.ID, nil, dest, vol.ID, 0, "", noProgMirror); err != nil {
 		t.Fatal(err)
 	}
