@@ -357,6 +357,9 @@ func writeOverTargets(a *App, p map[string]any) ([]destructiveTarget, error) {
 	// Each file the new copy writes is replaced; anything else in the folder is
 	// left exactly as it is, and the list says so.
 	writes := packageWriteNames(c)
+	if c.Spanned {
+		writes = spanTapeWriteNames(c)
+	}
 	for i := range ts {
 		rel, _ := filepath.Rel(dir, ts[i].Path)
 		switch {

@@ -21,6 +21,8 @@ var removalFiles = map[string]bool{
 
 // removalFuncs remove, unlink or truncate.
 var removalFuncs = map[string]bool{
+	// This package's own general removals: only the helper and the gate's own
+	// file may call them (gateOnly covers removeGatedEntry).
 	"main.removeEntryIn": true, "main.removeEntryInAs": true, "main.removeEntryInStep": true, "main.removeTreeIn": true,
 	"syscall.Ftruncate": true, "syscall.Truncate": true,
 	"golang.org/x/sys/unix.Ftruncate": true, "golang.org/x/sys/unix.Truncate": true,
@@ -47,8 +49,7 @@ var replaceFuncs = map[string]bool{
 	"golang.org/x/sys/windows.CREATE_ALWAYS":             true, "golang.org/x/sys/windows.TRUNCATE_EXISTING": true,
 	"golang.org/x/sys/windows.FileRenameInformation": true, "golang.org/x/sys/windows.FileRenameInformationEx": true,
 	"golang.org/x/sys/windows.FileRenameInfo": true, "golang.org/x/sys/windows.FileRenameInfoEx": true,
-	// This package's own general removals: only the helper and the gate's own
-	// file may call them (gateOnly covers removeGatedEntry).
+	// This package's own replacing renames.
 	"main.renameReplacing": true, "main.renameFile": true, "main.atomicRename": true,
 }
 

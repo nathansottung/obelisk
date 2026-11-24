@@ -2313,8 +2313,11 @@ func api(mux routeRegistrar, app *App) {
 			jsonErr(w, 400, fmt.Errorf("dest_dir required (LTFS mount, archive drive, burn folder)"))
 			return
 		}
-		// What is already at the target is said first, before any volume is made
-		// or any job starts.
+		if !outFolderGate(w, app, dest) {
+			return
+		}
+		// What is already at the target is said first, once the folder is decided,
+		// before any job starts. A volume asked for is made only after.
 		if wo := inspectWriteTarget(c, filepath.Join(dest, c.Name)); wo != nil {
 			writeOverResponse(w, wo)
 			return
@@ -2322,9 +2325,6 @@ func api(mux routeRegistrar, app *App) {
 		vol := resolveVolume(app, b)
 		if err := sealGuard(app, vol); err != nil {
 			jsonErr(w, 409, err)
-			return
-		}
-		if !outFolderGate(w, app, dest) {
 			return
 		}
 		startedOn(w).write(runJob(app, "write", "Write "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {
@@ -2349,6 +2349,9 @@ func api(mux routeRegistrar, app *App) {
 			jsonErr(w, 400, fmt.Errorf("dest_dir required (the mounted tape/drive for this segment)"))
 			return
 		}
+		if !outFolderGate(w, app, dest) {
+			return
+		}
 		if wo := app.spanTargetConflict(c, filepath.Join(dest, c.Name)); wo != nil {
 			writeOverResponse(w, wo)
 			return
@@ -2356,9 +2359,6 @@ func api(mux routeRegistrar, app *App) {
 		vol := resolveVolume(app, b)
 		if err := sealGuard(app, vol); err != nil {
 			jsonErr(w, 409, err)
-			return
-		}
-		if !outFolderGate(w, app, dest) {
 			return
 		}
 		startedOn(w).write(runJob(app, "write", "Span-write next segment of "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {

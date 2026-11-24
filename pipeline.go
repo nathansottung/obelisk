@@ -1446,6 +1446,14 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 		return fail(fmt.Errorf("putting the new build in place: %w", err))
 	}
 	placed = true
+	// The record's values before it takes the new build's, put back if the
+	// catalog then refuses the build.
+	pre := *c
+	putBackRecord := func() {
+		c.TarHash, c.EncHash, c.EncBytes, c.KeyRef = pre.TarHash, pre.EncHash, pre.EncBytes, pre.KeyRef
+		c.BuildTimings, c.BuildVerified, c.PrivateManifest = pre.BuildTimings, pre.BuildVerified, pre.PrivateManifest
+		c.Sidecars, c.BuildWarnings = pre.Sidecars, pre.BuildWarnings
+	}
 	// The build is in place: the record now describes it.
 	c.TarHash, c.EncHash, c.EncBytes, c.KeyRef = nb.TarHash, nb.EncHash, nb.EncBytes, nb.KeyRef
 	c.BuildTimings, c.BuildVerified, c.PrivateManifest = nb.BuildTimings, nb.BuildVerified, nb.PrivateManifest
@@ -1455,6 +1463,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 			if uerr := unswapBuild(buildMade, prev, work); uerr == nil {
 				_ = buildMade.Remove()
 			}
+			putBackRecord()
 			return fail(fmt.Errorf("recording the new build's tapes: %w", err))
 		}
 	}
@@ -1474,6 +1483,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 		if uerr := unswapBuild(buildMade, prev, work); uerr == nil {
 			_ = buildMade.Remove()
 		}
+		putBackRecord()
 		_ = fail(err)
 		if keepOld { // the rebuild did not happen: the package keeps its key, hash and earlier build
 			return fmt.Errorf("package built but catalog could not record it as staged (%w); its existing copies and earlier build are unchanged. Run Build again once the catalog can save", err)

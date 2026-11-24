@@ -106,3 +106,37 @@ func TestWriteOver_ListSaysWhichFilesStay(t *testing.T) {
 		t.Errorf("the Overwrite list does not say which files are replaced and which stay: %+v", p.Targets)
 	}
 }
+
+// A bag export's name is <name>-bag, or <name>-bag-<time>; other folders that
+// happen to contain "-bag" are not exports.
+func TestExports_BagNames(t *testing.T) {
+	k := exportKinds["bag"]
+	for name, want := range map[string]bool{
+		"my-bagels-bag": true, "my-bagels-bag-20261124-120000": true, "PKG-bag-20261124-120000-2": true,
+		"travel-bags": false, "travel-bags-20260301": false, "bag": false, "notes-bag.txt": false,
+	} {
+		if got := matchesExport(k, name); got != want {
+			t.Errorf("%q counted as a bag export: %v, want %v", name, got, want)
+		}
+	}
+	if b, _ := bagBase("my-bagels-bag-20261124-120000"); b != "my-bagels" {
+		t.Errorf("bag base %q", b)
+	}
+}
+
+// A weekly backup made on Thursday ranks above a manual one made on Tuesday of
+// the same week.
+func TestExports_WeeklyBackupUsesItsOwnTime(t *testing.T) {
+	dir := t.TempDir()
+	weekly := filepath.Join(dir, "obelisk-appbackup-2026-W47.tar")
+	mustWrite(t, weekly, "x")
+	thu := time.Date(2026, 11, 19, 9, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(weekly, thu, thu); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(dir, "obelisk-appbackup-20261117-100000.tar"), "x")
+	list, _, err := ExportsIn(dir, "appbackup")
+	if err != nil || len(list) != 2 || list[0].Name != "obelisk-appbackup-2026-W47.tar" || !list[0].Made.Equal(thu) {
+		t.Errorf("order or time: %+v %v", list, err)
+	}
+}
