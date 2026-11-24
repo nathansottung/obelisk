@@ -2245,6 +2245,21 @@ func api(mux routeRegistrar, app *App) {
 			return app.RefillStaging(id, volumeID, sourceDir, p)
 		}))
 	})
+	// Settle a copy whose ID two media hold: the medium at its recorded place is the
+	// copy ("recorded"), or the one found elsewhere is ("found").
+	register(mux, "POST /api/chunks/{id}/copies/settle", func(w http.ResponseWriter, r *http.Request) {
+		id := pathID(r)
+		if app.Store.Chunk(id) == nil {
+			jsonErr(w, 404, fmt.Errorf("package not found"))
+			return
+		}
+		b := body(r)
+		if err := app.SettleCopyConflict(id, strings.TrimSpace(s(b, "copy_id")), strings.TrimSpace(s(b, "keep"))); err != nil {
+			jsonErr(w, 400, err)
+			return
+		}
+		jsonOut(w, app.Store.Chunk(id))
+	})
 	register(mux, "POST /api/chunks/{id}/build", func(w http.ResponseWriter, r *http.Request) {
 		id := pathID(r)
 		c := app.Store.Chunk(id)

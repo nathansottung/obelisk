@@ -354,7 +354,11 @@ func (a *App) AdoptMedia(mountPath string, collectionID, volumeID int, deep bool
 		if err != nil {
 			return nil, err
 		}
-		a.Store.RecordCopy(nc, volumeID, cand.dir, true)
+		id, state := copyIDAt(nc, cand.dir)
+		if state != "ok" {
+			id = ""
+		}
+		a.Store.RecordAdoptedCopy(nc, volumeID, cand.dir, id)
 		a.Store.AppendVerifyEvent(nc, VerifyEvent{At: now, OK: true, Path: cand.payloadPath, Note: "adopt: payload hashed"})
 		seen[h] = nc.Name // dedupe identical candidates within this same run
 

@@ -259,6 +259,41 @@ Both are now **proven at build time**, before a package can ever reach media:
   history, `superseded=true`) and records a fresh one; superseded copies are
   excluded from `VerifiedCopyCount`/`CurrentCopyCount` and from restore sources.
 
+### The copy ID file (media format change)
+
+Every write of a package puts one more file in its folder on the medium:
+`COPY-ID.txt`. It holds two lines and nothing else: the format version
+(`obelisk-copy-id 1`) and a random 128-bit ID in hex. The ID is new for each write,
+never shared by two writes of one build, and the catalog records it on that `Copy`
+(`copy_id`). A spanned set is one write: every tape of the set holds the same ID.
+An optical disc gets its own ID while it burns. `RESTORE.txt` says in one line that
+the file exists, is not needed for a restore and holds no private data. `par2`, `gpg`
+and `tar` never read it, so the restore doctrine is unchanged.
+
+The ID is how Obelisk knows which copy a medium holds, wherever the drive is
+mounted (`store_copies.go`):
+
+- **A write** retires the copy whose ID the folder held before it, and no other.
+  Different bytes retire it once the payload is on the medium; the same bytes keep it
+  current until the new copy and its ID are in place, so a failed rewrite never
+  marks a good copy as replaced.
+- **A full check** credits the copy whose ID the folder holds. A retired copy's ID
+  credits nothing and blames nothing. A drive mounted somewhere else keeps its one
+  record, which moves to where it was read. A missing, unreadable or unknown ID earns
+  no credit, and the copy shows as not identified.
+- **Two media holding one ID** (a cloned drive, say) are a conflict. Neither earns
+  credit until the user chooses which one is the copy
+  (`POST /api/chunks/{id}/copies/settle`); the other is set aside, and a full check
+  confirms the one kept.
+
+A medium written before copy IDs is never given one: checks only read. When a catalog
+is upgraded, each such copy keeps its last-verified date but loses its credit
+(`unidentified: "no_id"`) until a full check at the folder it was recorded at. Such a
+copy is found only at exactly that folder and volume, or, on a moved drive, where the
+drive's serial and partition and the bytes read all point to it. A write that may
+have replaced one takes its credit but never retires it on a guess. Mirrors (loose
+files on a drive) carry no ID and keep their own rules.
+
 ## Adoption — entering the chain partway
 
 `adopt.go` catalogs media that Obelisk did **not** build, so it joins the

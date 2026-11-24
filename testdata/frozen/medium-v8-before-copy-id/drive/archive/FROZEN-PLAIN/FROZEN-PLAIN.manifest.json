@@ -1,0 +1,35 @@
+{
+  "build_verified": {
+    "mode": "full",
+    "contents": true,
+    "decrypt_roundtrip": true,
+    "preset": "ARCHIVAL",
+    "par2_percent": 10,
+    "routine_verify_level": "B",
+    "verify_due_months": 12,
+    "readback_after_write": true
+  },
+  "cipher": "none — payload is a plain POSIX tar",
+  "ciphertext_bytes": 23040,
+  "ciphertext_hash": "44f94b21442b699d3722730698976b9dbb545f5c54e763d486466e1cf0185f56",
+  "collection_id": 0,
+  "created_utc": "2026-11-24T04:21:00Z",
+  "encrypted": false,
+  "files": [
+    {
+      "file_id": 0,
+      "rel_path": "fixture-file.bin",
+      "size_bytes": 20000,
+      "hash": "b04c14964ab505c86216a10247fc0ef722683058f88c295af155b075b1bb87e5"
+    }
+  ],
+  "hash_alg": "SHA256",
+  "name": "FROZEN-PLAIN",
+  "obelisk_package": 1,
+  "obelisk_version": "0.9.0-dev",
+  "par2_redundancy_percent": 10,
+  "payload_file": "FROZEN-PLAIN.tar",
+  "schema_version": 8,
+  "source_root": "C:\\obelisk-fixture\\medium-v8\\source",
+  "tar_hash": "44f94b21442b699d3722730698976b9dbb545f5c54e763d486466e1cf0185f56"
+}

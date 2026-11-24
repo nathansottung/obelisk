@@ -214,8 +214,8 @@ var catalogDBInserts = map[string]string{
 	"file_version":    `INSERT INTO file_version VALUES(?,?,?,?,?,?,?,?)`,
 	"chunk":           `INSERT INTO chunk VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 	"chunk_file":      `INSERT INTO chunk_file VALUES(?,?,?,?,?,?,?,?)`,
-	"copy":            `INSERT INTO copy VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-	"segment":         `INSERT INTO segment VALUES(?,?,?,?,?,?,?,?,?)`,
+	"copy":            `INSERT INTO copy VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	"segment":         `INSERT INTO segment VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
 	"verify_event":    `INSERT INTO verify_event VALUES(?,?,?,?,?,?,?,?)`,
 	"volume":          `INSERT INTO volume VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 	"smart_snapshot":  `INSERT INTO smart_snapshot VALUES(?,?,?)`,
@@ -435,13 +435,14 @@ func (w *rowWriter) chunkChildren(ch *Chunk, what string) error {
 	for k, cp := range ch.Copies {
 		if err := w.exec("copy", what, ch.ID, k, cp.VolumeID, cp.Path, e.tp(cp.WrittenAt), e.tp(cp.LastVerifiedAt),
 			bp(cp.VerifyOK), e.tp(cp.LastCheckAt), cp.LastCheckLevel, bp(cp.LastCheckOK), b(cp.Superseded),
-			cp.KeyRef, cp.PayloadHash, cp.TarHash, e.j(cp.Sidecars), e.j(cp.Segments), b(cp.Repairable)); err != nil {
+			cp.KeyRef, cp.PayloadHash, cp.TarHash, e.j(cp.Sidecars), e.j(cp.Segments), b(cp.Repairable),
+			cp.CopyID, cp.Unidentified, e.j(cp.Conflict), e.j(cp.SetAside)); err != nil {
 			return err
 		}
 	}
 	for k, sg := range ch.Segments {
 		if err := w.exec("segment", what, ch.ID, k, sg.Index, sg.Bytes, sg.Hash, sg.Status, sg.Dest, sg.VolumeID,
-			b(sg.Par2)); err != nil {
+			b(sg.Par2), sg.CopyID, sg.Replaced); err != nil {
 			return err
 		}
 	}
@@ -1079,14 +1080,22 @@ func exportCatalogTables(tx *sql.Tx, withFiles bool) (*catalog, error) {
 		}
 	}
 	if err := q("copy", `SELECT chunk_id, volume_id, path, written_at, last_verified_at, verify_ok, last_check_at,
-		last_check_level, last_check_ok, superseded, key_ref, payload_hash, tar_hash, sidecars, segments, repairable
+		last_check_level, last_check_ok, superseded, key_ref, payload_hash, tar_hash, sidecars, segments, repairable,
+		copy_id, unidentified, conflict, set_aside
 		FROM copy ORDER BY chunk_id, ord`, func(r *sql.Rows) error {
 		var id int
 		var cp Copy
 		var written, verified, verifyOK, checkAt, checkOK nint
-		var sidecars, segments nstr
+		var sidecars, segments, conflict, setAside nstr
 		if err := r.Scan(&id, &cp.VolumeID, &cp.Path, &written, &verified, &verifyOK, &checkAt, &cp.LastCheckLevel,
-			&checkOK, &cp.Superseded, &cp.KeyRef, &cp.PayloadHash, &cp.TarHash, &sidecars, &segments, &cp.Repairable); err != nil {
+			&checkOK, &cp.Superseded, &cp.KeyRef, &cp.PayloadHash, &cp.TarHash, &sidecars, &segments, &cp.Repairable,
+			&cp.CopyID, &cp.Unidentified, &conflict, &setAside); err != nil {
+			return err
+		}
+		if err := jget(conflict, &cp.Conflict); err != nil {
+			return err
+		}
+		if err := jget(setAside, &cp.SetAside); err != nil {
 			return err
 		}
 		if err := jget(sidecars, &cp.Sidecars); err != nil {
@@ -1106,11 +1115,11 @@ func exportCatalogTables(tx *sql.Tx, withFiles bool) (*catalog, error) {
 	}); err != nil {
 		return nil, err
 	}
-	if err := q("segment", `SELECT chunk_id, idx, bytes, hash, status, dest, volume_id, par2 FROM segment
+	if err := q("segment", `SELECT chunk_id, idx, bytes, hash, status, dest, volume_id, par2, copy_id, replaced FROM segment
 		ORDER BY chunk_id, ord`, func(r *sql.Rows) error {
 		var id int
 		var sg Segment
-		if err := r.Scan(&id, &sg.Index, &sg.Bytes, &sg.Hash, &sg.Status, &sg.Dest, &sg.VolumeID, &sg.Par2); err != nil {
+		if err := r.Scan(&id, &sg.Index, &sg.Bytes, &sg.Hash, &sg.Status, &sg.Dest, &sg.VolumeID, &sg.Par2, &sg.CopyID, &sg.Replaced); err != nil {
 			return err
 		}
 		ch, err := chunkOf(id, "segment")

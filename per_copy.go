@@ -9,6 +9,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -83,10 +84,28 @@ func (a *App) par2CanRepair(payload string) bool {
 // the payload or segment files read.
 func priorBuildAt(c *Chunk, dir string) priorBuild {
 	p := priorBuild{Note: restoreNoteHash(dir)}
+	id, state := readCopyID(dir)
+	if state == "ok" {
+		p.CopyID = id
+	}
 	payload := payloadPathIn(dir, c)
-	segs, _ := filepath.Glob(filepath.Join(dir, c.Name+".seg*"))
-	par2s, _ := filepath.Glob(filepath.Join(dir, c.Name+"*.par2"))
-	p.Present = p.Note != "" || payload != "" || len(segs) > 0 || len(par2s) > 0
+	// Read by name, not by pattern: a mount path may hold pattern characters.
+	var segs []string
+	par2s := 0
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		n := e.Name()
+		if e.IsDir() || !strings.HasPrefix(n, c.Name) {
+			continue
+		}
+		if strings.HasPrefix(n, c.Name+".seg") {
+			segs = append(segs, filepath.Join(dir, n))
+		}
+		if strings.HasSuffix(n, ".par2") {
+			par2s++
+		}
+	}
+	p.Present = p.Note != "" || payload != "" || len(segs) > 0 || par2s > 0 || state != idMissing
 	for _, v := range recordedValues(c) {
 		if p.Note != "" && v.Sidecars["RESTORE.txt"] == p.Note {
 			return p
@@ -106,6 +125,31 @@ func priorBuildAt(c *Chunk, dir string) priorBuild {
 		}
 	}
 	return p
+}
+
+// goneCopyFolders is each folder of the package's current copies that is not there
+// now (normPath). It reads drives, so it runs outside the catalog lock.
+func (a *App) goneCopyFolders(c *Chunk) map[string]bool {
+	gone := map[string]bool{}
+	for _, p := range a.Store.copyFolders(c) {
+		if _, err := os.Stat(p); errors.Is(err, fs.ErrNotExist) {
+			gone[normPath(p)] = true
+		}
+	}
+	return gone
+}
+
+// identifyRead fills in what the copy ID file in the folder a check read holds, and
+// whether the copy recorded with that ID, somewhere else, is there too.
+func (a *App) identifyRead(c *Chunk, at *CopyAt) {
+	at.CopyID, at.IDState = copyIDAt(c, at.Path)
+	if at.IDState != "ok" {
+		return
+	}
+	if p := a.Store.copyPathWithID(c, at.CopyID); p != "" && normPath(p) != normPath(at.Path) {
+		id, state := readCopyID(p)
+		at.RecordedHolds = state == "ok" && id == at.CopyID
+	}
 }
 
 // keysCopiesNeedMissing names each key a copy on record needs that no configured
@@ -232,6 +276,10 @@ func (a *App) RefillStaging(id, volumeID int, sourceDir string, progress func(fl
 		// packages sit beside it, so only this package's files are taken.
 		if dir := filepath.Dir(from); filepath.Base(dir) == c.Name {
 			if err := copyFolderInto(dir, stage); err != nil {
+				return nil, err
+			}
+			// Staging is not a copy: the next write gives its copy a new ID.
+			if err := os.Remove(filepath.Join(stage, copyIDFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return nil, err
 			}
 		} else if err := copyOwnFiles(c, dir, stage, filepath.Base(from), vals.Sidecars); err != nil {

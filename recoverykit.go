@@ -376,6 +376,15 @@ func copyResult(cp Copy) string {
 			res += " " + cp.LastVerifiedAt.UTC().Format("2006-01-02")
 		}
 	}
+	switch {
+	case cp.Unidentified == idConflict:
+		res = "two media hold its copy ID; choose which one is the copy"
+	case cp.Unidentified != "":
+		res = "not identified, verify to confirm"
+		if cp.LastVerifiedAt != nil {
+			res += " (last verified " + cp.LastVerifiedAt.UTC().Format("2006-01-02") + ")"
+		}
+	}
 	if cp.Superseded {
 		res += " (superseded — re-written)"
 	}

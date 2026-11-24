@@ -270,6 +270,10 @@ type Segment struct {
 	Dest     string `json:"dest"`                // base destination mount last used for this segment
 	VolumeID int    `json:"volume_id,omitempty"` // registered volume this segment's tape belongs to
 	Par2     bool   `json:"par2,omitempty"`      // this "segment" is the par2 set on its own tape
+	// CopyID is the ID of the set write this tape belongs to (the same on every tape
+	// of the set); Replaced is the ID the tape held before it was written.
+	CopyID   string `json:"copy_id,omitempty"`
+	Replaced string `json:"replaced,omitempty"`
 }
 
 // Volume is a physical medium the operator can hold and locate: a tape, a
@@ -415,6 +419,16 @@ type Copy struct {
 	// can repair. The copy earns no verified credit, but it is not lost. False by
 	// default, and cleared by a check that passes.
 	Repairable bool `json:"repairable,omitempty"`
+	// CopyID is the ID in the copy's ID file on the medium (copy_id.go); empty for a
+	// copy written before copy IDs, and for a mirror.
+	CopyID string `json:"copy_id,omitempty"`
+	// Unidentified says why the copy earns no credit until a check identifies it
+	// (idNone, idMissing, ...). A copy marked so never has VerifyOK true.
+	Unidentified string `json:"unidentified,omitempty"`
+	// Conflict is where another medium holding this copy's ID was found, until the
+	// user settles which one is the copy. SetAside is each medium so set aside.
+	Conflict *CopyLocation  `json:"conflict,omitempty"`
+	SetAside []CopyLocation `json:"set_aside,omitempty"`
 }
 
 // BuildVerified is the build-time attestation that the package faithfully
@@ -981,7 +995,8 @@ var schemaMigrations = []schemaMigration{
 	// 8 → 9: each copy records the key, hashes and tapes it was written with, so a
 	// rebuild no longer stops older copies from verifying. Each existing copy
 	// inherits its package's current values. Idempotent: a copy that already holds
-	// its own values is left alone.
+	// its own values is left alone. A copy written before copy IDs keeps its
+	// last-verified date but loses its credit until a full check identifies it.
 	{To: 9, Fn: migrateCopyValuesV9},
 }
 
@@ -998,8 +1013,30 @@ func migrateCopyValuesV9(c *catalog) {
 			if ch.Spanned && !cp.Superseded && len(cp.Segments) == 0 {
 				cp.Segments = append([]Segment(nil), ch.Segments...)
 			}
+			markUnidentifiedOld(ch, cp)
 		}
+		settleOldStatus(ch)
 	}
+}
+
+// markUnidentifiedOld takes the credit from a current package copy written before
+// copy IDs. Its last-verified date stays; a failed copy stays failed.
+func markUnidentifiedOld(ch *Chunk, cp *Copy) {
+	if ch.Mirror || cp.Superseded || cp.CopyID != "" || (cp.VerifyOK != nil && !*cp.VerifyOK) {
+		return
+	}
+	cp.VerifyOK, cp.Unidentified = nil, idNone
+}
+
+// settleOldStatus is the package's status once its copies lost that credit: written,
+// not verified, until a check identifies a copy.
+func settleOldStatus(ch *Chunk) {
+	if ch.Mirror || (ch.Status != "VERIFIED" && ch.Status != StatusAdoptedVerified) ||
+		ch.CurrentCopyCount() == 0 || ch.VerifiedCopyCount() > 0 {
+		return
+	}
+	bad := false
+	ch.Status, ch.VerifyOK = "WRITTEN", &bad
 }
 
 // remapLegacyRole maps a pre-v8 (photography-specific) role string to the neutral
@@ -3520,6 +3557,12 @@ type CopyAt struct {
 	// Note is the hash of the RESTORE.txt beside what was read. It names the build
 	// when the payload is too damaged to.
 	Note string
+	// CopyID and IDState are what the copy ID file in the folder read holds ("ok",
+	// idMissing or idUnreadable); a package check sets them. RecordedHolds says the
+	// recorded folder of the copy with that ID, somewhere else, holds the ID too.
+	CopyID        string
+	IDState       string
+	RecordedHolds bool
 }
 
 // CreditCopyCheck records a check's result on the copy it read, and only that
@@ -3677,7 +3720,7 @@ func (s *Store) SupersedeCopy(c *Chunk, volumeID int) string {
 func (c *Chunk) VerifiedCopyCount() int {
 	n := 0
 	for _, cp := range c.Copies {
-		if !cp.Superseded && cp.VerifyOK != nil && *cp.VerifyOK {
+		if !cp.Superseded && cp.VerifyOK != nil && *cp.VerifyOK && cp.Unidentified == "" {
 			n++
 		}
 	}

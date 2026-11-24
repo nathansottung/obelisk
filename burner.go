@@ -223,6 +223,18 @@ func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, 
 		set("FAILED", "burn command refused: "+err.Error())
 		return nil, err
 	}
+	// The disc gets its own copy ID, in the staged folder only while it burns.
+	copyID, err := newCopyID()
+	if err != nil {
+		set("FAILED", "nothing was burned: "+err.Error())
+		return nil, err
+	}
+	idPath := filepath.Join(c.StagedDir, copyIDFile)
+	if err := os.WriteFile(idPath, copyIDContent(copyID), 0o644); err != nil {
+		set("FAILED", "nothing was burned: "+err.Error())
+		return nil, err
+	}
+	defer os.Remove(idPath)
 	if err := runBurnProgram(argv); err != nil {
 		set("FAILED", "burn command failed: "+err.Error())
 		return nil, err
@@ -239,7 +251,7 @@ func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, 
 	// only THIS copy failed; it never marks the package FAILED while staging or
 	// another verified copy survives.
 	recordBurnCopy := func(ok bool) {
-		a.Store.RecordCopy(c, a.Store.EnsureUnregistered().ID, copyPath, ok)
+		a.Store.RecordWrittenCopy(c, a.Store.EnsureUnregistered().ID, copyPath, ok, copyID, priorBuild{NotAPlace: true})
 		a.refreshChunkStatus(c)
 		a.Store.UpdateChunk(c)
 	}
@@ -266,6 +278,12 @@ func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, 
 		if h != c.EncHash {
 			set("FAILED", fmt.Sprintf("verify mismatch — disc=%s expected=%s (bad burn; re-burn on a fresh blank)", h, c.EncHash))
 			a.Store.AppendVerifyEvent(c, VerifyEvent{At: time.Now().UTC(), OK: false, Path: payload, Note: "burn verify: hash mismatch"})
+			recordBurnCopy(false)
+			return nil, errors.New(disc.Detail)
+		}
+		if id, _ := copyIDAt(c, filepath.Dir(payload)); id != copyID {
+			set("FAILED", "the disc read back is not the one just burned: its copy ID differs")
+			a.Store.AppendVerifyEvent(c, VerifyEvent{At: time.Now().UTC(), OK: false, Path: payload, Note: "burn verify: another disc's copy ID"})
 			recordBurnCopy(false)
 			return nil, errors.New(disc.Detail)
 		}

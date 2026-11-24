@@ -1,0 +1,7 @@
+Source-Organization: Obelisk
+Bagging-Date: 2026-11-24
+External-Identifier: FROZEN-PLAIN
+External-Description: Obelisk package. The payload lives in FROZEN-PLAIN.tar (a plain POSIX tar); manifest-sha256.txt lists the original files it preserves, by their tree-relative paths — exactly what the tar yields on extraction, and it is also the FIRST member inside the tar. For a fully conformant BagIt bag with a data/ payload tree, use Obelisk's bag export.
+Payload-Oxum: 20000.1
+Bag-Software-Agent: Obelisk 0.9.0-dev
+Obelisk-Payload-SHA256: 44f94b21442b699d3722730698976b9dbb545f5c54e763d486466e1cf0185f56

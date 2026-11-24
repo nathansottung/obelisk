@@ -92,3 +92,14 @@ d7609f373824e7c6139263f34ea0a40cad458ba8bc0e26c7c99d0b7e84a5aeac  frozen/catalog
 559347de2ddb37ebb1b659a2259a0f024644b6c556d5650d100b3554eca583cf  frozen/catalog-v8-packages/tapes/tape03/FROZEN-SPANNED/RESTORE.txt
 d4a60306f6b33c1884578e260509112f252a5351339e8b8db5052adbdacbfb33  frozen/catalog-v8-upgrade-folder/catalog.json
 117b1f3099ea5949ea2ca24dcf9db940bd57aa151f0e2390d4790880ea953972  frozen/catalog-v8-upgrade-folder/jobs.json
+0137719811c22028ffea0e74146ec48f0a2edac08a20117226d72143e1dab5bf  frozen/medium-v8-before-copy-id/catalog.json
+d7fd721f6edd3dfc2c76a9649294aae001b1ccfcb047bc3a98e2a8af41158082  frozen/medium-v8-before-copy-id/drive/archive/FROZEN-PLAIN/FROZEN-PLAIN.manifest.json
+44f94b21442b699d3722730698976b9dbb545f5c54e763d486466e1cf0185f56  frozen/medium-v8-before-copy-id/drive/archive/FROZEN-PLAIN/FROZEN-PLAIN.tar
+70feb45e3527b563e3ed6ae80da16b07f1fb97d57611054adb434e6e65379fdc  frozen/medium-v8-before-copy-id/drive/archive/FROZEN-PLAIN/FROZEN-PLAIN.tar.par2
+6ab44efea5086a65937ec0d7ae699ba48784a9bcd00de33a06702547d1149d49  frozen/medium-v8-before-copy-id/drive/archive/FROZEN-PLAIN/FROZEN-PLAIN.tar.vol000+192.par2
+ebe1416c54f24762241a15ff53f83ea5d310fc67119fcc92855863a083a80997  frozen/medium-v8-before-copy-id/drive/archive/FROZEN-PLAIN/RESTORE.txt
+820f68057755db89a6be5032fc843b66e2b848f810817fa82b12cfabf29e0c80  frozen/medium-v8-before-copy-id/drive/archive/FROZEN-PLAIN/bag-info.txt
+1712ecfb074bf29c4188ad3421032509159a09739fd604f8fe57038b4ddefcc9  frozen/medium-v8-before-copy-id/drive/archive/FROZEN-PLAIN/bagit.txt
+748576a768cd97aa8d62d6d69cfbd9984399b4d486db4b6e0725a8d3a5653876  frozen/medium-v8-before-copy-id/drive/archive/FROZEN-PLAIN/manifest-sha256.txt
+83b697bb8e93e87fed59c504796c3d8730a06cf096d467503775afa32bdf51ce  frozen/medium-v8-before-copy-id/drive/archive/FROZEN-PLAIN/tagmanifest-sha256.txt
+175029ad3fcd709e9a562d0afb1a8220bceab347bdbd2b1e0d99e6a86c9303b9  frozen/medium-v8-before-copy-id/restored.sha256

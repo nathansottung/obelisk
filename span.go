@@ -180,6 +180,26 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 	}
 	destChunk := out.Join(c.Name)
 	prior := priorBuildAt(c, destChunk) // which build this tape holds, before anything is written
+	prior.Gone = a.goneCopyFolders(c)
+	// One ID for the whole set write, on every tape: the one its written tapes hold,
+	// or a fresh one for a new set.
+	setID := a.Store.spanSetID(c)
+	if setID == "" {
+		id, err := newCopyID()
+		if err != nil {
+			return nil, err
+		}
+		setID, seg.Replaced = id, prior.CopyID
+	} else if prior.CopyID != "" && prior.CopyID != setID {
+		seg.Replaced = prior.CopyID
+	}
+	seg.CopyID = setID
+	// A set this write replaced no longer counts, and the package shows it at once.
+	retire := func() {
+		a.Store.RetireOverwrittenSpan(c, volumeID, destDir, prior)
+		a.refreshChunkStatus(c)
+		a.Store.UpdateChunk(c)
+	}
 	set := func(status string) { seg.Status, seg.Dest = status, destDir; _ = putSeg() }
 	fail := func(err error) (map[string]any, error) {
 		seg.Status, seg.Dest = "FAILED", destDir
@@ -196,7 +216,7 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 		// Even a failed copy may have replaced part of an older set's par2 files; one
 		// that replaced none has changed nothing.
 		if wrote > 0 {
-			a.Store.RetireOverwrittenSpan(c, volumeID, destDir, prior)
+			retire()
 		}
 		if err != nil {
 			return fail(err)
@@ -241,7 +261,7 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 			return fail(err)
 		}
 		seg.Hash = streamHash
-		a.Store.RetireOverwrittenSpan(c, volumeID, destDir, prior)
+		retire()
 		set("WRITTEN")
 		// par2 rides the last data tape when it wasn't given its own.
 		if seg.Index == dataSegmentCount(c.Segments) && !c.Segments[N-1].Par2 {
@@ -254,6 +274,9 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 
 	// manifest + RESTORE.txt on EVERY tape (copied verbatim from the staged build).
 	if err := copySidecars(c.StagedDir, out, c); err != nil {
+		return fail(err)
+	}
+	if err := writeCopyIDFile(out, c.Name, setID); err != nil {
 		return fail(err)
 	}
 
@@ -284,10 +307,8 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 			a.Store.UpdateChunk(c)
 			return nil, fmt.Errorf("all %d segments of %s were written, but the set does not check: %w; nothing was recorded as a copy, rebuild the package and write the set again", N, c.Name, err)
 		}
-		c.Status, c.Error = "VERIFIED", ""
+		c.Error = ""
 		c.WrittenDest, c.WrittenAt, c.VerifiedAt = destDir, &now, &now
-		ok := true
-		c.VerifyOK = &ok
 		// The whole spanned set is one verified copy; record it against the
 		// volume of the first segment as representative (each tape's own volume
 		// is on its Segment.VolumeID for the Volumes view).
@@ -299,13 +320,16 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 			}
 		}
 		a.Store.RecordSpanCopy(c, firstVol, fmt.Sprintf("spanned across %d media", N))
+		a.refreshChunkStatus(c)
+		a.Store.UpdateChunk(c)
 		a.Store.Log("span", fmt.Sprintf("%s fully written across %d media", c.Name, N))
 	} else {
+		a.refreshChunkStatus(c)
 		a.Store.UpdateChunk(c)
 	}
 	msg := fmt.Sprintf("Segment %d/%d verified — eject and %s, mount the next tape, then continue.", seg.Index, N, label)
 	if done == N {
-		msg = fmt.Sprintf("Segment %d/%d verified — %s. ALL %d tapes done; package VERIFIED.", seg.Index, N, label, N)
+		msg = fmt.Sprintf("Segment %d/%d verified — %s. ALL %d tapes done; package %s.", seg.Index, N, label, N, c.Status)
 	}
 	progress(1.0, msg)
 	return map[string]any{"chunk": c.Name, "segment": seg.Index, "of": N, "done": done, "complete": done == N, "message": msg}, nil

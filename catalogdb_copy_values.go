@@ -24,6 +24,12 @@ ALTER TABLE copy ADD COLUMN tar_hash TEXT NOT NULL DEFAULT '';
 ALTER TABLE copy ADD COLUMN sidecars TEXT;
 ALTER TABLE copy ADD COLUMN segments TEXT;
 ALTER TABLE copy ADD COLUMN repairable INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE copy ADD COLUMN copy_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE copy ADD COLUMN unidentified TEXT NOT NULL DEFAULT '';
+ALTER TABLE copy ADD COLUMN conflict TEXT;
+ALTER TABLE copy ADD COLUMN set_aside TEXT;
+ALTER TABLE segment ADD COLUMN copy_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE segment ADD COLUMN replaced TEXT NOT NULL DEFAULT '';
 `
 
 // catalogDBMigrateHook is a test seam: an error inside the migration's transaction,
@@ -68,6 +74,20 @@ func applyCatalogDBV2(tx *sql.Tx) error {
 			return err
 		}
 		if err := migrateSpanCopies(tx); err != nil {
+			return err
+		}
+		// Copies written before copy IDs keep their last-verified date but lose their
+		// credit until a full check identifies them (markUnidentifiedOld,
+		// settleOldStatus).
+		if _, err := tx.Exec(`UPDATE copy SET unidentified = 'no_id', verify_ok = NULL
+			WHERE superseded = 0 AND copy_id = '' AND (verify_ok IS NULL OR verify_ok = 1)
+			AND chunk_id IN (SELECT id FROM chunk WHERE mirror = 0)`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE chunk SET status = 'WRITTEN', verify_ok = 0
+			WHERE mirror = 0 AND status IN ('VERIFIED', 'ADOPTED-VERIFIED')
+			AND EXISTS (SELECT 1 FROM copy WHERE copy.chunk_id = chunk.id AND copy.superseded = 0)
+			AND NOT EXISTS (SELECT 1 FROM copy WHERE copy.chunk_id = chunk.id AND copy.superseded = 0 AND copy.verify_ok = 1)`); err != nil {
 			return err
 		}
 		if catalogDBMigrateHook != nil {

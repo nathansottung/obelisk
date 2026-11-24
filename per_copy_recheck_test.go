@@ -116,9 +116,9 @@ func TestPerCopy_RemountedDamageFailsTheBuildItsNoteNames(t *testing.T) {
 	}
 }
 
-// With nothing to say which build was read, neither keeps a verified credit and
-// neither is called failed: both need a check.
-func TestPerCopy_RemountedDamageWithNoNoteClearsBothCredits(t *testing.T) {
+// With no note to say which build was read, the copy ID still does: that copy is
+// failed, and only it.
+func TestPerCopy_RemountedDamageWithNoNoteFailsTheCopyItsIDNames(t *testing.T) {
 	app, c, moved := twoBuildsRemounted(t, "DAMAGE-UNNAMED")
 	dir := filepath.Join(moved, "b", c.Name)
 	flipByte(t, filepath.Join(dir, payloadName(c)))
@@ -129,17 +129,15 @@ func TestPerCopy_RemountedDamageWithNoNoteClearsBothCredits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, _ := r["verify_ok"].(bool); ok || r["credited"] != 0 {
+	if ok, _ := r["verify_ok"].(bool); ok || r["credited"] != 1 {
 		t.Fatalf("result: %v", r)
 	}
 	got := app.Store.Chunk(c.ID)
-	if got.VerifiedCopyCount() != 0 {
-		t.Fatalf("a copy known to be possibly damaged still counts: %+v", got.Copies)
+	if got.VerifiedCopyCount() != 1 || got.Copies[1].VerifyOK == nil || *got.Copies[1].VerifyOK {
+		t.Fatalf("copies: %+v", got.Copies)
 	}
-	for _, cp := range got.Copies {
-		if cp.VerifyOK != nil {
-			t.Fatalf("a copy was judged with no way to tell it apart: %+v", cp)
-		}
+	if got.Copies[0].VerifyOK == nil || !*got.Copies[0].VerifyOK {
+		t.Fatal("the other build lost its credit")
 	}
 }
 
@@ -195,8 +193,10 @@ func TestPerCopy_FailedPar2WriteKeepsTheOldSet(t *testing.T) {
 	if _, err := app.SpanWriteNext(c.ID, tape, 0, 0, 0, c.Copies[0].VolumeID, noProg); err == nil {
 		t.Fatal("the write did not fail")
 	}
+	// The frozen set has no copy ID, so it is not identified since the upgrade; a
+	// write that changed nothing leaves it exactly so.
 	got := frozenChunk(t, app, c.Name)
-	if got.Copies[0].Superseded || got.VerifiedCopyCount() != 1 {
+	if got.Copies[0].Superseded || got.Copies[0].Unidentified != idNone {
 		t.Fatalf("a write that changed nothing retired the set: %+v", got.Copies[0])
 	}
 }

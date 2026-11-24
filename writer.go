@@ -376,6 +376,7 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 	}
 	dest := out.Join(c.Name)
 	prior := priorBuildAt(c, dest) // which build this folder holds, before anything is written
+	prior.Gone = a.goneCopyFolders(c)
 	var need int64
 	entries, _ := os.ReadDir(c.StagedDir)
 	for _, e := range entries {
@@ -383,7 +384,7 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 		// Skip staging-only files: dirs, the filelist, and the intermediate tar
 		// that sits beside the ciphertext for encrypted packages. For a plaintext
 		// package the tar IS the payload (n == payloadBase), so it is counted.
-		if e.IsDir() || stagedOnlyFile(c, n) {
+		if e.IsDir() || stagedOnlyFile(c, n) || n == copyIDFile {
 			continue
 		}
 		if st, err := e.Info(); err == nil {
@@ -475,7 +476,7 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 		n := e.Name()
 		// Skip the payload (streamed above) and the staging-only intermediate tar
 		// and filelist; copy every real sidecar (par2 set, manifest, RESTORE.txt).
-		if e.IsDir() || n == payloadBase || stagedOnlyFile(c, n) {
+		if e.IsDir() || n == payloadBase || stagedOnlyFile(c, n) || n == copyIDFile {
 			continue // on private media the ENCRYPTED manifest.json.gpg ships instead
 		}
 		sum, err := out.CopyIn(filepath.Join(c.StagedDir, n), c.Name+"/"+n, 0o644)
@@ -485,6 +486,20 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 		if want, ok := c.Sidecars[n]; ok && sum != want {
 			return mediumFail(fmt.Errorf("staged sidecar %s changed during the write; rebuild the package", n))
 		}
+	}
+
+	// Last, this write's own ID: until it is in place, a copy of the same bytes that
+	// was here keeps its ID and stays current.
+	copyID := ""
+	if ok {
+		id, err := newCopyID()
+		if err != nil {
+			return mediumFail(err)
+		}
+		if err := writeCopyIDFile(out, c.Name, id); err != nil {
+			return mediumFail(err)
+		}
+		copyID = id
 	}
 
 	now := time.Now().UTC()
@@ -498,10 +513,7 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 	// Record the result on THIS copy; derive package status from all copies. A
 	// bad read-back marks only this copy failed — the package stays healthy if
 	// the staged payload or another verified copy is intact.
-	if ok && rewrite {
-		a.Store.SupersedeCopyAt(c, volumeID, dest)
-	}
-	a.Store.RecordCopy(c, volumeID, dest, ok)
+	a.Store.RecordWrittenCopy(c, volumeID, dest, ok, copyID, prior)
 	// Awareness: if this landed on a tape whose drive is actively encrypting (stenc),
 	// record it on the volume so kits/inventories shout about the drive-key risk.
 	a.noteTapeDriveEncryption(volumeID, cfg)
@@ -590,6 +602,7 @@ func (a *App) VerifyChunk(id int, destDir string) (map[string]any, error) {
 	// The copy read is checked against what it was written with. A read that matches
 	// no recorded copy (the staging folder, say) is compared with the current build.
 	at := CopyAt{Path: filepath.Dir(enc), Serial: driveSerialAt(base), Partition: partitionIDAt(base), Hash: rb, Note: restoreNoteHash(filepath.Dir(enc))}
+	a.identifyRead(c, &at)
 	vals, found := a.Store.copyValuesAt(c, at)
 	if !found {
 		vals = CopyValues{KeyRef: c.KeyRef, PayloadHash: c.EncHash, TarHash: c.TarHash, Sidecars: c.Sidecars}
@@ -607,12 +620,9 @@ func (a *App) VerifyChunk(id int, destDir string) (map[string]any, error) {
 	// never marks the package FAILED while another copy or the staged payload is
 	// intact. A read that matches no recorded copy (the staging folder, say)
 	// credits nothing.
-	credited := a.Store.CreditCopyCheck(c, at, ok, VerifyB)
+	credited, why := a.Store.CreditPackageCheck(c, at, ok, repairable)
 	if ok && credited > 0 {
 		c.VerifiedAt = &now
-	}
-	if !ok && credited > 0 {
-		a.Store.NoteCopyRepairable(c, at, repairable)
 	}
 	note := "media verify"
 	switch {
@@ -625,13 +635,13 @@ func (a *App) VerifyChunk(id int, destDir string) (map[string]any, error) {
 		note += " · repairable with the par2 set on the medium"
 	}
 	if credited == 0 {
-		note += " · no recorded copy at " + filepath.Dir(enc) + " (or the drive could not be told apart), so no copy was credited"
+		note += " · no copy was credited: " + why
 	}
 	a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: ok, Path: enc, Note: note, Advisory: credited == 0})
 	a.refreshChunkStatus(c)
 	a.Store.UpdateChunk(c)
 	return map[string]any{"chunk": c.Name, "path": enc, "verify_ok": ok, "expected": vals.PayloadHash, "actual": rb,
-		"repairable": repairable, "credited": credited, "status": c.Status, "verified_copies": c.VerifiedCopyCount()}, nil
+		"repairable": repairable, "credited": credited, "not_credited": why, "status": c.Status, "verified_copies": c.VerifiedCopyCount()}, nil
 }
 
 // VerifyCampaign scans dest_dir for chunk folders/payloads whose names match
@@ -711,6 +721,7 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 		// Package payloads are ALWAYS level B — full content hash, no option.
 		h, herr := hashFileHex(cd.path)
 		at := CopyAt{Path: filepath.Dir(cd.path), Serial: serial, Partition: part, Hash: h, Note: restoreNoteHash(filepath.Dir(cd.path))}
+		a.identifyRead(cd.c, &at)
 		vals, found := a.Store.copyValuesAt(cd.c, at)
 		if !found {
 			vals = CopyValues{KeyRef: cd.c.KeyRef, PayloadHash: cd.c.EncHash, TarHash: cd.c.TarHash, Sidecars: cd.c.Sidecars}
@@ -732,10 +743,7 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 		// Copy-level result, on the copy recorded where this payload was read and
 		// only there; package status derives from all copies (a bad medium on this
 		// campaign does not fail a package with other verified copies).
-		credited := a.Store.CreditCopyCheck(cd.c, at, ok, VerifyB)
-		if !ok && credited > 0 {
-			a.Store.NoteCopyRepairable(cd.c, at, repairable)
-		}
+		credited, why := a.Store.CreditPackageCheck(cd.c, at, ok, repairable)
 		if ok {
 			passed++
 		}
@@ -744,7 +752,7 @@ func (a *App) VerifyCampaign(destDir, level string, progress func(float64, strin
 			okCount++
 		}
 		if credited == 0 {
-			note += " · no recorded copy here, so no copy was credited"
+			note += " · no copy was credited: " + why
 		}
 		a.Store.AppendVerifyEvent(cd.c, VerifyEvent{At: now, OK: ok, Path: cd.path, Note: note, Level: VerifyB, Advisory: credited == 0})
 		a.refreshChunkStatus(cd.c)

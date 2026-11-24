@@ -1,0 +1,27 @@
+HOW TO RESTORE FROZEN-PLAIN
+==========================================================
+This package is stored UNENCRYPTED — no passphrase or key needed.
+The payload file FROZEN-PLAIN.tar is a plain POSIX tar.
+
+You need exactly two ubiquitous open-source programs:
+  par2  (github.com/Parchive/par2cmdline)  - repair
+  tar   (POSIX standard, preinstalled)     - extract
+
+1) VERIFY / REPAIR:
+     par2 verify FROZEN-PLAIN.tar.par2
+     par2 repair FROZEN-PLAIN.tar.par2      (only if verify fails)
+2) EXTRACT all, or one file (tar reads it directly, no gpg step):
+     tar -xf FROZEN-PLAIN.tar
+     tar -xf FROZEN-PLAIN.tar path/to/one/file
+
+Integrity (SHA256):  payload 44f94b21442b699d3722730698976b9dbb545f5c54e763d486466e1cf0185f56
+Full file list: FROZEN-PLAIN.manifest.json
+No compression anywhere — extracted bytes are the originals.
+==========================================================
+
+WINDOWS — the tar built into Windows writes each file name in the system's
+code page. A name that code page cannot hold (Japanese on a Western system,
+for example) is refused with "unreadable filename", and the other files are
+restored. The package keeps every name as UTF-8: to restore those files too,
+extract FROZEN-PLAIN.tar with a tar that keeps Unicode names, such as 7-Zip
+(7z x FROZEN-PLAIN.tar).

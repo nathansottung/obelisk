@@ -1636,7 +1636,7 @@ func checkSidecarsAt(c *Chunk, dir string) error {
 func writeRestoreTxt(dir string, c *Chunk, opticalEcc bool) error {
 	var t string
 	if c.Spanned {
-		t = spannedRestoreTxt(c)
+		t = spannedRestoreTxt(c) + "\n" + copyIDNote
 		t = appendWindowsTarNote(t, c)
 		t = appendPrivacyNote(t, c)
 		t = appendOpticalNote(t, c, opticalEcc)
@@ -1691,6 +1691,7 @@ No compression anywhere — extracted bytes are the originals.
 ==========================================================
 `, c.Name, c.HashAlg, c.EncHash, pl)
 	}
+	t += "\n" + copyIDNote
 	t = appendWindowsTarNote(t, c)
 	t = appendPrivacyNote(t, c)
 	t = appendOpticalNote(t, c, opticalEcc)
