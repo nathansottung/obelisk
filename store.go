@@ -2091,11 +2091,14 @@ func (s *Store) dailyBackup(b []byte) {
 	sort.Strings(matches) // YYYYMMDD suffix sorts chronologically
 	var drop []string
 	for len(matches) > 14 {
-		s.notePersist("backup-prune", matches[0])
 		drop = append(drop, filepath.Base(matches[0]))
 		matches = matches[1:]
 	}
-	removeRetained(s, filepath.Dir(s.path), drop, kindCatalogBackup)
+	// nil store: this runs inside a save, under the store's lock, and the
+	// folder is the catalog's own (checked when it was opened).
+	for _, name := range removeRetained(nil, filepath.Dir(s.path), drop, kindCatalogBackup, true) {
+		s.notePersist("backup-prune", filepath.Join(filepath.Dir(s.path), name))
+	}
 }
 
 // validDailyBackupName reports a daily backup name of base: base.bak-YYYYMMDD.

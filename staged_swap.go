@@ -95,16 +95,10 @@ func unswapBuild(build, prev *madeEntry, work string) error {
 	return nil
 }
 
-// sidecarsMatch reports whether dir holds every recorded sidecar unchanged, and
-// the payload the catalog records (when it records one).
-func sidecarsMatch(dir string, recorded map[string]string, payload, payloadHash string) bool {
+// sidecarsMatch reports whether dir holds every recorded sidecar unchanged.
+func sidecarsMatch(dir string, recorded map[string]string) bool {
 	if len(recorded) == 0 {
 		return false
-	}
-	if payload != "" && payloadHash != "" {
-		if got, err := hashFileHex(filepath.Join(dir, payload)); err != nil || !strings.EqualFold(got, payloadHash) {
-			return false
-		}
 	}
 	for name, want := range recorded {
 		got, err := hashFileHex(filepath.Join(dir, name))
@@ -115,12 +109,22 @@ func sidecarsMatch(dir string, recorded map[string]string, payload, payloadHash 
 	return true
 }
 
-// recoverStagedSwap puts the build the catalog records (by its sidecar hashes)
-// back under work after a crash part-way through swapInBuild. It only renames;
-// whatever is not the recorded build stays beside it and is listed to the user
-// as a leftover.
+// payloadMatches reports whether dir holds the payload with the given hash.
+func payloadMatches(dir, payload, hash string) bool {
+	if payload == "" || hash == "" {
+		return false
+	}
+	got, err := hashFileHex(filepath.Join(dir, payload))
+	return err == nil && strings.EqualFold(got, hash)
+}
+
+// recoverStagedSwap puts the build the catalog records back under work after a
+// crash part-way through swapInBuild. The record is told by its sidecar hashes,
+// which a build saves only once it is in place; the payload hash, which a build
+// may save earlier, only decides between two builds whose sidecars are alike. It
+// only renames; whatever is not the recorded build stays beside it and is
+// listed to the user as a leftover.
 func recoverStagedSwap(work string, recorded map[string]string, payload, payloadHash string) error {
-	match := func(dir string) bool { return sidecarsMatch(dir, recorded, payload, payloadHash) }
 	dir, name := filepath.Dir(work), filepath.Base(work)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -131,7 +135,9 @@ func recoverStagedSwap(work string, recorded map[string]string, payload, payload
 	}
 	var aside []string
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "."+name+".previous-") && e.IsDir() {
+		// The earlier build moved aside, or a finished build not yet moved in:
+		// either may be the one the catalog records.
+		if (strings.HasPrefix(e.Name(), "."+name+".previous-") || strings.HasPrefix(e.Name(), "."+name+".build-")) && e.IsDir() {
 			aside = append(aside, filepath.Join(dir, e.Name()))
 		}
 	}
@@ -142,12 +148,16 @@ func recoverStagedSwap(work string, recorded map[string]string, payload, payload
 	// only one there is the earlier build.
 	pick := ""
 	for _, p := range aside {
-		if match(p) {
+		if sidecarsMatch(p, recorded) && (pick == "" || payloadMatches(p, payload, payloadHash)) {
 			pick = p
 		}
 	}
-	if pick == "" && len(recorded) == 0 && len(aside) == 1 {
-		pick = aside[0]
+	if pick == "" && len(recorded) == 0 {
+		for _, p := range aside {
+			if strings.HasPrefix(filepath.Base(p), "."+name+".previous-") {
+				pick = p // nothing recorded: the earlier build goes back
+			}
+		}
 	}
 	_, werr := os.Lstat(work)
 	switch {
@@ -155,14 +165,20 @@ func recoverStagedSwap(work string, recorded map[string]string, payload, payload
 		if pick != "" {
 			return renameNew(pick, work)
 		}
+		return nil
 	case werr != nil:
 		return werr
-	case pick != "" && !match(work):
-		// The build under the name is one the catalog never recorded.
-		if err := renameNew(work, filepath.Join(dir, "."+name+".build-"+randomHex(4))); err != nil {
-			return err
-		}
-		return renameNew(pick, work)
+	case pick == "":
+		return nil
 	}
-	return nil
+	// Both are there. The one under the name stays when it is the recorded build:
+	// its sidecars match and, if the aside one's match too, so does its payload.
+	if sidecarsMatch(work, recorded) && (!sidecarsMatch(pick, recorded) || payloadMatches(work, payload, payloadHash) || !payloadMatches(pick, payload, payloadHash)) {
+		return nil
+	}
+	// The build under the name is one the catalog never recorded.
+	if err := renameNew(work, filepath.Join(dir, "."+name+".build-"+randomHex(4))); err != nil {
+		return err
+	}
+	return renameNew(pick, work)
 }

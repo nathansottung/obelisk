@@ -134,7 +134,7 @@ func (a *App) recordScan(snap *VolumeSnapshot, keep int) (*ScanRecord, error) {
 			drop = append(drop, d.FileList)
 		}
 	}
-	removeRetained(a.Store, dir, drop, kindScanList)
+	removeRetained(a.Store, dir, drop, kindScanList, false)
 	return rec, nil
 }
 

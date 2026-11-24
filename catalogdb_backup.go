@@ -351,7 +351,7 @@ func pruneDBBackups(dir string, limit int64) {
 			drop = append(drop, f.name)
 		}
 	}
-	removeRetained(nil, dir, drop, kindCatalogBackup)
+	removeRetained(nil, dir, drop, kindCatalogBackup, true)
 }
 
 // restoreStageName is a new stage name beside the catalog database in dataDir.

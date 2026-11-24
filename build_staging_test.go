@@ -198,8 +198,9 @@ func TestRebuild_SuccessReplacesTheEarlierBuild(t *testing.T) {
 	}
 }
 
-// A crash while the new build is being put in place never loses the earlier
-// one: the next build puts it back before it starts.
+// A crash while the new build is being put in place never loses either build,
+// and the next build first puts the one the catalog records back under the
+// package's name; the other stays beside it, listed as a leftover.
 func TestRebuild_CrashDuringTheSwapKeepsTheEarlierBuild(t *testing.T) {
 	for _, step := range []string{"aside", "in-place"} {
 		t.Run(step, func(t *testing.T) {
@@ -216,9 +217,7 @@ func TestRebuild_CrashDuringTheSwapKeepsTheEarlierBuild(t *testing.T) {
 			if err == nil {
 				t.Fatal("setup: the crash was not injected")
 			}
-			// As after a restart: the catalog is opened again, and the next build
-			// first recovers staging. Make it fail so what is left is what
-			// recovery did.
+			// As after a restart: the catalog is opened again.
 			if err := app.Store.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -227,11 +226,30 @@ func TestRebuild_CrashDuringTheSwapKeepsTheEarlierBuild(t *testing.T) {
 				t.Fatal(err)
 			}
 			app.Store = st
+			recorded := app.Store.Chunk(c.ID).Sidecars
+			// The next build first recovers staging; make it fail so what is left
+			// is what recovery did.
 			buildAfterTarHook = func(tarPath string) { _ = os.Remove(tarPath) }
 			_ = app.BuildChunk(c.ID, noProg)
 			buildAfterTarHook = nil
-			if got := stagedFiles(t, work); !sameFiles(got, before) {
-				t.Errorf("after a crash at %s the earlier build was not put back:\nbefore %v\nafter  %v", step, before, got)
+			for name, h := range recorded {
+				if got, err := hashFileHex(filepath.Join(work, name)); err != nil || got != h {
+					t.Errorf("after a crash at %s, staging does not hold the build the catalog records (%s)", step, name)
+				}
+			}
+			// Nothing is lost: the earlier build is in place or beside it.
+			found := sameFiles(stagedFiles(t, work), before)
+			es, _ := os.ReadDir(staging)
+			for _, e := range es {
+				if e.IsDir() && e.Name() != c.Name && sameFiles(stagedFiles(t, filepath.Join(staging, e.Name())), before) {
+					found = true
+					if l, _ := listLeftoversIn(staging); len(l) == 0 {
+						t.Error("the build not in place is not listed as a leftover")
+					}
+				}
+			}
+			if !found {
+				t.Errorf("after a crash at %s the earlier build is gone", step)
 			}
 		})
 	}

@@ -78,7 +78,7 @@ func TestRetention_FilesKeepTheNewestAndTheLastDay(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	removeRetained(nil, dir, names, kindCatalogBackup)
+	removeRetained(nil, dir, names, kindCatalogBackup, true)
 	for i, n := range names {
 		_, err := os.Stat(filepath.Join(dir, n))
 		switch i {

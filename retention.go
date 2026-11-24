@@ -32,16 +32,18 @@ func madeInTheLastDay(t time.Time) bool {
 }
 
 // removeRetained removes the named files of kind in dir that retention drops,
-// except the newest file of that kind in dir and any made in the last day. s,
-// when set, refuses anything under a source root. dir must be Obelisk's data
-// folder or a folder in it.
-func removeRetained(s *Store, dir string, drop []string, kind scratchKind) {
+// except any made in the last day and, with protectNewest, the newest file of
+// that kind in dir (for kinds without records of their own; scan lists and
+// comparisons are kept by their records, which the store prunes under the same
+// rule). s, when set, refuses anything under a source root. dir must be
+// Obelisk's data folder or a folder in it. It returns what it removed.
+func removeRetained(s *Store, dir string, drop []string, kind scratchKind, protectNewest bool) (removed []string) {
 	if len(drop) == 0 || !(isCatalogFolder(dir) || isCatalogFolder(filepath.Dir(dir))) {
-		return
+		return nil
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return
+		return nil
 	}
 	// The newest is kept by both measures: the last written (by modification
 	// time) and the last by name (names carry the date they were made).
@@ -65,11 +67,14 @@ func removeRetained(s *Store, dir string, drop []string, kind scratchKind) {
 	}
 	for _, name := range drop {
 		at, ok := mod[name]
-		if !ok || name == newest || name == lastName || madeInTheLastDay(at) {
+		if !ok || protectNewest && (name == newest || name == lastName) || madeInTheLastDay(at) {
 			continue
 		}
-		_ = removeOwned(s, []string{dir}, dir, name, kind)
+		if removeOwned(s, []string{dir}, dir, name, kind) == nil {
+			removed = append(removed, name)
+		}
 	}
+	return removed
 }
 
 // keepScanRecord reports whether retention keeps a scan record that its count

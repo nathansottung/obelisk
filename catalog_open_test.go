@@ -93,6 +93,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // ---- helpers ---------------------------------------------------------------
@@ -437,6 +438,11 @@ func TestPersistObserver_SeesBackupPrune(t *testing.T) {
 		name := filepath.Join(dir, fmt.Sprintf("catalog.json.bak-202001%02d", i))
 		if err := os.WriteFile(name, []byte(fmt.Sprintf("synthetic backup %02d\n", i)), 0o644); err != nil {
 			t.Fatalf("fixture: write %s: %v", name, err)
+		}
+		// Made on its day: retention never removes a backup made in the last day.
+		day := time.Date(2020, 1, i, 12, 0, 0, 0, time.UTC)
+		if err := os.Chtimes(name, day, day); err != nil {
+			t.Fatal(err)
 		}
 	}
 	before := backupSidecars(t, dir)

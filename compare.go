@@ -282,7 +282,7 @@ func (a *App) saveCompareRun(run *CompareRun, results []ClassResult) error {
 			drop = append(drop, d.ResultFile)
 		}
 	}
-	removeRetained(a.Store, dir, drop, kindCompareFile)
+	removeRetained(a.Store, dir, drop, kindCompareFile, false)
 	return nil
 }
 
