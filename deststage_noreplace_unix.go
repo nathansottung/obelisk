@@ -11,6 +11,6 @@ func linkThenUnlink(fromDir int, from string, toDir int, to string) error {
 	if err := unix.Linkat(fromDir, from, toDir, to, 0); err != nil {
 		return err
 	}
-	_ = unix.Unlinkat(fromDir, from, 0)
+	_ = unlinkOwnAt(fromDir, from, 0)
 	return nil
 }

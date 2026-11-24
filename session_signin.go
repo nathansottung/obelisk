@@ -141,7 +141,7 @@ func (s *sessionAuth) publishSigninFile() (string, error) {
 		err = renameReplacing(tmp, final)
 	}
 	if err != nil {
-		_ = os.Remove(tmp)
+		_ = removeStage(tmp)
 		return "", err
 	}
 	return final, nil
@@ -153,7 +153,9 @@ func removeStaleLaunchFiles(dir string, now time.Time) {
 	matches, _ := filepath.Glob(filepath.Join(dir, "open-*.html"))
 	for _, m := range matches {
 		if fi, err := os.Lstat(m); err == nil && fi.Mode().IsRegular() && now.Sub(fi.ModTime()) > 2*signInLinkLifetime {
-			_ = os.Remove(m)
+			// The sign-in folder is Obelisk's own private folder, not one the
+			// user chose; expired pages there are its own.
+			_ = removeOwned(nil, []string{dir}, dir, filepath.Base(m), kindSignIn)
 		}
 	}
 }
@@ -244,7 +246,7 @@ func openSignInLink(link string) (string, error) {
 		err = openBrowserAt((&url.URL{Scheme: "file", Path: abs}).String())
 	}
 	if err != nil {
-		_ = os.Remove(page)
+		_ = removeStage(page)
 		return "", err
 	}
 	return page, nil
@@ -263,7 +265,7 @@ func (s *sessionAuth) startOwnerSignIn(base string, logf func(string, ...any)) (
 	}
 	cleanup = func() {
 		if file != "" {
-			_ = os.Remove(file)
+			_ = removeOwned(nil, []string{filepath.Dir(file)}, filepath.Dir(file), filepath.Base(file), kindSignIn)
 		}
 	}
 	if os.Getenv("OBELISK_NO_BROWSER") != "" {
@@ -274,7 +276,7 @@ func (s *sessionAuth) startOwnerSignIn(base string, logf func(string, ...any)) (
 	if err == nil {
 		var page string
 		if page, err = openSignInLink(base + signInPath + "?code=" + url.QueryEscape(code)); err == nil && page != "" {
-			time.AfterFunc(signInLinkLifetime, func() { _ = os.Remove(page) })
+			time.AfterFunc(signInLinkLifetime, func() { _ = removeStage(page) })
 		}
 	}
 	if err != nil {

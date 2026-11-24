@@ -123,7 +123,7 @@ func discardDestStage(s *destStage) error {
 	if !s.published {
 		err = stageEntryOwned(s)
 		if err == nil {
-			err = s.private.Remove("payload" + mirrorTmpSuffix)
+			err = removeEntryIn(s.private, "payload"+mirrorTmpSuffix, false, nil) // checked as ours just above
 		}
 	}
 	if err == nil {
@@ -162,7 +162,7 @@ func removeOwnContainer(s *destStage) {
 	if named.Dev != held.Dev || named.Ino != held.Ino || named.Mode&unix.S_IFMT != unix.S_IFDIR {
 		return
 	}
-	_ = unix.Unlinkat(int(p.Fd()), s.container, unix.AT_REMOVEDIR)
+	_ = unlinkOwnAt(int(p.Fd()), s.container, unix.AT_REMOVEDIR)
 	runtime.KeepAlive(p)
 }
 

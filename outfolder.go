@@ -234,9 +234,10 @@ func (o *outFolder) Create(rel string) (string, *os.File, error) {
 }
 
 // Commit gives the staging file tmp the mode perm, flushes it, reads it back,
-// and only if it holds exactly the bytes with SHA-256 sum publishes it as rel,
-// replacing whatever entry is at rel. On any failure nothing is published and
-// the staging file is removed; a read-back that differs wraps errStageMismatch.
+// and only if it holds exactly the bytes with SHA-256 sum publishes it as rel.
+// An entry already at rel is never replaced: the publish refuses it (wrapping
+// fs.ErrExist). On any failure nothing is published and the staging file is
+// removed; a read-back that differs wraps errStageMismatch.
 func (o *outFolder) Commit(tmp, rel string, perm fs.FileMode, sum string) error {
 	v, err := destRel(filepath.ToSlash(rel))
 	if err != nil {
@@ -268,7 +269,7 @@ func (o *outFolder) Commit(tmp, rel string, perm fs.FileMode, sum string) error 
 			// Publish reads the staged bytes back and checks them against this
 			// digest before giving the file its name (VerifyStage).
 			st.expected = sum
-			err = o.dest.Publish(tmp, v)
+			err = o.dest.PublishNew(tmp, v)
 		}
 		if err != nil {
 			o.Discard(tmp)
@@ -302,16 +303,20 @@ func (o *outFolder) Commit(tmp, rel string, perm fs.FileMode, sum string) error 
 	o.mu.Lock()
 	delete(o.stages, tmp)
 	o.mu.Unlock()
-	if err := f.Close(); err != nil {
-		_ = o.root.Remove(tmp)
+	id, err := handleIdentity(f)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = removeMadeInRoot(o.root, tmp, id)
 		return err
 	}
 	if err := beforeDestPublish(o.root, tmp, v); err != nil {
-		_ = o.root.Remove(tmp)
+		_ = removeMadeInRoot(o.root, tmp, id)
 		return fmt.Errorf("publish %s: %w", rel, err)
 	}
-	if err := o.root.Rename(tmp, v); err != nil {
-		_ = o.root.Remove(tmp)
+	if err := publishNewInRoot(o.root, tmp, v, id); err != nil {
+		_ = removeMadeInRoot(o.root, tmp, id)
 		return fmt.Errorf("publish %s: %w", rel, err)
 	}
 	return nil
@@ -330,8 +335,11 @@ func (o *outFolder) Discard(tmp string) {
 	delete(o.stages, tmp)
 	o.mu.Unlock()
 	if f != nil {
+		id, err := handleIdentity(f)
 		f.Close()
-		_ = o.root.Remove(tmp)
+		if err == nil {
+			_ = removeMadeInRoot(o.root, tmp, id)
+		}
 	}
 }
 

@@ -72,7 +72,7 @@ func holdStagedOnlyFiles(c *Chunk) (putBack func() error, err error) {
 			}
 		}
 		if len(errs) == 0 && len(moved) > 0 {
-			_ = os.Remove(hold) // only ever removes an empty folder
+			_ = removeEmptyOwnFolder(parent, filepath.Base(hold), kindBurnHold) // only ever removes an empty folder
 		}
 		return errors.Join(errs...)
 	}
@@ -95,7 +95,8 @@ func holdStagedOnlyFiles(c *Chunk) (putBack func() error, err error) {
 }
 
 // recoverBurnHold puts back what a crashed burn left aside. A file that a newer build
-// has made again stays in the hold, and the move before the burn replaces it.
+// has made again stays in the hold: the burn then refuses to move the new one over
+// it, and the hold is listed to the user as a leftover to review.
 func recoverBurnHold(c *Chunk, dir, parent, hold string) error {
 	// Earlier versions kept the private manifest here.
 	if c.PrivateManifest {
@@ -104,7 +105,7 @@ func recoverBurnHold(c *Chunk, dir, parent, hold string) error {
 			if err := os.MkdirAll(hold, 0o700); err != nil {
 				return err
 			}
-			if err := os.Rename(old, filepath.Join(hold, c.Name+".manifest.json")); err != nil {
+			if err := renameNew(old, filepath.Join(hold, c.Name+".manifest.json")); err != nil {
 				return fmt.Errorf("the manifest left by an earlier burn could not be recovered: %w", err)
 			}
 		} else if !errors.Is(err, fs.ErrNotExist) {
@@ -134,7 +135,7 @@ func recoverBurnHold(c *Chunk, dir, parent, hold string) error {
 		}
 	}
 	if !left {
-		_ = os.Remove(hold) // only ever removes an empty folder
+		_ = removeEmptyOwnFolder(parent, filepath.Base(hold), kindBurnHold) // only ever removes an empty folder
 	}
 	return nil
 }

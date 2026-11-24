@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -83,11 +84,7 @@ func (s *Store) writePortableCatalog(w io.Writer) error {
 		return err
 	}
 	tmp := s.path + ".export-" + randomHex(6)
-	defer func() {
-		for _, side := range []string{"", "-wal", "-shm", "-journal"} {
-			os.Remove(tmp + side)
-		}
-	}()
+	defer func() { _ = removeDBScratch(filepath.Dir(s.path), tmp, nil) }()
 	if _, err := s.snapshotDB(tmp); err != nil {
 		return err
 	}

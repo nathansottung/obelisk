@@ -117,6 +117,33 @@ func addTarFile(tw *tar.Writer, p, name string) error {
 	return nil
 }
 
+// mkdirAllRecording makes the folder name and its missing parents inside root,
+// recording in made (when set) each folder it created.
+func mkdirAllRecording(root *os.Root, name string, made map[string]fileIdent) error {
+	if made == nil {
+		return root.MkdirAll(name, 0o755)
+	}
+	cur := ""
+	for _, part := range strings.Split(name, "/") {
+		cur = path.Join(cur, part)
+		if _, err := root.Lstat(cur); err == nil {
+			continue
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		if err := root.Mkdir(cur, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		if d, err := root.Open(cur); err == nil {
+			if id, err := handleIdentity(d); err == nil {
+				made[cur] = id
+			}
+			d.Close()
+		}
+	}
+	return nil
+}
+
 // extractTar unpacks a package tar into the folder into, which must exist.
 // With members, only those (a member, or every member under a folder member)
 // are unpacked, and a member not in the package is an error. Every name must
@@ -124,6 +151,13 @@ func addTarFile(tw *tar.Writer, p, name string) error {
 // an absolute path, or (on Windows) a drive or stream separator is refused.
 // Only files and folders are unpacked; a package holds nothing else.
 func extractTar(r io.Reader, into string, members []string) error {
+	return extractTarRecording(r, into, members, nil)
+}
+
+// extractTarRecording is extractTar that records, in made, the identity of
+// every file and folder it creates (by slash path relative to into), so a
+// cleanup can remove only what this extraction made.
+func extractTarRecording(r io.Reader, into string, members []string, made map[string]fileIdent) error {
 	root, err := os.OpenRoot(into)
 	if err != nil {
 		return err
@@ -167,11 +201,11 @@ func extractTar(r io.Reader, into string, members []string) error {
 		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			if err := root.MkdirAll(name, 0o755); err != nil {
+			if err := mkdirAllRecording(root, name, made); err != nil {
 				return err
 			}
 		case tar.TypeReg, tar.TypeRegA:
-			if err := extractTarFile(root, tr, hdr, name); err != nil {
+			if err := extractTarFile(root, tr, hdr, name, made); err != nil {
 				return err
 			}
 		default:
@@ -190,9 +224,9 @@ func extractTar(r io.Reader, into string, members []string) error {
 	return nil
 }
 
-func extractTarFile(root *os.Root, tr *tar.Reader, hdr *tar.Header, name string) error {
+func extractTarFile(root *os.Root, tr *tar.Reader, hdr *tar.Header, name string, made map[string]fileIdent) error {
 	if dir := path.Dir(name); dir != "." {
-		if err := root.MkdirAll(dir, 0o755); err != nil {
+		if err := mkdirAllRecording(root, dir, made); err != nil {
 			return err
 		}
 	}
@@ -203,6 +237,11 @@ func extractTarFile(root *os.Root, tr *tar.Reader, hdr *tar.Header, name string)
 			return fmt.Errorf("the package holds %q more than once", name)
 		}
 		return err
+	}
+	if made != nil {
+		if id, err := handleIdentity(f); err == nil {
+			made[name] = id
+		}
 	}
 	if _, err := io.Copy(f, tr); err != nil {
 		f.Close()

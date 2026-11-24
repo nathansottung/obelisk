@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -126,9 +127,20 @@ func checkOlderDBCopy(path, pragma string) (*catalog, error) {
 		return nil, err
 	}
 	tmp := f.Name()
-	f.Close()
 	defer removeDBFile(tmp)
-	if err := copyFile(path, tmp); err != nil {
+	err = func() error {
+		defer f.Close()
+		in, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		if _, err := io.Copy(f, in); err != nil {
+			return err
+		}
+		return f.Sync()
+	}()
+	if err != nil {
 		return nil, err
 	}
 	if err := upgradeDBFile(tmp); err != nil {
@@ -200,9 +212,9 @@ func (d *catalogDB) backupBeforeMigrate(from int) error {
 	prefix := fmt.Sprintf("%s.pre-schema-v%d-", d.path, from)
 	m, _ := filepath.Glob(prefix + "*")
 	for _, p := range m {
-		// A stage is a backup a crash may have cut short: it never counts.
+		// A stage is a backup a crash may have cut short: it never counts. It is
+		// left for the user to review as a leftover.
 		if strings.HasSuffix(p, ".stage") {
-			removeDBFile(p)
 			continue
 		}
 		if quickCheckFile(p) == nil && dbFileSchema(p) == from {
@@ -212,7 +224,7 @@ func (d *catalogDB) backupBeforeMigrate(from int) error {
 	final := prefix + time.Now().UTC().Format("20060102-150405.000000000")
 	stage := final + ".stage"
 	if _, err := d.w.Exec(`VACUUM INTO ?`, stage); err != nil {
-		_ = os.Remove(stage)
+		removeDBFile(stage)
 		return err
 	}
 	if err := quickCheckFile(stage); err != nil {

@@ -258,7 +258,11 @@ func (a *App) RefillStaging(id, volumeID int, sourceDir string, progress func(fl
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(stage)
+	stageMade, err := madeDir(stage)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = stageMade.Remove() }() // the refill folder, by identity, if it was not put in place
 
 	view := c.withSegments(cp.Segments) // the package as this copy recorded it
 	progress(0.05, "reading the copy")
@@ -282,7 +286,7 @@ func (a *App) RefillStaging(id, volumeID int, sourceDir string, progress func(fl
 				return nil, err
 			}
 			// Staging is not a copy: the next write gives its copy a new ID.
-			if err := os.Remove(filepath.Join(stage, copyIDFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			if err := removeOwnedByID(nil, []fileIdent{stageMade.id}, stage, copyIDFile, kindCopyID); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return nil, err
 			}
 		} else if err := copyOwnFiles(c, dir, stage, filepath.Base(from), vals.Sidecars); err != nil {
@@ -318,24 +322,37 @@ func (a *App) RefillStaging(id, volumeID int, sourceDir string, progress func(fl
 		return nil, err
 	}
 	progress(0.9, "replacing staging")
-	aside := ""
-	if _, err := os.Lstat(work); err == nil {
-		aside = stage + ".old"
-		if err := renameReplacing(work, aside); err != nil {
+	// The damaged staging is moved aside, not removed, until the refill is in
+	// place and recorded; it is recorded by identity before it moves.
+	var prev *madeEntry
+	if fi, err := os.Lstat(work); err == nil {
+		if isLinkMode(fi.Mode()) || !fi.IsDir() {
+			return nil, fmt.Errorf("%s is not a folder Obelisk made; move it out of staging and refill again", work)
+		}
+		if prev, err = madeDir(work); err != nil {
+			return nil, err
+		}
+		aside := stage + ".old"
+		if err := renameNew(work, aside); err != nil {
 			return nil, fmt.Errorf("moving the damaged staging aside: %w", err)
 		}
+		prev.Moved(aside)
 	}
-	if err := renameReplacing(stage, work); err != nil {
-		if aside != "" {
-			_ = renameReplacing(aside, work)
+	if err := renameNew(stage, work); err != nil {
+		if prev != nil {
+			if rerr := renameNew(prev.Path(), work); rerr == nil {
+				prev.Moved(work)
+			}
 		}
 		return nil, fmt.Errorf("putting the refill in place: %w", err)
 	}
+	stageMade.Moved(work)
+	stageMade = nil // in place: not removed
 	if err := a.Store.RefilledFrom(c, vals, st.Size(), work, cp.Segments); err != nil {
 		return nil, fmt.Errorf("the refill is in staging, but the catalog could not record it: %w", err)
 	}
-	if aside != "" {
-		_ = os.RemoveAll(aside)
+	if prev != nil {
+		_ = prev.Remove() // the replaced staging, by identity, now the refill is recorded
 	}
 	if c.Status == "FAILED" {
 		c.Status = "STAGED"

@@ -67,7 +67,7 @@ func (a *App) saveHeldSettings(h *HeldSettings) error {
 		return err
 	}
 	if err := renameReplacing(tmp, a.heldSettingsPath()); err != nil {
-		_ = os.Remove(tmp)
+		_ = removeStage(tmp)
 		return err
 	}
 	return nil
@@ -122,7 +122,7 @@ func (a *App) ApplyHeldSettings(confirm string) (Config, error) {
 
 // DiscardHeldSettings drops the held settings.
 func (a *App) DiscardHeldSettings() error {
-	err := os.Remove(a.heldSettingsPath())
+	err := removeOwned(nil, []string{a.DataDir}, a.DataDir, filepath.Base(a.heldSettingsPath()), kindHeldSettings)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}

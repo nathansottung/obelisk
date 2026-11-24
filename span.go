@@ -512,7 +512,7 @@ func rejoinSegments(sourceDir, outputDir string, c *Chunk, progress func(float64
 	tmp := out.Name()
 	failJoin := func(err error) (string, []string, error) {
 		out.Close()
-		_ = os.Remove(tmp)
+		_ = removeStage(tmp)
 		return "", nil, err
 	}
 	buf := make([]byte, 8<<20)
@@ -531,7 +531,9 @@ func rejoinSegments(sourceDir, outputDir string, c *Chunk, progress func(float64
 	if err := finalizeWrite(out, joined); err != nil {
 		return failJoin(err)
 	}
-	if err := renameReplacing(tmp, joined); err != nil {
+	// outputDir is a folder this restore or refill just made: nothing else is in
+	// it, and nothing is replaced.
+	if err := publishNoReplace(tmp, joined); err != nil {
 		return failJoin(err)
 	}
 	// Bring the par2 set next to the joined payload for verify/repair. A failure here

@@ -47,9 +47,9 @@ type RingStats struct {
 // live stall count — feeding the Performance strip's ring gauge. It must be cheap and
 // non-blocking; pass nil when no live telemetry is wanted.
 //
-// dst is written as a new staging file beside it, created exclusively, and renamed
-// to dst only once it is flushed, so a file already at dst (or a hard link to
-// another file) is replaced as a name and never written through.
+// dst is written as a new staging file beside it, created exclusively, and given
+// the name dst only once it is flushed and only if nothing is at dst: a file
+// already there is never replaced or written through.
 func ringCopy(src, dst string, offset, length int64, blockMB int, bufferGB, throttleMbps float64, progress func(done, total int64), live func(read, written int64, fillPct, stalls int)) (string, RingStats, error) {
 	out, err := createStage(dst, 0o644)
 	if err != nil {
@@ -62,11 +62,11 @@ func ringCopy(src, dst string, offset, length int64, blockMB int, bufferGB, thro
 		err = finalizeWrite(out, dst)
 	}
 	if err == nil {
-		err = renameReplacing(tmp, dst)
+		err = publishNoReplace(tmp, dst)
 	}
 	if err != nil {
 		out.Close()
-		_ = os.Remove(tmp)
+		_ = removeStage(tmp)
 		return "", stats, err
 	}
 	return hash, stats, nil
@@ -928,7 +928,7 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 		if err != nil {
 			return nil, err
 		}
-		xerr := extractTar(bufio.NewReaderSize(pf, 1<<20), tgt.into, members)
+		xerr := extractTarRecording(bufio.NewReaderSize(pf, 1<<20), tgt.into, members, tgt.madeSet())
 		pf.Close()
 		if xerr != nil {
 			return nil, fmt.Errorf("tar extract failed: %v", xerr)
@@ -960,7 +960,7 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 		return nil, err
 	}
 	counted := &countingReader{r: pipe}
-	terr := extractTar(bufio.NewReaderSize(counted, 1<<20), tgt.into, members)
+	terr := extractTarRecording(bufio.NewReaderSize(counted, 1<<20), tgt.into, members, tgt.madeSet())
 	killed := false
 	if terr != nil && counted.n > 0 {
 		// The tar failed partway: stop decrypting what will not be unpacked.
@@ -1030,9 +1030,16 @@ func tail(s string, n int) string {
 }
 
 // copyFile copies src to dst through a new staging file beside dst, created
-// exclusively and renamed to dst once flushed, so a file already at dst is
-// replaced as a name and never written through.
-func copyFile(src, dst string) error {
+// exclusively and given the name dst once flushed, only if nothing is at dst: a
+// file already there is never replaced or written through (the error wraps
+// fs.ErrExist).
+func copyFile(src, dst string) error { return copyFileAs(src, dst, false) }
+
+// copyFileOver is copyFile that replaces a file Obelisk made at dst, as a name
+// (never written through). Only for a file of a staged package Obelisk built.
+func copyFileOver(src, dst string) error { return copyFileAs(src, dst, true) }
+
+func copyFileAs(src, dst string, replace bool) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -1051,11 +1058,15 @@ func copyFile(src, dst string) error {
 		err = finalizeWrite(out, dst)
 	}
 	if err == nil {
-		err = renameReplacing(tmp, dst)
+		if replace {
+			err = renameReplacing(tmp, dst)
+		} else {
+			err = publishNoReplace(tmp, dst)
+		}
 	}
 	if err != nil {
 		out.Close()
-		_ = os.Remove(tmp)
+		_ = removeStage(tmp)
 	}
 	return err
 }

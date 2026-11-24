@@ -1736,7 +1736,7 @@ func (s *Store) backupBeforeMigrate(raw []byte, from int) {
 	}
 	name := fmt.Sprintf("%s.pre-schema-v%d-%s", s.path, from, time.Now().Format("20060102-150405"))
 	s.notePersist("pre-schema-backup", name)
-	_ = os.WriteFile(name, raw, 0o644)
+	_ = writeNewFile(name, raw, 0o644) // never over an earlier backup of the same second
 }
 
 // save persists the catalog. During a batched job it COALESCES writes: it marks
@@ -1887,21 +1887,21 @@ func (s *Store) writeCatalogJSON() error {
 	tmp := f.Name()
 	if _, err := f.Write(b); err != nil {
 		f.Close()
-		_ = os.Remove(tmp)
+		_ = removeStage(tmp)
 		return err
 	}
 	if err := f.Sync(); err != nil {
 		f.Close()
-		_ = os.Remove(tmp)
+		_ = removeStage(tmp)
 		return err
 	}
 	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
+		_ = removeStage(tmp)
 		return err
 	}
 	if err := renameReplacing(tmp, s.path); err != nil {
 		// The catalog is untouched and the bytes are still in memory; drop the stage.
-		_ = os.Remove(tmp)
+		_ = removeStage(tmp)
 		return err
 	}
 	// Best-effort; gracefully skipped where the platform/filesystem does not support
@@ -2051,7 +2051,9 @@ func endBatchInto(s *Store, err *error) {
 }
 
 // dailyBackup writes catalog.json.bak-YYYYMMDD once per calendar day (best
-// effort — a backup must never fail a save) and prunes to the newest 14.
+// effort — a backup must never fail a save) and prunes to the newest 14, under
+// the retention rule (retention.go): never the newest, never one made in the
+// last day. Only names this writes (an eight-digit date) are counted.
 func (s *Store) dailyBackup(b []byte) {
 	day := time.Now().Format("20060102")
 	if s.lastBak == day {
@@ -2061,15 +2063,37 @@ func (s *Store) dailyBackup(b []byte) {
 	bak := s.path + ".bak-" + day
 	if _, err := os.Stat(bak); err != nil {
 		s.notePersist("backup-create", bak)
-		_ = os.WriteFile(bak, b, 0o644)
+		_ = writeNewFile(bak, b, 0o644)
 	}
-	matches, _ := filepath.Glob(s.path + ".bak-*")
+	var matches []string
+	all, _ := filepath.Glob(s.path + ".bak-*")
+	for _, m := range all {
+		if validDailyBackupName(filepath.Base(m), filepath.Base(s.path)) {
+			matches = append(matches, m)
+		}
+	}
 	sort.Strings(matches) // YYYYMMDD suffix sorts chronologically
+	var drop []string
 	for len(matches) > 14 {
 		s.notePersist("backup-prune", matches[0])
-		_ = os.Remove(matches[0])
+		drop = append(drop, filepath.Base(matches[0]))
 		matches = matches[1:]
 	}
+	removeRetained(s, filepath.Dir(s.path), drop, kindCatalogBackup)
+}
+
+// validDailyBackupName reports a daily backup name of base: base.bak-YYYYMMDD.
+func validDailyBackupName(name, base string) bool {
+	d := strings.TrimPrefix(name, base+".bak-")
+	if d == name || len(d) != 8 {
+		return false
+	}
+	for _, r := range d {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // notePersist reports an attempted authority write to the observer openStore
@@ -4058,7 +4082,7 @@ func (s *Store) writeJobsRows() error {
 		return err
 	}
 	if err := renameReplacing(tmp, s.jobs.path); err != nil {
-		_ = os.Remove(tmp)
+		_ = removeStage(tmp)
 		return err
 	}
 	// Best-effort, and a no-op on Windows: the bytes are already durable via Sync

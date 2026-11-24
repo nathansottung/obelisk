@@ -18,7 +18,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -47,13 +46,14 @@ func newRestoreWork(dest *DestRoot) (restoreWork, error) {
 // extracted is where the package's files are unpacked.
 func (w restoreWork) extracted() string { return filepath.Join(w.abs, "x") }
 
-// removeWork removes a restore work folder, through the output folder's handle.
+// removeWork removes a restore work folder, through the output folder's handle,
+// following no links.
 func (d *DestRoot) removeWork(rel string) error {
 	v, err := destRel(rel)
 	if err != nil {
 		return err
 	}
-	return d.root.RemoveAll(v)
+	return removeKindInRoot(d.root, v, kindRestoreWork)
 }
 
 // copyForRepair copies the payload enc and every par2 file of its set (enc.par2,
@@ -90,7 +90,7 @@ func copyForRepair(enc, dir string) (string, error) {
 // with copy-then-verify and the no-replace step, so a name taken in the
 // meantime is refused too. Links and other special entries are not restored
 // and are reported. Returns the number of files restored.
-func publishRestored(dest *DestRoot, w restoreWork) (int, []string, error) {
+func publishRestored(dest *DestRoot, w restoreWork, made map[string]fileIdent) (int, []string, error) {
 	root := w.extracted()
 	var files, dirs, warnings []string
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -159,7 +159,9 @@ func publishRestored(dest *DestRoot, w restoreWork) (int, []string, error) {
 			}
 			return n, warnings, fmt.Errorf("restore %s: %w (%d file(s) were restored before it)", rel, err, n)
 		}
-		_ = os.Remove(p) // free the space as we go; the work folder is removed at the end
+		if id, ok := made[rel]; ok { // free the space as we go; the work folder is removed at the end
+			_ = removeMadePath(p, id)
+		}
 		n++
 	}
 	// Folders last, deepest first, so adding their contents does not change the
@@ -202,12 +204,23 @@ type restoreTarget struct {
 	work    restoreWork
 	into    string // where the package is unpacked
 	notes   []string
-	created bool      // out was created by this restore
-	root    *os.Root  // a handle on the new folder (dest == nil)
-	id      fileIdent // the new folder's identity
+	created bool // out was created by this restore
+	// made records, by slash path relative to into, each file and folder the
+	// extraction created, so cleanup removes only those.
+	made map[string]fileIdent
+	root *os.Root  // a handle on the new folder (dest == nil)
+	id   fileIdent // the new folder's identity
 	// unreserve ends the new folder's reservation as a live output (dest == nil;
 	// a DestRoot holds its own).
 	unreserve func()
+}
+
+// madeSet is where the extraction records what it creates.
+func (t *restoreTarget) madeSet() map[string]fileIdent {
+	if t.made == nil {
+		t.made = map[string]fileIdent{}
+	}
+	return t.made
 }
 
 // openRestoreTarget prepares where a restore into outputDir writes.
@@ -258,16 +271,16 @@ func (a *App) newRestoreFolder(outputDir string) (*restoreTarget, error) {
 	}
 	r, err := os.OpenRoot(abs)
 	if err != nil {
-		_ = syscall.Rmdir(abs) // removes only an empty folder, never a file
+		_ = rmdir(abs) // removes only an empty folder, never a file
 		return nil, fmt.Errorf("cannot open the restore folder %s: %w", outputDir, err)
 	}
-	tgt := &restoreTarget{out: abs, into: abs, created: true, root: r}
+	tgt := &restoreTarget{out: abs, into: abs, created: true, root: r, made: map[string]fileIdent{}}
 	fail := func(err error) (*restoreTarget, error) {
 		if tgt.unreserve != nil {
 			tgt.unreserve()
 		}
 		r.Close()
-		_ = syscall.Rmdir(abs) // still empty: removes only an empty folder, never a file
+		_ = rmdir(abs) // still empty: removes only an empty folder, never a file
 		return nil, err
 	}
 	if tgt.id, err = rootIdentity(r); err != nil {
@@ -385,12 +398,12 @@ func (t *restoreTarget) stillTheFolder() error {
 // entries are removed and reported, as a guarded restore does not restore them.
 func (t *restoreTarget) publish() (int, []string, error) {
 	if t.dest != nil {
-		return publishRestored(t.dest, t.work)
+		return publishRestored(t.dest, t.work, t.made)
 	}
 	if err := t.stillTheFolder(); err != nil {
 		return 0, nil, err
 	}
-	if err := t.root.RemoveAll(t.work.rel); err != nil {
+	if err := removeKindInRoot(t.root, t.work.rel, kindRestoreWork); err != nil {
 		return 0, nil, err
 	}
 	n := 0
@@ -407,11 +420,10 @@ func (t *restoreTarget) publish() (int, []string, error) {
 		}
 		return nil
 	})
+	// The restore unpacks only files and folders, so a link or special entry here
+	// did not come from it: it is left as it is and reported.
 	for _, p := range special {
-		if rerr := t.root.Remove(p); rerr != nil {
-			err = errors.Join(err, rerr)
-		}
-		warnings = append(warnings, fmt.Sprintf("%s was not restored: it is a link or special file, not a regular file", p))
+		warnings = append(warnings, fmt.Sprintf("%s is in the restore folder but did not come from the package (it is a link or special file); it was left as it is", p))
 	}
 	return n, warnings, err
 }
@@ -432,21 +444,23 @@ func (a *App) closeRestoreTarget(t *restoreTarget, succeeded bool) {
 		defer t.unreserve()
 	}
 	defer t.root.Close()
-	_ = t.root.RemoveAll(t.work.rel)
+	_ = removeKindInRoot(t.root, t.work.rel, kindRestoreWork)
 	if succeeded || !t.created {
 		return
 	}
-	var err error
-	if entries, rerr := fs.ReadDir(t.root.FS(), "."); rerr != nil {
-		err = rerr
-	} else {
+	// Only what this restore unpacked (recorded by identity as it was made) is
+	// removed; anything else that is there now is left, and the folder with it.
+	left, err := removeMadeTree(t.root, t.made)
+	if entries, rerr := fs.ReadDir(t.root.FS(), "."); rerr == nil && len(entries) > 0 {
 		for _, e := range entries {
-			err = errors.Join(err, t.root.RemoveAll(e.Name()))
+			left = append(left, e.Name())
 		}
+		a.Store.Log("restore", fmt.Sprintf("the restore into %s failed; %d item(s) there did not come from it and were left: %s", t.out, len(left), strings.Join(left, ", ")))
+		return
 	}
 	if err == nil {
 		if err = t.stillTheFolder(); err == nil {
-			err = syscall.Rmdir(t.out) // removes only an empty folder, never a file
+			err = removeEmptyFolder(t.out, t.id) // removes only an empty folder, never a file
 		}
 	}
 	if err != nil {

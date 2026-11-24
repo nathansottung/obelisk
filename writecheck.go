@@ -143,7 +143,7 @@ func proveRootWrite(r *os.Root, canon, what string) error {
 	if err := checkWriteAccess(canon, what); err != nil {
 		return err
 	}
-	return probeResult(canon, what, runWriteProbe(r))
+	return probeResult(canon, what, runWriteProbe(rootProbe{r}))
 }
 
 // prepareDataFolder makes sure dir can hold a catalog, creating it if needed. If it
@@ -189,20 +189,41 @@ func makeFolderTracked(abs string) (undo func(), err error) {
 			made = append(made, p)
 		}
 	}
-	undo = func() { removeMadeFolders(made) }
-	if err := os.MkdirAll(abs, 0o755); err != nil {
+	mkErr := os.MkdirAll(abs, 0o755)
+	// Each folder that was missing and is there now was made by this call: its
+	// identity is recorded, so undo removes only those folders.
+	ids := folderIdentities(made)
+	undo = func() { removeMadeFolders(made, ids) }
+	if mkErr != nil {
 		undo()
-		return nil, err
+		return nil, mkErr
 	}
 	return undo, nil
 }
 
-// removeMadeFolders removes empty folders Obelisk made, deepest first, and returns
-// those still there.
-func removeMadeFolders(made []string) []string {
+// folderIdentities is the identity of each folder in paths that is there now.
+func folderIdentities(paths []string) []*fileIdent {
+	ids := make([]*fileIdent, len(paths))
+	for i, p := range paths {
+		if id, err := ownFolderIdentity(p); err == nil {
+			ids[i] = &id
+		}
+	}
+	return ids
+}
+
+// removeMadeFolders removes empty folders Obelisk made, deepest first, each only
+// while it is still the folder made (ids), and returns those still there.
+func removeMadeFolders(made []string, ids []*fileIdent) []string {
 	var left []string
 	for i := len(made) - 1; i >= 0; i-- {
-		if err := os.Remove(made[i]); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if i >= len(ids) || ids[i] == nil {
+			if _, err := os.Lstat(made[i]); err == nil {
+				left = append([]string{made[i]}, left...)
+			}
+			continue
+		}
+		if err := removeEmptyFolder(made[i], *ids[i]); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			left = append([]string{made[i]}, left...)
 		}
 	}
@@ -222,9 +243,20 @@ func (p pathProbe) OpenFile(name string, flag int, perm os.FileMode) (*os.File, 
 	return os.OpenFile(filepath.Join(p.dir, name), flag, perm)
 }
 func (p pathProbe) Rename(a, b string) error {
-	return os.Rename(filepath.Join(p.dir, a), filepath.Join(p.dir, b))
+	return renameNew(filepath.Join(p.dir, a), filepath.Join(p.dir, b))
 }
-func (p pathProbe) Remove(name string) error { return os.Remove(filepath.Join(p.dir, name)) }
+func (p pathProbe) Remove(name string) error {
+	return removeOwned(nil, []string{p.dir}, p.dir, name, kindWriteProbe)
+}
+
+// rootProbe is a write check through a held folder handle.
+type rootProbe struct{ r *os.Root }
+
+func (p rootProbe) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
+	return p.r.OpenFile(name, flag, perm)
+}
+func (p rootProbe) Rename(a, b string) error { return renameNewInRoot(p.r, a, b) }
+func (p rootProbe) Remove(name string) error { return removeKindInRoot(p.r, name, kindWriteProbe) }
 
 // runWriteProbe creates, writes, renames and deletes one small file of its own, and
 // leaves nothing whichever step fails.
@@ -242,9 +274,27 @@ func runWriteProbe(fsys probeFS) (err error) {
 		return err
 	}
 	current := name
+	made, idErr := handleIdentity(f)
+	// stillMade reports whether the test file is still the one this check made.
+	stillMade := func(n string) bool {
+		g, err := fsys.OpenFile(n, os.O_RDONLY, 0)
+		if err != nil {
+			return false
+		}
+		id, err := handleIdentity(g)
+		g.Close()
+		return idErr == nil && err == nil && id == made
+	}
 	defer func() {
 		if err != nil {
-			rerr := retryTransientRename(func() error { return fsys.Remove(current) })
+			var rerr error
+			if _, serr := fsys.OpenFile(current, os.O_RDONLY, 0); serr != nil {
+				rerr = serr
+			} else if !stillMade(current) {
+				rerr = fmt.Errorf("%s is no longer the file this check made", current)
+			} else {
+				rerr = retryTransientRename(func() error { return fsys.Remove(current) })
+			}
 			if rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
 				err = &probeLeftError{name: current, err: err}
 			}
@@ -270,6 +320,9 @@ func runWriteProbe(fsys probeFS) (err error) {
 	current = moved
 	if err = writeProbeStep("delete"); err != nil {
 		return err
+	}
+	if !stillMade(moved) {
+		return fmt.Errorf("%s is no longer the file this check made", moved)
 	}
 	return retryTransientRename(func() error { return fsys.Remove(moved) })
 }

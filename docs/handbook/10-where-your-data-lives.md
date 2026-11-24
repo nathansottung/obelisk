@@ -22,10 +22,20 @@ Some words you'll see:
 | **The catalog** | The brain: every hash, drive, and plan. It holds no file content, but losing it loses what the tool knows — so back it up. It lives in your data folder as the catalog database, `catalog.db`, and the tool keeps **daily backups automatically** next to it (`catalog.db.bak-YYYYMMDD`): the last 7 days and one for each of the 4 weeks before, each a whole database you can put back as `catalog.db`. A data folder from an older version, with `catalog.json`, is upgraded the first time this version opens it: the Jobs view shows the upgrade, every record is checked in the new database before it is used, and the old file is kept as `catalog.json.pre-sqlite-v8-<time>`. **Export the portable catalog** for a copy any text editor can read. Started with `OBELISK_CATALOG_ENGINE=json`, the tool keeps the catalog in `catalog.json` instead, with daily backups `catalog.json.bak-YYYYMMDD` (newest 14 kept). |
 | **Settings** | Your configuration, as plain readable JSON (`config.json` in the data folder). |
 | **Keystores** | Your encryption keys. The app **refuses to run encryption without two**, on different devices. Secrets live only here; the catalog stores fingerprints, never the key itself. |
-| **Staging** | A temporary workspace while building packages, **emptied as packages complete**. It can't live inside a folder you back up. |
+| **Staging** | A workspace for building packages. Each build is made in a folder of its own, and the package's earlier build stays, untouched, until the new one has been built and checked. It can't live inside a folder you back up. |
 | **Destinations you choose** | The tape, disc, or drive you pick for each copy. The tool writes the package there and then re-reads it to verify. On sealed media it also writes the recovery tools (escrow) so the media can rebuild itself years from now. |
 | **Inventory & seal sidecars** | Small folders (`OBELISK_SEAL` when sealing, `OBELISK_DOCK` on a mirror target) written **only to media this tool itself writes** — never to drives you adopt, never to your source folders. |
 | **Quarantine folders** | Reversible `_deleted` holding areas, created **only inside libraries this tool built**. Setting a file aside moves it here; nothing is ever destroyed, and it can always be put back. |
+
+---
+
+## What it removes, and when
+
+Nothing you own is removed or overwritten unless you type **Delete** (or **Overwrite**) in the confirmation that lists exactly what would change. The tool removes on its own only files it made itself, inside its own folders: a save it did not finish, a build it replaced once the new build was checked, a temporary folder it made for one job. It never removes a finished package, an export you made, or anything outside its own folders, and exports and restores never replace a file that is already there.
+
+**Kept automatically.** The tool keeps a count of daily catalog backups, of each drive's scan lists and of saved comparisons, and removes the oldest beyond that count. Two rules hold over every count: the newest good copy is never removed (for scans, a drive's newest complete scan), and nothing made in the last day is removed, however many there are. Settings shows the same rule under **Kept automatically, and left behind**.
+
+**Left behind.** Files an earlier or interrupted run left in the tool's folders (an unfinished save or build, a work folder) are never removed on their own and never ignored. Settings lists each one with its size and age, and removes it only when you type **Delete**.
 
 ---
 

@@ -356,7 +356,7 @@ func (a *App) publishConfig(b []byte, initialize bool) (published bool, err erro
 	if e != nil {
 		return fail(e)
 	}
-	defer os.Remove(f.Name()) // only our staging file; never remove the destination
+	defer func() { _ = removeStageIn(dir, f.Name()) }() // only our staging file; never remove the destination
 	if n, e := f.Write(b); e != nil {
 		_ = f.Close()
 		return fail(e)
@@ -385,7 +385,7 @@ func (a *App) publishConfig(b []byte, initialize bool) (published bool, err erro
 		}
 		remove := a.configIO.removeTemp
 		if remove == nil {
-			remove = os.Remove
+			remove = func(p string) error { return removeStageIn(dir, p) }
 		}
 		// On Windows publishAbsent moved the file, so the staging name is already gone.
 		if e := remove(f.Name()); e != nil && !errors.Is(e, os.ErrNotExist) {

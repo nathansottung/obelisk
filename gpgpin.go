@@ -29,6 +29,7 @@ const gpgS2KCount = "65011712"
 type gpgSession struct {
 	bin  string
 	home string
+	made *madeEntry // the home folder, as made
 }
 
 func newGpgSession(gpgBin string) (*gpgSession, error) {
@@ -37,7 +38,11 @@ func newGpgSession(gpgBin string) (*gpgSession, error) {
 		return nil, fmt.Errorf("making a home folder for gpg: %w", err)
 	}
 	_ = os.Chmod(home, 0o700)
-	return &gpgSession{bin: gpgBin, home: home}, nil
+	made, err := madeDir(home)
+	if err != nil {
+		return nil, fmt.Errorf("making a home folder for gpg: %w", err)
+	}
+	return &gpgSession{bin: gpgBin, home: home, made: made}, nil
 }
 
 // args are the options every run takes: the isolated home, no options file,
@@ -72,7 +77,7 @@ func (s *gpgSession) close() {
 	}
 	// An agent on Windows can take a moment to let go of its files.
 	for i := 0; i < 20; i++ {
-		if err := os.RemoveAll(s.home); err == nil {
+		if err := s.made.Remove(); err == nil {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)

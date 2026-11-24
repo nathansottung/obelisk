@@ -524,7 +524,7 @@ const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 // (input), and its arguments as JSON in data-args, built with callArgs (escaped
 // as an attribute value, so the browser hands back exactly the JSON). Only the
 // functions listed in UI_CALLS can be called this way.
-const UI_CALLS=new Set(['adoptFolderDlg','assignDlgArchive','backupChangesDlg','backupHistoryDlg','bagExportDlg','bagPackageDlg','censusDlg','doReconcile','doRefill','doRewriteCopy','doSettleCopy','dockIngest','dockIngestAnyway','dockReverifyDlg','driveEncDlg','exploreGo','finalizeDlg','integrityArchiveDlg','mirrorDlg','overrideFile','parkFile','planDlg','planExecFromDock','planTree','printLabel','readMediumDlg','removeDlg','restoreDlg','restoreFileVersion','retireDlg','rmPickExport','rmToggle','scanDlg','snapTree','spanWriteDlg','tmZoom','toolBrowse','unsealDlg','vDrift','verifyMirrorDlg','writeDlg']);
+const UI_CALLS=new Set(['adoptFolderDlg','assignDlgArchive','backupChangesDlg','backupHistoryDlg','bagExportDlg','bagPackageDlg','censusDlg','doReconcile','doRefill','doRewriteCopy','doSettleCopy','dockIngest','dockIngestAnyway','dockReverifyDlg','driveEncDlg','exploreGo','finalizeDlg','integrityArchiveDlg','mirrorDlg','overrideFile','parkFile','planDlg','planExecFromDock','planTree','printLabel','readMediumDlg','removeDlg','removeLeftover','restoreDlg','restoreFileVersion','retireDlg','rmPickExport','rmToggle','scanDlg','snapTree','spanWriteDlg','tmZoom','toolBrowse','unsealDlg','vDrift','verifyMirrorDlg','writeDlg']);
 const callArgs=(...a)=>esc(JSON.stringify(a));
 function _uiDispatch(attr,e){
   const el=e&&e.target&&e.target.closest?e.target.closest('['+attr+']'):null;if(!el)return;
@@ -3767,6 +3767,13 @@ async function vSettings(){
 
   // ---- 2b. Back up this app (migration to a new computer) ----
   const aec=cfg.auto_export_cadence||'off';
+  h+=`<div class="panel"><h2>Kept automatically, and left behind</h2>
+    <label>What Obelisk rotates on its own</label>
+    <div class="help" id="retentionrule">Obelisk keeps a count of daily catalog backups, of each drive's scan lists, and of saved comparisons, and removes the oldest beyond it. Two rules hold over every count: <b>the newest good copy is never removed</b> (for scans, a drive's newest complete scan), and <b>nothing made in the last day is removed</b>, however many there are. Nothing else is ever removed without you typing <b>Delete</b>.</div>
+    <label style="margin-top:14px">Left behind by an earlier run</label>
+    <div class="help">Files an earlier or interrupted run left in Obelisk's folders (data, staging, scans, comparisons, tool cache). They are never removed on their own; review each and remove it here if you no longer need it.</div>
+    <div id="leftovers" class="memline dim">Checking…</div>
+  </div>`;
   h+=`<div class="panel"><h2>Back up this app's records</h2>
     <div class="help">One file that carries everything this tool knows — the catalog, settings, and job history — so it can move to a new computer or OS. It is <b>not</b> your file content; it's the brain. <a href="${HANDBOOK}12-moving-to-a-new-computer.md" target="_blank" rel="noopener" style="color:var(--act)">Moving to a new computer →</a></div>
     <div class="row" style="margin-top:12px;gap:8px">
@@ -3913,7 +3920,7 @@ async function vSettings(){
   </div>`;
 
   $('#view').innerHTML=h;
-  ivSync();loadSysinfo();stagingSpace();loadTools();escrowStatus();
+  ivSync();loadSysinfo();stagingSpace();loadTools();escrowStatus();loadLeftovers();
 }
 
 // Just the experience-mode buttons + note (no panel wrapper) — for the General section.
@@ -4082,6 +4089,20 @@ function bufCheck(){
   if(_memTotalGB>0&&v>_memTotalGB*0.25){el.style.display='block';
     el.innerHTML=`Warning: ${v} GB is over 25% of your ${_memTotalGB.toFixed(0)} GB RAM — leave headroom for the OS and other apps. Consider <b>${Math.round(_memTotalGB*0.25)} GB</b> or less.`;}
   else el.style.display='none';
+}
+async function loadLeftovers(){
+  const el=$('#leftovers');if(!el)return;
+  let r;try{r=await api('GET','/api/leftovers')}catch(e){el.textContent='Could not list leftovers: '+e.message;return}
+  const l=r.leftovers||[];
+  if(!l.length){el.textContent='Nothing left behind.';return}
+  const age=h=>h<48?Math.round(h)+' h':Math.round(h/24)+' days';
+  el.classList.remove('dim');
+  el.innerHTML=l.map(x=>`<div class="row" style="align-items:center;gap:8px;margin:3px 0"><span class="mono" style="flex:1;font-size:11.5px">${esc(x.path)}</span><span class="dim">${esc(x.kind)} · ${commaN(x.size)} bytes · ${esc(age(x.age_hours))} old</span><button class="btn ghost" data-call="removeLeftover" data-args="${callArgs(x.path)}">Remove…</button></div>`).join('');
+}
+async function removeLeftover(path){
+  try{const r=await confirmDestructive('leftover-remove',{path});if(r)toast('Removed '+path)}
+  catch(e){toast(e.message,1)}
+  loadLeftovers();
 }
 async function stagingSpace(){
   const el=$('#stginfo');if(!el)return;const path=(($('#st')||{}).value||'').trim();

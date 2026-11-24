@@ -110,11 +110,10 @@ func syncFile(path string) error {
 	return err
 }
 
-// removeDBFile removes a copy this file made, with any side file SQLite left.
+// removeDBFile removes a copy this file made beside the catalog, with any side
+// file SQLite left, through the scratch helper.
 func removeDBFile(path string) {
-	for _, side := range []string{"", "-wal", "-shm", "-journal"} {
-		os.Remove(path + side)
-	}
+	_ = removeDBScratch(filepath.Dir(path), path, nil)
 }
 
 // checkDB runs pragma (quick_check or integrity_check) through db and returns
@@ -249,7 +248,6 @@ func (b *dbBackend) dailyBackup(now time.Time) error {
 		return errCatalogClosed
 	}
 	dir := filepath.Dir(b.d.path)
-	sweepBackupStages(dir)
 	final := filepath.Join(dir, catalogDBBackupPrefix+now.Format("20060102"))
 	if _, err := os.Lstat(final); err == nil {
 		return nil // never replaced
@@ -340,32 +338,20 @@ func keptDBBackups(files []dbBackupFile, limit int64) map[string]bool {
 	return keep
 }
 
-// pruneDBBackups removes the daily backups in dir that are not kept.
+// pruneDBBackups removes the daily backups in dir that are not kept, under the
+// retention rule (retention.go): never the newest, never one made in the last
+// day. A stage a crashed backup left is not swept here: it is listed to the
+// user as a leftover.
 func pruneDBBackups(dir string, limit int64) {
 	files := listDBBackups(dir)
 	keep := keptDBBackups(files, limit)
+	var drop []string
 	for _, f := range files {
 		if !keep[f.name] {
-			os.Remove(filepath.Join(dir, f.name))
+			drop = append(drop, f.name)
 		}
 	}
-}
-
-// sweepBackupStages removes daily-backup stages old enough that a crash left them.
-func sweepBackupStages(dir string) {
-	ents, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	for _, e := range ents {
-		name := e.Name()
-		if !strings.HasPrefix(name, catalogDBBackupPrefix) || !strings.Contains(name, catalogDBBackupStage) || !e.Type().IsRegular() {
-			continue
-		}
-		if fi, err := e.Info(); err == nil && time.Since(fi.ModTime()) > catalogDBStageAge {
-			os.Remove(filepath.Join(dir, name))
-		}
-	}
+	removeRetained(nil, dir, drop, kindCatalogBackup)
 }
 
 // restoreStageName is a new stage name beside the catalog database in dataDir.
@@ -417,8 +403,12 @@ func stageRestoreImport(dataDir string, raw, jobs []byte) (string, *catalog, err
 	if err := os.Mkdir(work, 0o700); err != nil {
 		return refuse(err)
 	}
-	defer os.RemoveAll(work) // only the folder made above, which holds copies of the backup's members
-	if err := os.WriteFile(filepath.Join(work, "catalog.json"), raw, 0o600); err != nil {
+	workMade, err := madeDir(work)
+	if err != nil {
+		return refuse(err)
+	}
+	defer workMade.Remove() // only the folder made above, which holds copies of the backup's members
+	if err := writeNewFile(filepath.Join(work, "catalog.json"), raw, 0o600); err != nil {
 		return refuse(err)
 	}
 	if _, err := migrateCatalogToDB(work, catalogMigrateOptions{}); err != nil {
@@ -531,12 +521,12 @@ func releaseCatalogDB(path string) error {
 	if !strings.EqualFold(mode, "delete") {
 		return held("it could not be taken out of its write-ahead log mode")
 	}
-	for _, side := range []string{"-wal", "-shm", "-journal"} {
+	for _, side := range sqliteSideFiles {
 		p := path + side
 		if _, err := os.Lstat(p); errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if err := removeOwned(nil, []string{filepath.Dir(path)}, filepath.Dir(path), filepath.Base(p), kindDBSide); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			if runtime.GOOS == "windows" {
 				return held(fmt.Sprintf("%s is in use: %v", filepath.Base(p), err))
 			}

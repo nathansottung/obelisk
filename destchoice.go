@@ -574,14 +574,16 @@ func (s *Store) CreateDestination(path, folder string, confirmed bool) (*Destina
 	}
 	defer releaseCreate()
 	root, _, created, err := createDestComponents(in.anchor, in.anchorCanon, in.missing, snap, in.display)
+	// The folders just made, by identity, so an undo removes only those.
+	createdIDs := folderIdentities(created)
 	if err != nil {
-		return nil, withCreatedNote(err, removeMadeFolders(created))
+		return nil, withCreatedNote(err, removeMadeFolders(created, createdIDs))
 	}
 	root.Close()
 	s.Log("destination", "created "+strings.Join(created, ", "))
 	after, err := s.inspectDestination(path)
 	if err != nil {
-		return nil, withCreatedNote(err, removeMadeFolders(created))
+		return nil, withCreatedNote(err, removeMadeFolders(created, createdIDs))
 	}
 	defer after.anchor.Close()
 	if len(after.missing) > 0 {

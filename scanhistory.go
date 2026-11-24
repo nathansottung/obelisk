@@ -112,8 +112,9 @@ func (a *App) recordScan(snap *VolumeSnapshot, keep int) (*ScanRecord, error) {
 	if err != nil {
 		return nil, fmt.Errorf("saving the scan's file list: %w", err)
 	}
-	if err := renameReplacing(tmp, final); err != nil {
-		_ = os.Remove(tmp)
+	id, made := stageIdentity(tmp)
+	if err := publishNoReplace(tmp, final); err != nil {
+		_ = removeStage(tmp)
 		return nil, fmt.Errorf("saving the scan's file list: %w", err)
 	}
 	rec := &ScanRecord{VolumeID: snap.VolumeID, At: snap.CapturedAt, SessionID: snap.SessionID, Root: snap.Root, Label: snap.Label,
@@ -122,38 +123,45 @@ func (a *App) recordScan(snap *VolumeSnapshot, keep int) (*ScanRecord, error) {
 		SkippedFolders: len(snap.SkippedFolders), FileList: name, FileListSHA256: sha256Hex(buf.Bytes())}
 	dropped, err := a.Store.AddScanRecord(rec, keep)
 	if err != nil {
-		_ = os.Remove(final) // no record points at it
+		removePublished(final, id, made) // no record points at it
 		return nil, fmt.Errorf("saving the scan record: %w", err)
 	}
-	// The record is on disk; the dropped scans' file lists can go.
+	// The record is on disk; the dropped scans' file lists can go, under the
+	// retention rule (retention.go).
+	var drop []string
 	for _, d := range dropped {
 		if validScanFileName(d.FileList) {
-			_ = os.Remove(filepath.Join(dir, d.FileList))
+			drop = append(drop, d.FileList)
 		}
 	}
-	a.sweepScanFiles(dir)
+	removeRetained(a.Store, dir, drop, kindScanList)
 	return rec, nil
 }
 
-// sweepScanFiles removes file lists in the scans folder that no record points
-// at (left by a crash, or by a catalog restored from an older backup). Only
-// files older than an hour are removed, so a scan being recorded at the same
-// moment keeps its file.
-func (a *App) sweepScanFiles(dir string) {
+// unreferencedScanFiles lists the file lists in the scans folder that no record
+// points at (left by a crash, or by a catalog restored from an older backup,
+// in which case they are the newest scans). They are never removed on their
+// own: they are listed to the user as leftovers. Only files older than an hour
+// are listed, so a scan being recorded at the same moment is not.
+func (a *App) unreferencedScanFiles() []Leftover {
+	dir := a.scansDir()
 	inUse := a.Store.ScanFileListsInUse()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return
+		return nil
 	}
+	var out []Leftover
 	for _, e := range entries {
 		name := e.Name()
 		if !e.Type().IsRegular() || !validScanFileName(name) || inUse[name] {
 			continue
 		}
 		if fi, err := e.Info(); err == nil && time.Since(fi.ModTime()) > time.Hour {
-			_ = os.Remove(filepath.Join(dir, name))
+			out = append(out, Leftover{Folder: dir, Name: name, Path: filepath.Join(dir, name), Kind: "scan file list no record points at",
+				Size: fi.Size(), Modified: fi.ModTime(), AgeHours: round2(time.Since(fi.ModTime()).Hours())})
 		}
 	}
+	return out
 }
 
 // LoadScanFiles reads a scan's file list, checking it against its recorded

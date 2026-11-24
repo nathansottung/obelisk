@@ -25,6 +25,8 @@ package main
 // function directly.
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -32,6 +34,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 )
 
@@ -87,18 +91,30 @@ var (
 				return true
 			}
 		}
+		if strings.HasPrefix(base, ".catalog.") && strings.Contains(base, ".check-") {
+			return true
+		}
 		return strings.HasPrefix(base, "catalog.") && (strings.Contains(base, ".export-") || strings.Contains(base, ".stage-") || strings.HasSuffix(base, ".stage"))
+	}}
+	// kindDBSide is a side file SQLite keeps beside the live catalog database.
+	kindDBSide = scratchKind{label: "catalog side file", match: func(n string) bool {
+		return n == "catalog.db-wal" || n == "catalog.db-shm" || n == "catalog.db-journal"
 	}}
 	// kindCatalogWork is a work folder made beside the catalog for one restore.
 	kindCatalogWork = scratchKind{label: "unfinished catalog restore", tree: true, leftover: true, match: func(n string) bool {
 		return strings.HasPrefix(n, "restore-stage-")
 	}}
 	// kindLock is a lock file Obelisk holds while it moves its catalog.
-	kindLock = scratchKind{label: "lock file", match: func(n string) bool { return strings.HasSuffix(n, ".lock") }}
+	kindLock = scratchKind{label: "lock file", match: func(n string) bool { return n == "catalog.db.move-lock" }}
 	// kindCopyID is the COPY-ID.txt a burn puts in a staged package for that burn.
 	kindCopyID = scratchKind{label: "burn copy ID", match: func(n string) bool { return n == copyIDFile }}
 	// kindIntermediateTar is a build's plain tar, removed once it is encrypted.
 	kindIntermediateTar = scratchKind{label: "intermediate tar", match: func(n string) bool { return strings.HasSuffix(n, ".tar") }}
+	// kindEccStage is the error-correction file dvdisaster is writing, before it
+	// is given its name.
+	kindEccStage = scratchKind{label: "unfinished error-correction file", leftover: true, match: func(n string) bool {
+		return strings.HasPrefix(n, ".") && strings.HasSuffix(n, ".partial.ecc")
+	}}
 	// kindTempHome is a private folder made under the system temp folder.
 	kindTempHome = scratchKind{label: "private temporary folder", tree: true, match: func(n string) bool {
 		return strings.HasPrefix(n, "obelisk-")
@@ -119,8 +135,180 @@ var (
 	kindHeldSettings = scratchKind{label: "held settings", match: func(n string) bool { return n == "held-settings.json" }}
 )
 
+// kindRestoreWork is a restore's private work folder in its output folder.
+var kindRestoreWork = scratchKind{label: "restore work folder", tree: true, leftover: true, match: func(n string) bool {
+	return strings.HasPrefix(n, ".obelisk-restore-")
+}}
+
+// removeKindInRoot removes rel inside root when its name is of kind (a folder
+// whose removal follows no links). For Obelisk's own work folder inside an
+// output folder it holds a handle on.
+func removeKindInRoot(root *os.Root, rel string, kind scratchKind) error {
+	base := filepath.Base(filepath.FromSlash(rel))
+	if !validEntryName(base) || !kind.match(base) {
+		return fmt.Errorf("refusing to remove %s: not a %s Obelisk makes", rel, kind.label)
+	}
+	return removeEntryIn(root, filepath.FromSlash(rel), kind.tree, nil)
+}
+
+// removeMadeInRoot removes the file rel inside root when it is still the object
+// with identity id (one this operation created).
+func removeMadeInRoot(root *os.Root, rel string, id fileIdent) error {
+	return removeEntryIn(root, filepath.FromSlash(rel), false, &id)
+}
+
+// removeMadeTree removes, inside root, only the entries recorded in made (files
+// by identity; folders by identity and only once empty), deepest first. Anything
+// else is left where it is and returned.
+func removeMadeTree(root *os.Root, made map[string]fileIdent) (left []string, err error) {
+	names := make([]string, 0, len(made))
+	for n := range made {
+		names = append(names, n)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		return len(names[i]) > len(names[j]) || len(names[i]) == len(names[j]) && names[i] > names[j]
+	})
+	for _, n := range names {
+		rel := filepath.FromSlash(n)
+		fi, lerr := root.Lstat(rel)
+		if lerr != nil {
+			continue
+		}
+		id := made[n]
+		if !fi.IsDir() {
+			err = errors.Join(err, removeEntryIn(root, rel, false, &id))
+			continue
+		}
+		if isLinkMode(fi.Mode()) {
+			continue
+		}
+		d, oerr := root.Open(rel)
+		if oerr != nil {
+			continue
+		}
+		got, ierr := handleIdentity(d)
+		entries, _ := d.ReadDir(1)
+		d.Close()
+		if ierr != nil || got != id || len(entries) > 0 {
+			left = append(left, n)
+			continue
+		}
+		err = errors.Join(err, root.Remove(rel))
+	}
+	return left, err
+}
+
+// removeEmptyFolderIn removes the empty folder rel inside root; a file or link
+// there is refused, and a folder with anything in it is kept.
+func removeEmptyFolderIn(root *os.Root, rel string) error {
+	fi, err := root.Lstat(rel)
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() || isLinkMode(fi.Mode()) {
+		return fmt.Errorf("refusing to remove %s: not a folder", rel)
+	}
+	return root.Remove(rel) // a folder is removed only when empty
+}
+
+// removeEmptyFolder removes the folder at path only while it is empty and is
+// still the folder with identity id. It never removes a file.
+func removeEmptyFolder(path string, id fileIdent) error {
+	got, err := ownFolderIdentity(path)
+	if err != nil {
+		return err
+	}
+	if got != id {
+		return fmt.Errorf("refusing to remove %s: it is no longer the folder Obelisk made", path)
+	}
+	return rmdir(path)
+}
+
+// publishNewInRoot gives the staged file tmp (identity id) the name v inside
+// root only when nothing is there: a hard link refuses an existing name in the
+// same step; where links are not supported, the name is checked just before the
+// rename. The staging name is then removed. An existing entry is never replaced
+// (the error wraps fs.ErrExist).
+func publishNewInRoot(root *os.Root, tmp, v string, id fileIdent) error {
+	tmp, v = filepath.FromSlash(tmp), filepath.FromSlash(v)
+	err := root.Link(tmp, v)
+	if err == nil {
+		_ = removeEntryIn(root, tmp, false, &id) // the staging name of the published file
+		return nil
+	}
+	if errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("%s is already there and was left as it is: %w", filepath.ToSlash(v), fs.ErrExist)
+	}
+	if _, lerr := root.Lstat(v); lerr == nil {
+		return fmt.Errorf("%s is already there and was left as it is: %w", filepath.ToSlash(v), fs.ErrExist)
+	} else if !errors.Is(lerr, fs.ErrNotExist) {
+		return lerr
+	}
+	return root.Rename(tmp, v)
+}
+
+// publishNoReplace moves the finished file from to final, refusing when final
+// already exists. publishAbsent is the atomic no-replace publish. Off Windows, on a
+// filesystem without hard links (FAT, exFAT), the absence is checked just before
+// the rename; on Windows the move needs no such fallback, so a failure is returned
+// and nothing can replace a file that arrived. The folder entry is then flushed.
+func publishNoReplace(from, final string) error {
+	if err := publishAbsent(from, final); err == nil {
+		// final is in place. Off Windows the staging name is a second name for the
+		// same file, made by this process; one that cannot be removed now is
+		// listed to the user as a leftover.
+		_ = removeStage(from)
+	} else {
+		if _, serr := os.Lstat(final); !errors.Is(serr, fs.ErrNotExist) {
+			return fmt.Errorf("%s already exists; refusing to replace it", final)
+		}
+		if !publishAbsentHasFallback {
+			return err
+		}
+		if err := renameReplacing(from, final); err != nil {
+			return err
+		}
+	}
+	return syncDir(filepath.Dir(final))
+}
+
+// kindBurnHold is the folder a burn keeps staged-only files in, beside the
+// burned folder.
+var kindBurnHold = scratchKind{label: "burn hold folder", tree: true, leftover: true, match: func(n string) bool {
+	return strings.HasPrefix(n, ".obelisk-burn-hold-")
+}}
+
+// removeEmptyOwnFolder removes parent/name, an empty folder of kind; a folder
+// with anything in it, a file or a link is kept.
+func removeEmptyOwnFolder(parent, name string, kind scratchKind) error {
+	if !validEntryName(name) || !kind.match(name) {
+		return fmt.Errorf("refusing to remove %s: not a %s Obelisk makes", filepath.Join(parent, name), kind.label)
+	}
+	root, err := os.OpenRoot(parent)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return removeEmptyFolderIn(root, name)
+}
+
+// kindWriteProbe is the small file a write check makes and removes again.
+var kindWriteProbe = scratchKind{label: "write-check file", leftover: true, match: func(n string) bool {
+	return strings.HasPrefix(n, ".obelisk-write-check-")
+}}
+
+// renameNewInRoot renames from to to inside root only when nothing is at to.
+func renameNewInRoot(root *os.Root, from, to string) error {
+	if _, err := root.Lstat(to); err == nil {
+		return fmt.Errorf("%s is already there: %w", to, fs.ErrExist)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return root.Rename(from, to)
+}
+
 // leftoverKinds are the kinds listed to the user when found from an earlier run.
-var leftoverKinds = []scratchKind{kindRemoving, kindBuild, kindPrevious, kindRefill, kindStage, kindCatalogTemp, kindCatalogWork}
+var leftoverKinds = []scratchKind{kindRemoving, kindBuild, kindPrevious, kindRefill, kindStage, kindCatalogTemp, kindCatalogWork, kindEccStage, kindBurnHold, kindWriteProbe}
 
 // validEntryName is a single name in a folder: no separators, not "." or "..".
 func validEntryName(name string) bool {
@@ -443,4 +631,145 @@ func treeSizeIn(root *os.Root, rel string) int64 {
 		}
 	}
 	return n
+}
+
+// madeStages records, by path, the staging files this process created
+// exclusively (createStage), so a failure path can remove one by name and the
+// helper still checks it is the same file.
+var madeStages sync.Map // path -> fileIdent
+
+// rememberMade records f, just created exclusively, for removeStage.
+func rememberMade(f *os.File) {
+	if id, err := handleIdentity(f); err == nil {
+		madeStages.Store(f.Name(), id)
+	}
+}
+
+// stageIdentity is the identity recorded for a staging file this process made.
+func stageIdentity(path string) (fileIdent, bool) {
+	v, ok := madeStages.Load(path)
+	if !ok {
+		return fileIdent{}, false
+	}
+	return v.(fileIdent), true
+}
+
+// publishedStage removes final, a file this operation just published from the
+// staging file whose identity is id, when nothing has replaced it since.
+func removePublished(final string, id fileIdent, ok bool) {
+	if ok {
+		_ = removeMadePath(final, id)
+	}
+}
+
+// forgetMade drops the record of a staging file that was given its final name.
+func forgetMade(path string) { madeStages.Delete(path) }
+
+// removeStage removes a staging file this process created, when what is at its
+// name is still that file. A name it did not create is refused.
+func removeStage(path string) error {
+	v, ok := madeStages.LoadAndDelete(path)
+	if !ok {
+		return fmt.Errorf("refusing to remove %s: Obelisk did not make it in this run", path)
+	}
+	return removeMadePath(path, v.(fileIdent))
+}
+
+// removeStageIn removes a staging file Obelisk made in dir: by identity when
+// this process recorded it, otherwise by its staging name in that folder only.
+func removeStageIn(dir, path string) error {
+	if _, ok := stageIdentity(path); ok {
+		return removeStage(path)
+	}
+	if filepath.Dir(path) != filepath.Clean(dir) {
+		return fmt.Errorf("refusing to remove %s: not in %s", path, dir)
+	}
+	return removeOwned(nil, []string{dir}, dir, filepath.Base(path), kindStage)
+}
+
+// writeNewFile writes data to a new file at path, which must not exist yet: it
+// never truncates or replaces anything. For files written into a folder this
+// same operation just made.
+func writeNewFile(path string, data []byte, perm os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		if id, ierr := ownFileIdentity(path); ierr == nil {
+			_ = removeMadePath(path, id)
+		}
+	}
+	return err
+}
+
+// ownFileIdentity is the identity of the file at path, from an open handle.
+func ownFileIdentity(path string) (fileIdent, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return fileIdent{}, err
+	}
+	defer f.Close()
+	return handleIdentity(f)
+}
+
+// isCatalogFolder reports whether dir holds an Obelisk catalog (catalog.db or
+// catalog.json) or its owner lock, which makes it Obelisk's data folder.
+func isCatalogFolder(dir string) bool {
+	for _, n := range []string{"catalog.db", "catalog.json", dataOwnerFile} {
+		if fi, err := os.Lstat(filepath.Join(dir, n)); err == nil && fi.Mode().IsRegular() {
+			return true
+		}
+	}
+	return false
+}
+
+// sqliteSideFiles are the files SQLite keeps beside a database.
+var sqliteSideFiles = []string{"-wal", "-shm", "-journal"}
+
+// removeDBScratch removes a database file this operation made at path (by
+// identity, when given) and the side files SQLite made beside it. Only catalog
+// scratch names are accepted (kindCatalogTemp), and only when path is directly
+// in ownedDir, the folder that holds the catalog (compared by identity).
+func removeDBScratch(ownedDir, path string, id *fileIdent) error {
+	dir, name := filepath.Dir(path), filepath.Base(path)
+	if !isCatalogFolder(ownedDir) {
+		return fmt.Errorf("refusing to remove %s: %s does not hold an Obelisk catalog", path, ownedDir)
+	}
+	owned, err := ownFolderIdentity(ownedDir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	var errs []error
+	if id != nil {
+		if here, err := ownFolderIdentity(dir); err != nil || here != owned {
+			return fmt.Errorf("refusing to remove %s: not in the catalog's folder", path)
+		}
+		errs = append(errs, removeMadePath(path, *id))
+	} else {
+		errs = append(errs, removeOwnedByID(nil, []fileIdent{owned}, dir, name, kindCatalogTemp))
+	}
+	for _, side := range sqliteSideFiles {
+		errs = append(errs, removeOwnedByID(nil, []fileIdent{owned}, dir, name+side, kindCatalogTemp))
+	}
+	return errors.Join(errs...)
+}
+
+// rmdir removes the folder at path only if it is empty; it never removes a file.
+func rmdir(path string) error { return syscall.Rmdir(path) }
+
+// randomHex is n random bytes in hex, for unique names.
+func randomHex(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b)
 }

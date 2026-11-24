@@ -62,7 +62,7 @@ func typeCheckPackage(t *testing.T) (*token.FileSet, []*ast.File, *types.Info) {
 		}
 		files = append(files, f)
 	}
-	info := &types.Info{Selections: map[*ast.SelectorExpr]*types.Selection{}, Types: map[ast.Expr]types.TypeAndValue{}}
+	info := &types.Info{Selections: map[*ast.SelectorExpr]*types.Selection{}, Types: map[ast.Expr]types.TypeAndValue{}, Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}}
 	conf := types.Config{Importer: importer.ForCompiler(fset, "gc", func(path string) (io.ReadCloser, error) {
 		file, ok := exports[path]
 		if !ok {

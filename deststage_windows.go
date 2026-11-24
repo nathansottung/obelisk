@@ -106,10 +106,7 @@ func discardDestStage(s *destStage) error {
 		// FileDispositionInformation acts on our handle, even on an error path.
 		// Clear read-only on OUR object if a sidecar requested read-only mode.
 		err = s.file.Chmod(0o600)
-		remove := byte(1)
-		var iosb windows.IO_STATUS_BLOCK
-		err = errors.Join(err, windows.NtSetInformationFile(windows.Handle(s.file.Fd()), &iosb, &remove, 1, windows.FileDispositionInformation))
-		runtime.KeepAlive(s.file)
+		err = errors.Join(err, deleteByHandle(s.file))
 	}
 	return errors.Join(err, s.file.Close())
 }

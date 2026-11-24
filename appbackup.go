@@ -584,9 +584,7 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	dbStage, swapped := "", false
 	defer func() {
 		if dbStage != "" { // not swapped in: only the stage this restore made is removed
-			for _, side := range []string{"", "-wal", "-shm", "-journal"} {
-				os.Remove(dbStage + side)
-			}
+			_ = removeDBScratch(a.DataDir, dbStage, nil)
 		}
 	}()
 	switch {
@@ -764,7 +762,7 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 			// fail too (its error is deliberately discarded here), and unlinking a path is
 			// not secure erasure of the bytes behind it. Either way the original
 			// publication error is what gets returned.
-			_ = os.Remove(tmp)
+			_ = removeStage(tmp)
 			return err
 		}
 		return nil

@@ -187,12 +187,12 @@ func writeBagItTags(dir string, c *Chunk, files []ChunkFileRef) error {
 	sort.Strings(names)
 	var tm strings.Builder
 	for _, n := range names {
-		if err := os.WriteFile(filepath.Join(dir, n), []byte(tags[n]), 0o644); err != nil {
+		if err := writeNewFile(filepath.Join(dir, n), []byte(tags[n]), 0o644); err != nil {
 			return fmt.Errorf("writing BagIt tag %s: %w", n, err)
 		}
 		fmt.Fprintf(&tm, "%s  %s\n", sha256Hex([]byte(tags[n])), bagEncodePath(n))
 	}
-	if err := os.WriteFile(filepath.Join(dir, "tagmanifest-sha256.txt"), []byte(tm.String()), 0o644); err != nil {
+	if err := writeNewFile(filepath.Join(dir, "tagmanifest-sha256.txt"), []byte(tm.String()), 0o644); err != nil {
 		return fmt.Errorf("writing BagIt tagmanifest: %w", err)
 	}
 	return nil

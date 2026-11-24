@@ -9,8 +9,8 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"errors"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -372,7 +372,7 @@ func writeStoreObserved(path string, ks *keystoreFile, observe func(string)) err
 	}
 	if err := renameReplacing(tmp, path); err != nil {
 		// The staged copy holds key material; do not leave it beside the keystore.
-		_ = os.Remove(tmp)
+		_ = removeStage(tmp)
 		return err
 	}
 	return nil
@@ -1257,7 +1257,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	if err != nil {
 		return fail(err)
 	}
-	if err := os.WriteFile(manifestPath, []byte(bagPayloadManifest(listed)), 0o644); err != nil {
+	if err := writeNewFile(manifestPath, []byte(bagPayloadManifest(listed)), 0o644); err != nil {
 		return fail(err)
 	}
 
@@ -1609,7 +1609,7 @@ func writeManifest(dir string, c *Chunk, files []ChunkFileRef, keyFpr string) er
 		m["rejoin_unix"] = "cat " + c.Name + ".seg* > " + payloadName(c)
 	}
 	b, _ := json.MarshalIndent(m, "", "  ")
-	return os.WriteFile(filepath.Join(dir, c.Name+".manifest.json"), b, 0o644)
+	return writeNewFile(filepath.Join(dir, c.Name+".manifest.json"), b, 0o644)
 }
 
 // segJoinList builds "NAME.seg001+NAME.seg002+..." for the Windows copy /b rejoin.
@@ -1689,7 +1689,7 @@ func writeRestoreTxt(dir string, c *Chunk, opticalEcc bool) error {
 		t = appendWindowsTarNote(t, c)
 		t = appendPrivacyNote(t, c)
 		t = appendOpticalNote(t, c, opticalEcc)
-		return os.WriteFile(filepath.Join(dir, "RESTORE.txt"), []byte(t), 0o644)
+		return writeNewFile(filepath.Join(dir, "RESTORE.txt"), []byte(t), 0o644)
 	}
 	if c.Encrypted {
 		pl := payloadName(c) // <name>.tar.gpg
@@ -1744,7 +1744,7 @@ No compression anywhere — extracted bytes are the originals.
 	t = appendWindowsTarNote(t, c)
 	t = appendPrivacyNote(t, c)
 	t = appendOpticalNote(t, c, opticalEcc)
-	return os.WriteFile(filepath.Join(dir, "RESTORE.txt"), []byte(t), 0o644)
+	return writeNewFile(filepath.Join(dir, "RESTORE.txt"), []byte(t), 0o644)
 }
 
 // appendWindowsTarNote says what the tar built into Windows does with a name

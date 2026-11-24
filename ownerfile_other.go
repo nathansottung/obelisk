@@ -11,9 +11,10 @@ func createOwnerOnlyTemp(dir, pattern string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
+	rememberMade(f)
 	if err := f.Chmod(0o600); err != nil {
 		f.Close()
-		_ = os.Remove(f.Name())
+		_ = removeStage(f.Name())
 		return nil, err
 	}
 	return f, nil

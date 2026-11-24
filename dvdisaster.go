@@ -17,7 +17,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -126,7 +125,10 @@ func (a *App) generateDiscEcc(c *Chunk, cfg Config, progress func(float64, strin
 		return "", fmt.Errorf("no optical device configured for dvdisaster ECC")
 	}
 	eccPath := filepath.Join(c.StagedDir, eccFileName(c.Name))
-	args := eccGenArgs(device, cfg.BurnEcc, eccPath)
+	// dvdisaster writes under a staging name; only a finished file takes the
+	// .ecc's name, so a failure never removes an earlier good one.
+	eccStage := filepath.Join(c.StagedDir, "."+eccFileName(c.Name)+"."+randomHex(4)+".partial.ecc")
+	args := eccGenArgs(device, cfg.BurnEcc, eccStage)
 	if args == nil {
 		return "", fmt.Errorf("ecc method %q is not generatable", cfg.BurnEcc)
 	}
@@ -136,13 +138,21 @@ func (a *App) generateDiscEcc(c *Chunk, cfg Config, progress func(float64, strin
 	defer cancel()
 	out, runErr := helperCommandContext(ctx, bin, args...).CombinedOutput()
 	if runErr != nil {
-		_ = os.Remove(eccPath) // never leave a half-written .ecc behind
+		// never leave a half-written .ecc behind; the earlier .ecc is untouched
+		_ = removeOwned(a.Store, []string{c.StagedDir}, c.StagedDir, filepath.Base(eccStage), kindEccStage)
 		tail := strings.TrimSpace(string(out))
 		if len(tail) > 400 {
 			tail = tail[len(tail)-400:]
 		}
 		a.Store.Log("ecc", fmt.Sprintf("%s: dvdisaster ECC failed (%v) — ECC layer skipped, par2 repair works regardless: %s", c.Name, runErr, tail))
 		return "", runErr
+	}
+	// The finished file replaces the package's earlier .ecc, a file of the same
+	// staged package Obelisk built.
+	if err := renameReplacing(eccStage, eccPath); err != nil {
+		_ = removeOwned(a.Store, []string{c.StagedDir}, c.StagedDir, filepath.Base(eccStage), kindEccStage)
+		a.Store.Log("ecc", fmt.Sprintf("%s: the ECC file dvdisaster wrote could not be given its name (%v) — ECC layer skipped", c.Name, err))
+		return "", err
 	}
 	a.Store.Log("ecc", fmt.Sprintf("%s: dvdisaster %s ECC written → %s", c.Name, strings.ToUpper(normBurnEcc(cfg.BurnEcc)), eccPath))
 	return eccPath, nil
