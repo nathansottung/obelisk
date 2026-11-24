@@ -1,7 +1,8 @@
 // Reports on `go test -json` output: each package's result and time, the slowest
-// top-level tests, the output of every failed test, and the "running tests" list a
-// test timeout prints. It only reports; the go test exit status decides the step.
-// Also written to the job summary when GITHUB_STEP_SUMMARY is set.
+// top-level tests, the output of every failed test and subtest, any test binary that
+// did not build, and what a test timeout printed (the panic and its "running tests"
+// list, and each test that never finished). It only reports; the go test exit status
+// decides the step. Also written to the job summary when GITHUB_STEP_SUMMARY is set.
 //
 // Usage: node scripts/ci/slowest-tests.mjs GO_TEST_JSON_FILE [COUNT]
 import fs from 'node:fs';
@@ -16,30 +17,49 @@ for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
 }
 if (events.length === 0) throw Error(`${file}: no go test events`);
 
-const tests = new Map(); // "pkg test" -> { pkg, test, action, elapsed, output[] }
-const packages = new Map(); // pkg -> { action, elapsed, output[] }
+const key = (pkg, test) => pkg + ' ' + test;
+const tests = new Map(); // "pkg test" -> { pkg, test, action, elapsed, output[] }, subtests included
+const packages = new Map(); // pkg -> { action, elapsed }
+const builds = new Map(); // import path -> { failed, output[] }
+const timeouts = []; // the lines a timeout printed, from whichever test they came under
+let inTimeout = false;
 for (const e of events) {
-  const entry = e.Test
-    ? tests.get(e.Package + ' ' + e.Test) ?? tests.set(e.Package + ' ' + e.Test, { pkg: e.Package, test: e.Test, output: [] }).get(e.Package + ' ' + e.Test)
-    : packages.get(e.Package) ?? packages.set(e.Package, { output: [] }).get(e.Package);
-  if (e.Action === 'output') entry.output.push(e.Output);
-  if (['pass', 'fail', 'skip'].includes(e.Action)) { entry.action = e.Action; entry.elapsed = e.Elapsed ?? 0; }
+  if (e.Action === 'build-output' || e.Action === 'build-fail') {
+    const b = builds.get(e.ImportPath) ?? builds.set(e.ImportPath, { output: [] }).get(e.ImportPath);
+    if (e.Action === 'build-output') b.output.push(e.Output);
+    else b.failed = true;
+    continue;
+  }
+  if (e.Action === 'output') {
+    const o = e.Output ?? '';
+    if (o.startsWith('panic: test timed out')) inTimeout = true;
+    if (inTimeout) {
+      if (o.trim() === '') inTimeout = false;
+      else timeouts.push(o.replace(/\n$/, ''));
+    }
+  }
+  if (!e.Test) {
+    const p = packages.get(e.Package) ?? packages.set(e.Package, {}).get(e.Package);
+    if (['pass', 'fail', 'skip'].includes(e.Action)) { p.action = e.Action; p.elapsed = e.Elapsed ?? 0; }
+    continue;
+  }
+  const k = key(e.Package, e.Test);
+  const t = tests.get(k) ?? tests.set(k, { pkg: e.Package, test: e.Test, output: [] }).get(k);
+  if (e.Action === 'output') t.output.push(e.Output);
+  if (['pass', 'fail', 'skip'].includes(e.Action)) { t.action = e.Action; t.elapsed = e.Elapsed ?? 0; }
 }
 
 const lines = [];
 for (const [pkg, p] of packages) if (p.action) lines.push(`${pkg}: ${p.action} in ${p.elapsed.toFixed(2)}s`);
-const top = [...tests.values()].filter(t => !t.test.includes('/') && t.action);
-top.sort((a, b) => b.elapsed - a.elapsed);
+const all = [...tests.values()];
+const top = all.filter(t => !t.test.includes('/') && t.action).sort((a, b) => b.elapsed - a.elapsed);
 lines.push('', `Slowest ${Math.min(count, top.length)} of ${top.length} top-level tests:`);
 for (const t of top.slice(0, count)) lines.push(`${t.elapsed.toFixed(2).padStart(9)}s  ${t.test}  ${t.action}`);
 
-for (const t of top.filter(t => t.action === 'fail')) lines.push('', `FAIL ${t.test}`, ...t.output.map(o => o.replace(/\n$/, '')));
-for (const [pkg, p] of packages) {
-  const at = p.output.findIndex(o => o.startsWith('panic: test timed out'));
-  if (at < 0) continue;
-  lines.push('', `${pkg}:`);
-  for (const o of p.output.slice(at)) { if (o.trim() === '') break; lines.push(o.replace(/\n$/, '')); }
-}
+for (const t of all.filter(t => t.action === 'fail')) lines.push('', `FAIL ${t.test}`, ...t.output.map(o => o.replace(/\n$/, '')));
+for (const [path, b] of builds) if (b.failed) lines.push('', `BUILD FAILED ${path}`, ...b.output.map(o => o.replace(/\n$/, '')));
+if (timeouts.length) lines.push('', ...timeouts);
+for (const t of all.filter(t => !t.action)) lines.push(`did not finish: ${t.test}`);
 
 const text = lines.join('\n') + '\n';
 process.stdout.write(text);
