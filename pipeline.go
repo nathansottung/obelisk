@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -879,6 +880,9 @@ func (a *App) Plan(collectionID int, mediaKind string, targetGB float64, par2 in
 var (
 	buildAfterTarHook          func(tarPath string)
 	buildDecryptPassphraseHook func(pass string) string
+	// buildSwapCrash stops a build at a step of putting it in place, as a crash
+	// would: returning true there returns at once, with no cleanup.
+	buildSwapCrash func(step string) bool
 )
 
 // buildUsesWindowsExternalTarHook lets a test exercise the OBX-006 containment on
@@ -1084,8 +1088,9 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	oldSidecars := c.Sidecars
 	notedFrom, noted := len(c.Copies), 0
 	oldPrivate, oldBuildVerified := c.PrivateManifest, c.BuildVerified
+	keepOld, buildCrashed := overCopies, false
 	restoreOld := func() {
-		if !overCopies {
+		if !keepOld {
 			return
 		}
 		c.KeyRef, c.EncHash, c.TarHash, c.EncBytes = oldKey, oldEncHash, oldTarHash, oldEncBytes
@@ -1145,22 +1150,37 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 		return err
 	}
 	work := filepath.Join(cfg.StagingDir, c.Name)
-	// A build starts from an empty folder: nothing from an earlier build (its
-	// payload, par2 volumes, manifest, RESTORE.txt) can be shipped beside this
-	// one's. Until this build succeeds the package records no staged folder.
 	if rel, err := filepath.Rel(cfg.StagingDir, work); err != nil || rel != filepath.Base(work) || rel == "." || rel == ".." {
 		return fmt.Errorf("package name %q does not make a folder inside staging", c.Name)
 	}
-	if err := os.RemoveAll(work); err != nil {
-		return fmt.Errorf("clearing the earlier build of %s from staging: %w", c.Name, err)
+	// A crash while an earlier build was being put in place is undone first: the
+	// build the catalog records goes back under its name. Nothing is removed.
+	if err := recoverStagedSwap(work, oldSidecars); err != nil {
+		return fmt.Errorf("putting the earlier build of %s back in staging: %w", c.Name, err)
 	}
-	if err := os.MkdirAll(work, 0o755); err != nil {
+	// The build goes into a new folder of its own, so nothing from an earlier
+	// build (its payload, par2 volumes, manifest, RESTORE.txt) can be shipped
+	// beside this one's. The earlier build stays where it is, untouched and still
+	// recorded, until this one has succeeded and verified; a build that fails
+	// leaves it as it was.
+	buildDir, err := os.MkdirTemp(cfg.StagingDir, "."+c.Name+".build-*")
+	if err != nil {
 		return err
 	}
-	c.StagedDir = ""
-	if !overCopies { // a failed rebuild puts these back
-		c.Sidecars = nil
+	buildMade, err := madeDir(buildDir)
+	if err != nil {
+		return err
 	}
+	placed := false
+	defer func() {
+		if !placed && !buildCrashed {
+			_ = buildMade.Remove() // this build's own folder, by identity
+		}
+	}()
+	oldStaged := c.StagedDir
+	// The earlier build is kept, and the record put back, when the catalog
+	// records it in place.
+	keepOld = overCopies || (oldStaged == work && a.stagedPayloadPresent(c) && len(oldSidecars) > 0)
 	// Pre-flight against this ONE package's build peak (shared with /api/space-advice
 	// so the pre-build advice and this refusal never disagree).
 	if free, err := diskFree(cfg.StagingDir); err == nil {
@@ -1183,14 +1203,19 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	}
 	_ = setStatus("BUILDING", "")
 	fail := func(err error) error {
-		c.StagedDir, c.Sidecars = "", nil // nothing of a failed build is written
+		c.StagedDir, c.Sidecars = "", nil // nothing of a failed build is recorded
+		if keepOld {
+			c.StagedDir = oldStaged // the earlier build, untouched
+		}
 		restoreOld()
 		_ = setStatus("FAILED", err.Error())
 		return err
 	}
 
-	tarPath := filepath.Join(work, c.Name+".tar")
-	payloadPath := filepath.Join(work, payloadName(c)) // <name>.tar.gpg (ciphertext) when encrypted, <name>.tar (the tar itself) when not
+	tarPath := filepath.Join(buildDir, c.Name+".tar")
+	payloadPath := filepath.Join(buildDir, payloadName(c)) // <name>.tar.gpg (ciphertext) when encrypted, <name>.tar (the tar itself) when not
+	// Records name the files where they will be once this build is in place.
+	placedPath := func(p string) string { return filepath.Join(work, filepath.Base(p)) }
 
 	// Per-stage timing so the operator can see WHERE the build time goes.
 	// Pipeline order and the parity-over-payload rule are unchanged.
@@ -1227,7 +1252,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	// source files as "sha256  relpath" over the ORIGINAL tree — so a reader can
 	// stream-verify each member as it extracts, and the tree that comes out is
 	// unchanged: this is one added description file at the tar root, never a restructure.
-	manifestPath := filepath.Join(work, bagPayloadManifestName)
+	manifestPath := filepath.Join(buildDir, bagPayloadManifestName)
 	listed, err := a.Store.ChunkFiles(c.ID)
 	if err != nil {
 		return fail(err)
@@ -1267,7 +1292,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 		finish("stage_verify", t, 0.40)
 		bv.Contents = true
 		now := time.Now().UTC()
-		a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: true, Path: tarPath,
+		a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: true, Path: placedPath(tarPath),
 			Note: fmt.Sprintf("stage_verify: %d member(s) byte-exact vs catalog source hashes", len(listed))})
 	}
 
@@ -1309,12 +1334,12 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 			finish("crypt_verify", t, 0.72)
 			bv.DecryptRoundtrip = true
 			now := time.Now().UTC()
-			a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: true, Path: payloadPath,
+			a.Store.AppendVerifyEvent(c, VerifyEvent{At: now, OK: true, Path: placedPath(payloadPath),
 				Note: "crypt_verify: ciphertext decrypts to the verified tar (tar_hash matched)"})
 		}
 		// Delete the intermediate tar only after both proofs are done with it.
 		if cfg.DeleteTarAfterEncrypt {
-			_ = os.Remove(tarPath)
+			_ = removeOwnedByID(nil, []fileIdent{buildMade.id}, buildDir, filepath.Base(tarPath), kindIntermediateTar)
 		}
 	} else {
 		// No encryption requested: the tar IS the payload, and payloadName(c) is
@@ -1347,7 +1372,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	if c.Spanned {
 		// Finalize the segment plan against the real payload + par2 size now
 		// that both exist, so the manifest/RESTORE.txt written below match.
-		if err := a.finalizeSegments(c, work); err != nil {
+		if err := a.finalizeSegments(c, buildDir); err != nil {
 			return fail(err)
 		}
 	}
@@ -1360,23 +1385,23 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	// still shows (a rebuild resets span segments), and seal and dock inventories
 	// decide from this flag.
 	c.PrivateManifest = c.Encrypted && (cfg.PrivateMedia || c.PrivateManifest)
-	if err := writeManifest(work, c, listed, fpr); err != nil {
+	if err := writeManifest(buildDir, c, listed, fpr); err != nil {
 		return fail(err)
 	}
 	if c.PrivateManifest {
-		manPlain := filepath.Join(work, c.Name+".manifest.json")
+		manPlain := filepath.Join(buildDir, c.Name+".manifest.json")
 		if err := gpgEncrypt(gpgBin, chunkPass, manPlain+".gpg", manPlain); err != nil {
 			return fail(fmt.Errorf("encrypting private manifest: %w", err))
 		}
 	}
-	if err := writeRestoreTxt(work, c, cfg.eccIntended()); err != nil {
+	if err := writeRestoreTxt(buildDir, c, cfg.eccIntended()); err != nil {
 		return fail(fmt.Errorf("writing RESTORE.txt: %w", err))
 	}
 	// Record the sidecars the medium must carry, so a write can require them in
 	// staging unchanged and a verify can read them back.
 	sidecars := map[string]string{}
 	for _, name := range requiredSidecars(c) {
-		h, err := hashFileHex(filepath.Join(work, name))
+		h, err := hashFileHex(filepath.Join(buildDir, name))
 		if err != nil {
 			return fail(fmt.Errorf("sidecar %s: %w", name, err))
 		}
@@ -1387,11 +1412,22 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	// description layer, not needed to restore — so a write failure does NOT fail the
 	// build, but it must not be swallowed: log it and record it on the package so the
 	// build's job result surfaces an "incomplete BagIt tags" warning to the operator.
-	if err := writeBagItTags(work, c, listed); err != nil {
+	if err := writeBagItTags(buildDir, c, listed); err != nil {
 		a.Store.Log("build", c.Name+": "+err.Error())
 		c.BuildWarnings = append(c.BuildWarnings, "BagIt tag files incomplete: "+err.Error())
 	}
 
+	// The build succeeded and verified: put it in place of the earlier one, which
+	// is moved aside, not removed, until the catalog records this one.
+	prev, err := swapInBuild(buildMade, work)
+	if errors.Is(err, errBuildCrashed) {
+		buildCrashed = true
+		return err
+	}
+	if err != nil {
+		return fail(fmt.Errorf("putting the new build in place: %w", err))
+	}
+	placed = true
 	c.StagedDir = work
 	// Copies already on media still count: the status comes from them.
 	c.Status = "STAGED"
@@ -1403,11 +1439,24 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	// it as STAGED the next step (write) would never see it — worse, a reopen could
 	// leave it looking un-built. Surface the failure rather than reporting success.
 	if err := setStatus(c.Status, ""); err != nil {
-		if overCopies { // the rebuild did not happen: the package keeps its key and hash
-			_ = fail(err)
-			return fmt.Errorf("package built but catalog could not record it as staged (%w); its existing copies are unchanged. Run Build again once the catalog can save", err)
+		// The catalog did not take the new build: the earlier one goes back under
+		// its name, and the new one is removed as this build's own.
+		if uerr := unswapBuild(buildMade, prev, work); uerr == nil {
+			_ = buildMade.Remove()
+		}
+		_ = fail(err)
+		if keepOld { // the rebuild did not happen: the package keeps its key, hash and earlier build
+			return fmt.Errorf("package built but catalog could not record it as staged (%w); its existing copies and earlier build are unchanged. Run Build again once the catalog can save", err)
 		}
 		return fmt.Errorf("package built but catalog could not record it as staged (%w) — re-run Build once the catalog can save", err)
+	}
+	// The earlier build is now replaced. It is removed only when it was the build
+	// the catalog recorded; anything else found under the package's name stays
+	// beside it as a leftover for the user to review.
+	if prev != nil && oldStaged == work {
+		if err := prev.Remove(); err != nil {
+			a.Store.Log("build", fmt.Sprintf("%s: the replaced build at %s could not be removed: %v", c.Name, prev.Path(), err))
+		}
 	}
 	a.Store.Log("build", c.Name+" staged")
 	progress(1.0, "staged")
