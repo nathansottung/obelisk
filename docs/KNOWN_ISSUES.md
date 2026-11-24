@@ -78,7 +78,7 @@ Each new write now puts a small `COPY-ID.txt` beside the package. It holds a for
 
 **After the upgrade, every copy written before this change shows "not identified, verify to confirm" and no longer counts as protecting its package.** Its last-verified date is kept. Run a full check (Verify) of each medium to give its copies their credit back. Obelisk never writes an ID onto an existing medium. A package built before this change keeps its older `RESTORE.txt`, without the line about the file, until it is rebuilt.
 
-**A spanned set written before this change cannot get its credit back by a check**, because Obelisk has no check for a whole spanned set. It stays "not identified" until the set is written again. It still restores, in the app and by hand.
+**A spanned set written before this change cannot get its credit back by a check**, because Obelisk has no check for a whole spanned set. It stays "not identified" until the set is written again. It still restores, in the app and by hand. A check for a whole spanned set is tracked in [#38](https://github.com/nathansottung/obelisk/issues/38) and is required before tape is a qualified target.
 
 If two media hold the same ID, for example after a drive was cloned, neither counts until you choose which one is the copy. Write a new copy to the other medium to give it its own ID.
 
