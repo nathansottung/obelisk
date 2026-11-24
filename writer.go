@@ -377,6 +377,7 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 	dest := out.Join(c.Name)
 	prior := priorBuildAt(c, dest) // which build this folder holds, before anything is written
 	prior.Gone = a.goneCopyFolders(c)
+	prior.Serial, prior.Partition = driveSerialAt(dest), partitionIDAt(dest)
 	var need int64
 	entries, _ := os.ReadDir(c.StagedDir)
 	for _, e := range entries {

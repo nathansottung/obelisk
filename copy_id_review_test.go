@@ -179,3 +179,46 @@ func TestCopyID_UnidentifiedSpannedSetSaysToWriteItAgain(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// Writing a new copy to the medium set aside, as the app advises, gives it its own
+// ID and leaves the kept copy current.
+func TestCopyID_WritingToTheSetAsideMediumKeepsTheKeptCopy(t *testing.T) {
+	for _, bySerial := range []bool{false, true} {
+		t.Run(map[bool]string{false: "same serial", true: "own serials"}[bySerial], func(t *testing.T) {
+			if bySerial {
+				serialFromMarker(t)
+			}
+			app, _ := newTestApp(t, nativeTools(t))
+			c, _ := privateChunk(t, app, "WRITE-SET-ASIDE", false)
+			root := t.TempDir()
+			medium, clone := markedDrive(t, filepath.Join(root, "m"), "SERIAL-M"), markedDrive(t, filepath.Join(root, "c"), "SERIAL-C")
+			if _, err := app.WriteChunk(c.ID, medium, 0, 0, 0, app.Store.EnsureUnregistered().ID, noProg); err != nil {
+				t.Fatal(err)
+			}
+			mkdirs(t, filepath.Join(clone, c.Name))
+			if err := copyFolderInto(filepath.Join(medium, c.Name), filepath.Join(clone, c.Name)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := app.VerifyChunk(c.ID, clone); err != nil {
+				t.Fatal(err)
+			}
+			cp := currentCopyAt(t, app.Store.Chunk(c.ID), filepath.Join(medium, c.Name))
+			if err := app.SettleCopyConflict(c.ID, cp.CopyID, "recorded"); err != nil {
+				t.Fatal(err)
+			}
+			wantVerifies(t, app, c.ID, medium)
+			if _, err := app.WriteChunk(c.ID, clone, 0, 0, 0, app.Store.EnsureUnregistered().ID, noProg); err != nil {
+				t.Fatal(err)
+			}
+			got := app.Store.Chunk(c.ID)
+			if kept := currentCopyAt(t, got, filepath.Join(medium, c.Name)); kept.CopyID != cp.CopyID || !verified(kept) {
+				t.Fatalf("the kept copy: %+v", kept)
+			}
+			if got.CurrentCopyCount() != 2 || got.VerifiedCopyCount() != 2 {
+				t.Fatalf("current=%d verified=%d: %+v", got.CurrentCopyCount(), got.VerifiedCopyCount(), got.Copies)
+			}
+			wantVerifies(t, app, c.ID, medium)
+			wantVerifies(t, app, c.ID, clone)
+		})
+	}
+}

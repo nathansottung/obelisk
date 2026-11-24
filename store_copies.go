@@ -27,6 +27,23 @@ type priorBuild struct {
 	// NotAPlace: the path the copy is recorded at does not name one medium (a disc
 	// drive's mount, which every burned disc shares), so no copy is found by it.
 	NotAPlace bool
+	// Serial and Partition are of the drive written to, when they could be found.
+	Serial, Partition string
+}
+
+// setAsideHere is whether the folder written to is a medium the user set aside as a
+// duplicate of cp: it holds cp's ID, but it is not cp's medium.
+func setAsideHere(cp *Copy, volumeID int, path string, prior priorBuild) bool {
+	at := CopyAt{Path: path, VolumeID: volumeID, Serial: prior.Serial, Partition: prior.Partition}
+	if kept, decided := keptByDrive(cp, at); decided {
+		return !kept
+	}
+	for _, l := range cp.SetAside {
+		if sameLocation(l, at) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p priorBuild) names(vals CopyValues) bool {
@@ -64,7 +81,9 @@ func (s *Store) replacedByWriteLocked(c *Chunk, volumeID int, path string, prior
 			continue
 		}
 		if prior.CopyID != "" && cp.CopyID == prior.CopyID {
-			sure = append(sure, i)
+			if !setAsideHere(cp, volumeID, path, prior) {
+				sure = append(sure, i)
+			}
 			continue
 		}
 		if prior.NotAPlace || cp.VolumeID != volumeID || normPath(cp.Path) != normPath(path) {
