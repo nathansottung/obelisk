@@ -1123,7 +1123,7 @@ func api(mux routeRegistrar, app *App) {
 					vols[cp.VolumeID] = true
 				}
 			}
-			for _, sg := range ch.Segments {
+			for _, sg := range ch.allTapes() {
 				if sg.VolumeID != 0 {
 					vols[sg.VolumeID] = true
 				}
@@ -2229,6 +2229,37 @@ func api(mux routeRegistrar, app *App) {
 		}
 		jsonOut(w, c)
 	})
+	// Refill damaged or missing staging from a verified copy, checked against that
+	// copy's own hash before it is used.
+	register(mux, "POST /api/chunks/{id}/refill", func(w http.ResponseWriter, r *http.Request) {
+		id := pathID(r)
+		c := app.Store.Chunk(id)
+		if c == nil {
+			jsonErr(w, 404, fmt.Errorf("package not found"))
+			return
+		}
+		b := body(r)
+		volumeID := int(f(b, "volume_id"))
+		sourceDir := strings.TrimSpace(s(b, "source_dir"))
+		startedOn(w).write(runJob(app, "refill", "Refill staging "+c.Name, func(p func(float64, string)) (map[string]any, error) {
+			return app.RefillStaging(id, volumeID, sourceDir, p)
+		}))
+	})
+	// Settle a copy whose ID two media hold: the medium at its recorded place is the
+	// copy ("recorded"), or the one found elsewhere is ("found").
+	register(mux, "POST /api/chunks/{id}/copies/settle", func(w http.ResponseWriter, r *http.Request) {
+		id := pathID(r)
+		if app.Store.Chunk(id) == nil {
+			jsonErr(w, 404, fmt.Errorf("package not found"))
+			return
+		}
+		b := body(r)
+		if err := app.SettleCopyConflict(id, strings.TrimSpace(s(b, "copy_id")), strings.TrimSpace(s(b, "keep"))); err != nil {
+			jsonErr(w, 400, err)
+			return
+		}
+		jsonOut(w, app.Store.Chunk(id))
+	})
 	register(mux, "POST /api/chunks/{id}/build", func(w http.ResponseWriter, r *http.Request) {
 		id := pathID(r)
 		c := app.Store.Chunk(id)
@@ -2236,20 +2267,8 @@ func api(mux routeRegistrar, app *App) {
 			jsonErr(w, 404, fmt.Errorf("package not found"))
 			return
 		}
-		accepted := body(r)["accept_existing_copies"] == true
-		if warning := app.Store.rebuildWarning(id); warning != nil && !accepted {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusConflict)
-			_ = json.NewEncoder(w).Encode(map[string]any{"error": warning.Error(), "warning": warning.Error(),
-				"needs_confirmation": true, "copies": warning.Copies})
-			return
-		}
 		startedOn(w).write(runJob(app, "build", "Build "+c.Name, func(p func(float64, string)) (map[string]any, error) {
-			build := app.BuildChunk
-			if accepted {
-				build = app.BuildChunkOverCopies
-			}
-			if err := build(id, p); err != nil {
+			if err := app.BuildChunk(id, p); err != nil {
 				return nil, err
 			}
 			// Re-read the freshly built chunk for its staged path and payload size, and
@@ -2664,7 +2683,7 @@ func api(mux routeRegistrar, app *App) {
 					}
 				}
 			}
-			for _, sg := range c.Segments {
+			for _, sg := range c.allTapes() {
 				if a := st[sg.VolumeID]; sg.VolumeID != 0 && a != nil {
 					if !a.chunks[c.ID] {
 						a.chunks[c.ID] = true
@@ -2839,7 +2858,7 @@ func api(mux routeRegistrar, app *App) {
 					row["last_check_level"], row["last_check_ok"], row["last_check_at"] = cp.LastCheckLevel, cp.LastCheckOK, cp.LastCheckAt
 				}
 			}
-			for _, sg := range c.Segments {
+			for _, sg := range c.allTapes() {
 				if sg.VolumeID == v.ID {
 					on = true
 					row["holds_segment"] = sg.Index

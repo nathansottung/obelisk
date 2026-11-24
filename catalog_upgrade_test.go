@@ -25,55 +25,22 @@ type v8Folder struct {
 	catalogRaw, jobsRaw []byte
 }
 
-// makeV8DataFolder builds a real v8 data folder on the catalog.json engine: an
-// archive scanned twice (so a file has versions), a volume in a location, a
-// package with a verified copy and verify history, an event with files, a
-// profile assignment, audit entries and a job board with a finished job.
+// makeV8DataFolder is a working copy of the frozen schema 8 data folder, made by the
+// code of that time from real operations (testdata/frozen).
 func makeV8DataFolder(t *testing.T) v8Folder {
 	t.Helper()
 	t.Setenv(catalogEngineEnv, "json")
-	app := abTestApp(t)
-	abPopulate(t, app)
-	s := app.Store
-	coll := s.Collections()[0]
-	loc := s.AddLocation("Shoe box", true, "under the stairs")
-	vol := s.Volumes()[0]
-	if err := s.SetVolumeLocation(vol.ID, loc.ID); err != nil {
+	dir := t.TempDir()
+	copyTree(t, filepath.Join("testdata", "frozen", "catalog-v8-upgrade-folder"), dir)
+	// Settings and the owner file are not part of the frozen catalog: they are made
+	// here, so no token or machine detail is committed. The token is abTestApp's.
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"auth_token":"secret-token-should-not-travel"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ev := s.AddEvent(&Event{Name: "Wedding", EventType: "wedding", Year: 2024, CollectionID: coll.ID})
-	var ids []int
-	for _, f := range testFiles(t, s.FilesOf(coll.ID)) {
-		ids = append(ids, f.ID)
-	}
-	if _, err := s.AssignFilesToEvent(ids, ev.ID); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, dataOwnerFile), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	prof := s.AddProfile(Profile{Name: "Keep two", RequiredCopies: 2})
-	if err := s.SetAssignment(coll.ID, "sub", prof.ID); err != nil {
-		t.Fatal(err)
-	}
-	// A rescan after a change gives the file a second version.
-	src := s.FoldersOf(coll.ID)[0].Path
-	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("alpha, changed"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := app.ScanFolder(coll.ID, src, func(float64, string) {}); err != nil {
-		t.Fatal(err)
-	}
-	s.Log("test", "a record of the v8 era")
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	// Opened and closed once more, as a user's folder would have been.
-	again, err := OpenStore(app.DataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := again.Close(); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(filepath.Join(app.DataDir, "catalog.json"))
+	raw, err := os.ReadFile(filepath.Join(dir, "catalog.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,11 +48,11 @@ func makeV8DataFolder(t *testing.T) v8Folder {
 	if err := decodeCatalogJSON(raw, &c); err != nil || c.SchemaVersion != 8 {
 		t.Fatalf("the folder's catalog.json is schema v%d (%v), want v8", c.SchemaVersion, err)
 	}
-	jobsRaw, err := os.ReadFile(filepath.Join(app.DataDir, "jobs.json"))
+	jobsRaw, err := os.ReadFile(filepath.Join(dir, "jobs.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return v8Folder{dir: app.DataDir, catalogRaw: raw, jobsRaw: jobsRaw}
+	return v8Folder{dir: dir, catalogRaw: raw, jobsRaw: jobsRaw}
 }
 
 // assertEveryRecordKept proves the catalog database in dir holds every record of
@@ -107,6 +74,9 @@ func assertEveryRecordKept(t testing.TB, dir string, raw []byte) {
 	if err := decodeCatalogJSON(raw, &want); err != nil {
 		t.Fatal(err)
 	}
+	// The upgrade's one intended change: each copy records its package's values.
+	migrateCopyValuesV9(&want)
+	want.SchemaVersion = currentSchemaVersion
 	if len(got.Audit) < len(want.Audit) || !reflect.DeepEqual(canonAudit(got.Audit[:len(want.Audit)]), canonAudit(want.Audit)) {
 		t.Fatalf("the audit log was not kept: %d entries before, %d after", len(want.Audit), len(got.Audit))
 	}

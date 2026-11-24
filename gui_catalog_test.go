@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -92,7 +93,7 @@ func TestGUICatalogNativeDecodeAndSearch(t *testing.T) {
 func TestGUICatalogRefusedLoads(t *testing.T) {
 	valid := guiFixture("TEST")
 	rawValid := guiBytes(t, valid)
-	cases := map[string][]byte{"zero": {}, "malformed": []byte("{"), "null": []byte("null"), "old": []byte(`{"schema_version":7}`), "future": []byte(`{"schema_version":9}`), "large": bytes.Repeat([]byte(" "), guiCatalogMaxBytes+1)}
+	cases := map[string][]byte{"zero": {}, "malformed": []byte("{"), "null": []byte("null"), "old": []byte(`{"schema_version":7}`), "future": []byte(fmt.Sprintf(`{"schema_version":%d}`, currentSchemaVersion+1)), "large": bytes.Repeat([]byte(" "), guiCatalogMaxBytes+1)}
 	bad := valid
 	cases["missing-size"] = bytes.Replace(rawValid, []byte(`"size_bytes":123,`), nil, 1)
 	cases["null-size"] = bytes.Replace(rawValid, []byte(`"size_bytes":123`), []byte(`"size_bytes":null`), 1)
@@ -119,7 +120,7 @@ func TestGUICatalogRefusedLoads(t *testing.T) {
 			t.Fatal("parsed partial bytes accompanying error")
 		}
 	}
-	if _, err := loadGUICatalog("empty", func(string) ([]byte, error) { return guiBytes(t, catalog{SchemaVersion: 8}), nil }); err != nil {
+	if _, err := loadGUICatalog("empty", func(string) ([]byte, error) { return guiBytes(t, catalog{SchemaVersion: currentSchemaVersion}), nil }); err != nil {
 		t.Fatal(err)
 	}
 }

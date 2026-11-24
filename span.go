@@ -61,8 +61,7 @@ func planSegments(payloadBytes, target int64) []Segment {
 // before the rename still resolves its <name>.tar.gpg.par2 set.
 func par2SetFiles(dir string, c *Chunk) []string {
 	for _, n := range payloadNameCandidates(c) {
-		if m, _ := filepath.Glob(filepath.Join(dir, n+"*.par2")); len(m) > 0 {
-			sort.Strings(m)
+		if m := filesNamed(dir, false, n, ".par2"); len(m) > 0 {
 			return m
 		}
 	}
@@ -179,6 +178,27 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 		return nil, err
 	}
 	destChunk := out.Join(c.Name)
+	prior := priorBuildAt(c, destChunk) // which build this tape holds, before anything is written
+	prior.Gone = a.goneCopyFolders(c)
+	// One ID for the whole set write, on every tape: the one its written tapes hold,
+	// or a fresh one for a new set.
+	setID := a.Store.spanSetID(c)
+	if setID == "" {
+		id, err := newCopyID()
+		if err != nil {
+			return nil, err
+		}
+		setID, seg.Replaced = id, prior.CopyID
+	} else if prior.CopyID != "" && prior.CopyID != setID {
+		seg.Replaced = prior.CopyID
+	}
+	seg.CopyID = setID
+	// A set this write replaced no longer counts, and the package shows it at once.
+	retire := func() {
+		a.Store.RetireOverwrittenSpan(c, volumeID, destDir, prior)
+		a.refreshChunkStatus(c)
+		a.Store.UpdateChunk(c)
+	}
 	set := func(status string) { seg.Status, seg.Dest = status, destDir; _ = putSeg() }
 	fail := func(err error) (map[string]any, error) {
 		seg.Status, seg.Dest = "FAILED", destDir
@@ -191,7 +211,13 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 	if seg.Par2 {
 		// Dedicated par2 tape.
 		progress(0.1, fmt.Sprintf("writing par2 set (tape %d/%d)", seg.Index, N))
-		if err := copyPar2Set(c.StagedDir, out, c); err != nil {
+		wrote, err := copyPar2Set(c.StagedDir, out, c)
+		// Even a failed copy may have replaced part of an older set's par2 files; one
+		// that replaced none has changed nothing.
+		if wrote > 0 {
+			retire()
+		}
+		if err != nil {
 			return fail(err)
 		}
 	} else {
@@ -234,11 +260,12 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 			return fail(err)
 		}
 		seg.Hash = streamHash
+		retire()
 		set("WRITTEN")
 		// par2 rides the last data tape when it wasn't given its own.
 		if seg.Index == dataSegmentCount(c.Segments) && !c.Segments[N-1].Par2 {
 			progress(0.85, "writing par2 set alongside last segment")
-			if err := copyPar2Set(c.StagedDir, out, c); err != nil {
+			if _, err := copyPar2Set(c.StagedDir, out, c); err != nil {
 				return fail(err)
 			}
 		}
@@ -246,6 +273,9 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 
 	// manifest + RESTORE.txt on EVERY tape (copied verbatim from the staged build).
 	if err := copySidecars(c.StagedDir, out, c); err != nil {
+		return fail(err)
+	}
+	if err := writeCopyIDFile(out, c.Name, setID); err != nil {
 		return fail(err)
 	}
 
@@ -276,10 +306,8 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 			a.Store.UpdateChunk(c)
 			return nil, fmt.Errorf("all %d segments of %s were written, but the set does not check: %w; nothing was recorded as a copy, rebuild the package and write the set again", N, c.Name, err)
 		}
-		c.Status, c.Error = "VERIFIED", ""
+		c.Error = ""
 		c.WrittenDest, c.WrittenAt, c.VerifiedAt = destDir, &now, &now
-		ok := true
-		c.VerifyOK = &ok
 		// The whole spanned set is one verified copy; record it against the
 		// volume of the first segment as representative (each tape's own volume
 		// is on its Segment.VolumeID for the Volumes view).
@@ -290,14 +318,17 @@ func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 				break
 			}
 		}
-		a.Store.RecordCopy(c, firstVol, fmt.Sprintf("spanned across %d media", N), true)
+		a.Store.RecordSpanCopy(c, firstVol, fmt.Sprintf("spanned across %d media", N))
+		a.refreshChunkStatus(c)
+		a.Store.UpdateChunk(c)
 		a.Store.Log("span", fmt.Sprintf("%s fully written across %d media", c.Name, N))
 	} else {
+		a.refreshChunkStatus(c)
 		a.Store.UpdateChunk(c)
 	}
 	msg := fmt.Sprintf("Segment %d/%d verified — eject and %s, mount the next tape, then continue.", seg.Index, N, label)
 	if done == N {
-		msg = fmt.Sprintf("Segment %d/%d verified — %s. ALL %d tapes done; package VERIFIED.", seg.Index, N, label, N)
+		msg = fmt.Sprintf("Segment %d/%d verified — %s. ALL %d tapes done; package %s.", seg.Index, N, label, N, c.Status)
 	}
 	progress(1.0, msg)
 	return map[string]any{"chunk": c.Name, "segment": seg.Index, "of": N, "done": done, "complete": done == N, "message": msg}, nil
@@ -339,20 +370,21 @@ func spanSetMatches(c *Chunk, payload string) error {
 	return nil
 }
 
-func copyPar2Set(stagedDir string, out *outFolder, c *Chunk) error {
+func copyPar2Set(stagedDir string, out *outFolder, c *Chunk) (wrote int, err error) {
 	files := par2SetFiles(stagedDir, c)
 	if len(files) == 0 {
-		return fmt.Errorf("no par2 files found in staged dir for %s", c.Name)
+		return 0, fmt.Errorf("no par2 files found in staged dir for %s", c.Name)
 	}
 	for _, src := range files {
 		if _, err := out.CopyIn(src, c.Name+"/"+filepath.Base(src), 0o644); err != nil {
 			if errors.Is(err, errStageMismatch) {
-				return fmt.Errorf("par2 file %s read-back mismatch", filepath.Base(src))
+				return wrote, fmt.Errorf("par2 file %s read-back mismatch", filepath.Base(src))
 			}
-			return err
+			return wrote, err
 		}
+		wrote++
 	}
-	return nil
+	return wrote, nil
 }
 
 // copySidecars copies the package's sidecars (the manifest it ships, encrypted
@@ -372,6 +404,75 @@ func copySidecars(stagedDir string, out *outFolder, c *Chunk) error {
 	return nil
 }
 
+// spanViewFor is the package as the tape set under sourceDir recorded it: the set
+// whose number of data tapes matches the segment files found there. The bytes are
+// still checked after the rejoin.
+func spanViewFor(c *Chunk, sourceDir string) *Chunk {
+	segs := segmentFilesUnder(sourceDir, c.Name)
+	if dataSegmentCount(c.Segments) != len(segs) {
+		for i := range c.Copies {
+			if cs := c.Copies[i].Segments; len(cs) > 0 && dataSegmentCount(cs) == len(segs) {
+				return c.withSegments(cs)
+			}
+		}
+	}
+	return c.withSegments(c.Segments)
+}
+
+// filesNamed is the plain files directly in dir (or, with sub, in dir's
+// subfolders) whose names start with prefix and end with suffix, sorted. Names are
+// compared as text: a medium's path may hold pattern characters such as '['.
+func filesNamed(dir string, sub bool, prefix, suffix string) []string {
+	var out []string
+	scan := func(d string) {
+		entries, _ := os.ReadDir(d)
+		for _, e := range entries {
+			if n := e.Name(); !e.IsDir() && strings.HasPrefix(n, prefix) && strings.HasSuffix(n, suffix) {
+				out = append(out, filepath.Join(d, n))
+			}
+		}
+	}
+	if !sub {
+		scan(dir)
+	} else {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if e.IsDir() {
+				scan(filepath.Join(dir, e.Name()))
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// segmentFilesUnder is the package's segment files in dir, or failing that in
+// dir's subfolders (one per tape), sorted. Names are matched as text, never as a
+// pattern: a mount path may hold pattern characters such as '['.
+func segmentFilesUnder(dir, name string) []string {
+	in := func(d string) []string {
+		var out []string
+		entries, _ := os.ReadDir(d)
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasPrefix(e.Name(), name+".seg") {
+				out = append(out, filepath.Join(d, e.Name()))
+			}
+		}
+		return out
+	}
+	segs := in(dir)
+	if len(segs) == 0 {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if e.IsDir() {
+				segs = append(segs, in(filepath.Join(dir, e.Name()))...)
+			}
+		}
+	}
+	sort.Strings(segs)
+	return segs
+}
+
 // rejoinSegments concatenates <chunk>.segNNN files found in sourceDir into
 // outputDir/<payload> and copies the par2 set beside it, so the existing restore
 // path (par2 -> gpg -> tar) runs unchanged. This is the automated form of the
@@ -380,11 +481,7 @@ func copySidecars(stagedDir string, out *outFolder, c *Chunk) error {
 // <name>.tar.gpg.par2 set) so `par2 verify <payload>.par2` matches either way.
 func rejoinSegments(sourceDir, outputDir string, c *Chunk, progress func(float64, string)) (string, []string, error) {
 	var warnings []string
-	segs, _ := filepath.Glob(filepath.Join(sourceDir, c.Name+".seg*"))
-	if len(segs) == 0 {
-		// maybe segments are in per-tape subfolders under sourceDir
-		segs, _ = filepath.Glob(filepath.Join(sourceDir, "*", c.Name+".seg*"))
-	}
+	segs := segmentFilesUnder(sourceDir, c.Name) // in sourceDir, or in per-tape subfolders
 	if len(segs) == 0 {
 		return "", nil, fmt.Errorf("no segment files (%s.segNNN) found under %s — copy every tape's segment into one folder first", c.Name, sourceDir)
 	}
@@ -396,11 +493,11 @@ func rejoinSegments(sourceDir, outputDir string, c *Chunk, progress func(float64
 	// Pick the payload base name from the par2 set actually on the media.
 	base := payloadName(c)
 	for _, cand := range payloadNameCandidates(c) {
-		if m, _ := filepath.Glob(filepath.Join(sourceDir, cand+"*.par2")); len(m) > 0 {
+		if m := filesNamed(sourceDir, false, cand, ".par2"); len(m) > 0 {
 			base = cand
 			break
 		}
-		if m, _ := filepath.Glob(filepath.Join(sourceDir, "*", cand+"*.par2")); len(m) > 0 {
+		if m := filesNamed(sourceDir, true, cand, ".par2"); len(m) > 0 {
 			base = cand
 			break
 		}
@@ -442,8 +539,8 @@ func rejoinSegments(sourceDir, outputDir string, c *Chunk, progress func(float64
 	// restore can no longer repair damage — a warning the operator must see (surfaced
 	// on the restore job and in the event log), not a silent omission.
 	par2Copied := 0
-	for _, glob := range []string{filepath.Join(sourceDir, base+"*.par2"), filepath.Join(sourceDir, "*", base+"*.par2")} {
-		if m, _ := filepath.Glob(glob); len(m) > 0 {
+	for _, sub := range []bool{false, true} {
+		if m := filesNamed(sourceDir, sub, base, ".par2"); len(m) > 0 {
 			for _, p := range m {
 				if err := copyFile(p, filepath.Join(outputDir, filepath.Base(p))); err != nil {
 					warnings = append(warnings, fmt.Sprintf("par2 file %s could not be placed beside the rejoined payload (%v) — the payload is intact, but it cannot be repaired if damaged", filepath.Base(p), err))

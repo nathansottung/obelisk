@@ -1,0 +1,40 @@
+HOW TO RESTORE FROZEN-SPANNED   (SPANNED across 3 media)
+==========================================================
+This package's payload was byte-split across 3 tapes/drives as
+FROZEN-SPANNED.seg001 … FROZEN-SPANNED.seg003. Every tape also carries this file
+and FROZEN-SPANNED.manifest.json.gpg. The par2 set is on its OWN final tape (labelled ...-tape-4-of-4).
+
+STEP 0 — GATHER and REJOIN.
+Copy into ONE folder every tape's FROZEN-SPANNED.segNNN, and the par2 set
+FROZEN-SPANNED.tar.gpg.par2 and FROZEN-SPANNED.tar.gpg.vol*.par2 (on its OWN final tape (labelled ...-tape-4-of-4)): par2
+verify and repair in step 1 read them there. Then run ONE of:
+     Windows:  copy /b FROZEN-SPANNED.seg001+FROZEN-SPANNED.seg002+FROZEN-SPANNED.seg003 FROZEN-SPANNED.tar.gpg
+     Unix/mac: cat FROZEN-SPANNED.seg* > FROZEN-SPANNED.tar.gpg
+(The zero-padded names sort into the correct order automatically.)
+
+Now the normal restore, exactly as for a single-medium package:
+1) VERIFY / REPAIR (no key needed):
+     par2 verify FROZEN-SPANNED.tar.gpg.par2
+     par2 repair FROZEN-SPANNED.tar.gpg.par2      (only if verify fails)
+2) DECRYPT (prompts for the passphrase of key K-F77F3F8A):
+     gpg -d -o FROZEN-SPANNED.tar FROZEN-SPANNED.tar.gpg
+3) EXTRACT:
+     tar -xf FROZEN-SPANNED.tar
+
+Integrity (SHA256): payload f1d342aba5edae2cd21e7d24567760a4f7a3b46108e09f8ef5c5831e88282b2c   tar 39d0599a431623de1cd37a22bbd67434950080ce1f5f7e98af348d4a97e9f8b2
+Custody chain: source file SHA-256s -> tar hash -> payload hash ->
+per-segment hashes (manifest / catalog) link every tape to the originals.
+Full file list: FROZEN-SPANNED.manifest.json.gpg (encrypted; see PRIVACY below)
+No compression anywhere — extracted bytes are the originals.
+==========================================================
+
+WINDOWS — the tar built into Windows writes each file name in the system's
+code page. A name that code page cannot hold (Japanese on a Western system,
+for example) is refused with "unreadable filename", and the other files are
+restored. The package keeps every name as UTF-8: to restore those files too,
+extract FROZEN-SPANNED.tar with a tar that keeps Unicode names, such as 7-Zip
+(7z x FROZEN-SPANNED.tar).
+
+PRIVACY — this medium's file listing is ENCRYPTED (FROZEN-SPANNED.manifest.json.gpg),
+so a lost tape reveals no filenames. To read it:
+     gpg -d FROZEN-SPANNED.manifest.json.gpg      (passphrase for key K-F77F3F8A)

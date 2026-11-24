@@ -279,9 +279,9 @@ func TestCatalogMove_IDSequencesContinue(t *testing.T) {
 // The shipped fixtures: their placeholder hashes are refused, and with real hashes
 // both move, the schema-v1 one through the in-memory migrations.
 func TestCatalogMove_Fixtures(t *testing.T) {
-	for _, name := range []string{"catalog_current.json", "catalog_schema1.json"} {
+	for _, name := range []string{"catalog_current_schema.json", "catalog_schema1.json", "frozen/catalog-v8-original.json"} {
 		t.Run(name, func(t *testing.T) {
-			raw, err := os.ReadFile(filepath.Join("testdata", name))
+			raw, err := os.ReadFile(filepath.Join("testdata", filepath.FromSlash(name)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -359,7 +359,7 @@ func TestCatalogMove_RefusesFaults(t *testing.T) {
 			}},
 		{name: "newer catalog", want: "newer version",
 			edit: func(raw []byte) []byte {
-				return bytes.Replace(raw, []byte(`"schema_version":8`), []byte(`"schema_version":9`), 1)
+				return bytes.Replace(raw, []byte(fmt.Sprintf(`"schema_version":%d`, currentSchemaVersion)), []byte(fmt.Sprintf(`"schema_version":%d`, currentSchemaVersion+1)), 1)
 			}},
 		{name: "data after the catalog", want: "more data", edit: func(raw []byte) []byte { return append(raw, `{}`...) }},
 		{name: "empty", want: "empty", edit: func([]byte) []byte { return []byte{} }},

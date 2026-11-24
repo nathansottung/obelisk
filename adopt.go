@@ -64,7 +64,7 @@ func scanAdoptCandidates(mount string) []adoptCand {
 // hasPar2Set reports whether a par2 set accompanies the payload (either name).
 func hasPar2Set(cand adoptCand) bool {
 	for _, n := range []string{cand.name + ".tar", cand.name + ".tar.gpg"} {
-		if m, _ := filepath.Glob(filepath.Join(cand.dir, n+"*.par2")); len(m) > 0 {
+		if m := filesNamed(cand.dir, false, n, ".par2"); len(m) > 0 {
 			return true
 		}
 	}
@@ -258,8 +258,11 @@ func (a *App) AdoptMedia(mountPath string, collectionID, volumeID int, deep bool
 	// Idempotency index: payload hash -> already-cataloged package name.
 	seen := map[string]string{}
 	for _, c := range a.Store.Chunks(0) {
-		if c.EncHash != "" {
-			seen[c.EncHash] = c.Name
+		// Every build on record counts: a medium may hold an older one.
+		for _, v := range recordedValues(c) {
+			if v.PayloadHash != "" {
+				seen[v.PayloadHash] = c.Name
+			}
 		}
 	}
 
@@ -351,7 +354,11 @@ func (a *App) AdoptMedia(mountPath string, collectionID, volumeID int, deep bool
 		if err != nil {
 			return nil, err
 		}
-		a.Store.RecordCopy(nc, volumeID, cand.dir, true)
+		id, state := copyIDAt(nc, cand.dir)
+		if state != "ok" {
+			id = ""
+		}
+		a.Store.RecordAdoptedCopy(nc, volumeID, cand.dir, id)
 		a.Store.AppendVerifyEvent(nc, VerifyEvent{At: now, OK: true, Path: cand.payloadPath, Note: "adopt: payload hashed"})
 		seen[h] = nc.Name // dedupe identical candidates within this same run
 

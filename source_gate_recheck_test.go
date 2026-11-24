@@ -126,13 +126,18 @@ func TestWrite_HoldsItsPackageAgainstARebuild(t *testing.T) {
 	app, _ := newTestApp(t, nativeTools(t))
 	c := builtTestChunk(t, app, "HELD-WHILE-READ")
 	var rebuild, together error
-	_, err := app.writeChunk(nil, c.ID, t.TempDir(), 0, 0, 0, 0, noProg2, func() {
+	prevHook := writeAfterPayloadHook
+	writeAfterPayloadHook = func() error {
 		rebuild = app.BuildChunk(c.ID, noProg)
 		var second func()
 		if second, together = app.Store.shareWork(packageWorkKey(c.ID), "busy"); together == nil {
 			second()
 		}
-	})
+		return nil
+	}
+	t.Cleanup(func() { writeAfterPayloadHook = prevHook })
+	_, err := app.WriteChunk(c.ID, t.TempDir(), 0, 0, 0, 0, noProg2)
+	writeAfterPayloadHook = prevHook
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +150,7 @@ func TestWrite_HoldsItsPackageAgainstARebuild(t *testing.T) {
 	after := app.Store.Chunk(c.ID)
 	after.Status = "FAILED"
 	app.Store.UpdateChunk(after)
-	if err := app.BuildChunkOverCopies(c.ID, noProg); err != nil {
+	if err := app.BuildChunk(c.ID, noProg); err != nil {
 		t.Fatalf("a rebuild after the writes: %v", err)
 	}
 }

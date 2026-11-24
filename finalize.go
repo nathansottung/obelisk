@@ -53,7 +53,7 @@ func (a *App) volumeChunks(v *Volume) (chunks []*Chunk, packages int, bytes int6
 			}
 		}
 		var segBytes int64
-		for _, sg := range c.Segments {
+		for _, sg := range c.allTapes() {
 			if sg.VolumeID == v.ID {
 				onSeg = true
 				segBytes += sg.Bytes
@@ -100,7 +100,7 @@ func (a *App) AssessFinalize(v *Volume, mountPath string, cfg Config) finalizeAs
 				stale = append(stale, c.Name+" (verify stale)")
 			}
 		}
-		for _, sg := range c.Segments {
+		for _, sg := range c.allTapes() {
 			if sg.VolumeID == v.ID && sg.Status != "VERIFIED" {
 				stale = append(stale, fmt.Sprintf("%s segment %d (%s)", c.Name, sg.Index, sg.Status))
 			}

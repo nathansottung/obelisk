@@ -6,10 +6,12 @@ import (
 	"bytes"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -83,8 +85,8 @@ func TestCatalogDB_CreateIsDurable(t *testing.T) {
 	if got := readMeta(t, d, "format"); got != catalogDBFormat {
 		t.Errorf("format = %q", got)
 	}
-	if got := readMeta(t, d, "schema_version"); got != "1" {
-		t.Errorf("schema_version = %q, want 1", got)
+	if got := readMeta(t, d, "schema_version"); got != strconv.Itoa(catalogDBSchemaVersion) {
+		t.Errorf("schema_version = %q, want %d", got, catalogDBSchemaVersion)
 	}
 	if ro, why := d.ReadOnly(); ro {
 		t.Errorf("a new catalog database is read-only: %s", why)
@@ -310,7 +312,7 @@ func TestCatalogDB_PermissionDeniedIsRefused(t *testing.T) {
 // refused with the reason, and the files are left exactly as they were, even
 // with a commit pending in the -wal (closing must not fold it in).
 func TestCatalogDB_NewerVersionIsReadOnly(t *testing.T) {
-	path := crashedCatalogDBWith(t, `UPDATE meta SET value='2' WHERE key='schema_version'`,
+	path := crashedCatalogDBWith(t, fmt.Sprintf(`UPDATE meta SET value='%d' WHERE key='schema_version'`, catalogDBSchemaVersion+1),
 		`INSERT INTO meta(key, value) VALUES('from', 'newer')`)
 	before := dirSnapshot(t, filepath.Dir(path))
 
@@ -319,7 +321,7 @@ func TestCatalogDB_NewerVersionIsReadOnly(t *testing.T) {
 		t.Fatalf("a newer database should open read-only, got %v", err)
 	}
 	ro, why := d.ReadOnly()
-	if !ro || !strings.Contains(why, "newer version") || !strings.Contains(why, "v2") {
+	if !ro || !strings.Contains(why, "newer version") || !strings.Contains(why, fmt.Sprintf("v%d", catalogDBSchemaVersion+1)) {
 		t.Fatalf("ReadOnly = %v, %q", ro, why)
 	}
 	if got := readMeta(t, d, "from"); got != "newer" {

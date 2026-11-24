@@ -524,7 +524,7 @@ const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 // (input), and its arguments as JSON in data-args, built with callArgs (escaped
 // as an attribute value, so the browser hands back exactly the JSON). Only the
 // functions listed in UI_CALLS can be called this way.
-const UI_CALLS=new Set(['adoptFolderDlg','assignDlgArchive','backupChangesDlg','backupHistoryDlg','bagExportDlg','bagPackageDlg','censusDlg','doReconcile','doRewriteCopy','dockIngest','dockIngestAnyway','dockReverifyDlg','driveEncDlg','exploreGo','finalizeDlg','integrityArchiveDlg','mirrorDlg','overrideFile','parkFile','planDlg','planExecFromDock','planTree','printLabel','readMediumDlg','removeDlg','restoreDlg','restoreFileVersion','retireDlg','rmPickExport','rmToggle','scanDlg','snapTree','spanWriteDlg','tmZoom','toolBrowse','unsealDlg','vDrift','verifyMirrorDlg','writeDlg']);
+const UI_CALLS=new Set(['adoptFolderDlg','assignDlgArchive','backupChangesDlg','backupHistoryDlg','bagExportDlg','bagPackageDlg','censusDlg','doReconcile','doRefill','doRewriteCopy','doSettleCopy','dockIngest','dockIngestAnyway','dockReverifyDlg','driveEncDlg','exploreGo','finalizeDlg','integrityArchiveDlg','mirrorDlg','overrideFile','parkFile','planDlg','planExecFromDock','planTree','printLabel','readMediumDlg','removeDlg','restoreDlg','restoreFileVersion','retireDlg','rmPickExport','rmToggle','scanDlg','snapTree','spanWriteDlg','tmZoom','toolBrowse','unsealDlg','vDrift','verifyMirrorDlg','writeDlg']);
 const callArgs=(...a)=>esc(JSON.stringify(a));
 function _uiDispatch(attr,e){
   const el=e&&e.target&&e.target.closest?e.target.closest('['+attr+']'):null;if(!el)return;
@@ -657,10 +657,14 @@ function levelSelectorHTML(id){return `<label>Verification level (only B satisfi
 // Name a copy's verify state, always with its level — "verified (B, full)" (green)
 // vs "checked (C, sample)" (amber, advisory).
 function copyVerifyLabel(cp){const lvl=cp.last_check_level||'B';const ln=(VLEVELS[lvl]||{}).name||lvl;
+  // A copy earns credit only once the medium is known to hold its copy ID.
+  if(cp.unidentified==='conflict')return `<span style="color:var(--bad)">two media hold this copy's ID: choose which one is the copy</span>`;
+  if(cp.unidentified)return `<span style="color:var(--warn)" title="${esc(copyIDReason(cp.unidentified))}">not identified, ${(cp.segments||[]).length?'write the set again to confirm':'verify to confirm'}${cp.last_verified_at?' · last verified '+cp.last_verified_at.slice(0,10):''}</span>`;
   const laterAdvisory=lvl!=='B'&&cp.last_check_at&&(!cp.last_verified_at||cp.last_check_at>cp.last_verified_at);
   if(cp.verify_ok===true){let s=`<span style="color:var(--ok)">✓ verified (B, full)${cp.last_verified_at?' · '+cp.last_verified_at.slice(0,10):''}</span>`;
     if(laterAdvisory)s+=` <span style="color:var(--warn)">· checked (${lvl}, ${esc(ln.toLowerCase())}) ${cp.last_check_at.slice(0,10)}</span>`;
     return s}
+  if(cp.verify_ok===false&&cp.repairable)return `<span style="color:var(--warn)">repairable with par2${cp.last_verified_at?' · '+cp.last_verified_at.slice(0,10):''}</span>`;
   if(cp.verify_ok===false)return `<span style="color:var(--bad)">✗ FAILED (B, full)${cp.last_verified_at?' · '+cp.last_verified_at.slice(0,10):''}</span>`;
   if(cp.last_check_ok===true)return `<span style="color:var(--warn)">checked (${lvl}, ${esc(ln.toLowerCase())})${cp.last_check_at?' · '+cp.last_check_at.slice(0,10):''} — advisory, not COMPLETE</span>`;
   if(cp.last_check_ok===false)return `<span style="color:var(--bad)">✗ ${lvl} check failed${cp.last_check_at?' · '+cp.last_check_at.slice(0,10):''}</span>`;
@@ -2324,12 +2328,7 @@ async function doBuild(id){
     </div>
     <div class="row" style="margin-top:12px"><button class="btn" onclick="go()">Build now</button></div>`;
   dlg(body,async()=>{
-    try{await api('POST',`/api/chunks/${id}/build`)}
-    catch(e){
-      if(!e.body||!e.body.needs_confirmation)throw e;
-      if(!confirm(e.body.warning+'\n\nRebuild anyway?'))throw new Error('Nothing was rebuilt. The existing copies are unchanged.');
-      await api('POST',`/api/chunks/${id}/build`,{accept_existing_copies:true});
-    }
+    await api('POST',`/api/chunks/${id}/build`);
     toast('Build started — see Jobs');loc('jobs')});
 }
 async function writeDlg(id,name,payload){
@@ -2448,6 +2447,9 @@ function ageStr(iso){if(!iso)return 'never';const d=new Date(iso);const days=Mat
 function currentCopies(c){return (c.copies||[]).filter(x=>!x.superseded)}
 function verifiedCopies(c){return currentCopies(c).filter(x=>x.verify_ok===true).length}
 function copyMark(v){return v===true?'✓':v===false?'✗':'?'}
+function copyIDReason(why){return ({no_id:'Written before copy IDs.',
+  missing:'Its folder holds no copy ID file.',unreadable:'Its copy ID file cannot be read.',
+  mismatch:'Its folder holds another copy\'s ID.',unchecked:'You chose this medium. A full check confirms it.'})[why]||''}
 function copyTag(c,required){const total=currentCopies(c).length;if(!total)return '';
   const vc=verifiedCopies(c);
   if(vc<required)return ` <span class="etag due" title="redundancy goal ${required}">under-protected (${vc} of ${required} copies)</span>`;
@@ -2458,10 +2460,22 @@ function copiesLine(c,volmap){const cur=currentCopies(c);const sup=(c.copies||[]
     let s=`${lbl} — ${copyVerifyLabel(cp)}`;
     if(cp.verify_ok===false&&!c.spanned)
       s+=` <button class="btn ghost" style="font-size:10px;padding:1px 7px" data-call="doRewriteCopy" data-args="${callArgs(c.id,cp.volume_id,v.label||('vol#'+cp.volume_id))}">Re-write this copy</button>`;
+    if(cp.verify_ok===true)
+      s+=` <button class="btn ghost" style="font-size:10px;padding:1px 7px" title="Use when staging is damaged or gone. Checked against this copy's hash first." data-call="doRefill" data-args="${callArgs(c.id,cp.volume_id,!!c.spanned)}">Refill staging</button>`;
+    if(cp.conflict)
+      s+=` <button class="btn ghost" style="font-size:10px;padding:1px 7px" title="${esc(cp.path)}" data-call="doSettleCopy" data-args="${callArgs(c.id,cp.copy_id,'recorded')}">Keep the recorded medium</button>`+
+        ` <button class="btn ghost" style="font-size:10px;padding:1px 7px" title="${esc(cp.conflict.path)}" data-call="doSettleCopy" data-args="${callArgs(c.id,cp.copy_id,'found')}">Keep the one found</button>`;
     return s});
   let h=`<div class="dim" style="font-size:11px">copies: ${parts.join(' · ')||'<span class="dim">none current</span>'}</div>`;
   if(sup.length)h+=`<div class="dim" style="font-size:10.5px;opacity:.65">superseded: ${sup.map(cp=>{const v=volmap[cp.volume_id]||{};return esc(v.label||'vol#'+cp.volume_id)+' '+copyMark(cp.verify_ok)}).join(' · ')}</div>`;
   return h}
+async function doSettleCopy(id,copyID,keep){
+  try{await api('POST','/api/chunks/'+id+'/copies/settle',{copy_id:copyID,keep});
+    toast('Settled. Verify the medium you kept to confirm it; write a new copy to the other to give it its own ID.');route()}catch(e){toast(e.message,1)}}
+async function doRefill(id,vol,spanned){
+  let source='';
+  if(spanned){source=prompt('Folder holding the files of every tape in this set:')||'';if(!source.trim())return}
+  try{await api('POST','/api/chunks/'+id+'/refill',{volume_id:Number(vol),source_dir:source});toast('Refill started — see Jobs');loc('jobs')}catch(e){toast(e.message,1)}}
 async function doRewriteCopy(id,vol,label){
   try{const c=await api('GET','/api/chunks/'+id);
     const cp=(c.copies||[]).find(x=>x.volume_id===Number(vol)&&!x.superseded);

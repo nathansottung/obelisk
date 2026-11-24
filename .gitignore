@@ -24,3 +24,9 @@ keystore*.json
 
 # Claude Code local session/config dir — never commit
 .claude/
+
+# Frozen fixtures: synthetic old-format catalogs and their throwaway keys, on purpose
+# (see testdata/frozen/README.md). The rules above still cover everything else.
+!testdata/frozen/**/catalog.json
+!testdata/frozen/**/keystore.json
+!testdata/frozen/**/obelisk-appbackup-*

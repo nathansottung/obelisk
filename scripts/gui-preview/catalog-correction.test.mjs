@@ -25,7 +25,7 @@ test('Exact decimal protocol rejects coercion, malformed, out-of-range and unkno
     for(const id of [1,9007199254740992,'','0','-1','01','+1','1.0','1e0',' 1','9223372036854775808',null]) {
       assert.equal(exactDecimal(id,data.idMax),false,String(id));assert.throws(()=>validateIDs([id],data));
     }
-    assert.throws(()=>validateIDs(['999'],data));assert.throws(()=>validateIDs(['1','1'],data));assert.throws(()=>validateCatalog({schema:8}));
+    assert.throws(()=>validateIDs(['999'],data));assert.throws(()=>validateIDs(['1','1'],data));assert.throws(()=>validateCatalog({schema:9}));
     const bad=structuredClone(data);bad.files[1].id=bad.files[0].id;assert.throws(()=>validateCatalog(bad));
     const numeric=structuredClone(data);numeric.files[0].id=1;assert.throws(()=>validateCatalog(numeric));
   }finally{await close(s);}

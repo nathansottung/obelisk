@@ -1,0 +1,261 @@
+{
+ "schema_version": 8,
+ "next_id": {
+  "chunk": 1,
+  "template": 4,
+  "volume": 1
+ },
+ "collections": null,
+ "folders": null,
+ "files": null,
+ "chunks": [
+  {
+   "id": 1,
+   "collection_id": 0,
+   "name": "FROZEN-PLAIN",
+   "status": "VERIFIED",
+   "media_kind": "HDD",
+   "target_bytes": 1073741824,
+   "data_bytes": 20000,
+   "enc_bytes": 23040,
+   "file_count": 1,
+   "src_root": "C:\\obelisk-fixture\\medium-v8\\source",
+   "hash_alg": "SHA256",
+   "tar_hash": "44f94b21442b699d3722730698976b9dbb545f5c54e763d486466e1cf0185f56",
+   "enc_hash": "44f94b21442b699d3722730698976b9dbb545f5c54e763d486466e1cf0185f56",
+   "encrypted": false,
+   "key_ref": "",
+   "par2_redundancy": 10,
+   "staged_dir": "C:\\obelisk-fixture\\medium-v8\\staging\\FROZEN-PLAIN",
+   "written_dest": "C:\\obelisk-fixture\\medium-v8\\drive\\archive\\FROZEN-PLAIN",
+   "verify_ok": true,
+   "error": "",
+   "files": [
+    {
+     "file_id": 0,
+     "rel_path": "fixture-file.bin",
+     "size_bytes": 20000,
+     "hash": "b04c14964ab505c86216a10247fc0ef722683058f88c295af155b075b1bb87e5"
+    }
+   ],
+   "sidecars": {
+    "FROZEN-PLAIN.manifest.json": "d7fd721f6edd3dfc2c76a9649294aae001b1ccfcb047bc3a98e2a8af41158082",
+    "RESTORE.txt": "ebe1416c54f24762241a15ff53f83ea5d310fc67119fcc92855863a083a80997"
+   },
+   "build_timings": {
+    "hash": 0.01,
+    "par2": 0.07,
+    "stage": 0,
+    "stage_verify": 0,
+    "tar": 0.01
+   },
+   "build_verified": {
+    "mode": "full",
+    "contents": true,
+    "decrypt_roundtrip": true,
+    "preset": "ARCHIVAL",
+    "par2_percent": 10,
+    "routine_verify_level": "B",
+    "verify_due_months": 12,
+    "readback_after_write": true
+   },
+   "verify_events": [
+    {
+     "at": "2026-11-24T04:21:00.8326833Z",
+     "ok": true,
+     "path": "C:\\obelisk-fixture\\medium-v8\\staging\\FROZEN-PLAIN\\FROZEN-PLAIN.tar",
+     "note": "stage_verify: 1 member(s) byte-exact vs catalog source hashes",
+     "level": "B"
+    },
+    {
+     "at": "2026-11-24T04:21:01.111057Z",
+     "ok": true,
+     "path": "C:\\obelisk-fixture\\medium-v8\\drive\\archive\\FROZEN-PLAIN\\FROZEN-PLAIN.tar",
+     "note": "write read-back",
+     "level": "B"
+    }
+   ],
+   "ring_stats": {
+    "buffer_blocks": 128,
+    "block_bytes": 67108864,
+    "min_fill": 128,
+    "starved_events": 0,
+    "bytes": 23040,
+    "seconds": 0.01,
+    "read_mbps": 3.8,
+    "write_mbps": 3.8
+   },
+   "spanned": false,
+   "copies": [
+    {
+     "volume_id": 1,
+     "path": "C:\\obelisk-fixture\\medium-v8\\drive\\archive\\FROZEN-PLAIN",
+     "written_at": "2026-11-24T04:21:01.111057Z",
+     "last_verified_at": "2026-11-24T04:21:01.111057Z",
+     "verify_ok": true
+    }
+   ],
+   "created_at": "2026-11-24T04:21:00.7862891Z",
+   "written_at": "2026-11-24T04:21:01.111057Z",
+   "verified_at": "2026-11-24T04:21:01.111057Z"
+  }
+ ],
+ "keys": null,
+ "burn_queues": null,
+ "volumes": [
+  {
+   "id": 1,
+   "label": "FROZEN-DRIVE",
+   "barcode": "",
+   "kind": "HDD",
+   "location": "",
+   "notes": "",
+   "created_at": "2026-11-24T04:21:00.9322211Z",
+   "serial": "FROZEN-SERIAL",
+   "partition_id": "FROZEN-PARTITION"
+  }
+ ],
+ "locations": null,
+ "drift": null,
+ "dock_sessions": null,
+ "templates": [
+  {
+   "id": 1,
+   "name": "Photographer",
+   "event_types": [
+    "wedding",
+    "engagement",
+    "baptism",
+    "boudoir",
+    "religious event",
+    "family",
+    "portrait",
+    "other"
+   ],
+   "routes": {
+    "DELIVERABLES": "Finalized Images/{year}/{event_type}/{event}/",
+    "ORIGINALS": "photos/{year}/{event_type}/{event}/",
+    "PROJECT-FILES": "photos/{year}/{event_type}/{event}/",
+    "SIDECARS": "photos/{year}/{event_type}/{event}/"
+   },
+   "group_noun": "Event",
+   "built_in": true,
+   "created_at": "0001-01-01T00:00:00Z"
+  },
+  {
+   "id": 2,
+   "name": "Musician",
+   "event_types": [
+    "album",
+    "single",
+    "ep",
+    "live",
+    "demo",
+    "remix",
+    "other"
+   ],
+   "routes": {
+    "DELIVERABLES": "music/{year}/{project}/masters/",
+    "ORIGINALS": "music/{year}/{project}/stems/",
+    "PROJECT-FILES": "music/{year}/{project}/project/",
+    "SIDECARS": "music/{year}/{project}/"
+   },
+   "group_noun": "Project",
+   "built_in": true,
+   "created_at": "0001-01-01T00:00:00Z"
+  },
+  {
+   "id": 3,
+   "name": "Filmmaker",
+   "event_types": [
+    "short",
+    "feature",
+    "documentary",
+    "commercial",
+    "music video",
+    "event",
+    "other"
+   ],
+   "routes": {
+    "DELIVERABLES": "deliverables/{year}/{project}/",
+    "ORIGINALS": "footage/{year}/{project}/",
+    "PROJECT-FILES": "projects/{year}/{project}/",
+    "SIDECARS": "footage/{year}/{project}/"
+   },
+   "group_noun": "Project",
+   "built_in": true,
+   "created_at": "0001-01-01T00:00:00Z"
+  },
+  {
+   "id": 4,
+   "name": "General",
+   "event_types": [
+    "personal",
+    "family",
+    "work",
+    "travel",
+    "project",
+    "other"
+   ],
+   "routes": {
+    "DELIVERABLES": "{year}/{category}/{collection}/",
+    "ORIGINALS": "{year}/{category}/{collection}/",
+    "PROJECT-FILES": "{year}/{category}/{collection}/",
+    "SIDECARS": "{year}/{category}/{collection}/"
+   },
+   "group_noun": "Collection",
+   "built_in": true,
+   "created_at": "0001-01-01T00:00:00Z"
+  }
+ ],
+ "tape_checks": null,
+ "profiles": [
+  {
+   "id": "single-copy",
+   "name": "Single Copy",
+   "description": "low-value / re-creatable data",
+   "required_copies": 1,
+   "required_distinct_media_kinds": 1,
+   "required_offsite_copies": 0,
+   "media_kinds_allowed": null,
+   "verify_due_months": 12,
+   "builtin": true
+  },
+  {
+   "id": "3-2-1-standard",
+   "name": "3-2-1 Standard",
+   "description": "the canonical rule; default for new Archives",
+   "required_copies": 3,
+   "required_distinct_media_kinds": 2,
+   "required_offsite_copies": 1,
+   "media_kinds_allowed": null,
+   "verify_due_months": 12,
+   "builtin": true
+  },
+  {
+   "id": "pre-deletion-hold",
+   "name": "Pre-Deletion Hold",
+   "description": "over-protect data whose SOURCE is about to be deleted",
+   "required_copies": 4,
+   "required_distinct_media_kinds": 2,
+   "required_offsite_copies": 1,
+   "media_kinds_allowed": null,
+   "verify_due_months": 6,
+   "builtin": true
+  }
+ ],
+ "assignments": null,
+ "protection": null,
+ "audit": [
+  {
+   "at": "2026-11-24T04:21:00.9233081Z",
+   "action": "build",
+   "detail": "FROZEN-PLAIN staged"
+  },
+  {
+   "at": "2026-11-24T04:21:01.1258951Z",
+   "action": "write",
+   "detail": "FROZEN-PLAIN -\u003e C:\\obelisk-fixture\\medium-v8\\drive\\archive\\FROZEN-PLAIN verify_ok=true"
+  }
+ ]
+}

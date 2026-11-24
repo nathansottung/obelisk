@@ -24,6 +24,9 @@ These rules apply to every session in this repository.
   and `OBELISK_CATALOG_ENGINE=json`), plus the known-failure gate:
   `go test -json ./... > out.jsonl` then `node scripts/ci/go-known-failures.mjs out.jsonl`,
   run from the repo folder.
+- Frozen fixtures of old catalog and app-backup formats (`testdata/frozen`) are never
+  edited or rebuilt. A schema change adds a new frozen fixture made by the old code.
+  Tests must not fake an old format by stripping fields from a new one.
 
 ## Flow for each change
 

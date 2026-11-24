@@ -9,7 +9,7 @@ export function exactDecimal(value, max, zero = false) {
 const text = value => validUnicode(value) && new TextEncoder().encode(value).length <= 4096;
 const date = value => typeof value === 'string' && value.length <= 64 && Number.isFinite(Date.parse(value));
 export function validateCatalog(data) {
-  requireValue(data && data.schema === 8 && ['2147483647', int64Max].includes(data.idMax));
+  requireValue(data && data.schema === 9 && ['2147483647', int64Max].includes(data.idMax));
   requireValue(typeof data.digest === 'string' && /^[a-f0-9]{64}$/.test(data.digest) && date(data.loadedAt));
   requireValue(data.recordedAt === undefined || data.recordedAt === null || date(data.recordedAt));
   const scope = data.inventoryScope;

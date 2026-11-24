@@ -1,0 +1,446 @@
+{
+ "schema_version": 8,
+ "next_id": {
+  "chunk": 2,
+  "template": 4,
+  "volume": 1
+ },
+ "collections": null,
+ "folders": null,
+ "files": null,
+ "chunks": [
+  {
+   "id": 1,
+   "collection_id": 0,
+   "name": "FROZEN-SINGLE",
+   "status": "VERIFIED",
+   "media_kind": "CUSTOM",
+   "target_bytes": 1073741824,
+   "data_bytes": 30000,
+   "enc_bytes": 32856,
+   "file_count": 1,
+   "src_root": "C:\\obelisk-fixture\\v8-json\\source",
+   "hash_alg": "SHA256",
+   "tar_hash": "733b0768fdb1ecd30580c23b26bd7008e575406012bc87fb2e3fdc9382cac8de",
+   "enc_hash": "05e80b991b090f2e2d1110800c44d50fa917d20ca595f3dc367562a8c7f5bfd5",
+   "encrypted": true,
+   "key_ref": "K-977128B4",
+   "private_manifest": true,
+   "par2_redundancy": 10,
+   "staged_dir": "C:\\obelisk-fixture\\v8-json\\staging\\FROZEN-SINGLE",
+   "written_dest": "C:\\obelisk-fixture\\v8-json\\medium\\FROZEN-SINGLE",
+   "verify_ok": true,
+   "error": "",
+   "files": [
+    {
+     "file_id": 0,
+     "rel_path": "fixture-file.bin",
+     "size_bytes": 30000,
+     "hash": "cb1999bd093b60ae834afba48b4e04133c26efce0ec7f1fea52623cc0faa45b5"
+    }
+   ],
+   "sidecars": {
+    "FROZEN-SINGLE.manifest.json.gpg": "db68f2e4329b3f9d0a6ce59e5b480c37cb0fde4cd26df0b9e05097546c7730c9",
+    "RESTORE.txt": "8d137b50f4e187216e34d3f0137f3cd8728f3ac1a527804734f6e998d0e61388"
+   },
+   "build_timings": {
+    "crypt_verify": 0.24,
+    "encrypt": 0.37,
+    "hash": 0.01,
+    "par2": 0.05,
+    "stage_verify": 0,
+    "tar": 0.01
+   },
+   "build_verified": {
+    "mode": "full",
+    "contents": true,
+    "decrypt_roundtrip": true,
+    "preset": "Custom",
+    "par2_percent": 10,
+    "routine_verify_level": "B",
+    "verify_due_months": 12,
+    "readback_after_write": true
+   },
+   "verify_events": [
+    {
+     "at": "2026-11-23T21:53:21.6730964Z",
+     "ok": true,
+     "path": "C:\\obelisk-fixture\\v8-json\\staging\\FROZEN-SINGLE\\FROZEN-SINGLE.tar",
+     "note": "stage_verify: 1 member(s) byte-exact vs catalog source hashes",
+     "level": "B"
+    },
+    {
+     "at": "2026-11-23T21:53:22.2843167Z",
+     "ok": true,
+     "path": "C:\\obelisk-fixture\\v8-json\\staging\\FROZEN-SINGLE\\FROZEN-SINGLE.tar.gpg",
+     "note": "crypt_verify: ciphertext decrypts to the verified tar (tar_hash matched)",
+     "level": "B"
+    },
+    {
+     "at": "2026-11-23T21:53:22.8690625Z",
+     "ok": true,
+     "path": "C:\\obelisk-fixture\\v8-json\\medium\\FROZEN-SINGLE\\FROZEN-SINGLE.tar.gpg",
+     "note": "write read-back",
+     "level": "B"
+    }
+   ],
+   "ring_stats": {
+    "buffer_blocks": 128,
+    "block_bytes": 67108864,
+    "min_fill": 128,
+    "starved_events": 0,
+    "bytes": 32856,
+    "seconds": 0.01,
+    "read_mbps": 7,
+    "write_mbps": 6.3
+   },
+   "spanned": false,
+   "copies": [
+    {
+     "volume_id": 1,
+     "path": "C:\\obelisk-fixture\\v8-json\\medium\\FROZEN-SINGLE",
+     "written_at": "2026-11-23T21:53:22.8747485Z",
+     "last_verified_at": "2026-11-23T21:53:22.8747485Z",
+     "verify_ok": true
+    }
+   ],
+   "created_at": "2026-11-23T21:53:21.6348916Z",
+   "written_at": "2026-11-23T21:53:22.8690625Z",
+   "verified_at": "2026-11-23T21:53:22.8690625Z"
+  },
+  {
+   "id": 2,
+   "collection_id": 0,
+   "name": "FROZEN-SPANNED",
+   "status": "VERIFIED",
+   "media_kind": "CUSTOM",
+   "target_bytes": 16000,
+   "data_bytes": 30000,
+   "enc_bytes": 32857,
+   "file_count": 1,
+   "src_root": "C:\\obelisk-fixture\\v8-json\\source",
+   "hash_alg": "SHA256",
+   "tar_hash": "230c09c3b733df18cb789e82985fe422379bc2a30877f09cb64d8a4b8d908327",
+   "enc_hash": "e41f0ba2a471340c7bd27a9597f43c806ac6bf6bfe0e754b05f8fcd8ad518a53",
+   "encrypted": true,
+   "key_ref": "K-D0DF32B5",
+   "private_manifest": true,
+   "par2_redundancy": 10,
+   "staged_dir": "C:\\obelisk-fixture\\v8-json\\staging\\FROZEN-SPANNED",
+   "written_dest": "C:\\obelisk-fixture\\v8-json\\tapes\\tape03",
+   "verify_ok": true,
+   "error": "",
+   "files": [
+    {
+     "file_id": 0,
+     "rel_path": "fixture-file.bin",
+     "size_bytes": 30000,
+     "hash": "cb1999bd093b60ae834afba48b4e04133c26efce0ec7f1fea52623cc0faa45b5"
+    }
+   ],
+   "sidecars": {
+    "FROZEN-SPANNED.manifest.json.gpg": "245ed2cc7ad4ef3ff220c2a0b64fc0e03970ff314730aa5553c37daf72f18217",
+    "RESTORE.txt": "559347de2ddb37ebb1b659a2259a0f024644b6c556d5650d100b3554eca583cf"
+   },
+   "build_timings": {
+    "crypt_verify": 0.27,
+    "encrypt": 0.36,
+    "hash": 0.01,
+    "par2": 0.05,
+    "stage_verify": 0,
+    "tar": 0.04
+   },
+   "build_verified": {
+    "mode": "full",
+    "contents": true,
+    "decrypt_roundtrip": true,
+    "preset": "Custom",
+    "par2_percent": 10,
+    "routine_verify_level": "B",
+    "verify_due_months": 12,
+    "readback_after_write": true
+   },
+   "verify_events": [
+    {
+     "at": "2026-11-23T21:53:22.9641201Z",
+     "ok": true,
+     "path": "C:\\obelisk-fixture\\v8-json\\staging\\FROZEN-SPANNED\\FROZEN-SPANNED.tar",
+     "note": "stage_verify: 1 member(s) byte-exact vs catalog source hashes",
+     "level": "B"
+    },
+    {
+     "at": "2026-11-23T21:53:23.5937595Z",
+     "ok": true,
+     "path": "C:\\obelisk-fixture\\v8-json\\staging\\FROZEN-SPANNED\\FROZEN-SPANNED.tar.gpg",
+     "note": "crypt_verify: ciphertext decrypts to the verified tar (tar_hash matched)",
+     "level": "B"
+    },
+    {
+     "at": "2026-11-23T21:53:24.0545102Z",
+     "ok": true,
+     "path": "C:\\obelisk-fixture\\v8-json\\tapes\\tape00\\FROZEN-SPANNED",
+     "note": "span segment 1/4 read-back verified",
+     "level": "B"
+    },
+    {
+     "at": "2026-11-23T21:53:24.1280743Z",
+     "ok": true,
+     "path": "C:\\obelisk-fixture\\v8-json\\tapes\\tape01\\FROZEN-SPANNED",
+     "note": "span segment 2/4 read-back verified",
+     "level": "B"
+    },
+    {
+     "at": "2026-11-23T21:53:24.2031045Z",
+     "ok": true,
+     "path": "C:\\obelisk-fixture\\v8-json\\tapes\\tape02\\FROZEN-SPANNED",
+     "note": "span segment 3/4 read-back verified",
+     "level": "B"
+    },
+    {
+     "at": "2026-11-23T21:53:24.2926409Z",
+     "ok": true,
+     "path": "C:\\obelisk-fixture\\v8-json\\tapes\\tape03\\FROZEN-SPANNED",
+     "note": "span segment 4/4 read-back verified",
+     "level": "B"
+    }
+   ],
+   "ring_stats": {
+    "buffer_blocks": 128,
+    "block_bytes": 67108864,
+    "min_fill": 128,
+    "starved_events": 0,
+    "bytes": 1497,
+    "seconds": 0,
+    "read_mbps": 0,
+    "write_mbps": -922337203685477600
+   },
+   "spanned": true,
+   "segments": [
+    {
+     "index": 1,
+     "bytes": 15680,
+     "hash": "bdeeae3312c82bbd0a85cd17ab2bf98da0eaee35ec775ed2017c1977296c8a61",
+     "status": "VERIFIED",
+     "dest": "C:\\obelisk-fixture\\v8-json\\tapes\\tape00",
+     "volume_id": 1
+    },
+    {
+     "index": 2,
+     "bytes": 15680,
+     "hash": "53e90e18e290f2e211a4e05f17ea46f00d8dd03ab0623d2b8e87043611e92511",
+     "status": "VERIFIED",
+     "dest": "C:\\obelisk-fixture\\v8-json\\tapes\\tape01",
+     "volume_id": 1
+    },
+    {
+     "index": 3,
+     "bytes": 1497,
+     "hash": "655891f735661d527a43de1749e4eb8062b17d0031aadd3b8b3c660148aeb8bf",
+     "status": "VERIFIED",
+     "dest": "C:\\obelisk-fixture\\v8-json\\tapes\\tape02",
+     "volume_id": 1
+    },
+    {
+     "index": 4,
+     "bytes": 313224,
+     "hash": "",
+     "status": "VERIFIED",
+     "dest": "C:\\obelisk-fixture\\v8-json\\tapes\\tape03",
+     "volume_id": 1,
+     "par2": true
+    }
+   ],
+   "copies": [
+    {
+     "volume_id": 1,
+     "path": "spanned across 4 media",
+     "written_at": "2026-11-23T21:53:24.30597Z",
+     "last_verified_at": "2026-11-23T21:53:24.30597Z",
+     "verify_ok": true
+    }
+   ],
+   "created_at": "2026-11-23T21:53:22.8995946Z",
+   "written_at": "2026-11-23T21:53:24.2926409Z",
+   "verified_at": "2026-11-23T21:53:24.2926409Z"
+  }
+ ],
+ "keys": [
+  {
+   "key_ref": "K-977128B4",
+   "fingerprint": "bf42bc75ccf29ed67491b0bac07daec68f299fc0935c931e68de65e711a726c5",
+   "note": "package FROZEN-SINGLE",
+   "created_at": "2026-11-23T21:53:21.7222975Z"
+  },
+  {
+   "key_ref": "K-D0DF32B5",
+   "fingerprint": "d060552cd62f7d8ed4a7cb64a903d520fc3bc2dc165c3c83666508e2af1b4730",
+   "note": "package FROZEN-SPANNED",
+   "created_at": "2026-11-23T21:53:23.0024007Z"
+  }
+ ],
+ "burn_queues": null,
+ "volumes": [
+  {
+   "id": 1,
+   "label": "(unregistered)",
+   "barcode": "",
+   "kind": "OTHER",
+   "location": "",
+   "notes": "auto-created for media written before volumes were tracked",
+   "created_at": "2026-11-23T21:53:22.8690625Z"
+  }
+ ],
+ "locations": null,
+ "drift": null,
+ "dock_sessions": null,
+ "templates": [
+  {
+   "id": 1,
+   "name": "Photographer",
+   "event_types": [
+    "wedding",
+    "engagement",
+    "baptism",
+    "boudoir",
+    "religious event",
+    "family",
+    "portrait",
+    "other"
+   ],
+   "routes": {
+    "DELIVERABLES": "Finalized Images/{year}/{event_type}/{event}/",
+    "ORIGINALS": "photos/{year}/{event_type}/{event}/",
+    "PROJECT-FILES": "photos/{year}/{event_type}/{event}/",
+    "SIDECARS": "photos/{year}/{event_type}/{event}/"
+   },
+   "group_noun": "Event",
+   "built_in": true,
+   "created_at": "0001-01-01T00:00:00Z"
+  },
+  {
+   "id": 2,
+   "name": "Musician",
+   "event_types": [
+    "album",
+    "single",
+    "ep",
+    "live",
+    "demo",
+    "remix",
+    "other"
+   ],
+   "routes": {
+    "DELIVERABLES": "music/{year}/{project}/masters/",
+    "ORIGINALS": "music/{year}/{project}/stems/",
+    "PROJECT-FILES": "music/{year}/{project}/project/",
+    "SIDECARS": "music/{year}/{project}/"
+   },
+   "group_noun": "Project",
+   "built_in": true,
+   "created_at": "0001-01-01T00:00:00Z"
+  },
+  {
+   "id": 3,
+   "name": "Filmmaker",
+   "event_types": [
+    "short",
+    "feature",
+    "documentary",
+    "commercial",
+    "music video",
+    "event",
+    "other"
+   ],
+   "routes": {
+    "DELIVERABLES": "deliverables/{year}/{project}/",
+    "ORIGINALS": "footage/{year}/{project}/",
+    "PROJECT-FILES": "projects/{year}/{project}/",
+    "SIDECARS": "footage/{year}/{project}/"
+   },
+   "group_noun": "Project",
+   "built_in": true,
+   "created_at": "0001-01-01T00:00:00Z"
+  },
+  {
+   "id": 4,
+   "name": "General",
+   "event_types": [
+    "personal",
+    "family",
+    "work",
+    "travel",
+    "project",
+    "other"
+   ],
+   "routes": {
+    "DELIVERABLES": "{year}/{category}/{collection}/",
+    "ORIGINALS": "{year}/{category}/{collection}/",
+    "PROJECT-FILES": "{year}/{category}/{collection}/",
+    "SIDECARS": "{year}/{category}/{collection}/"
+   },
+   "group_noun": "Collection",
+   "built_in": true,
+   "created_at": "0001-01-01T00:00:00Z"
+  }
+ ],
+ "tape_checks": null,
+ "profiles": [
+  {
+   "id": "single-copy",
+   "name": "Single Copy",
+   "description": "low-value / re-creatable data",
+   "required_copies": 1,
+   "required_distinct_media_kinds": 1,
+   "required_offsite_copies": 0,
+   "media_kinds_allowed": null,
+   "verify_due_months": 12,
+   "builtin": true
+  },
+  {
+   "id": "3-2-1-standard",
+   "name": "3-2-1 Standard",
+   "description": "the canonical rule; default for new Archives",
+   "required_copies": 3,
+   "required_distinct_media_kinds": 2,
+   "required_offsite_copies": 1,
+   "media_kinds_allowed": null,
+   "verify_due_months": 12,
+   "builtin": true
+  },
+  {
+   "id": "pre-deletion-hold",
+   "name": "Pre-Deletion Hold",
+   "description": "over-protect data whose SOURCE is about to be deleted",
+   "required_copies": 4,
+   "required_distinct_media_kinds": 2,
+   "required_offsite_copies": 1,
+   "media_kinds_allowed": null,
+   "verify_due_months": 6,
+   "builtin": true
+  }
+ ],
+ "assignments": null,
+ "protection": null,
+ "audit": [
+  {
+   "at": "2026-11-23T21:53:22.6710095Z",
+   "action": "build",
+   "detail": "FROZEN-SINGLE staged"
+  },
+  {
+   "at": "2026-11-23T21:53:22.8955193Z",
+   "action": "write",
+   "detail": "FROZEN-SINGLE -\u003e C:\\obelisk-fixture\\v8-json\\medium\\FROZEN-SINGLE verify_ok=true"
+  },
+  {
+   "at": "2026-11-23T21:53:23.9841431Z",
+   "action": "build",
+   "detail": "FROZEN-SPANNED staged"
+  },
+  {
+   "at": "2026-11-23T21:53:24.3111917Z",
+   "action": "span",
+   "detail": "FROZEN-SPANNED fully written across 4 media"
+  }
+ ]
+}

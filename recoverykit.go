@@ -370,6 +370,23 @@ func copyResult(cp Copy) string {
 	if cp.LastVerifiedAt != nil {
 		res += " " + cp.LastVerifiedAt.UTC().Format("2006-01-02")
 	}
+	if cp.Repairable {
+		res = "repairable with par2"
+		if cp.LastVerifiedAt != nil {
+			res += " " + cp.LastVerifiedAt.UTC().Format("2006-01-02")
+		}
+	}
+	switch {
+	case cp.Unidentified == idConflict:
+		res = "two media hold its copy ID; choose which one is the copy"
+	case cp.Unidentified != "" && len(cp.Segments) > 0: // no check reads a whole set
+		res = "not identified, write the set again to confirm"
+	case cp.Unidentified != "":
+		res = "not identified, verify to confirm"
+		if cp.LastVerifiedAt != nil {
+			res += " (last verified " + cp.LastVerifiedAt.UTC().Format("2006-01-02") + ")"
+		}
+	}
 	if cp.Superseded {
 		res += " (superseded — re-written)"
 	}
@@ -386,8 +403,8 @@ func writeCopiesTable(b *strings.Builder, c *Chunk, volm map[int]*Volume) {
 		return
 	}
 	b.WriteString("**Copies**\n\n")
-	b.WriteString("| Volume | Barcode | Kind | Location | Last verify | Path |\n")
-	b.WriteString("|--------|---------|------|----------|-------------|------|\n")
+	b.WriteString("| Volume | Barcode | Kind | Location | Last verify | Key ref | Payload SHA-256 | Path |\n")
+	b.WriteString("|--------|---------|------|----------|-------------|---------|-----------------|------|\n")
 	for _, cp := range c.Copies {
 		label, barcode, kind, loc := "(unregistered)", "—", "—", "—"
 		if v := volm[cp.VolumeID]; v != nil {
@@ -402,8 +419,13 @@ func writeCopiesTable(b *strings.Builder, c *Chunk, volm map[int]*Volume) {
 				loc = v.Location
 			}
 		}
-		b.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s |\n",
-			mdCell(label), mdCell(barcode), mdCell(kind), mdCell(loc), mdCell(copyResult(cp)), mdCell(cp.Path)))
+		vals := c.valuesOf(&cp)
+		key := vals.KeyRef
+		if key == "" {
+			key = "—"
+		}
+		b.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s |\n",
+			mdCell(label), mdCell(barcode), mdCell(kind), mdCell(loc), mdCell(copyResult(cp)), mdCell(key), mdCell(vals.PayloadHash), mdCell(cp.Path)))
 	}
 }
 
@@ -411,25 +433,27 @@ func writeSegmentsTable(b *strings.Builder, c *Chunk, volm map[int]*Volume) {
 	b.WriteString("\n**Spanned segments** — the payload was byte-split across these media (rejoin per `RESTORE.txt`):\n\n")
 	b.WriteString("| Segment | Bytes | Hash (prefix) | Status | Volume | Destination |\n")
 	b.WriteString("|---------|------:|---------------|--------|--------|-------------|\n")
-	for _, sg := range c.Segments {
-		name := fmt.Sprintf("%d of %d", sg.Index, len(c.Segments))
-		if sg.Par2 {
-			name += " · par2 set"
-		}
-		hp := "—"
-		if sg.Hash != "" {
-			n := len(sg.Hash)
-			if n > 16 {
-				n = 16
+	for _, set := range c.tapeSets() {
+		for _, sg := range set {
+			name := fmt.Sprintf("%d of %d", sg.Index, len(set))
+			if sg.Par2 {
+				name += " · par2 set"
 			}
-			hp = "`" + sg.Hash[:n] + "…`"
+			hp := "—"
+			if sg.Hash != "" {
+				n := len(sg.Hash)
+				if n > 16 {
+					n = 16
+				}
+				hp = "`" + sg.Hash[:n] + "…`"
+			}
+			dest := sg.Dest
+			if dest == "" {
+				dest = "(not yet written)"
+			}
+			b.WriteString(fmt.Sprintf("| %s | %d | %s | %s | %s | %s |\n",
+				mdCell(name), sg.Bytes, hp, mdCell(sg.Status), mdCell(volDesc(volm, sg.VolumeID)), mdCell(dest)))
 		}
-		dest := sg.Dest
-		if dest == "" {
-			dest = "(not yet written)"
-		}
-		b.WriteString(fmt.Sprintf("| %s | %d | %s | %s | %s | %s |\n",
-			mdCell(name), sg.Bytes, hp, mdCell(sg.Status), mdCell(volDesc(volm, sg.VolumeID)), mdCell(dest)))
 	}
 }
 
