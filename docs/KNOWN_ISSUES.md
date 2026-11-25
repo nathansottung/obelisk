@@ -18,6 +18,16 @@ not work.
 - One Obelisk process now owns a data folder; a second is refused ([#26](https://github.com/nathansottung/obelisk/pull/26)).
 - The local web interface now requires a signed-in session on every start ([#29](https://github.com/nathansottung/obelisk/pull/29)).
 - Encrypted media no longer receive `filelist.txt` or a plain tar. Private media also keep every plain file list off the medium, and restore notes name only files on it ([#31](https://github.com/nathansottung/obelisk/pull/31)). Encrypted media with private media off still show file names in their manifest. Media already written are not changed. See below.
+- Obelisk no longer removes or overwrites anything you own unless you type **Delete** or **Overwrite**. It removes on its own only files it made, inside its own folders ([#40](https://github.com/nathansottung/obelisk/pull/40)). See below for what changes in use.
+
+## Removal and overwrite since PR #40
+
+- **Leftovers are listed, not swept.** Files an earlier or interrupted run left in Obelisk's folders now stay until you remove them. Settings lists each under **Kept automatically, and left behind**, with its size and age.
+- **Kept mirror versions use space.** When a mirror would replace a different file, it first keeps the old one under `_obelisk-previous/<time of the run>/` on that drive. These are never removed on their own and never count as copies. Remove them with **Remove kept versions…**.
+- **Writing over an existing copy asks first.** If the package's folder on the destination already holds something, the write stops and says what it is, then offers **Verify it** or **Overwrite…**.
+- **Exports get new names.** Each Recovery Kit, escrow bundle, BagIt export and app backup goes in a new folder named by when it was made, with an `EXPORT-INFO.txt`. Older ones are labelled superseded on the export screen and are never changed.
+- **Escrow tool caches from before the upgrade.** A cached tool file whose hash no longer matches its pin cannot be refreshed, because Obelisk has no record of downloading it. Remove the file yourself to let it download again.
+- **A leftover can be offered while a job is using it.** The list has no age floor yet, so a build or stage that is running now may appear. Do not remove anything from the list while a job runs.
 
 ## Check media written before PR #31
 
