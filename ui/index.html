@@ -2317,7 +2317,7 @@ async function spanWriteDlg(id,name){
   async()=>{const d=$('#d1').value.trim();if(!d)return;
     const body={dest_dir:d,throttle_mbps:parseFloat($('#d5').value)||0};Object.assign(body,volChoice());
     if(!(await destGate(d)))throw new Error('Nothing written: choose what to do about '+d+' first');
-    try{await api('POST',`/api/chunks/${id}/span-write`,body)}
+    try{if(!(await keyDriveRetry(body,()=>api('POST',`/api/chunks/${id}/span-write`,body))))return}
     catch(e){if(e.body&&e.body.write_over){writeOverOffer(e.body.write_over,id,'span-write-over',body);return}throw e}
     toast('Segment write started — see Jobs. When it verifies, eject & label the tape, mount the next, then click again.',1);loc('jobs')})}
 async function doBuild(id){
@@ -2331,7 +2331,7 @@ async function doBuild(id){
     </div>
     <div class="row" style="margin-top:12px"><button class="btn" onclick="go()">Build now</button></div>`;
   dlg(body,async()=>{
-    await api('POST',`/api/chunks/${id}/build`);
+    if(!(await keyDriveRetry({},b=>api('POST',`/api/chunks/${id}/build`,b))))return;
     toast('Build started — see Jobs');loc('jobs')});
 }
 async function writeDlg(id,name,payload){
@@ -2351,9 +2351,26 @@ async function writeDlg(id,name,payload){
     const body={dest_dir:d,buffer_gb:parseFloat($('#d2').value)||0,block_mb:parseInt($('#d4').value)||0,throttle_mbps:parseFloat($('#d5').value)||0};
     Object.assign(body,volChoice());
     if(!(await destGate(d)))throw new Error('Nothing written: choose what to do about '+d+' first');
-    try{await api('POST',`/api/chunks/${id}/write`,body)}
+    try{if(!(await keyDriveRetry(body,()=>api('POST',`/api/chunks/${id}/write`,body))))return}
     catch(e){if(e.body&&e.body.write_over){writeOverOffer(e.body.write_over,id,'write-over',body);return}throw e}
     toast('Write started — see Jobs');loc('jobs')});}
+/* keyDriveRetry: an encrypted package would land on a drive that holds one of
+   its keystores, or one Obelisk cannot tell apart from them. Say so; only if
+   the user chooses to go ahead is the request sent again with the override.
+   Resolves false when the user cancels. */
+async function keyDriveRetry(body,send){
+  try{await send(body);return true}
+  catch(e){if(!(e.body&&e.body.key_drive))throw e;
+    if(!(await keyDriveOffer(e.body.error)))return false;
+    body.allow_key_drive=true;await send(body);return true}}
+function keyDriveOffer(msg){return new Promise(res=>{
+  let d=$('#dkeydrive');if(!d){d=document.createElement('dialog');d.id='dkeydrive';document.body.append(d)}
+  d.innerHTML=`<h1>The key would sit beside this package</h1><div style="margin:6px 0">${esc(msg)}</div>
+    <div class="dim" style="margin:6px 0">Anyone who has that drive would have the key, and losing it would lose both. If you go ahead, the job reports what to move afterwards.</div>
+    <div class="row" style="margin-top:12px"><button class="btn" id="dkdno">Cancel</button> <button class="btn ghost" id="dkdgo" style="color:var(--bad)">Write here anyway</button></div>`;
+  d.querySelector('#dkdno').onclick=()=>{d.close();res(false)};
+  d.querySelector('#dkdgo').onclick=()=>{d.close();res(true)};
+  d.showModal()})}
 /* writeOverOffer: a write found files at its target. Say what is there (this
    build intact, a partial earlier write, or something else); offer Verify for
    an intact copy, and only then the gated Overwrite, which lists the files. */

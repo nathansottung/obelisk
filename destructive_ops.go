@@ -30,7 +30,7 @@ func init() {
 			}
 			c := a.Store.Chunk(id)
 			return runJob(a, "write", "Re-write "+c.Name+" copy", func(pr func(float64, string)) (map[string]any, error) {
-				return a.RewriteCopy(id, vol, paramFloat(p, "buffer_gb"), paramInt(p, "block_mb"), paramFloat(p, "throttle_mbps"), pr)
+				return a.RewriteCopy(id, vol, paramFloat(p, "buffer_gb"), paramInt(p, "block_mb"), paramFloat(p, "throttle_mbps"), pr, paramKeyDrive(p))
 			})
 		},
 	}
@@ -305,6 +305,13 @@ func rewriteCopyTargets(a *App, p map[string]any) ([]destructiveTarget, error) {
 	return append(out, files...), nil
 }
 
+// paramKeyDrive is the key-drive override (key_placement.go) the user chose for
+// an operation: allow_key_drive set to true.
+func paramKeyDrive(p map[string]any) PackageWriteOptions {
+	v, _ := p["allow_key_drive"].(bool)
+	return PackageWriteOptions{AllowKeyDrive: v}
+}
+
 func paramFloat(p map[string]any, k string) float64 {
 	v, _ := p[k].(float64)
 	return v
@@ -329,7 +336,7 @@ func init() {
 			}
 			c := a.Store.Chunk(id)
 			return runJob(a, "write", "Write "+c.Name+" over "+dest, func(pr func(float64, string)) (map[string]any, error) {
-				return a.WriteChunkOver(id, dest, paramFloat(p, "buffer_gb"), paramInt(p, "block_mb"), paramFloat(p, "throttle_mbps"), vol, pr)
+				return a.WriteChunkOver(id, dest, paramFloat(p, "buffer_gb"), paramInt(p, "block_mb"), paramFloat(p, "throttle_mbps"), vol, pr, paramKeyDrive(p))
 			})
 		},
 	}
@@ -393,7 +400,7 @@ func init() {
 			}
 			c := a.Store.Chunk(id)
 			return runJob(a, "write", "Span-write next segment of "+c.Name+" over "+dest, func(pr func(float64, string)) (map[string]any, error) {
-				return a.SpanWriteNextOver(id, dest, paramFloat(p, "buffer_gb"), paramInt(p, "block_mb"), paramFloat(p, "throttle_mbps"), vol, pr)
+				return a.SpanWriteNextOver(id, dest, paramFloat(p, "buffer_gb"), paramInt(p, "block_mb"), paramFloat(p, "throttle_mbps"), vol, pr, paramKeyDrive(p))
 			})
 		},
 	}

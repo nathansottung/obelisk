@@ -297,8 +297,8 @@ func (a *App) refreshChunkStatus(c *Chunk) {
 	}
 }
 
-func (a *App) WriteChunk(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string)) (map[string]any, error) {
-	return a.writeChunk(nil, id, destDir, bufferGB, blockMB, throttleMbps, volumeID, progress, false)
+func (a *App) WriteChunk(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string), opts ...PackageWriteOptions) (map[string]any, error) {
+	return a.writeChunk(nil, id, destDir, bufferGB, blockMB, throttleMbps, volumeID, progress, false, packageWriteOptions(opts))
 }
 
 // chunkWritable is the check that a package can be written from staging now.
@@ -327,7 +327,7 @@ func chunkStagedForWrite(c *Chunk) error {
 // folder for destDir (a re-write), or into destDir opened here when out is nil.
 // With rewrite, the copy at that folder becomes history only once the new one is
 // fully on the medium, or at once if its payload was replaced by different bytes.
-func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string), rewrite bool) (map[string]any, error) {
+func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string), rewrite bool, opts PackageWriteOptions) (map[string]any, error) {
 	cfg, cfgErr := a.LoadConfig()
 	if cfgErr != nil {
 		return nil, cfgErr
@@ -355,6 +355,11 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 		return nil, fmt.Errorf("package %d not found", id)
 	}
 	if err := chunkWritable(c); err != nil {
+		return nil, err
+	}
+	// An encrypted package never goes to a drive that holds its key.
+	keyNotice, err := a.checkKeyPlacement(c, destDir, cfg.KeystorePaths, opts.AllowKeyDrive)
+	if err != nil {
 		return nil, err
 	}
 	enc := payloadPathIn(c.StagedDir, c)
@@ -539,15 +544,19 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 	} else {
 		progress(1.0, "read-back MISMATCH — copy marked failed")
 	}
-	return map[string]any{"chunk": c.Name, "dest": dest, "verify_ok": ok,
-		"status": c.Status, "verified_copies": c.VerifiedCopyCount(), "ring_buffer": stats}, nil
+	res := map[string]any{"chunk": c.Name, "dest": dest, "verify_ok": ok,
+		"status": c.Status, "verified_copies": c.VerifiedCopyCount(), "ring_buffer": stats}
+	if keyNotice != "" {
+		res["key_drive_notice"] = keyNotice
+	}
+	return res, nil
 }
 
 // RewriteCopy re-writes the package's copy on volumeID from staging to the same
 // destination folder. Once the write succeeds the old record is retained in history
 // (superseded=true) beside a fresh Copy; a write that fails leaves a good copy
 // current. This is the "Re-write this copy" affordance for a failed medium.
-func (a *App) RewriteCopy(id, volumeID int, bufferGB float64, blockMB int, throttleMbps float64, progress func(float64, string)) (map[string]any, error) {
+func (a *App) RewriteCopy(id, volumeID int, bufferGB float64, blockMB int, throttleMbps float64, progress func(float64, string), opts ...PackageWriteOptions) (map[string]any, error) {
 	c := a.Store.Chunk(id)
 	if c == nil {
 		return nil, fmt.Errorf("package %d not found", id)
@@ -576,7 +585,7 @@ func (a *App) RewriteCopy(id, volumeID int, bufferGB float64, blockMB int, throt
 		return nil, err
 	}
 	defer out.Close()
-	return a.writeChunk(out, id, filepath.Dir(dest), bufferGB, blockMB, throttleMbps, volumeID, progress, true)
+	return a.writeChunk(out, id, filepath.Dir(dest), bufferGB, blockMB, throttleMbps, volumeID, progress, true, packageWriteOptions(opts))
 }
 
 // packageBeingBuilt is why a check of this package has to wait.
@@ -1105,11 +1114,11 @@ var destFree = diskFree
 // WriteChunkOver writes the package to destDir over what is already in its
 // folder there. Only the delete gate's "write-over" runs it, after the typed word
 // (removal_rule_test.go, gateOnly).
-func (a *App) WriteChunkOver(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string)) (map[string]any, error) {
+func (a *App) WriteChunkOver(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string), opts ...PackageWriteOptions) (map[string]any, error) {
 	out, err := a.openOutFolderOver(destDir)
 	if err != nil {
 		return nil, err
 	}
 	defer out.Close()
-	return a.writeChunk(out, id, destDir, bufferGB, blockMB, throttleMbps, volumeID, progress, true)
+	return a.writeChunk(out, id, destDir, bufferGB, blockMB, throttleMbps, volumeID, progress, true, packageWriteOptions(opts))
 }

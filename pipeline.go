@@ -542,11 +542,26 @@ func (a *App) Passphrase(ref string) (string, error) {
 }
 
 // mergeReadableKeystores reads every keystore in paths with the strict reader
-// and checks they merge, returning what was read.
-func (a *App) mergeReadableKeystores(paths []string) ([]*keystoreFile, error) {
+// and checks they merge, returning what was read. withPrev also reads the
+// earlier copy an interrupted write left beside a keystore (which recovery
+// merges in), standing in for a keystore that cannot be read without it.
+func (a *App) mergeReadableKeystores(paths []string, withPrev bool) ([]*keystoreFile, error) {
 	stores := make([]*keystoreFile, 0, len(paths))
 	for _, p := range paths {
 		ks, err := a.readExistingKeystore(p, false)
+		if withPrev {
+			if _, serr := os.Lstat(p + keystorePrevSuffix); serr == nil {
+				prev, perr := a.readExistingKeystore(p+keystorePrevSuffix, false)
+				if perr != nil {
+					return nil, fmt.Errorf("keystore %s has an earlier copy from an interrupted write that cannot be read; keep both files and restore by hand: %w", p, perr)
+				}
+				if err != nil {
+					ks, err = prev, nil
+				} else {
+					stores = append(stores, prev)
+				}
+			}
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -598,7 +613,7 @@ func (a *App) syncKeystores() (KeySyncReport, error) {
 	// A read-only check first, so a set that will be refused (a keystore missing,
 	// invalid or in conflict) is refused before anything is made. The same checks
 	// are made again with the lock held, which is what the writes rely on.
-	if _, err := a.mergeReadableKeystores(paths); err != nil {
+	if _, err := a.mergeReadableKeystores(paths, true); err != nil {
 		return rep, err
 	}
 	// A keystore's folder may have become a source since it was configured.
@@ -621,7 +636,7 @@ func (a *App) syncKeystores() (KeySyncReport, error) {
 			rep.Recovered = append(rep.Recovered, p)
 		}
 	}
-	stores, err := a.mergeReadableKeystores(paths)
+	stores, err := a.mergeReadableKeystores(paths, false)
 	if err != nil {
 		return rep, err
 	}
@@ -1219,7 +1234,7 @@ func chunkNeedsRestaging(c *Chunk) bool {
 
 // BuildChunk builds a package. A rebuild gives the package a new key and hash; each
 // copy already on media keeps the ones it was written with.
-func (a *App) BuildChunk(id int, progress func(float64, string)) error {
+func (a *App) BuildChunk(id int, progress func(float64, string), opts ...PackageWriteOptions) error {
 	cfg, cfgErr := a.LoadConfig()
 	if cfgErr != nil {
 		return cfgErr
@@ -1267,9 +1282,11 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 		_ = a.Store.SetChunkSegments(c, oldSegments)
 	}
 	if c.Encrypted {
-		// An encrypted build can be the first key-generation operation. Keep
-		// that initialization workflow separate from strict replica status/sync.
-		if st := a.keystoreStatus(cfg.KeystorePaths, true); !st["ok"].(bool) {
+		// An encrypted build does not start unless every keystore is present,
+		// readable and in agreement: its key is issued only once it is in all of
+		// them (GenerateKey), and a build must not begin on a set that cannot take
+		// it. A first key is made with key generation (Keys), not by a build.
+		if st := a.keystoreStatus(cfg.KeystorePaths, false); !st["ok"].(bool) {
 			return fmt.Errorf("refusing to encrypt: %s", st["reason"])
 		}
 	}
@@ -1300,6 +1317,14 @@ func (a *App) BuildChunk(id int, progress func(float64, string)) error {
 	// destination guard's source check, by where it really is.
 	if err := a.Store.CheckOutsideSources(cfg.StagingDir); err != nil {
 		return err
+	}
+	// The encrypted payload is made in staging: never on a drive holding its key.
+	keyNotice, err := a.checkKeyPlacement(c, cfg.StagingDir, cfg.KeystorePaths, packageWriteOptions(opts).AllowKeyDrive)
+	if err != nil {
+		return err
+	}
+	if keyNotice != "" {
+		progress(0.01, keyNotice)
 	}
 	releaseStaging, err := a.Store.reserveOutputPath(cfg.StagingDir)
 	if err != nil {
