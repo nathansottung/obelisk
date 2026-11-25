@@ -136,20 +136,20 @@ func TestKeyPlacement_RewriteCopyOnKeystoreDrive(t *testing.T) {
 	wantPrepareKeyDrive(t, app, "rewrite-copy", map[string]any{"id": float64(c.ID), "volume_id": float64(cp.VolumeID)})
 }
 
-// A keystore whose drive is unplugged is placed by the drive it was last seen
-// on: being put away is not a reason to refuse every write, and a write to the
-// drive it lives on still refuses. A keystore never seen online stays unknown,
-// and says to reconnect it rather than to move it.
-func TestKeyPlacement_UnpluggedKeystoreUsesLastSeenDrive(t *testing.T) {
+// A keystore whose drive is not connected cannot be placed. Its drive number
+// is no guide: disk numbers are handed out as drives are plugged in, so the
+// put-away keystore's drive can come back under another number (and another
+// letter) and be the very destination. So it refuses, with nothing remembered
+// from an earlier sighting, and says to reconnect it rather than to move it.
+func TestKeyPlacement_DisconnectedKeystoreRefusesAndSaysReconnect(t *testing.T) {
 	app, _ := newTestApp(t, nativeTools(t))
 	root := t.TempDir()
 	ks1, ks2 := filepath.Join(root, "k1", "keys.json"), filepath.Join(root, "k2", "keys.json")
-	other, onK2 := filepath.Join(root, "d"), filepath.Join(root, "k2dest")
+	back := filepath.Join(root, "f") // keystore 2's drive, plugged in again elsewhere
 	devs := map[string]string{
-		filepath.Join(root, "k1"):     "disk-1",
-		filepath.Join(root, "k2"):     "disk-2",
-		filepath.Join(root, "d"):      "disk-4",
-		filepath.Join(root, "k2dest"): "disk-2",
+		filepath.Join(root, "k1"): "disk-1",
+		filepath.Join(root, "k2"): "disk-2",
+		back:                      "disk-3",
 	}
 	unplugged := map[string]bool{}
 	prev := keystoreDeviceOf
@@ -173,36 +173,24 @@ func TestKeyPlacement_UnpluggedKeystoreUsesLastSeenDrive(t *testing.T) {
 	enc := &Chunk{Name: "ENC-AWAY", Encrypted: true}
 	keys := []string{ks1, ks2}
 
-	if _, err := app.checkKeyPlacement(enc, other, keys, false); err != nil {
-		t.Fatalf("both keystores present: %v", err)
+	// Seen connected first, then put away and plugged in again as disk-3.
+	if _, err := app.checkKeyPlacement(enc, back, keys, false); err != nil {
+		t.Fatalf("both keystores present, another drive: %v", err)
 	}
 	unplugged[filepath.Join(root, "k2")] = true
-	if _, err := app.checkKeyPlacement(enc, other, keys, false); err != nil {
-		t.Fatalf("keystore 2 put away, writing to another drive: %v", err)
-	}
-	_, err := app.checkKeyPlacement(enc, onK2, keys, false)
+	_, err := app.checkKeyPlacement(enc, back, keys, false)
 	var kd *KeyDriveError
-	if !errors.As(err, &kd) || len(kd.Same) != 1 || kd.Same[0] != ks2 {
-		t.Fatalf("a write to the put-away keystore's drive: %v", err)
-	}
-	// What was last seen outlives this run.
-	fresh := &App{DataDir: app.DataDir, Store: app.Store}
-	if _, err := fresh.checkKeyPlacement(enc, other, keys, false); err != nil {
-		t.Fatalf("after a restart: %v", err)
-	}
-
-	ks3 := filepath.Join(root, "k3", "keys.json")
-	devs[filepath.Join(root, "k3")] = "disk-5"
-	unplugged[filepath.Join(root, "k3")] = true
-	_, err = app.checkKeyPlacement(enc, other, []string{ks1, ks3}, false)
-	if !errors.As(err, &kd) || len(kd.Unseen) != 1 || kd.Unseen[0] != ks3 || len(kd.Unknown) != 0 {
-		t.Fatalf("a keystore never seen: %v", err)
+	if !errors.As(err, &kd) || len(kd.Offline) != 1 || kd.Offline[0] != ks2 || len(kd.Unknown) != 0 {
+		t.Fatalf("a write while keystore 2 is not connected: %v", err)
 	}
 	if !strings.Contains(err.Error(), "reconnect") {
 		t.Errorf("the refusal does not say to reconnect the keystore: %v", err)
 	}
-	n, err := app.checkKeyPlacement(enc, other, []string{ks1, ks3}, true)
+	n, err := app.checkKeyPlacement(enc, back, keys, true)
 	if err != nil || !strings.Contains(strings.ToLower(n), "reconnect") || strings.Contains(n, "Move the keystore") {
-		t.Fatalf("the override notice for an unseen keystore: %q %v", n, err)
+		t.Fatalf("the override notice for a disconnected keystore: %q %v", n, err)
+	}
+	if _, err := os.Stat(filepath.Join(app.DataDir, "keystore-drives.json")); err == nil {
+		t.Fatal("a keystore's drive number was remembered")
 	}
 }

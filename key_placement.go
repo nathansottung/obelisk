@@ -12,21 +12,16 @@ package main
 // too. The user may override for one write; the write then carries a notice
 // saying what was done and what to do about it.
 //
-// A keystore kept on a drive that is put away (unplugged) is placed by the
-// drive it was last seen on, which Obelisk remembers in keystore-drives.json in
-// its data folder: the drive's identity is its physical disks, which do not
-// change while it is away. One never seen connected cannot be placed, refuses,
-// and says to reconnect it.
+// A keystore whose drive is not connected cannot be placed, and its drive is
+// not remembered from an earlier sighting: disk numbers are handed out as
+// drives are plugged in, so a put-away keystore's drive can come back under
+// another number and be the very destination. It refuses, and says to
+// reconnect the keystore rather than to move it.
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"reflect"
 	"strings"
-	"sync"
 )
 
 // PackageWriteOptions are the user's choices for one package write.
@@ -52,7 +47,7 @@ type KeyDriveError struct {
 	Dest    string
 	Same    []string // keystores on the destination's drive
 	Unknown []string // the destination or keystores whose drive could not be identified
-	Unseen  []string // keystores not connected now and never seen connected
+	Offline []string // keystores whose drive is not connected
 }
 
 func (e *KeyDriveError) Error() string {
@@ -63,8 +58,8 @@ func (e *KeyDriveError) Error() string {
 	if len(e.Unknown) > 0 {
 		why = append(why, fmt.Sprintf("Obelisk cannot tell which drive %s is on, so it cannot show the key is kept apart from the package", strings.Join(e.Unknown, ", ")))
 	}
-	if len(e.Unseen) > 0 {
-		why = append(why, fmt.Sprintf("keystore %s is not connected and Obelisk has never seen which drive it is on; reconnect it once so Obelisk can check", strings.Join(e.Unseen, ", ")))
+	if len(e.Offline) > 0 {
+		why = append(why, fmt.Sprintf("keystore %s is not connected, so Obelisk cannot check which drive it is on; reconnect it so Obelisk can check", strings.Join(e.Offline, ", ")))
 	}
 	return fmt.Sprintf("refusing to write encrypted package %s: %s. A key may sit on a drive only if nothing on that drive is encrypted with it. Choose a destination on another drive, move the keystore, or reconnect it; to write here anyway, confirm the key-drive override (allow_key_drive)", e.Package, strings.Join(why, "; "))
 }
@@ -81,9 +76,9 @@ func (e *KeyDriveError) Notice() string {
 	if len(e.Same) > 0 || len(e.Unknown) > 0 {
 		todo = append(todo, "Move the keystore to a drive that holds no package encrypted with its keys, then run key sync.")
 	}
-	if len(e.Unseen) > 0 {
-		what = append(what, fmt.Sprintf("while keystore %s was not connected and its drive had never been seen", strings.Join(e.Unseen, ", ")))
-		todo = append(todo, fmt.Sprintf("Reconnect keystore %s and check that its drive holds no package encrypted with its keys.", strings.Join(e.Unseen, ", ")))
+	if len(e.Offline) > 0 {
+		what = append(what, fmt.Sprintf("while keystore %s was not connected, so its drive could not be checked", strings.Join(e.Offline, ", ")))
+		todo = append(todo, fmt.Sprintf("Reconnect keystore %s and check that its drive holds no package encrypted with its keys.", strings.Join(e.Offline, ", ")))
 	}
 	return fmt.Sprintf("ACTION NEEDED: encrypted package %s was written to %s by your override, %s. %s", e.Package, e.Dest, strings.Join(what, "; "), strings.Join(todo, " "))
 }
@@ -100,21 +95,13 @@ func (a *App) checkKeyPlacement(c *Chunk, dest string, keystores []string, allow
 	if derr != nil {
 		kd.Unknown = append(kd.Unknown, dest)
 	}
-	seen := map[string]string{}
 	for _, p := range keystores {
 		disks, kerr := keyPlacementDevice(p)
 		switch {
-		case kerr == nil:
-			seen[p] = strings.Join(disks, deviceSeparator)
 		case errors.Is(kerr, errNoExistingParent):
-			// Not connected: placed by the drive it was last seen on.
-			last, ok := a.lastSeenKeystoreDrive(p)
-			if !ok {
-				kd.Unseen = append(kd.Unseen, p)
-				continue
-			}
-			disks = strings.Split(last, deviceSeparator)
-		default:
+			kd.Offline = append(kd.Offline, p)
+			continue
+		case kerr != nil:
 			kd.Unknown = append(kd.Unknown, p)
 			continue
 		}
@@ -122,8 +109,7 @@ func (a *App) checkKeyPlacement(c *Chunk, dest string, keystores []string, allow
 			kd.Same = append(kd.Same, p)
 		}
 	}
-	a.rememberKeystoreDrives(seen)
-	if len(kd.Same) == 0 && len(kd.Unknown) == 0 && len(kd.Unseen) == 0 {
+	if len(kd.Same) == 0 && len(kd.Unknown) == 0 && len(kd.Offline) == 0 {
 		return "", nil
 	}
 	if !allow {
@@ -145,77 +131,6 @@ func keyPlacementDevice(path string) ([]string, error) {
 		return nil, errors.New("no drive identity")
 	}
 	return strings.Split(dev, deviceSeparator), nil
-}
-
-// keystoreDrivesMu serialises reads and saves of keystore-drives.json.
-var keystoreDrivesMu sync.Mutex
-
-func (a *App) keystoreDrivesPath() string {
-	if a.DataDir == "" {
-		return ""
-	}
-	return filepath.Join(a.DataDir, "keystore-drives.json")
-}
-
-func keystoreDriveKey(p string) string {
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		abs = p
-	}
-	return strings.ToLower(filepath.Clean(abs))
-}
-
-// readKeystoreDrives is the drive each keystore was last seen on, by path.
-func (a *App) readKeystoreDrives() map[string]string {
-	out := map[string]string{}
-	if path := a.keystoreDrivesPath(); path != "" {
-		if b, err := os.ReadFile(path); err == nil {
-			_ = json.Unmarshal(b, &out)
-		}
-	}
-	return out
-}
-
-// lastSeenKeystoreDrive is the drive identity keystore p was last seen on.
-func (a *App) lastSeenKeystoreDrive(p string) (string, bool) {
-	keystoreDrivesMu.Lock()
-	defer keystoreDrivesMu.Unlock()
-	dev, ok := a.readKeystoreDrives()[keystoreDriveKey(p)]
-	return dev, ok && dev != ""
-}
-
-// rememberKeystoreDrives records the drives the keystores in seen are on now.
-// It is best effort: a record that cannot be saved only means a keystore put
-// away before its drive was recorded refuses as unseen, which is the safe side.
-func (a *App) rememberKeystoreDrives(seen map[string]string) {
-	path := a.keystoreDrivesPath()
-	if path == "" || len(seen) == 0 {
-		return
-	}
-	keystoreDrivesMu.Lock()
-	defer keystoreDrivesMu.Unlock()
-	cur := a.readKeystoreDrives()
-	next := make(map[string]string, len(cur)+len(seen))
-	for k, v := range cur {
-		next[k] = v
-	}
-	for p, dev := range seen {
-		next[keystoreDriveKey(p)] = dev
-	}
-	if reflect.DeepEqual(cur, next) {
-		return
-	}
-	b, err := json.MarshalIndent(next, "", "  ")
-	if err != nil {
-		return
-	}
-	tmp, err := writeStage(path, b, 0o600)
-	if err != nil {
-		return
-	}
-	if err := renameReplacing(tmp, path); err != nil {
-		_ = removeStage(tmp)
-	}
 }
 
 func sharesDisk(a, b []string) bool {
