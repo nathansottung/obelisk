@@ -206,8 +206,8 @@ func (a *App) keystoreStatus(paths []string, allowMissing bool) map[string]any {
 		reason = "Keystores hold different key sets; run key sync."
 	}
 	for _, path := range paths {
-		if _, err := os.Lstat(path + keystorePrevSuffix); err == nil {
-			note := fmt.Sprintf("A write to keystore %s was interrupted; its earlier copy is kept beside it. Run key sync to finish it.", path)
+		if a.keystoreBehindPrev(path) {
+			note := fmt.Sprintf("A write to keystore %s was interrupted or it was damaged; its previous copy beside it holds keys it lacks. Run key sync to merge them back.", path)
 			if warning != "" {
 				warning += " "
 			}
@@ -215,4 +215,19 @@ func (a *App) keystoreStatus(paths []string, allowMissing bool) map[string]any {
 		}
 	}
 	return map[string]any{"ok": len(paths) >= MinKeystores && consistent && rulesErr == nil, "reason": reason, "warning": warning, "min_required": MinKeystores, "stores": rows}
+}
+
+// keystoreBehindPrev reports whether the previous generation kept beside the
+// keystore at path holds a key the keystore lacks (or the keystore cannot be
+// read while that copy can): what key sync then merges back.
+func (a *App) keystoreBehindPrev(path string) bool {
+	if _, err := os.Lstat(path + keystorePrevSuffix); err != nil {
+		return false
+	}
+	prev, err := a.readExistingKeystore(path+keystorePrevSuffix, false)
+	if err != nil {
+		return true
+	}
+	cur, err := a.readExistingKeystore(path, false)
+	return err != nil || !keystoreCovers(cur, prev)
 }

@@ -11,13 +11,14 @@ package main
 // a byte-range lock on Windows would stop readers and the rename that publishes
 // it. The lock files stay in place, for the reason given in dataowner.go.
 //
-// Each keystore write keeps the previous generation (keys.json.prev) until the
-// new file has been renamed into place, flushed and read back. A crash at any
-// point leaves either the new file whole, or the old file whole beside a
-// .prev copy of it; the next key change, and every passphrase lookup, reads the
-// .prev copy too, so a key that was in a keystore before the crash is still
-// readable after it. Keys are only ever added, so recovering merges the two
-// generations and never chooses one over the other.
+// Each keystore write first keeps the previous generation beside it
+// (keys.json.prev), then stages, flushes, renames and reads back the new one.
+// A crash at any point leaves the new file whole, or the old file whole, and
+// the previous generation whole beside it. Every passphrase lookup reads the
+// previous generation too, and every key change first merges it back in, so a
+// key that was in a keystore before the crash is still readable after it. Keys
+// are only ever added, so recovering is a union and never chooses one
+// generation over the other. Nothing here removes a file.
 
 import (
 	"bytes"
@@ -128,11 +129,13 @@ func lockKeystores(paths []string, makeFolders bool) (release func(), err error)
 	return release, nil
 }
 
-// recoverKeystore finishes a keystore write a crash interrupted. Called with the
-// keystore lock held. A keystore with no .prev copy needs nothing. Otherwise the
-// two generations are merged (keys are only added, so the union loses nothing)
-// and the result published; a missing or unreadable keystore is rebuilt from its
-// .prev copy. A .prev copy that cannot be read is left for the user and refuses.
+// recoverKeystore merges a keystore's previous generation (keys.json.prev) into
+// it, with the keystore lock held. Keys are only ever added, so the previous
+// generation normally holds nothing the keystore lacks and this changes nothing.
+// When a crash or damage left the keystore behind it, or unreadable, the union is
+// published: recovery never chooses one generation over the other. A previous
+// generation that cannot be read, or that disagrees, refuses and is left for the
+// user.
 func (a *App) recoverKeystore(path string) (recovered bool, err error) {
 	prevPath := path + keystorePrevSuffix
 	if _, err := os.Lstat(prevPath); os.IsNotExist(err) {
@@ -140,15 +143,19 @@ func (a *App) recoverKeystore(path string) (recovered bool, err error) {
 	}
 	prev, err := a.readExistingKeystore(prevPath, false)
 	if err != nil {
-		return false, fmt.Errorf("keystore %s has an earlier copy from an interrupted write that cannot be read; keep both files and restore by hand: %w", path, err)
+		return false, fmt.Errorf("the previous copy of keystore %s cannot be read; keep both files and restore by hand: %w", path, err)
+	}
+	cur, cerr := a.readExistingKeystore(path, false)
+	if cerr == nil && keystoreCovers(cur, prev) {
+		return false, nil // nothing to recover
 	}
 	stores := []*keystoreFile{prev}
-	if cur, cerr := a.readExistingKeystore(path, false); cerr == nil {
+	if cerr == nil {
 		stores = append(stores, cur)
 	}
 	merged, err := mergeKeystores(stores)
 	if err != nil {
-		return false, fmt.Errorf("keystore %s and its earlier copy from an interrupted write disagree; keep both files and reconcile by hand: %w", path, err)
+		return false, fmt.Errorf("keystore %s and its previous copy disagree; keep both files and reconcile by hand: %w", path, err)
 	}
 	if err := a.publishKeystore(path, merged); err != nil {
 		return false, err
@@ -156,10 +163,28 @@ func (a *App) recoverKeystore(path string) (recovered bool, err error) {
 	return true, nil
 }
 
-// publishKeystore writes ks to path with the keystore lock held, keeping the
-// previous generation until the new one is on disk and reads back as exactly
-// ks. On a failed read-back the previous generation is put back. Cleanup is not
-// deferred, so a crash (a test's panic) leaves the files as a crash would.
+// keystoreCovers reports whether cur holds every key of prev, with its secret.
+func keystoreCovers(cur, prev *keystoreFile) bool {
+	have := map[string]any{}
+	for _, k := range cur.Keys {
+		have[k["key_ref"].(string)] = k["passphrase"]
+	}
+	for _, k := range prev.Keys {
+		if v, ok := have[k["key_ref"].(string)]; !ok || v != k["passphrase"] {
+			return false
+		}
+	}
+	return true
+}
+
+// publishKeystore writes ks to path with the keystore lock held. The previous
+// generation is kept beside it (keys.json.prev) before the new one is written,
+// and stays there: the new file is staged, flushed, renamed into place and read
+// back as exactly ks. The previous copy is refreshed only from a keystore that
+// reads whole and holds every key it already has, so it never loses a key; it is
+// never removed. On a failed read-back the generation kept by this write is put
+// back. Cleanup is not deferred, so a crash (a test's panic) leaves the files as
+// a crash would.
 func (a *App) publishKeystore(path string, ks *keystoreFile) error {
 	if a.keystoreMutationObserver != nil {
 		a.keystoreMutationObserver(path)
@@ -175,45 +200,49 @@ func (a *App) publishKeystore(path string, ks *keystoreFile) error {
 	dir := filepath.Dir(path)
 	prevPath := path + keystorePrevSuffix
 
-	// 1. Keep the previous generation. One left by an interrupted write is kept
-	// as it is: recoverKeystore merged it into what is being written now.
-	havePrev, madePrev := false, false
-	if _, err := os.Lstat(prevPath); err == nil {
-		havePrev = true
-	} else if old, rerr := os.ReadFile(path); rerr == nil {
-		tmp, err := writeStage(prevPath, old, 0o600)
-		if err != nil {
-			return fmt.Errorf("cannot keep the previous copy of keystore %s: %w", path, err)
+	// 1. Keep the previous generation.
+	keptNow := false
+	old, rerr := os.ReadFile(path)
+	switch {
+	case rerr == nil:
+		cur, cerr := a.readExistingKeystore(path, false)
+		refresh := cerr == nil
+		if refresh {
+			if _, serr := os.Lstat(prevPath); serr == nil {
+				prev, perr := a.readExistingKeystore(prevPath, false)
+				refresh = perr == nil && keystoreCovers(cur, prev)
+			}
 		}
-		if err := renameReplacing(tmp, prevPath); err != nil {
-			_ = removeStage(tmp)
-			return fmt.Errorf("cannot keep the previous copy of keystore %s: %w", path, err)
+		if refresh {
+			tmp, err := writeStage(prevPath, old, 0o600)
+			if err != nil {
+				return fmt.Errorf("cannot keep the previous copy of keystore %s: %w", path, err)
+			}
+			if err := renameReplacing(tmp, prevPath); err != nil {
+				_ = removeStage(tmp)
+				return fmt.Errorf("cannot keep the previous copy of keystore %s: %w", path, err)
+			}
+			if err := flushFile(prevPath); err != nil {
+				return fmt.Errorf("the previous copy of keystore %s may not have reached the disk: %w", path, err)
+			}
+			if err := syncDir(dir); err != nil {
+				return fmt.Errorf("cannot flush keystore folder %s: %w", dir, err)
+			}
+			keptNow = true
 		}
-		if err := syncDir(dir); err != nil {
-			return fmt.Errorf("cannot flush keystore folder %s: %w", dir, err)
-		}
-		havePrev, madePrev = true, true
-	} else if !os.IsNotExist(rerr) {
+	case !os.IsNotExist(rerr):
 		return fmt.Errorf("cannot read keystore %s before changing it: %w", path, rerr)
 	}
 	noteKeystoreStep("prev-kept", path)
 
-	// 2. The new generation, staged, flushed and renamed into place. If it never
-	// takes the name, the keystore is unchanged and a copy made here is let go.
-	dropMadePrev := func() {
-		if madePrev {
-			_ = os.Remove(prevPath)
-		}
-	}
+	// 2. The new generation, staged, flushed and renamed into place.
 	tmp, err := writeStage(path, b, 0o600)
 	if err != nil {
-		dropMadePrev()
 		return err
 	}
 	noteKeystoreStep("staged", path)
 	if err := renameReplacing(tmp, path); err != nil {
 		_ = removeStage(tmp)
-		dropMadePrev()
 		return err
 	}
 	if err := flushFile(path); err != nil {
@@ -226,26 +255,16 @@ func (a *App) publishKeystore(path string, ks *keystoreFile) error {
 
 	// 3. Read it back: it must hold exactly what was written.
 	if err := a.keystoreReadsBack(path, ks); err != nil {
-		if havePrev {
-			if old, rerr := os.ReadFile(prevPath); rerr == nil {
-				if t, werr := writeStage(path, old, 0o600); werr == nil {
-					if renameReplacing(t, path) != nil {
-						_ = removeStage(t)
-					}
+		if keptNow {
+			if t, werr := writeStage(path, old, 0o600); werr == nil {
+				if renameReplacing(t, path) != nil {
+					_ = removeStage(t)
 				}
 			}
 		}
 		return err
 	}
 	noteKeystoreStep("read-back", path)
-
-	// 4. Only now is the previous generation let go.
-	if havePrev {
-		if err := os.Remove(prevPath); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("keystore %s was written, but its previous copy could not be removed: %w", path, err)
-		}
-		_ = syncDir(dir)
-	}
 	noteKeystoreStep("done", path)
 	return nil
 }

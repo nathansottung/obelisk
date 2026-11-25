@@ -58,11 +58,21 @@ func kvAllHold(t *testing.T, paths []string, want map[string]string) map[string]
 	return first
 }
 
+// kvNoPrev checks that nothing is left to recover: each previous generation
+// kept beside a keystore is whole and holds no key the keystore lacks.
 func kvNoPrev(t *testing.T, paths []string) {
 	t.Helper()
 	for _, p := range paths {
-		if _, err := os.Lstat(p + keystorePrevSuffix); err == nil {
-			t.Errorf("an earlier copy is still beside %s", p)
+		if _, err := os.Lstat(p + keystorePrevSuffix); err != nil {
+			continue
+		}
+		prev, err := readStore(p + keystorePrevSuffix)
+		if err != nil {
+			t.Fatalf("the previous copy beside %s is not whole: %v", p, err)
+		}
+		cur, err := readStore(p)
+		if err != nil || !keystoreCovers(cur, prev) {
+			t.Errorf("the previous copy beside %s holds keys it lacks", p)
 		}
 	}
 }
