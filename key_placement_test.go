@@ -38,6 +38,16 @@ func stubDevices(t *testing.T, devs map[string]string) {
 	t.Cleanup(func() { keystoreDeviceOf = prev })
 }
 
+// writeKeystoreStub puts a keystore file at p, for placement checks, which
+// place a keystore only by its own file.
+func writeKeystoreStub(t *testing.T, p string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, p, `{"keys":[]}`)
+}
+
 func within(prefix, p string) bool {
 	rel, err := filepath.Rel(prefix, p)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
@@ -59,6 +69,10 @@ func TestKeyPlacement_Rule(t *testing.T) {
 	}
 	app := &App{Store: st}
 	enc := &Chunk{Name: "ENC-1", Encrypted: true}
+	unknownKS := filepath.Join(root, "u", "keys.json")
+	for _, p := range []string{ks1, ks2, unknownKS} {
+		writeKeystoreStub(t, p)
+	}
 	keys := []string{ks1, ks2}
 
 	t.Run("plaintext is not checked", func(t *testing.T) {
@@ -91,7 +105,7 @@ func TestKeyPlacement_Rule(t *testing.T) {
 		}
 	})
 	t.Run("unknown keystore refuses", func(t *testing.T) {
-		_, err := app.checkKeyPlacement(enc, other, []string{ks1, filepath.Join(root, "u", "keys.json")}, false)
+		_, err := app.checkKeyPlacement(enc, other, []string{ks1, unknownKS}, false)
 		var kd *KeyDriveError
 		if !errors.As(err, &kd) || len(kd.Unknown) != 1 {
 			t.Fatalf("unknown keystore not refused: %v", err)

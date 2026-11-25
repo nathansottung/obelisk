@@ -21,6 +21,8 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"strings"
 )
 
@@ -96,6 +98,18 @@ func (a *App) checkKeyPlacement(c *Chunk, dest string, keystores []string, allow
 		kd.Unknown = append(kd.Unknown, dest)
 	}
 	for _, p := range keystores {
+		// A keystore is placed only by its own file. The folder above a missing
+		// file may now be another drive at the keystore's letter, while the
+		// keystore's drive is plugged in elsewhere.
+		fi, serr := os.Stat(p)
+		if errors.Is(serr, fs.ErrNotExist) {
+			kd.Offline = append(kd.Offline, p)
+			continue
+		}
+		if serr != nil || !fi.Mode().IsRegular() {
+			kd.Unknown = append(kd.Unknown, p)
+			continue
+		}
 		disks, kerr := keyPlacementDevice(p)
 		switch {
 		case errors.Is(kerr, errNoExistingParent):

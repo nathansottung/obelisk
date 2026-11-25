@@ -172,6 +172,8 @@ func TestKeyPlacement_DisconnectedKeystoreRefusesAndSaysReconnect(t *testing.T) 
 	t.Cleanup(func() { keystoreDeviceOf = prev })
 	enc := &Chunk{Name: "ENC-AWAY", Encrypted: true}
 	keys := []string{ks1, ks2}
+	writeKeystoreStub(t, ks1)
+	writeKeystoreStub(t, ks2)
 
 	// Seen connected first, then put away and plugged in again as disk-3.
 	if _, err := app.checkKeyPlacement(enc, back, keys, false); err != nil {
@@ -192,5 +194,35 @@ func TestKeyPlacement_DisconnectedKeystoreRefusesAndSaysReconnect(t *testing.T) 
 	}
 	if _, err := os.Stat(filepath.Join(app.DataDir, "keystore-drives.json")); err == nil {
 		t.Fatal("a keystore's drive number was remembered")
+	}
+}
+
+// A keystore whose file is not there is not placed by the folder above it: the
+// drive now at its letter may be another drive, while the keystore's own drive
+// is plugged in elsewhere and is the destination. It refuses as disconnected.
+func TestKeyPlacement_MissingKeystoreFileIsNotPlacedByItsFolder(t *testing.T) {
+	app, _ := newTestApp(t, nativeTools(t))
+	root := t.TempDir()
+	ks1, ks2 := filepath.Join(root, "k1", "keys.json"), filepath.Join(root, "k2", "keys.json")
+	for _, p := range []string{ks1, filepath.Dir(ks2)} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite(t, ks1, `{"keys":[]}`)
+	if err := os.MkdirAll(filepath.Dir(ks2), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// k2 is now another drive at the keystore's letter; f is the keystore's drive.
+	back := filepath.Join(root, "f")
+	stubDevices(t, map[string]string{
+		filepath.Join(root, "k1"): "disk-1",
+		filepath.Join(root, "k2"): "disk-7",
+		back:                      "disk-3",
+	})
+	_, err := app.checkKeyPlacement(&Chunk{Name: "ENC-GONE", Encrypted: true}, back, []string{ks1, ks2}, false)
+	var kd *KeyDriveError
+	if !errors.As(err, &kd) || len(kd.Offline) != 1 || kd.Offline[0] != ks2 {
+		t.Fatalf("a keystore whose file is missing: %v", err)
 	}
 }
