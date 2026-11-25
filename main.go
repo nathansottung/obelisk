@@ -2269,8 +2269,12 @@ func api(mux routeRegistrar, app *App) {
 		b := body(r)
 		volumeID := int(f(b, "volume_id"))
 		sourceDir := strings.TrimSpace(s(b, "source_dir"))
+		keyOpt := PackageWriteOptions{AllowKeyDrive: bl(b, "allow_key_drive")}
+		if cfg, err := app.LoadConfig(); err == nil && !keyDriveGate(w, app, c, cfg.StagingDir, keyOpt) {
+			return
+		}
 		startedOn(w).write(runJob(app, "refill", "Refill staging "+c.Name, func(p func(float64, string)) (map[string]any, error) {
-			return app.RefillStaging(id, volumeID, sourceDir, p)
+			return app.RefillStaging(id, volumeID, sourceDir, p, keyOpt)
 		}))
 	})
 	// Settle a copy whose ID two media hold: the medium at its recorded place is the
@@ -2342,7 +2346,13 @@ func api(mux routeRegistrar, app *App) {
 		if !outFolderGate(w, app, dest) {
 			return
 		}
-		// What is already at the target is said first, once the folder is decided,
+		// The key drive is asked about before what is at the target, so a user who
+		// confirms an overwrite there has already chosen the override.
+		keyOpt := PackageWriteOptions{AllowKeyDrive: bl(b, "allow_key_drive")}
+		if !keyDriveGate(w, app, c, dest, keyOpt) {
+			return
+		}
+		// What is already at the target is said next, once the folder is decided,
 		// before any job starts. A volume asked for is made only after.
 		if wo := inspectWriteTarget(c, filepath.Join(dest, c.Name)); wo != nil {
 			writeOverResponse(w, wo)
@@ -2351,10 +2361,6 @@ func api(mux routeRegistrar, app *App) {
 		vol := resolveVolume(app, b)
 		if err := sealGuard(app, vol); err != nil {
 			jsonErr(w, 409, err)
-			return
-		}
-		keyOpt := PackageWriteOptions{AllowKeyDrive: bl(b, "allow_key_drive")}
-		if !keyDriveGate(w, app, c, dest, keyOpt) {
 			return
 		}
 		startedOn(w).write(runJob(app, "write", "Write "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {
@@ -2382,6 +2388,10 @@ func api(mux routeRegistrar, app *App) {
 		if !outFolderGate(w, app, dest) {
 			return
 		}
+		keyOpt := PackageWriteOptions{AllowKeyDrive: bl(b, "allow_key_drive")}
+		if !keyDriveGate(w, app, c, dest, keyOpt) {
+			return
+		}
 		if wo := app.spanTargetConflict(c, filepath.Join(dest, c.Name)); wo != nil {
 			writeOverResponse(w, wo)
 			return
@@ -2389,10 +2399,6 @@ func api(mux routeRegistrar, app *App) {
 		vol := resolveVolume(app, b)
 		if err := sealGuard(app, vol); err != nil {
 			jsonErr(w, 409, err)
-			return
-		}
-		keyOpt := PackageWriteOptions{AllowKeyDrive: bl(b, "allow_key_drive")}
-		if !keyDriveGate(w, app, c, dest, keyOpt) {
 			return
 		}
 		startedOn(w).write(runJob(app, "write", "Span-write next segment of "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {

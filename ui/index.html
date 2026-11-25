@@ -2384,7 +2384,7 @@ function writeOverOffer(wo,id,op,body){
   const v=d.querySelector('#dwoverify');
   if(v)v.onclick=async()=>{d.close();try{const r=await api('POST',`/api/chunks/${id}/verify`,{dest_dir:body.dest_dir});toast(r.verify_ok?'Medium verified ✓':'VERIFY FAILED — medium does not match catalog',!r.verify_ok);vChunks()}catch(e){toast(e.message,1)}};
   d.querySelector('#dwoover').onclick=async()=>{d.close();
-    try{const r=await confirmDestructive(op,Object.assign({id},body));if(r){toast('Write started — see Jobs');loc('jobs')}}catch(e){toast(e.message,1)}};
+    try{let r;if(!(await keyDriveRetry(Object.assign({id},body),async b=>{r=await confirmDestructive(op,b)})))return;if(r){toast('Write started — see Jobs');loc('jobs')}}catch(e){toast(e.message,1)}};
   d.showModal();
 }
 let destT;function checkDest(id){clearTimeout(destT);destT=setTimeout(async()=>{
@@ -2512,13 +2512,13 @@ async function doSettleCopy(id,copyID,keep){
 async function doRefill(id,vol,spanned){
   let source='';
   if(spanned){source=prompt('Folder holding the files of every tape in this set:')||'';if(!source.trim())return}
-  try{await api('POST','/api/chunks/'+id+'/refill',{volume_id:Number(vol),source_dir:source});toast('Refill started — see Jobs');loc('jobs')}catch(e){toast(e.message,1)}}
+  try{if(!(await keyDriveRetry({volume_id:Number(vol),source_dir:source},b=>api('POST','/api/chunks/'+id+'/refill',b))))return;toast('Refill started — see Jobs');loc('jobs')}catch(e){toast(e.message,1)}}
 async function doRewriteCopy(id,vol,label){
   try{const c=await api('GET','/api/chunks/'+id);
     const cp=(c.copies||[]).find(x=>x.volume_id===Number(vol)&&!x.superseded);
     const dir=cp&&cp.path?cp.path.replace(/[\\/][^\\/]*[\\/]?$/,''):'';
     if(dir&&!(await destGate(dir)))return;
-    if(!(await confirmDestructive('rewrite-copy',{id:Number(id),volume_id:Number(vol)})))return;
+    let r;if(!(await keyDriveRetry({id:Number(id),volume_id:Number(vol)},async b=>{r=await confirmDestructive('rewrite-copy',b)}))||!r)return;
     toast('Re-write started — see Jobs. When it verifies, the copy is protected again.');loc('jobs')}catch(e){toast(e.message,1)}}
 
 function volPicker(vols){

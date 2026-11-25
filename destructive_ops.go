@@ -294,6 +294,9 @@ func rewriteCopyTargets(a *App, p map[string]any) ([]destructiveTarget, error) {
 	if err := a.outFolderReady(filepath.Dir(cp.Path)); err != nil {
 		return nil, refuseDestructive(409, "%s", err.Error())
 	}
+	if err := keyDrivePrecheck(a, c, filepath.Dir(cp.Path), p); err != nil {
+		return nil, err
+	}
 	out := []destructiveTarget{recordTarget(fmt.Sprintf("copy of %s on volume %d", c.Name, vol), cp, "marked superseded, and a new copy is written")}
 	files, err := treeTargets(cp.Path, "replaced by the re-written copy")
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -310,6 +313,21 @@ func rewriteCopyTargets(a *App, p map[string]any) ([]destructiveTarget, error) {
 func paramKeyDrive(p map[string]any) PackageWriteOptions {
 	v, _ := p["allow_key_drive"].(bool)
 	return PackageWriteOptions{AllowKeyDrive: v}
+}
+
+// keyDrivePrecheck refuses, before an overwrite is confirmed, a write of
+// encrypted package c to dest on a keystore's drive (key_placement.go), unless
+// the user already chose the override. The write itself checks again.
+func keyDrivePrecheck(a *App, c *Chunk, dest string, p map[string]any) error {
+	if paramKeyDrive(p).AllowKeyDrive {
+		return nil
+	}
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return err
+	}
+	_, err = a.checkKeyPlacement(c, dest, cfg.KeystorePaths, false)
+	return err
 }
 
 func paramFloat(p map[string]any, k string) float64 {
@@ -352,6 +370,9 @@ func writeOverTargets(a *App, p map[string]any) ([]destructiveTarget, error) {
 	dest := paramString(p, "dest_dir")
 	if dest == "" {
 		return nil, refuseDestructive(400, "dest_dir required")
+	}
+	if err := keyDrivePrecheck(a, c, dest, p); err != nil {
+		return nil, err
 	}
 	dir := filepath.Join(dest, c.Name)
 	if inspectWriteTarget(c, dir) == nil {
