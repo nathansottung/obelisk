@@ -205,5 +205,14 @@ func (a *App) keystoreStatus(paths []string, allowMissing bool) map[string]any {
 	case !consistent:
 		reason = "Keystores hold different key sets; run key sync."
 	}
+	for _, path := range paths {
+		if _, err := os.Lstat(path + keystorePrevSuffix); err == nil {
+			note := fmt.Sprintf("A write to keystore %s was interrupted; its earlier copy is kept beside it. Run key sync to finish it.", path)
+			if warning != "" {
+				warning += " "
+			}
+			warning += note
+		}
+	}
 	return map[string]any{"ok": len(paths) >= MinKeystores && consistent && rulesErr == nil, "reason": reason, "warning": warning, "min_required": MinKeystores, "stores": rows}
 }

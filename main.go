@@ -2524,12 +2524,12 @@ func api(mux routeRegistrar, app *App) {
 		jsonOut(w, map[string]any{"key_ref": ref, "passphrase": pass, "fingerprint": fpr})
 	})
 	mux.HandleFunc("POST /api/keys/sync", func(w http.ResponseWriter, r *http.Request) {
-		n, err := app.SyncKeystores()
+		rep, err := app.syncKeystores()
 		if err != nil {
 			jsonErr(w, 400, err)
 			return
 		}
-		jsonOut(w, map[string]any{"key_count": n})
+		jsonOut(w, rep)
 	})
 	mux.HandleFunc("GET /api/keys/{ref}/qr.png", func(w http.ResponseWriter, r *http.Request) {
 		ref := r.PathValue("ref")

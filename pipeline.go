@@ -392,74 +392,147 @@ func (a *App) KeystoreStatus() map[string]any {
 	return st
 }
 
+// GenerateKey makes a new key and saves it to every keystore as one locked key
+// change (keystore_lock.go). The key is returned, and so acknowledged, only once
+// every keystore has been written and read back holding it; a key that reached
+// only some of them is reported as not issued, and nothing is encrypted with it.
+// Generation keeps the first-use workflow: a keystore file that does not exist
+// yet is created. Ordinary sync never treats absence as enrollment.
 func (a *App) GenerateKey(note string) (ref, passphrase, fpr string, err error) {
-	// Generation retains the existing first-use workflow; ordinary sync never
-	// treats absence as enrollment. The same conflict checks still apply.
 	cfg, cfgErr := a.LoadConfig()
 	if cfgErr != nil {
 		return "", "", "", cfgErr
 	}
-	st := a.keystoreStatus(cfg.KeystorePaths, true)
-	if !st["ok"].(bool) {
+	paths := append([]string(nil), cfg.KeystorePaths...)
+	// Checked first without the lock, so a set that will be refused is refused
+	// before anything (a folder, a lock file) is made; checked again under it.
+	if st := a.keystoreStatus(paths, true); !st["ok"].(bool) {
 		return "", "", "", fmt.Errorf("keystore requirement not met: %s", st["reason"])
 	}
-	raw := make([]byte, 36)
-	if _, err = rand.Read(raw); err != nil {
-		return
-	}
-	passphrase = base64.RawURLEncoding.EncodeToString(raw) // 288-bit
-	rb := make([]byte, 4)
-	_, _ = rand.Read(rb)
-	ref = "K-" + strings.ToUpper(hex.EncodeToString(rb))
-	sum := sha256.Sum256([]byte(passphrase))
-	fpr = hex.EncodeToString(sum[:])
-	rec := map[string]any{"key_ref": ref, "algorithm": "GPG-AES256", "passphrase": passphrase,
-		"created_at": time.Now().UTC().Format(time.RFC3339), "note": note}
 	// A keystore's folder may have become a source since it was configured.
-	releaseKeystores, relErr := a.Store.reserveOutputFiles(cfg.KeystorePaths)
+	releaseKeystores, relErr := a.Store.reserveOutputFiles(paths)
 	if relErr != nil {
 		return "", "", "", relErr
 	}
 	defer releaseKeystores()
-	for _, p := range cfg.KeystorePaths {
-		ks, e := readStore(p)
-		if e != nil {
-			return "", "", "", e
-		}
-		ks.Keys = append(ks.Keys, rec)
-		if e := writeStore(p, ks); e != nil {
+	unlock, lockErr := lockKeystores(paths, true)
+	if lockErr != nil {
+		return "", "", "", lockErr
+	}
+	defer unlock()
+	for _, p := range paths {
+		if _, e := a.recoverKeystore(p); e != nil {
 			return "", "", "", e
 		}
 	}
-	a.Store.AddKeyMeta(KeyMeta{Ref: ref, Fingerprint: fpr, Note: note, CreatedAt: time.Now().UTC()})
-	return
+	// Checked with the lock held, so nothing changes the keystores between this
+	// check and the writes below.
+	st := a.keystoreStatus(paths, true)
+	if !st["ok"].(bool) {
+		return "", "", "", fmt.Errorf("keystore requirement not met: %s", st["reason"])
+	}
+	stores := make([]*keystoreFile, 0, len(paths))
+	for _, p := range paths {
+		ks, e := a.readExistingKeystore(p, true)
+		if e != nil {
+			return "", "", "", e
+		}
+		stores = append(stores, ks)
+	}
+	raw := make([]byte, 36)
+	if _, err = rand.Read(raw); err != nil {
+		return "", "", "", err
+	}
+	pass := base64.RawURLEncoding.EncodeToString(raw) // 288-bit
+	rb := make([]byte, 4)
+	if _, err = rand.Read(rb); err != nil {
+		return "", "", "", err
+	}
+	newRef := "K-" + strings.ToUpper(hex.EncodeToString(rb))
+	for _, ks := range stores {
+		if keyRefs(ks)[newRef] {
+			return "", "", "", fmt.Errorf("a generated key reference is already in use; try again")
+		}
+	}
+	sum := sha256.Sum256([]byte(pass))
+	newFpr := hex.EncodeToString(sum[:])
+	rec := map[string]any{"key_ref": newRef, "algorithm": "GPG-AES256", "passphrase": pass,
+		"created_at": time.Now().UTC().Format(time.RFC3339), "note": note}
+	for i, p := range paths {
+		ks := stores[i]
+		ks.Keys = append(ks.Keys, rec)
+		if e := a.publishKeystore(p, ks); e != nil {
+			return "", "", "", fmt.Errorf("the new key was not saved to every keystore, so it was not issued: %w", e)
+		}
+	}
+	// Acknowledged only when every keystore, read again, holds it.
+	if e := a.keystoresHoldRef(paths, newRef); e != nil {
+		return "", "", "", fmt.Errorf("the new key was not saved to every keystore, so it was not issued: %w", e)
+	}
+	a.Store.AddKeyMeta(KeyMeta{Ref: newRef, Fingerprint: newFpr, Note: note, CreatedAt: time.Now().UTC()})
+	return newRef, pass, newFpr, nil
+}
+
+// keystoresHoldRef checks that every keystore in paths can be read and holds
+// ref, under one secret across them.
+func (a *App) keystoresHoldRef(paths []string, ref string) error {
+	var pass string
+	for _, p := range paths {
+		ks, err := a.readExistingKeystore(p, false)
+		if err != nil {
+			return err
+		}
+		found := false
+		for _, k := range ks.Keys {
+			if k["key_ref"] != ref {
+				continue
+			}
+			secret := k["passphrase"].(string) // validated by readExistingKeystore
+			if pass != "" && secret != pass {
+				return fmt.Errorf("keystores hold conflicting secret material for the key; reconcile them first")
+			}
+			pass, found = secret, true
+		}
+		if !found {
+			return fmt.Errorf("keystore %s does not hold the key; reconnect it and run key sync", p)
+		}
+	}
+	return nil
 }
 
 // Passphrase tolerates unavailable replicas for offline recovery, but checks
 // every readable, valid participant for ambiguity in the requested reference.
+// The earlier copy a crash may have left beside a keystore (keys.json.prev) is
+// read too, so a key is found while any one file holding it can be read.
 // Success proves availability, not complete replica consistency.
 func (a *App) Passphrase(ref string) (string, error) {
 	cfg, cfgErr := a.LoadConfig()
 	if cfgErr != nil {
 		return "", cfgErr
 	}
-	paths := append([]string(nil), cfg.KeystorePaths...)
 	var pass string
 	found := false
-	for _, p := range paths {
-		ks, err := a.readExistingKeystore(p, false)
-		if err != nil {
-			continue
-		}
-		for _, k := range ks.Keys {
-			if k["key_ref"] != ref {
+	for _, p := range cfg.KeystorePaths {
+		for _, file := range []string{p, p + keystorePrevSuffix} {
+			if file != p {
+				if _, err := os.Lstat(file); err != nil {
+					continue
+				}
+			}
+			ks, err := a.readExistingKeystore(file, false)
+			if err != nil {
 				continue
 			}
-			secret := k["passphrase"].(string) // validated by readExistingKeystore
-			if found && pass != secret {
-				return "", fmt.Errorf("conflicting secret material for the requested key; reconcile the keystores before recovery")
+			for _, k := range ks.Keys {
+				if k["key_ref"] != ref {
+					continue
+				}
+				secret := k["passphrase"].(string) // validated by readExistingKeystore
+				if found && pass != secret {
+					return "", fmt.Errorf("conflicting secret material for the requested key; reconcile the keystores before recovery")
+				}
+				pass, found = secret, true
 			}
-			pass, found = secret, true
 		}
 	}
 	if !found {
@@ -468,42 +541,122 @@ func (a *App) Passphrase(ref string) (string, error) {
 	return pass, nil
 }
 
-// SyncKeystores validates one participant snapshot before the first mutation.
-// Publication remains sequential: later errors do not roll back earlier stores.
-// This is not a lock against another process changing files after validation.
-func (a *App) SyncKeystores() (int, error) {
-	cfg, cfgErr := a.LoadConfig()
-	if cfgErr != nil {
-		return 0, cfgErr
-	}
-	paths := append([]string(nil), cfg.KeystorePaths...)
-	if len(paths) == 0 {
-		return 0, fmt.Errorf("no keystores configured for synchronization")
-	}
+// mergeReadableKeystores reads every keystore in paths with the strict reader
+// and checks they merge, returning what was read.
+func (a *App) mergeReadableKeystores(paths []string) ([]*keystoreFile, error) {
 	stores := make([]*keystoreFile, 0, len(paths))
 	for _, p := range paths {
 		ks, err := a.readExistingKeystore(p, false)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		stores = append(stores, ks)
 	}
-	out, err := mergeKeystores(stores)
-	if err != nil {
-		return 0, err
+	if _, err := mergeKeystores(stores); err != nil {
+		return nil, err
+	}
+	return stores, nil
+}
+
+// KeySyncReport is what a key sync did: the keys it added to each keystore
+// (by reference, never by secret) and any interrupted write it finished.
+type KeySyncReport struct {
+	KeyCount  int           `json:"key_count"`
+	Added     []KeySyncDiff `json:"added"`
+	Recovered []string      `json:"recovered"`
+}
+
+// KeySyncDiff names the keys one keystore lacked before the sync.
+type KeySyncDiff struct {
+	Keystore string   `json:"keystore"`
+	Keys     []string `json:"keys"`
+}
+
+// SyncKeystores is syncKeystores, reporting the number of keys.
+func (a *App) SyncKeystores() (int, error) {
+	r, err := a.syncKeystores()
+	return r.KeyCount, err
+}
+
+// syncKeystores brings every keystore to the union of their keys, as one locked
+// key change (keystore_lock.go): read, check, merge, write each one and read it
+// back, with no other key change able to run in between. A merge never drops a
+// key; keystores that disagree keep the union and the report names what each
+// lacked. Two different secrets under one reference cannot both be kept, so that
+// refuses and nothing is written. Publication is sequential: a failure partway
+// leaves the earlier keystores updated, never short of a key they held.
+func (a *App) syncKeystores() (KeySyncReport, error) {
+	var rep KeySyncReport
+	cfg, cfgErr := a.LoadConfig()
+	if cfgErr != nil {
+		return rep, cfgErr
+	}
+	paths := append([]string(nil), cfg.KeystorePaths...)
+	if len(paths) == 0 {
+		return rep, fmt.Errorf("no keystores configured for synchronization")
+	}
+	// A read-only check first, so a set that will be refused (a keystore missing,
+	// invalid or in conflict) is refused before anything is made. The same checks
+	// are made again with the lock held, which is what the writes rely on.
+	if _, err := a.mergeReadableKeystores(paths); err != nil {
+		return rep, err
 	}
 	// A keystore's folder may have become a source since it was configured.
 	releaseKeystores, err := a.Store.reserveOutputFiles(paths)
 	if err != nil {
-		return 0, err
+		return rep, err
 	}
 	defer releaseKeystores()
+	unlock, err := lockKeystores(paths, false)
+	if err != nil {
+		return rep, err
+	}
+	defer unlock()
 	for _, p := range paths {
-		if err := writeStoreObserved(p, out, a.keystoreMutationObserver); err != nil {
-			return 0, fmt.Errorf("keystore synchronization publication failed; earlier participants may already have been updated: %w", err)
+		done, err := a.recoverKeystore(p)
+		if err != nil {
+			return rep, err
+		}
+		if done {
+			rep.Recovered = append(rep.Recovered, p)
 		}
 	}
-	return len(out.Keys), nil
+	stores, err := a.mergeReadableKeystores(paths)
+	if err != nil {
+		return rep, err
+	}
+	out, _ := mergeKeystores(stores)
+	all := keyRefs(out)
+	for i, p := range paths {
+		have := keyRefs(stores[i])
+		var missing []string
+		for ref := range all {
+			if !have[ref] {
+				missing = append(missing, ref)
+			}
+		}
+		if len(missing) > 0 {
+			sort.Strings(missing)
+			rep.Added = append(rep.Added, KeySyncDiff{Keystore: p, Keys: missing})
+		}
+	}
+	for i, p := range paths {
+		if sameKeyRecords(stores[i].Keys, out.Keys) {
+			continue // already the union, in order: nothing to write
+		}
+		if err := a.publishKeystore(p, &keystoreFile{Marker: 1, Keys: out.Keys}); err != nil {
+			return rep, fmt.Errorf("keystore synchronization publication failed; earlier participants may already have been updated: %w", err)
+		}
+	}
+	rep.KeyCount = len(out.Keys)
+	if len(rep.Added) > 0 {
+		var parts []string
+		for _, d := range rep.Added {
+			parts = append(parts, fmt.Sprintf("%s lacked %s", d.Keystore, strings.Join(d.Keys, ", ")))
+		}
+		a.Store.Log("keys", "key sync: keystores disagreed; kept the union ("+strings.Join(parts, "; ")+")")
+	}
+	return rep, nil
 }
 
 // ---- scanning --------------------------------------------------------------

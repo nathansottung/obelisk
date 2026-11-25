@@ -2958,7 +2958,7 @@ async function vKeys(){
   for(const s of st.stores||[])h+=`<tr><td class="mono">${esc(s.path)}</td><td class="num">${s.key_count}</td>
     <td>${s.reachable?'<span class="stamp VERIFIED">reachable</span>':'<span class="stamp FAILED">unreachable</span>'}</td></tr>`;
   h+=`</table><div class="row" style="margin-top:10px">
-    <button class="btn ghost" onclick="api('POST','/api/keys/sync').then(r=>{toast('Synced '+r.key_count+' key(s)');vKeys()}).catch(e=>toast(e.message,1))">Sync keystores</button>
+    <button class="btn ghost" onclick="api('POST','/api/keys/sync').then(r=>{const d=(r.added||[]).map(a=>a.keystore+' lacked '+a.keys.join(', ')).join('; ');toast('Synced '+r.key_count+' key(s)'+(d?'. The keystores disagreed; kept every key: '+d:''));vKeys()}).catch(e=>toast(e.message,1))">Sync keystores</button>
     <button class="btn danger" onclick="recoveryKitDlg()">Export Recovery Kit…</button>
     <button class="btn ghost" onclick="keySheetDlg()">Enter key from sheet…</button>
     <span class="dim">Register paths in Settings.</span></div></div>`;
