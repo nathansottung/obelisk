@@ -37,7 +37,12 @@ func TestOutFolder_WithoutGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	victim := plantAtStageName(t, filepath.Join(dir, "sub", "f.txt"))
-	if err := o.WriteFile("sub/f.txt", []byte("NEW"), 0o644); err != nil {
+	// A file already at the name is never replaced or written through.
+	if err := o.WriteFile("sub/f.txt", []byte("NEW"), 0o644); err == nil {
+		t.Fatal("a write replaced a file already at its name")
+	}
+	requireUntouched(t, victim, filepath.Join(dir, "sub", "f.txt"))
+	if err := o.WriteFile("sub/g.txt", []byte("NEW"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	other := filepath.Join(t.TempDir(), "c.bin")
@@ -49,9 +54,9 @@ func TestOutFolder_WithoutGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertFileBytes(t, victim, "SOMEONE ELSE'S")
-	assertFileBytes(t, filepath.Join(dir, "sub", "f.txt"), "NEW")
+	assertFileBytes(t, filepath.Join(dir, "sub", "g.txt"), "NEW")
 	assertFileBytes(t, filepath.Join(dir, "c.bin"), "COPIED")
-	if got := treeOf(t, dir); !equalStrings(got, []string{"c.bin", "sub", "sub/f.txt"}) {
+	if got := treeOf(t, dir); !equalStrings(got, []string{"c.bin", "sub", "sub/f.txt", "sub/g.txt"}) {
 		t.Errorf("staging files left behind: %v", got)
 	}
 }

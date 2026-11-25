@@ -33,7 +33,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -123,7 +122,6 @@ func migrateCatalogToDB(dataDir string, opt catalogMigrateOptions) (catalogMigra
 		return catalogMigrateResult{}, err
 	}
 	defer release()
-	sweepCatalogStages(dataDir)
 
 	raw, jsonErr := readFileRetrying(jsonPath)
 	jsonMissing := errors.Is(jsonErr, fs.ErrNotExist)
@@ -163,11 +161,7 @@ func moveCatalog(dataDir string, raw []byte, opt catalogMigrateOptions) (catalog
 	want := catalogDBRowCounts(c)
 
 	stage := filepath.Join(dataDir, catalogStagePrefix+randomHex(6))
-	removeStage := func() {
-		for _, side := range []string{"", "-wal", "-shm", "-journal"} {
-			os.Remove(stage + side)
-		}
-	}
+	removeStage := func() { _ = removeDBScratch(dataDir, stage, nil) }
 	d, err := openCatalogDB(stage, true)
 	if err != nil {
 		return refuse(err)
@@ -334,7 +328,7 @@ func lockCatalogMove(dataDir string) (func(), error) {
 	return func() {
 		unlockFile(f)
 		f.Close()
-		os.Remove(path)
+		_ = removeOwned(nil, []string{dataDir}, dataDir, catalogMoveLock, kindLock)
 	}, nil
 }
 
@@ -810,14 +804,6 @@ func catalogKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-func randomHex(n int) string {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	return hex.EncodeToString(b)
-}
-
 // isCatalogStub reports whether raw is the pointer left in catalog.json by a move.
 func isCatalogStub(raw []byte) bool {
 	var s catalogStub
@@ -841,34 +827,10 @@ func keepCatalogJSON(dataDir string, raw []byte, from int) (string, error) {
 		return "", err
 	}
 	if err := publishNoReplace(tmp, final); err != nil {
-		os.Remove(tmp)
+		_ = removeStage(tmp)
 		return "", err
 	}
 	return final, nil
-}
-
-// publishNoReplace moves the finished file from to final, refusing when final
-// already exists. publishAbsent is the atomic no-replace publish. Off Windows, on a
-// filesystem without hard links (FAT, exFAT), the absence is checked just before
-// the rename; on Windows the move needs no such fallback, so a failure is returned
-// and nothing can replace a file that arrived. The folder entry is then flushed.
-func publishNoReplace(from, final string) error {
-	if err := publishAbsent(from, final); err == nil {
-		// final is in place. Off Windows a staging name that cannot be removed now
-		// is only a second name for the same file; the next move sweeps it.
-		_ = os.Remove(from)
-	} else {
-		if _, serr := os.Lstat(final); !errors.Is(serr, fs.ErrNotExist) {
-			return fmt.Errorf("%s already exists; refusing to replace it", final)
-		}
-		if !publishAbsentHasFallback {
-			return err
-		}
-		if err := renameReplacing(from, final); err != nil {
-			return err
-		}
-	}
-	return syncDir(filepath.Dir(final))
 }
 
 // writeCatalogStub replaces catalog.json with the pointer to catalog.db.
@@ -887,17 +849,8 @@ func writeCatalogStub(jsonPath, backup string) error {
 		return err
 	}
 	if err := renameReplacing(tmp, jsonPath); err != nil {
-		os.Remove(tmp)
+		_ = removeStage(tmp)
 		return err
 	}
 	return syncDir(filepath.Dir(jsonPath))
-}
-
-// sweepCatalogStages removes staging databases a stopped move left behind. Only
-// this file makes names with that prefix.
-func sweepCatalogStages(dataDir string) {
-	matches, _ := filepath.Glob(filepath.Join(dataDir, catalogStagePrefix+"*"))
-	for _, m := range matches {
-		os.Remove(m)
-	}
 }

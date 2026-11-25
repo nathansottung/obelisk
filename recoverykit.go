@@ -44,8 +44,13 @@ func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string))
 		return nil, err
 	}
 	defer out.Close()
-	const kitRel = "obelisk-recovery-kit"
-	const keysRel = kitRel + "/keys"
+	// A new kit never meets an earlier one: its name sorts by when it was made,
+	// and it names the earlier kits in this folder it supersedes, which are left
+	// exactly as they were (export_names.go).
+	now := time.Now()
+	kitRel := freshExportName(out, exportKinds["kit"].prefix, "", now)
+	supersedes := earlierExports(out, exportKinds["kit"], kitRel)
+	keysRel := kitRel + "/keys"
 	if err := out.MkdirAll(keysRel); err != nil {
 		return nil, err
 	}
@@ -70,6 +75,22 @@ func (a *App) BuildRecoveryKit(outputDir string, progress func(float64, string))
 	}
 
 	progress(0.35, "readme")
+	vols := map[int]bool{}
+	for _, c := range chunks {
+		for _, cp := range c.Copies {
+			if !cp.Superseded {
+				vols[cp.VolumeID] = true
+			}
+		}
+	}
+	info := exportInfo(exportKinds["kit"], kitRel, now, []string{
+		fmt.Sprintf("%d package(s) across %d volume(s) (MEDIA_INVENTORY.md)", len(chunks), len(vols)),
+		fmt.Sprintf("%d key(s), one QR card each (keys/)", len(keys)),
+		"the restore runbook, the format census, each archive's structure export, and the escrow tools",
+	}, supersedes)
+	if err := out.WriteFile(kitRel+"/"+exportInfoName, info, 0o644); err != nil {
+		return nil, err
+	}
 	if err := out.WriteFile(kitRel+"/"+"README_RECOVERY.md", []byte(recoveryReadmeMD(len(chunks), len(keys))), 0o644); err != nil {
 		return nil, err
 	}

@@ -103,6 +103,10 @@ As it works, each file is copied and then **re-read and checked** against its fi
 
 You should now see the job finish with every file copied and verified. Open the drive in your normal file manager and your files are right there as plain folders.
 
+**Writing a package over an earlier copy.** A write never replaces what is already in the package's folder on the destination. It says what is there first: this build, intact (then **Verify it** instead), a partial write from an earlier run, or other files. Only then does it offer **Overwrite…**, which lists exactly the files it would replace and runs only after you type **Overwrite**. The same holds for writing the next tape of a set onto a tape that holds another set.
+
+**A mirror never destroys what is already on the drive.** A file already there with the same content is left alone. A different file at the same path (an older copy, or a file of your own) is first kept as an earlier version in `_obelisk-previous/<time of the run>/`, at the same path inside it, and only then is the new copy put in place. The job says how many files it kept and how much space they use, and names separately any that were not Obelisk's own earlier copies. **Kept versions use space on the drive until you remove them**: they are never removed on their own, never count as copies, and are removed only with **Remove kept versions…** and the typed word **Delete**. Before it starts, a mirror checks that the drive has room for the new copies and the kept versions, and stops if not.
+
 ---
 
 ## Part C: Adopting a box of old drives (Dock sessions)

@@ -9,8 +9,8 @@ import (
 )
 
 // A copy by path writes into a new staging file it creates exclusively and then
-// gives it its name. A file already at that name, here a hard link to someone
-// else's file, is replaced as a name only: the other file keeps its bytes.
+// gives it its name only if nothing is there. A file already at that name, here
+// a hard link to someone else's file, is never replaced or written through.
 func TestPathCopies_NeverWriteThroughAnExistingFile(t *testing.T) {
 	newSrc := func(t *testing.T, body string) string {
 		p := filepath.Join(t.TempDir(), "new.bin")
@@ -20,20 +20,18 @@ func TestPathCopies_NeverWriteThroughAnExistingFile(t *testing.T) {
 	t.Run("copyFile", func(t *testing.T) {
 		dst := filepath.Join(t.TempDir(), "sidecar.par2")
 		victim := plantAtStageName(t, dst)
-		if err := copyFile(newSrc(t, "NEW SIDECAR"), dst); err != nil {
-			t.Fatal(err)
+		if err := copyFile(newSrc(t, "NEW SIDECAR"), dst); err == nil {
+			t.Fatal("copyFile replaced a file already at its target")
 		}
-		assertFileBytes(t, victim, "SOMEONE ELSE'S")
-		assertFileBytes(t, dst, "NEW SIDECAR")
+		requireUntouched(t, victim, dst)
 	})
 	t.Run("ringCopy", func(t *testing.T) {
 		dst := filepath.Join(t.TempDir(), "payload.tar")
 		victim := plantAtStageName(t, dst)
-		if _, _, err := ringCopy(newSrc(t, "NEW PAYLOAD"), dst, 0, 0, 1, 0.01, 0, func(int64, int64) {}, nil); err != nil {
-			t.Fatal(err)
+		if _, _, err := ringCopy(newSrc(t, "NEW PAYLOAD"), dst, 0, 0, 1, 0.01, 0, func(int64, int64) {}, nil); err == nil {
+			t.Fatal("ringCopy replaced a file already at its target")
 		}
-		assertFileBytes(t, victim, "SOMEONE ELSE'S")
-		assertFileBytes(t, dst, "NEW PAYLOAD")
+		requireUntouched(t, victim, dst)
 	})
 	t.Run("rejoin", func(t *testing.T) {
 		segs := t.TempDir()
@@ -41,12 +39,10 @@ func TestPathCopies_NeverWriteThroughAnExistingFile(t *testing.T) {
 		out := t.TempDir()
 		victim := plantAtStageName(t, filepath.Join(out, "PKG.tar"))
 		c := &Chunk{Name: "PKG", Spanned: true, Segments: []Segment{{Index: 1}}}
-		joined, _, err := rejoinSegments(segs, out, c, noProg)
-		if err != nil {
-			t.Fatal(err)
+		if _, _, err := rejoinSegments(segs, out, c, noProg); err == nil {
+			t.Fatal("rejoin replaced a file already at its target")
 		}
-		assertFileBytes(t, victim, "SOMEONE ELSE'S")
-		assertFileBytes(t, joined, "JOINED")
+		requireUntouched(t, victim, filepath.Join(out, "PKG.tar"))
 	})
 	t.Run("no staging file left", func(t *testing.T) {
 		dir := t.TempDir()
@@ -62,17 +58,16 @@ func TestPathCopies_NeverWriteThroughAnExistingFile(t *testing.T) {
 	})
 }
 
-// The mirror's path copy stages too: a file already at the target is replaced
-// as a name only.
+// The mirror's path copy stages too, and never replaces a file already at the
+// target: neither the file nor what it is linked to changes.
 func TestMirrorCopyFile_NeverWritesThroughAnExistingFile(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src.bin")
 	mustWrite(t, src, "NEW")
 	dst := filepath.Join(dir, "dst.bin")
 	victim := plantAtStageName(t, dst)
-	if _, _, err := mirrorCopyFile(src, dst, nil, nil); err != nil {
-		t.Fatal(err)
+	if _, _, err := mirrorCopyFile(src, dst, nil, nil); err == nil {
+		t.Fatal("a copy replaced a file already at its target")
 	}
-	assertFileBytes(t, victim, "SOMEONE ELSE'S")
-	assertFileBytes(t, dst, "NEW")
+	requireUntouched(t, victim, dst)
 }

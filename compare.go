@@ -261,24 +261,28 @@ func (a *App) saveCompareRun(run *CompareRun, results []ClassResult) error {
 		err = cerr
 	}
 	if err != nil {
-		_ = os.Remove(tmp)
+		_ = removeStage(tmp)
 		return fmt.Errorf("saving the comparison: %w", err)
 	}
-	if err := renameReplacing(tmp, final); err != nil {
-		_ = os.Remove(tmp)
+	id, made := stageIdentity(tmp)
+	if err := publishNoReplace(tmp, final); err != nil {
+		_ = removeStage(tmp)
 		return fmt.Errorf("saving the comparison: %w", err)
 	}
 	run.ResultFile, run.ResultSHA256 = name, hex.EncodeToString(sum.Sum(nil))
 	dropped, err := a.Store.AddCompareRun(run, compareRunsRetained)
 	if err != nil {
-		_ = os.Remove(final)
+		removePublished(final, id, made)
 		return fmt.Errorf("saving the comparison record: %w", err)
 	}
+	// Retention (retention.go) decides which dropped runs' files go.
+	var drop []string
 	for _, d := range dropped {
 		if validCompareFileName(d.ResultFile) {
-			_ = os.Remove(filepath.Join(dir, d.ResultFile))
+			drop = append(drop, d.ResultFile)
 		}
 	}
+	removeRetained(a.Store, dir, drop, kindCompareFile, false)
 	return nil
 }
 

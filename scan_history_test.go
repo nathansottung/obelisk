@@ -15,6 +15,10 @@ import (
 // file list is stored compressed outside the catalog, and only the newest
 // scan_history_retained scans of a drive are kept.
 func TestScanHistory_RecordsEachScanWithRetention(t *testing.T) {
+	// Seen from three days on, so the count applies: nothing made in the last
+	// day is ever dropped (retention.go).
+	retentionNow = func() time.Time { return time.Now().Add(72 * time.Hour) }
+	t.Cleanup(func() { retentionNow = time.Now })
 	app := dockApp(t)
 	if _, err := app.SaveConfig(map[string]any{"scan_history_retained": 2}); err != nil {
 		t.Fatal(err)
@@ -140,7 +144,7 @@ func mkdirFor(t *testing.T, dir string) string {
 
 // File lists no record points at (left by a crash, or by an older catalog) are
 // removed once they are an hour old; a fresh one is left for the scan writing it.
-func TestScanHistory_SweepsOrphanedFileLists(t *testing.T) {
+func TestScanHistory_OrphanedFileListsAreListedNotSwept(t *testing.T) {
 	app := dockApp(t)
 	coll := app.Store.AddCollection("Photos")
 	drive := t.TempDir()
@@ -165,8 +169,15 @@ func TestScanHistory_SweepsOrphanedFileLists(t *testing.T) {
 	if _, err := app.IngestDrive(ds.ID, drive, "SER-S", "DS", "", "", false, noProg); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(old); err == nil {
-		t.Error("an hour-old orphaned file list was kept")
+	if _, err := os.Stat(old); err != nil {
+		t.Errorf("an orphaned file list was removed without the user: %v", err)
+	}
+	listed := false
+	for _, l := range app.Leftovers() {
+		listed = listed || l.Path == old
+	}
+	if !listed {
+		t.Error("an hour-old orphaned file list is not listed as a leftover")
 	}
 	for _, p := range []string{fresh, other} {
 		if _, err := os.Stat(p); err != nil {

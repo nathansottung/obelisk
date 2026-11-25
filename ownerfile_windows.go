@@ -45,7 +45,9 @@ func createOwnerOnlyTemp(dir, pattern string) (*os.File, error) {
 		if err != nil {
 			return nil, &os.PathError{Op: "create", Path: name, Err: err}
 		}
-		return os.NewFile(uintptr(h), name), nil
+		f := os.NewFile(uintptr(h), name)
+		rememberMade(f)
+		return f, nil
 	}
 	return nil, &os.PathError{Op: "create", Path: filepath.Join(dir, pattern), Err: os.ErrExist}
 }

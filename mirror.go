@@ -67,9 +67,8 @@ var errCopySource = errors.New("source read failed")
 //
 // The source is opened before anything is created, so a source that cannot be
 // read costs the destination nothing. The bytes go into a new staging file beside
-// dst, created exclusively, which is renamed to dst once flushed: a file already
-// at dst (or a hard link to another file) is replaced as a name, never written
-// through.
+// dst, created exclusively, which takes the name dst once flushed and only if
+// nothing is there: a file already at dst is never replaced or written through.
 func mirrorCopyFile(src, dst string, th *throttler, onBytes func(int64)) (string, int64, error) {
 	in, err := os.Open(src)
 	if err != nil {
@@ -84,10 +83,10 @@ func mirrorCopyFile(src, dst string, th *throttler, onBytes func(int64)) (string
 	hash, n, err := mirrorCopyStream(in, out, th, onBytes)
 	err = errors.Join(err, out.Close())
 	if err == nil {
-		err = renameReplacing(tmp, dst)
+		err = publishNoReplace(tmp, dst)
 	}
 	if err != nil {
-		_ = os.Remove(tmp)
+		_ = removeStage(tmp)
 		return "", n, err
 	}
 	return hash, n, nil
@@ -144,6 +143,8 @@ type MirrorResult struct {
 	// DestinationNotes lists warnings the destination was accepted with and checks
 	// that could not run on its filesystem (for example on exFAT or FAT32).
 	DestinationNotes []string `json:"destination_notes,omitempty"`
+	// What was kept instead of replaced (mirror_previous.go).
+	KeptSummary
 }
 
 // MirrorToVolume copies the selected folders of an archive to destDir as plain
@@ -269,6 +270,12 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 	}
 	// Two files that would land at one path: neither is copied or credited.
 	shared := collidingPaths(mrels)
+	// What is already at each path: the same content is left alone; anything
+	// else is kept as a previous version before the new copy takes its name.
+	plan, err := a.planMirrorKeeps(dest, collectionID, vol.ID, files, mrels, shared)
+	if err != nil {
+		return nil, err
+	}
 	for i, f := range files {
 		doneFiles = int64(i + 1) // file currently being mirrored (matches the "i+1/len" message)
 		srcRoot := folderPath[f.FolderID]
@@ -281,9 +288,27 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 		if i%25 == 0 || len(files) < 50 {
 			report(fmt.Sprintf("mirroring %d/%d — %s", i+1, len(files), f.RelPath))
 		}
+		if plan.same[mrel] { // already there, byte for byte: left alone and credited
+			sample, _ := dest.SampleHashRel(mrel)
+			refs = append(refs, ChunkFileRef{FileID: f.ID, RelPath: f.RelPath, SizeBytes: plan.sizes[mrel], Hash: plan.existing[mrel], SampleHash: sample})
+			res.Mirrored++
+			continue
+		}
+		if _, keep := plan.existing[mrel]; keep {
+			if err := a.startKeeping(dest, vol, collectionID, "mirror", plan); err != nil {
+				// Nothing is kept or replaced for this file: it counts as failed,
+				// and the file there is left exactly as it was.
+				if stop := a.stopOnDestinationChange("mirror", err, -1); stop != nil {
+					return nil, stop
+				}
+				a.Store.Log("mirror", fmt.Sprintf("%s: not replaced: %v", mrel, err))
+				res.Failed++
+				continue
+			}
+		}
 		// One confined landing: parent creation, staging, read-back, publication and
 		// failure cleanup all happen through the authorized handle, relative to mrel.
-		streamHash, n, cerr := copyVerifyToRoot(dest, srcPath, mrel, th, func(d int64) {
+		streamHash, n, cerr := copyVerifyKeeping(dest, plan, srcPath, mrel, f.ID, th, func(d int64) {
 			doneBytes += d
 			now := time.Now()
 			// Feed the Performance strip: a copy reads and writes the same bytes, so the
@@ -295,6 +320,9 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 				report(fmt.Sprintf("mirroring %d/%d — %s", i+1, len(files), f.RelPath))
 			}
 		})
+		if errors.Is(cerr, errMirrorCrashed) {
+			return nil, cerr
+		}
 		if cerr != nil {
 			if stop := a.stopOnDestinationChange("mirror", cerr, res.Mirrored); stop != nil {
 				return nil, stop
@@ -324,6 +352,10 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 	if stop := a.stopOnDestinationChange("mirror", dest.checkRoot(), res.Mirrored); stop != nil {
 		return nil, stop
 	}
+	if err := a.finishKeeping(dest, vol, plan); err != nil {
+		return nil, err
+	}
+	res.KeptSummary = plan.summary(dest)
 	// Record the verified file-level copies exactly like an adopted mirror, so
 	// drift and coverage treat them as real copies (Prompt 23 records).
 	if len(refs) > 0 {
@@ -344,13 +376,13 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 	if res.Coverage, err = a.archiveCoverage([]int{collectionID}); err != nil {
 		return res, err
 	}
-	a.Store.Log("mirror", fmt.Sprintf("%s → %s (%s): %d files (%.1f GB), %d changed, %d failed, %d skipped",
-		coll.Name, vol.Label, destDir, res.Mirrored, float64(res.Bytes)/1e9, res.Changed, res.Failed, res.Skipped))
+	a.Store.Log("mirror", fmt.Sprintf("%s → %s (%s): %d files (%.1f GB), %d changed, %d failed, %d skipped, %d identical left alone; earlier versions kept: %d of Obelisk's own, %d other file(s), %s",
+		coll.Name, vol.Label, destDir, res.Mirrored, float64(res.Bytes)/1e9, res.Changed, res.Failed, res.Skipped, res.Identical, len(res.KeptOwn), len(res.KeptOther), humanBytes(res.KeptBytes)))
 	progress(1.0, fmt.Sprintf("mirrored %d file(s) to %s", res.Mirrored, vol.Label))
 	return res, nil
 }
 
-// copyVerifyToRoot copies srcPath to rel BENEATH AN AUTHORIZED DESTINATION with the
+// copyVerifyToRootAs copies srcPath to rel BENEATH AN AUTHORIZED DESTINATION with the
 // full copy-then-verify discipline — stage into a uniquely owned .mnemo_tmp created
 // with O_EXCL (hashing on the way), read the bytes back off the destination through
 // the same handle and confirm they match, then publish by rename — so a partial or
@@ -370,9 +402,9 @@ func (a *App) MirrorToVolume(collectionID int, folderIDs []int, destDir string, 
 //
 // A source-side failure is wrapped with errCopySource so callers can keep counting
 // "skipped" (unreadable source) apart from "failed" (destination would not take it).
-func copyVerifyToRoot(dest *DestRoot, srcPath, rel string, th *throttler, onBytes func(int64)) (string, int64, error) {
-	return copyVerifyToRootAs(dest, srcPath, rel, "", true, nil, th, onBytes)
-}
+//
+// Mirrors publish through copyVerifyKeeping (mirror_previous.go), which keeps
+// any different file already at rel as a previous version first.
 
 // fileMeta is metadata given to a copy before it is published: permission bits
 // (when mode is non-zero) and a modification time (when mtime is set). It is
@@ -391,10 +423,12 @@ var errSourceDiffers = errors.New("source differs from the content expected")
 // (the error wraps fs.ErrExist). When expect is set, the source must stream
 // exactly that SHA-256 or nothing is published (errSourceDiffers).
 func copyVerifyNewToRoot(dest *DestRoot, srcPath, rel, expect string, meta *fileMeta, th *throttler, onBytes func(int64)) (string, int64, error) {
-	return copyVerifyToRootAs(dest, srcPath, rel, expect, false, meta, th, onBytes)
+	return copyVerifyToRootAs(dest, srcPath, rel, expect, meta, th, onBytes, dest.PublishNew)
 }
 
-func copyVerifyToRootAs(dest *DestRoot, srcPath, rel, expect string, replace bool, meta *fileMeta, th *throttler, onBytes func(int64)) (string, int64, error) {
+// copyVerifyToRootAs is the copy-then-verify landing; publish gives the verified
+// stage its name (never over an existing file, unless publish first keeps it).
+func copyVerifyToRootAs(dest *DestRoot, srcPath, rel, expect string, meta *fileMeta, th *throttler, onBytes func(int64), publish func(tmpRel, v string) error) (string, int64, error) {
 	v, err := destRel(rel)
 	if err != nil {
 		return "", 0, err
@@ -435,12 +469,10 @@ func copyVerifyToRootAs(dest *DestRoot, srcPath, rel, expect string, replace boo
 			return "", n, fmt.Errorf("setting the time and mode of %s: %w", path.Base(v), err)
 		}
 	}
-	publish := dest.Publish
-	if !replace {
-		publish = dest.PublishNew
-	}
 	if err := publish(tmpRel, v); err != nil {
-		_ = dest.Discard(tmpRel)
+		if !errors.Is(err, errMirrorCrashed) {
+			_ = dest.Discard(tmpRel)
+		}
 		return "", n, err
 	}
 	return streamHash, n, nil

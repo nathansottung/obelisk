@@ -240,11 +240,7 @@ func (s *Store) snapshotDBBytes() ([]byte, int, error) {
 		return nil, 0, err
 	}
 	tmp := s.path + ".export-" + hex.EncodeToString(tok)
-	defer func() {
-		for _, side := range []string{"", "-wal", "-shm", "-journal"} {
-			os.Remove(tmp + side)
-		}
-	}()
+	defer func() { _ = removeDBScratch(filepath.Dir(s.path), tmp, nil) }()
 	schema, err := s.snapshotDB(tmp)
 	if err != nil {
 		return nil, 0, err

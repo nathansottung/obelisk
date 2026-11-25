@@ -983,7 +983,7 @@ func pruneEmptyStaging(rootReal, dir string) {
 	}
 	defer r.Close()
 	for dir != "." && dir != "/" && !strings.EqualFold(dir, QuarantineDir) && strings.HasPrefix(strings.ToLower(dir), strings.ToLower(QuarantineDir)+"/") {
-		if r.Remove(filepath.FromSlash(dir)) != nil {
+		if removeEmptyFolderIn(r, filepath.FromSlash(dir)) != nil {
 			return
 		}
 		dir = path.Dir(dir)

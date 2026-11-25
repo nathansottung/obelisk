@@ -868,6 +868,22 @@ type BackupSession struct {
 	At           time.Time `json:"at"`
 	Name         string    `json:"name"`
 	Dest         string    `json:"dest,omitempty"` // mirror destination path (mirror mode)
+	// A run that kept earlier versions instead of replacing them (Base "kept"):
+	// the folder they went to, whether the run finished, and each one. Kept
+	// versions never count as copies.
+	KeptRun      string        `json:"kept_run,omitempty"`
+	Status       string        `json:"status,omitempty"` // incomplete | complete
+	KeptVersions []KeptVersion `json:"kept_versions,omitempty"`
+}
+
+// KeptVersion is an earlier version a mirror kept instead of replacing.
+type KeptVersion struct {
+	FileID  int    `json:"file_id,omitempty"`
+	RelPath string `json:"rel_path"` // where it was, on the volume
+	KeptRel string `json:"kept_rel"` // where it went: _obelisk-previous/<run>/<rel_path>
+	Hash    string `json:"hash"`     // its SHA-256
+	Size    int64  `json:"size_bytes"`
+	OwnCopy bool   `json:"own_copy"` // Obelisk's own earlier copy of this file
 }
 
 // DriftItem is one file that differs between the source folders now and what
@@ -1736,7 +1752,7 @@ func (s *Store) backupBeforeMigrate(raw []byte, from int) {
 	}
 	name := fmt.Sprintf("%s.pre-schema-v%d-%s", s.path, from, time.Now().Format("20060102-150405"))
 	s.notePersist("pre-schema-backup", name)
-	_ = os.WriteFile(name, raw, 0o644)
+	_ = writeNewFile(name, raw, 0o644) // never over an earlier backup of the same second
 }
 
 // save persists the catalog. During a batched job it COALESCES writes: it marks
@@ -1887,21 +1903,21 @@ func (s *Store) writeCatalogJSON() error {
 	tmp := f.Name()
 	if _, err := f.Write(b); err != nil {
 		f.Close()
-		_ = os.Remove(tmp)
+		_ = removeStage(tmp)
 		return err
 	}
 	if err := f.Sync(); err != nil {
 		f.Close()
-		_ = os.Remove(tmp)
+		_ = removeStage(tmp)
 		return err
 	}
 	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
+		_ = removeStage(tmp)
 		return err
 	}
 	if err := renameReplacing(tmp, s.path); err != nil {
 		// The catalog is untouched and the bytes are still in memory; drop the stage.
-		_ = os.Remove(tmp)
+		_ = removeStage(tmp)
 		return err
 	}
 	// Best-effort; gracefully skipped where the platform/filesystem does not support
@@ -2051,7 +2067,9 @@ func endBatchInto(s *Store, err *error) {
 }
 
 // dailyBackup writes catalog.json.bak-YYYYMMDD once per calendar day (best
-// effort — a backup must never fail a save) and prunes to the newest 14.
+// effort — a backup must never fail a save) and prunes to the newest 14, under
+// the retention rule (retention.go): never the newest, never one made in the
+// last day. Only names this writes (an eight-digit date) are counted.
 func (s *Store) dailyBackup(b []byte) {
 	day := time.Now().Format("20060102")
 	if s.lastBak == day {
@@ -2061,15 +2079,40 @@ func (s *Store) dailyBackup(b []byte) {
 	bak := s.path + ".bak-" + day
 	if _, err := os.Stat(bak); err != nil {
 		s.notePersist("backup-create", bak)
-		_ = os.WriteFile(bak, b, 0o644)
+		_ = writeNewFile(bak, b, 0o644)
 	}
-	matches, _ := filepath.Glob(s.path + ".bak-*")
+	var matches []string
+	all, _ := filepath.Glob(s.path + ".bak-*")
+	for _, m := range all {
+		if validDailyBackupName(filepath.Base(m), filepath.Base(s.path)) {
+			matches = append(matches, m)
+		}
+	}
 	sort.Strings(matches) // YYYYMMDD suffix sorts chronologically
+	var drop []string
 	for len(matches) > 14 {
-		s.notePersist("backup-prune", matches[0])
-		_ = os.Remove(matches[0])
+		drop = append(drop, filepath.Base(matches[0]))
 		matches = matches[1:]
 	}
+	// nil store: this runs inside a save, under the store's lock, and the
+	// folder is the catalog's own (checked when it was opened).
+	for _, name := range removeRetained(nil, filepath.Dir(s.path), drop, kindCatalogBackup, true) {
+		s.notePersist("backup-prune", filepath.Join(filepath.Dir(s.path), name))
+	}
+}
+
+// validDailyBackupName reports a daily backup name of base: base.bak-YYYYMMDD.
+func validDailyBackupName(name, base string) bool {
+	d := strings.TrimPrefix(name, base+".bak-")
+	if d == name || len(d) != 8 {
+		return false
+	}
+	for _, r := range d {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // notePersist reports an attempted authority write to the observer openStore
@@ -3283,13 +3326,44 @@ func (s *Store) AddBackupSession(b *BackupSession) *BackupSession {
 	return b
 }
 
-// BackupSessions returns the run history for a collection (0 = all), newest first.
+// UpdateBackupSession saves a changed run record.
+func (s *Store) UpdateBackupSession(b *BackupSession) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, x := range s.c.BackupSessions {
+		if x.ID == b.ID {
+			c := *b
+			s.c.BackupSessions[i] = &c
+			return s.save()
+		}
+	}
+	return fmt.Errorf("run record %d not found", b.ID)
+}
+
+// KeptVersionRuns returns the records of mirror runs that kept earlier versions
+// (Base "kept") for a collection (0 = all), newest first.
+func (s *Store) KeptVersionRuns(collectionID int) []*BackupSession {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []*BackupSession
+	for i := len(s.c.BackupSessions) - 1; i >= 0; i-- {
+		b := s.c.BackupSessions[i]
+		if b.Base == "kept" && (collectionID == 0 || b.CollectionID == collectionID) {
+			c := *b
+			out = append(out, &c)
+		}
+	}
+	return out
+}
+
+// BackupSessions returns the run history for a collection (0 = all), newest
+// first. Records of kept earlier versions are not runs (KeptVersionRuns).
 func (s *Store) BackupSessions(collectionID int) []*BackupSession {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []*BackupSession
 	for _, b := range s.c.BackupSessions {
-		if collectionID == 0 || b.CollectionID == collectionID {
+		if b.Base != "kept" && (collectionID == 0 || b.CollectionID == collectionID) {
 			out = append(out, b)
 		}
 	}
@@ -4058,7 +4132,7 @@ func (s *Store) writeJobsRows() error {
 		return err
 	}
 	if err := renameReplacing(tmp, s.jobs.path); err != nil {
-		_ = os.Remove(tmp)
+		_ = removeStage(tmp)
 		return err
 	}
 	// Best-effort, and a no-op on Windows: the bytes are already durable via Sync

@@ -148,7 +148,16 @@ func TestWriteBundleAssemblesAndVerifies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WriteEscrowBundle: %v", err)
 	}
-	root := filepath.Join(dest, escrowBundleDir)
+	// A standalone bundle has a name of its own that sorts by when it was made,
+	// and says inside when it was made and what it covers.
+	root, _ := sum["dir"].(string)
+	if !strings.HasPrefix(filepath.Base(root), escrowBundleDir+"-") {
+		t.Fatalf("bundle folder %q does not carry the time it was made", root)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, exportInfoName)); !strings.Contains(string(b), "Made:") || !strings.Contains(string(b), "Covers:") {
+		info := string(b)
+		t.Errorf("EXPORT-INFO.txt does not say when it was made and what it covers: %s", info)
+	}
 
 	// Core docs exist.
 	for _, f := range []string{"ESCROW_README.md", "LICENSES.md", "MANIFEST.json", "SHA-256SUMS"} {

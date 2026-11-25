@@ -341,7 +341,8 @@ the same idea across subsystems:
 
 The same open-time pass also runs **migrations** (e.g. an old `written_dest`
 becomes a `Copy` on an auto-created "(unregistered)" volume) and, once per
-calendar day, writes `catalog.json.bak-YYYYMMDD` (keeping the newest 14). All of
+calendar day, writes `catalog.json.bak-YYYYMMDD` (keeping the newest 14, under the
+retention rule in `retention.go`: never the newest, never one made in the last day). All of
 this lives in `store.go`'s `OpenStore` / `save`, so recovery is one code path.
 
 ## Why a JSON catalog (and where SQLite would slot in)
@@ -557,7 +558,8 @@ both engines.
   `quick_check` itself, and is renamed to the day's name without replacing
   anything. The newest 7 days are kept, then the newest of each of the 4 ISO weeks
   before them, within a size cap (16 GiB; past it the oldest go first, and the
-  newest always stays). A backup never fails a save. An app backup on this engine
+  newest always stays, and none made in the last day is removed; see `retention.go`).
+  A backup never fails a save. An app backup on this engine
   carries `catalog.db`, a snapshot that includes every change not yet committed,
   with the job board inside it, instead of `catalog.json` and `jobs.json`; on both
   engines it also carries each comparison's results file (`compares/`), on the

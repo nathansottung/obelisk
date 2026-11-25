@@ -23,7 +23,11 @@ const renameRetryMaxWait = 200 * time.Millisecond
 // A failed rename never touches final, so on any failure the existing destination is
 // left as it was. tmp is left in place; removing it is the caller's decision.
 func renameReplacing(tmp, final string) error {
-	return retryTransientRename(func() error { return renameFile(tmp, final) })
+	err := retryTransientRename(func() error { return renameFile(tmp, final) })
+	if err == nil {
+		forgetMade(tmp)
+	}
+	return err
 }
 
 // createStage creates the staging file for final: a new, uniquely named file in
@@ -42,9 +46,10 @@ func createStage(final string, perm os.FileMode) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
+	rememberMade(f)
 	if err := f.Chmod(perm); err != nil {
 		f.Close()
-		_ = os.Remove(f.Name())
+		_ = removeStage(f.Name())
 		return nil, err
 	}
 	return f, nil
@@ -65,7 +70,7 @@ func writeStage(final string, data []byte, perm os.FileMode) (string, error) {
 		err = cerr
 	}
 	if err != nil {
-		_ = os.Remove(f.Name())
+		_ = removeStage(f.Name())
 		return "", err
 	}
 	return f.Name(), nil
@@ -80,7 +85,7 @@ func writeSecretFile(name string, data []byte) error {
 		return err
 	}
 	if err := renameReplacing(tmp, name); err != nil {
-		_ = os.Remove(tmp)
+		_ = removeStage(tmp)
 		return err
 	}
 	return nil

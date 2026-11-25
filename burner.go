@@ -123,12 +123,13 @@ func (a *App) CreateBurnQueue(collectionID int, mediaKind, name string) (*BurnQu
 	return q, nil
 }
 
-// moveManifestAside moves the plaintext manifest out of a folder being burned. A
-// variable so a test can present a move that fails.
-var moveManifestAside = os.Rename
+// moveManifestAside moves the plaintext manifest out of a folder being burned,
+// never over a file already in the hold. A variable so a test can present a move
+// that fails.
+var moveManifestAside = renameNew
 
-// moveManifestBack puts it back. A variable for the same reason.
-var moveManifestBack = os.Rename
+// moveManifestBack puts it back, never over a file. A variable for the same reason.
+var moveManifestBack = renameNew
 
 // BurnNext burns the first PENDING disc: shell out to the configured burn
 // command (with {SRC}/{LABEL} substituted), then optionally hash-verify the
@@ -229,12 +230,22 @@ func (a *App) BurnNext(id int, progress func(float64, string)) (map[string]any, 
 		set("FAILED", "nothing was burned: "+err.Error())
 		return nil, err
 	}
+	// COPY-ID.txt is a name Obelisk keeps for itself inside the staged package it
+	// built; one an earlier burn left (a crash) is replaced.
 	idPath := filepath.Join(c.StagedDir, copyIDFile)
-	if err := os.WriteFile(idPath, copyIDContent(copyID), 0o644); err != nil {
+	idTmp, err := writeStage(idPath, copyIDContent(copyID), 0o644)
+	if err == nil {
+		if err = renameReplacing(idTmp, idPath); err != nil {
+			_ = removeStage(idTmp)
+		}
+	}
+	if err != nil {
 		set("FAILED", "nothing was burned: "+err.Error())
 		return nil, err
 	}
-	defer os.Remove(idPath)
+	if id, err := ownFileIdentity(idPath); err == nil {
+		defer func() { _ = removeMadePath(idPath, id) }()
+	}
 	if err := runBurnProgram(argv); err != nil {
 		set("FAILED", "burn command failed: "+err.Error())
 		return nil, err
@@ -363,7 +374,9 @@ func (a *App) carryEccToNextDisc(q *BurnQueue, current *BurnDisc, c *Chunk, eccP
 	}
 	defer releaseNext()
 	dst := filepath.Join(nc.StagedDir, filepath.Base(eccPath))
-	if err := copyFile(eccPath, dst); err != nil {
+	// The next package's staged folder is Obelisk's own build; an earlier carried
+	// copy of this ECC there is replaced.
+	if err := copyFileOver(eccPath, dst); err != nil {
 		a.Store.Log("ecc", fmt.Sprintf("%s: could not carry ECC onto %s (%v) — kept in staging", c.Name, nc.Name, err))
 		return
 	}

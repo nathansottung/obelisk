@@ -47,9 +47,9 @@ type RingStats struct {
 // live stall count — feeding the Performance strip's ring gauge. It must be cheap and
 // non-blocking; pass nil when no live telemetry is wanted.
 //
-// dst is written as a new staging file beside it, created exclusively, and renamed
-// to dst only once it is flushed, so a file already at dst (or a hard link to
-// another file) is replaced as a name and never written through.
+// dst is written as a new staging file beside it, created exclusively, and given
+// the name dst only once it is flushed and only if nothing is at dst: a file
+// already there is never replaced or written through.
 func ringCopy(src, dst string, offset, length int64, blockMB int, bufferGB, throttleMbps float64, progress func(done, total int64), live func(read, written int64, fillPct, stalls int)) (string, RingStats, error) {
 	out, err := createStage(dst, 0o644)
 	if err != nil {
@@ -62,11 +62,11 @@ func ringCopy(src, dst string, offset, length int64, blockMB int, bufferGB, thro
 		err = finalizeWrite(out, dst)
 	}
 	if err == nil {
-		err = renameReplacing(tmp, dst)
+		err = publishNoReplace(tmp, dst)
 	}
 	if err != nil {
 		out.Close()
-		_ = os.Remove(tmp)
+		_ = removeStage(tmp)
 		return "", stats, err
 	}
 	return hash, stats, nil
@@ -371,6 +371,14 @@ func (a *App) writeChunk(out *outFolder, id int, destDir string, bufferGB float6
 	// <name>.tar.gpg, or the legacy .tar.gpg for a plaintext package built before
 	// the rename) so the on-medium payload stays consistent with its sidecars.
 	payloadBase := filepath.Base(enc)
+	// A plain write never replaces what is already in the package's folder: it
+	// says what is there (this build, intact; a partial earlier write; something
+	// else) and stops. Replacing it is the delete gate's "write-over".
+	if !out.replace {
+		if wo := inspectWriteTarget(c, out.Join(c.Name)); wo != nil {
+			return nil, wo
+		}
+	}
 	if err := out.MkdirAll(c.Name); err != nil {
 		return nil, err
 	}
@@ -563,7 +571,7 @@ func (a *App) RewriteCopy(id, volumeID int, bufferGB float64, blockMB int, throt
 	if err := chunkWritable(c); err != nil {
 		return nil, err
 	}
-	out, err := a.openOutFolder(filepath.Dir(dest))
+	out, err := a.openOutFolderOver(filepath.Dir(dest))
 	if err != nil {
 		return nil, err
 	}
@@ -928,7 +936,7 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 		if err != nil {
 			return nil, err
 		}
-		xerr := extractTar(bufio.NewReaderSize(pf, 1<<20), tgt.into, members)
+		xerr := extractTarRecording(bufio.NewReaderSize(pf, 1<<20), tgt.into, members, tgt.madeSet())
 		pf.Close()
 		if xerr != nil {
 			return nil, fmt.Errorf("tar extract failed: %v", xerr)
@@ -960,7 +968,7 @@ func (a *App) RestoreChunk(id int, sourceDir, outputDir string, members []string
 		return nil, err
 	}
 	counted := &countingReader{r: pipe}
-	terr := extractTar(bufio.NewReaderSize(counted, 1<<20), tgt.into, members)
+	terr := extractTarRecording(bufio.NewReaderSize(counted, 1<<20), tgt.into, members, tgt.madeSet())
 	killed := false
 	if terr != nil && counted.n > 0 {
 		// The tar failed partway: stop decrypting what will not be unpacked.
@@ -1030,9 +1038,16 @@ func tail(s string, n int) string {
 }
 
 // copyFile copies src to dst through a new staging file beside dst, created
-// exclusively and renamed to dst once flushed, so a file already at dst is
-// replaced as a name and never written through.
-func copyFile(src, dst string) error {
+// exclusively and given the name dst once flushed, only if nothing is at dst: a
+// file already there is never replaced or written through (the error wraps
+// fs.ErrExist).
+func copyFile(src, dst string) error { return copyFileAs(src, dst, false) }
+
+// copyFileOver is copyFile that replaces a file Obelisk made at dst, as a name
+// (never written through). Only for a file of a staged package Obelisk built.
+func copyFileOver(src, dst string) error { return copyFileAs(src, dst, true) }
+
+func copyFileAs(src, dst string, replace bool) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -1051,11 +1066,15 @@ func copyFile(src, dst string) error {
 		err = finalizeWrite(out, dst)
 	}
 	if err == nil {
-		err = renameReplacing(tmp, dst)
+		if replace {
+			err = renameReplacing(tmp, dst)
+		} else {
+			err = publishNoReplace(tmp, dst)
+		}
 	}
 	if err != nil {
 		out.Close()
-		_ = os.Remove(tmp)
+		_ = removeStage(tmp)
 	}
 	return err
 }
@@ -1082,3 +1101,15 @@ var partitionIDAt = func(path string) string {
 // destFree is the free space at a write's destination. A variable so a test can
 // make a medium full.
 var destFree = diskFree
+
+// WriteChunkOver writes the package to destDir over what is already in its
+// folder there. Only the delete gate's "write-over" runs it, after the typed word
+// (removal_rule_test.go, gateOnly).
+func (a *App) WriteChunkOver(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string)) (map[string]any, error) {
+	out, err := a.openOutFolderOver(destDir)
+	if err != nil {
+		return nil, err
+	}
+	defer out.Close()
+	return a.writeChunk(out, id, destDir, bufferGB, blockMB, throttleMbps, volumeID, progress, true)
+}

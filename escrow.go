@@ -38,8 +38,10 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path"
@@ -347,16 +349,33 @@ func (a *App) WriteEscrowBundle(destDir string, plan EscrowPlan, progress func(f
 		return nil, err
 	}
 	defer out.Close()
-	return a.writeEscrowBundleTo(out, "", plan, progress)
+	// A standalone bundle never meets an earlier one: its name sorts by when it
+	// was made, and it says what it covers and what it supersedes.
+	now := time.Now()
+	root := freshExportName(out, exportKinds["escrow"].prefix, "", now)
+	supersedes := earlierExports(out, exportKinds["escrow"], root)
+	res, err := a.writeEscrowBundleIn(out, root, plan, progress)
+	if err != nil {
+		return res, err
+	}
+	info := exportInfo(exportKinds["escrow"], root, now, []string{fmt.Sprintf("the escrow tools for this version of Obelisk (mode %s)", plan.Mode)}, supersedes)
+	if err := out.WriteFile(path.Join(root, exportInfoName), info, 0o644); err != nil {
+		return res, err
+	}
+	return res, nil
 }
 
 // writeEscrowBundleTo is WriteEscrowBundle into base/escrow-bundle inside out,
 // an output folder the caller already holds (the seal sidecar, the recovery kit).
 func (a *App) writeEscrowBundleTo(out *outFolder, base string, plan EscrowPlan, progress func(float64, string)) (map[string]any, error) {
+	return a.writeEscrowBundleIn(out, path.Join(base, escrowBundleDir), plan, progress)
+}
+
+// writeEscrowBundleIn writes the bundle into the folder root inside out.
+func (a *App) writeEscrowBundleIn(out *outFolder, root string, plan EscrowPlan, progress func(float64, string)) (map[string]any, error) {
 	if plan.Skipped || plan.Mode == EscrowOff {
 		return map[string]any{"skipped": true, "reason": "escrow_on_media=off"}, nil
 	}
-	root := path.Join(base, escrowBundleDir)
 	if err := out.MkdirAll(root); err != nil {
 		return nil, err
 	}
@@ -553,17 +572,77 @@ func fetchEscrowArtifact(url, dest, want string) error {
 	h := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(out, h), resp.Body); err != nil {
 		out.Close()
-		os.Remove(tmp)
+		_ = removeStage(tmp)
 		return err
 	}
 	out.Close()
 	got := hex.EncodeToString(h.Sum(nil))
 	if want != "" && !strings.EqualFold(got, want) {
-		os.Remove(tmp)
+		_ = removeStage(tmp)
 		return fmt.Errorf("checksum mismatch: got %s, want %s", got, want)
 	}
+	return publishEscrowDownload(tmp, dest, got)
+}
+
+// publishEscrowDownload gives the downloaded stage tmp (content hash got) the
+// name dest. The cache replaces only a file it downloaded itself, checked by
+// identity against its record of what it downloaded; anything else at the name
+// stays.
+func publishEscrowDownload(tmp, dest, got string) error {
+	dir, name := filepath.Dir(dest), filepath.Base(dest)
+	downloads := readEscrowDownloads(dir)
+	if fi, err := os.Lstat(dest); err == nil {
+		rec, ok := downloads[name]
+		id, ierr := ownFileIdentity(dest)
+		if !ok || ierr != nil || !fi.Mode().IsRegular() || rec.ident() != id {
+			_ = removeStage(tmp)
+			return fmt.Errorf("%s is already in the cache folder and Obelisk did not download it; it was left as it is. Move it out of the folder to fetch it again", dest)
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		_ = removeStage(tmp)
+		return err
+	}
+	id, _ := stageIdentity(tmp)
 	if err := renameReplacing(tmp, dest); err != nil {
-		os.Remove(tmp)
+		_ = removeStage(tmp)
+		return err
+	}
+	downloads[name] = escrowDownload{Vol: id.vol, Idx: id.idx, SHA256: got}
+	return writeEscrowDownloads(dir, downloads)
+}
+
+// escrowDownloadsFile records, in the cache folder, the files the cache
+// downloaded, by identity, so it replaces only those.
+const escrowDownloadsFile = ".obelisk-downloads.json"
+
+type escrowDownload struct {
+	Vol    uint64 `json:"vol"`
+	Idx    uint64 `json:"idx"`
+	SHA256 string `json:"sha256"`
+}
+
+func (d escrowDownload) ident() fileIdent { return fileIdent{vol: d.Vol, idx: d.Idx} }
+
+func readEscrowDownloads(dir string) map[string]escrowDownload {
+	m := map[string]escrowDownload{}
+	if b, err := os.ReadFile(filepath.Join(dir, escrowDownloadsFile)); err == nil {
+		_ = json.Unmarshal(b, &m)
+	}
+	return m
+}
+
+func writeEscrowDownloads(dir string, m map[string]escrowDownload) error {
+	b, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, escrowDownloadsFile)
+	tmp, err := writeStage(path, b, 0o644)
+	if err != nil {
+		return err
+	}
+	if err := renameReplacing(tmp, path); err != nil {
+		_ = removeStage(tmp)
 		return err
 	}
 	return nil

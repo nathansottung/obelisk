@@ -358,7 +358,7 @@ func TestDestAuth_PublishFailureReportsTheCause(t *testing.T) {
 	beforeDestPublish = func(*os.Root, string, string) error { return injected }
 	defer func() { beforeDestPublish = orig }()
 
-	_, _, cerr := copyVerifyToRoot(dest, filepath.Join(src, "x.txt"), "x.txt", nil, nil)
+	_, _, cerr := copyVerifyNewToRoot(dest, filepath.Join(src, "x.txt"), "x.txt", "", nil, nil, nil)
 	if cerr == nil {
 		t.Fatal("a failed publish must surface as an error")
 	}

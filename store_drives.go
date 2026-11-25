@@ -246,10 +246,18 @@ func (s *Store) AddScanRecord(rec *ScanRecord, keep int) ([]*ScanRecord, error) 
 			n++
 		}
 	}
+	// Retention (retention.go): the drive's newest complete scan and every scan
+	// made in the last day are kept, beyond the count if need be.
+	var newestComplete *ScanRecord
+	for _, r := range s.c.Scans {
+		if r.VolumeID == rec.VolumeID && r.Scan == ScanComplete && (newestComplete == nil || !r.At.Before(newestComplete.At)) {
+			newestComplete = r
+		}
+	}
 	var dropped []*ScanRecord
 	kept := make([]*ScanRecord, 0, len(s.c.Scans))
 	for _, r := range s.c.Scans { // oldest first
-		if r.VolumeID == rec.VolumeID && n > keep {
+		if r.VolumeID == rec.VolumeID && n > keep && !keepScanRecord(r, newestComplete) {
 			d := *r
 			dropped = append(dropped, &d)
 			n--
@@ -397,12 +405,20 @@ func (s *Store) AddCompareRun(run *CompareRun, keep int) ([]*CompareRun, error) 
 	rec := cloneCompareRun(run)
 	rec.ID = s.next("compare")
 	s.c.CompareRuns = append(s.c.CompareRuns, rec)
+	// Retention (retention.go): the newest run, just added, and every run made in
+	// the last day are kept, beyond the count if need be.
 	var dropped []*CompareRun
 	if n := len(s.c.CompareRuns) - keep; n > 0 {
-		for _, d := range s.c.CompareRuns[:n] {
-			dropped = append(dropped, cloneCompareRun(d))
+		kept := make([]*CompareRun, 0, len(s.c.CompareRuns))
+		for i, d := range s.c.CompareRuns {
+			if n > 0 && i < len(s.c.CompareRuns)-1 && !madeInTheLastDay(d.At) {
+				dropped = append(dropped, cloneCompareRun(d))
+				n--
+				continue
+			}
+			kept = append(kept, d)
 		}
-		s.c.CompareRuns = append([]*CompareRun(nil), s.c.CompareRuns[n:]...)
+		s.c.CompareRuns = kept
 	}
 	if err := s.writeCatalog(); err != nil {
 		s.c.CompareRuns, s.c.NextID["compare"] = prev, prevID

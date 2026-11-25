@@ -211,11 +211,7 @@ func openCatalogDB(path string, create bool) (*catalogDB, error) {
 // call created are ever removed.
 func createCatalogDBFile(path string) error {
 	tmp := path + ".creating-" + randomHex(6)
-	discard := func() {
-		for _, side := range []string{"", "-wal", "-shm", "-journal"} {
-			os.Remove(tmp + side)
-		}
-	}
+	discard := func() { _ = removeDBScratch(filepath.Dir(path), tmp, nil) }
 	w, err := sql.Open(catalogDBDriver, catalogDBDSN(tmp, catalogDBWriterPragmas...)+"&_txlock=immediate")
 	if err != nil {
 		return err

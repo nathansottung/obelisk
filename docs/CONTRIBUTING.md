@@ -85,6 +85,14 @@ Match the surrounding code — it is intentional, not accidental:
   restorable by hand with `par2` / `gpg` / `tar`. par2 is computed over the
   payload; no compression layer, ever. If a change touches build/write/restore,
   it must keep `RESTORE.txt` accurate and end-to-end true.
+- **Nothing the user owns is removed or overwritten without the typed word.**
+  A removal or overwrite of anything the user has goes through the delete gate
+  (`destructive.go`). Obelisk's own scratch (a file this operation made, or a
+  kind of file it makes, inside its own folders) is removed only through
+  `scratch.go`, by identity and following no links. Leftovers from an earlier
+  run are listed to the user, never swept. `removal_rule_test.go` fails any
+  other file that calls a removal function, or a replacing rename that is not a
+  listed save.
 - **Persisted JSON is a contract.** Don't rename existing `json:"..."` tags or
   API routes — add fields/aliases and keep old catalogs loading. Match the
   existing comment density and naming.

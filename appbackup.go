@@ -354,7 +354,8 @@ func (a *App) ExportAppBackup(destDir string, includeKeys bool) (ExportResult, e
 		return ExportResult{}, err
 	}
 	defer out.Close()
-	return a.exportAppBackupInto(out, appBackupBaseName(time.Now()), includeKeys)
+	// A new name that sorts by time and never meets an earlier backup.
+	return a.exportAppBackupInto(out, freshExportName(out, exportKinds["appbackup"].prefix, ".tar", time.Now()), includeKeys)
 }
 
 // ---- restore -------------------------------------------------------------
@@ -584,9 +585,7 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 	dbStage, swapped := "", false
 	defer func() {
 		if dbStage != "" { // not swapped in: only the stage this restore made is removed
-			for _, side := range []string{"", "-wal", "-shm", "-journal"} {
-				os.Remove(dbStage + side)
-			}
+			_ = removeDBScratch(a.DataDir, dbStage, nil)
 		}
 	}()
 	switch {
@@ -764,7 +763,7 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 			// fail too (its error is deliberately discarded here), and unlinking a path is
 			// not secure erasure of the bytes behind it. Either way the original
 			// publication error is what gets returned.
-			_ = os.Remove(tmp)
+			_ = removeStage(tmp)
 			return err
 		}
 		return nil

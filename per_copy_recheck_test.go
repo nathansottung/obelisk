@@ -32,6 +32,35 @@ func writeSpanSet(t *testing.T, app *App, id int, root, prefix string, volumeID 
 	return nil
 }
 
+// writeSpanSetOver is writeSpanSet onto tapes that hold another set: each tape
+// already holding one goes through the delete gate's span-write-over.
+func writeSpanSetOver(t *testing.T, app *App, id int, root, prefix string, volumeID int) []string {
+	t.Helper()
+	var tapes []string
+	for i := 0; i < 50; i++ {
+		tape := filepath.Join(root, fmt.Sprintf("%s%02d", prefix, i))
+		if err := os.MkdirAll(tape, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		var res map[string]any
+		var err error
+		if c := app.Store.Chunk(id); app.spanTargetConflict(c, filepath.Join(tape, c.Name)) != nil {
+			res, err = spanWriteOver(t, app, id, tape, volumeID)
+		} else {
+			res, err = app.SpanWriteNext(id, tape, 0, 0, 0, volumeID, noProg)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		tapes = append(tapes, tape)
+		if done, _ := res["complete"].(bool); done {
+			return tapes
+		}
+	}
+	t.Fatal("the set never finished")
+	return nil
+}
+
 func resetSegments(t *testing.T, app *App, c *Chunk) {
 	t.Helper()
 	for i := range c.Segments {
@@ -57,7 +86,7 @@ func TestPerCopy_OverwritingOneSetKeepsItsReplica(t *testing.T) {
 		t.Fatalf("two sets on record expected: %+v", c.Copies)
 	}
 	c = rebuildPackage(t, app, c)
-	if _, err := app.SpanWriteNext(c.ID, xTapes[0], 0, 0, 0, x.ID, noProg); err != nil {
+	if _, err := spanWriteOver(t, app, c.ID, xTapes[0], x.ID); err != nil {
 		t.Fatal(err)
 	}
 	got := app.Store.Chunk(c.ID)
@@ -158,7 +187,7 @@ func TestPerCopy_SameSetRewrittenAfterARemountIsOneCopy(t *testing.T) {
 	if err := os.Rename(first, second); err != nil {
 		t.Fatal(err)
 	}
-	writeSpanSet(t, app, c.ID, second, "t", vol.ID)
+	writeSpanSetOver(t, app, c.ID, second, "t", vol.ID)
 	got := app.Store.Chunk(c.ID)
 	if got.CurrentCopyCount() != 1 || got.VerifiedCopyCount() != 1 {
 		t.Fatalf("one physical set, but current=%d verified=%d", got.CurrentCopyCount(), got.VerifiedCopyCount())
@@ -227,7 +256,7 @@ func TestPerCopy_OverwriteWithABadNoteLeavesNoPhantom(t *testing.T) {
 			if err := spoil(filepath.Join(second, c.Name, "RESTORE.txt")); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := app.WriteChunk(c.ID, second, 0, 0, 0, vol.ID, noProg); err != nil {
+			if _, err := writeOver(t, app, c.ID, second, vol.ID); err != nil {
 				t.Fatal(err)
 			}
 			if got := app.Store.Chunk(c.ID); got.VerifiedCopyCount() != 1 || got.CurrentCopyCount() != 1 {
@@ -247,7 +276,7 @@ func TestPerCopy_SpanOverwriteWithNoNoteRetiresTheSet(t *testing.T) {
 	if err := os.Remove(filepath.Join(to, c.Name, "RESTORE.txt")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.SpanWriteNext(c.ID, to, 0, 0, 0, c.Copies[0].VolumeID, noProg); err != nil {
+	if _, err := spanWriteOver(t, app, c.ID, to, c.Copies[0].VolumeID); err != nil {
 		t.Fatal(err)
 	}
 	if got := frozenChunk(t, app, c.Name); !got.Copies[0].Superseded {

@@ -287,6 +287,58 @@ func destructiveRoutes(mux routeRegistrar, app *App) {
 	})
 }
 
+// removeGatedEntry removes dir/name and everything under it, after the typed
+// word: through a handle on dir, following no links (a link is removed as a
+// link), and renamed out of the way first so a removal that stops part-way
+// leaves no half-removed entry under its name.
+func removeGatedEntry(dir, name string) error {
+	if !validEntryName(name) {
+		return fmt.Errorf("refusing to remove %q: not a single name in a folder", name)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	fi, err := root.Lstat(name)
+	if err != nil {
+		return err
+	}
+	if isLinkMode(fi.Mode()) || !fi.IsDir() {
+		return root.Remove(name)
+	}
+	return removeEntryIn(root, name, true, nil)
+}
+
+// removeGatedEntryIn is removeGatedEntry for dir inside an authorized root,
+// reached through its handle: a link at dir is refused, so nothing outside the
+// root is reached.
+func removeGatedEntryIn(root *os.Root, dir, name string) error {
+	fi, err := root.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if isLinkMode(fi.Mode()) || !fi.IsDir() {
+		return fmt.Errorf("refusing to remove under %s: it is not a folder", dir)
+	}
+	sub, err := root.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer sub.Close()
+	if !validEntryName(name) {
+		return fmt.Errorf("refusing to remove %q: not a single name in a folder", name)
+	}
+	fi, err = sub.Lstat(name)
+	if err != nil {
+		return err
+	}
+	if isLinkMode(fi.Mode()) || !fi.IsDir() {
+		return sub.Remove(name)
+	}
+	return removeEntryIn(sub, name, true, nil)
+}
+
 // ---- target helpers -----------------------------------------------------
 
 // fileTarget records the object at p exactly, without following a final link:

@@ -391,10 +391,11 @@ func produceGUIInventory(ctx context.Context, source, output string, limits inve
 		return
 	}
 	stageName := stage.Name()
+	rememberMade(stage)
 	closed := false
 	remove := ops.remove
 	if remove == nil {
-		remove = os.Remove
+		remove = removeStage
 	}
 	defer func() {
 		if !closed {
