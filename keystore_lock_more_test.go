@@ -533,3 +533,50 @@ func TestKeystoreLock_NormalPathAndSyncReport(t *testing.T) {
 		t.Fatalf("the disagreement was not logged: %+v", a)
 	}
 }
+
+// A key change started while another is between its two keystore writes waits
+// for it instead of refusing: the unlocked pre-check sees the keystores half
+// changed (one holds the new key, the other not yet), which is no reason to
+// refuse. Seen as "Keystores hold different key sets" on a busy CI runner.
+func TestKeystoreLock_ChangeDuringAnotherWaitsInsteadOfRefusing(t *testing.T) {
+	for _, second := range []string{"generate", "sync"} {
+		t.Run(second, func(t *testing.T) {
+			f := newKV(t, []map[string]any{kvKey("A", "synthetic-secret-A")}, []map[string]any{kvKey("A", "synthetic-secret-A")})
+			done := make(chan error, 1)
+			var once sync.Once
+			prev := keystoreWriteStep
+			keystoreWriteStep = func(s, p string) {
+				if s != "done" || p != f.paths[0] {
+					return
+				}
+				once.Do(func() {
+					go func() {
+						var err error
+						if second == "generate" {
+							_, _, _, err = f.app.GenerateKey("second")
+						} else {
+							_, err = f.app.SyncKeystores()
+						}
+						done <- err
+					}()
+					// Give the second change time to run its pre-check and reach
+					// the lock while the first holds it, half written.
+					select {
+					case err := <-done:
+						done <- err
+					case <-time.After(300 * time.Millisecond):
+					}
+				})
+			}
+			t.Cleanup(func() { keystoreWriteStep = prev })
+			if _, _, _, err := f.app.GenerateKey("first"); err != nil {
+				t.Fatalf("first generate: %v", err)
+			}
+			if err := <-done; err != nil {
+				t.Fatalf("%s during a half-written generate: %v", second, err)
+			}
+			keystoreWriteStep = prev
+			kvAllHold(t, f.paths, nil)
+		})
+	}
+}

@@ -406,7 +406,7 @@ func (a *App) GenerateKey(note string) (ref, passphrase, fpr string, err error) 
 	paths := append([]string(nil), cfg.KeystorePaths...)
 	// Checked first without the lock, so a set that will be refused is refused
 	// before anything (a folder, a lock file) is made; checked again under it.
-	if st := a.keystoreStatus(paths, true); !st["ok"].(bool) {
+	if st := a.settledKeystoreStatus(paths, true); !st["ok"].(bool) {
 		return "", "", "", fmt.Errorf("keystore requirement not met: %s", st["reason"])
 	}
 	// A keystore's folder may have become a source since it was configured.
@@ -613,7 +613,10 @@ func (a *App) syncKeystores() (KeySyncReport, error) {
 	// A read-only check first, so a set that will be refused (a keystore missing,
 	// invalid or in conflict) is refused before anything is made. The same checks
 	// are made again with the lock held, which is what the writes rely on.
-	if _, err := a.mergeReadableKeystores(paths, true); err != nil {
+	if err := settledKeystoreCheck(paths, func() error {
+		_, err := a.mergeReadableKeystores(paths, true)
+		return err
+	}); err != nil {
 		return rep, err
 	}
 	// A keystore's folder may have become a source since it was configured.
@@ -1286,7 +1289,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string), opts ...Package
 		// readable and in agreement: its key is issued only once it is in all of
 		// them (GenerateKey), and a build must not begin on a set that cannot take
 		// it. A first key is made with key generation (Keys), not by a build.
-		if st := a.keystoreStatus(cfg.KeystorePaths, false); !st["ok"].(bool) {
+		if st := a.settledKeystoreStatus(cfg.KeystorePaths, false); !st["ok"].(bool) {
 			return fmt.Errorf("refusing to encrypt: %s", st["reason"])
 		}
 	}

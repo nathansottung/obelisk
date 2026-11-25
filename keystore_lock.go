@@ -323,3 +323,49 @@ func keyRefs(ks *keystoreFile) map[string]bool {
 	}
 	return out
 }
+
+// settledKeystoreCheck runs check, a read-only check of the keystores at paths
+// made without their lock. One that fails may have seen another key change
+// half done (one keystore written, the next not yet), so where every lock file
+// is already there, and taking the lock therefore changes nothing on disk, it
+// runs again under the lock and that answer stands. A change half done always
+// has its lock files: they are made before its first write.
+func settledKeystoreCheck(paths []string, check func() error) error {
+	err := check()
+	if err == nil || !keystoreLocksPresent(paths) {
+		return err
+	}
+	unlock, lerr := lockKeystores(paths, false)
+	if lerr != nil {
+		return lerr
+	}
+	defer unlock()
+	return check()
+}
+
+// settledKeystoreStatus is keystoreStatus checked as settledKeystoreCheck does.
+func (a *App) settledKeystoreStatus(paths []string, allowMissing bool) map[string]any {
+	var st map[string]any
+	_ = settledKeystoreCheck(paths, func() error {
+		st = a.keystoreStatus(paths, allowMissing)
+		if !st["ok"].(bool) {
+			return errors.New("not ok")
+		}
+		return nil
+	})
+	return st
+}
+
+// keystoreLocksPresent reports whether every keystore at paths has its lock file.
+func keystoreLocksPresent(paths []string) bool {
+	if len(paths) == 0 {
+		return false
+	}
+	for _, p := range paths {
+		fi, err := os.Lstat(p + keystoreLockSuffix)
+		if err != nil || !fi.Mode().IsRegular() {
+			return false
+		}
+	}
+	return true
+}
