@@ -198,7 +198,7 @@ func (a *App) stagingIntact(c *Chunk) bool {
 // subfolder each). The refill is built beside staging, checked against the copy's
 // own hashes, and only then takes staging's place: a refill that fails changes
 // nothing. The package then describes the copy that was read.
-func (a *App) RefillStaging(id, volumeID int, sourceDir string, progress func(float64, string)) (map[string]any, error) {
+func (a *App) RefillStaging(id, volumeID int, sourceDir string, progress func(float64, string), opts ...PackageWriteOptions) (map[string]any, error) {
 	cfg, err := a.LoadConfig()
 	if err != nil {
 		return nil, err
@@ -241,6 +241,14 @@ func (a *App) RefillStaging(id, volumeID int, sourceDir string, progress func(fl
 	}
 	if err := a.Store.CheckOutsideSources(cfg.StagingDir); err != nil {
 		return nil, err
+	}
+	// The refill puts the encrypted package in staging, as a build does.
+	keyNotice, err := a.checkKeyPlacement(c, cfg.StagingDir, cfg.KeystorePaths, packageWriteOptions(opts).AllowKeyDrive)
+	if err != nil {
+		return nil, err
+	}
+	if keyNotice != "" {
+		progress(0.01, keyNotice)
 	}
 	releaseStaging, err := a.Store.reserveOutputPath(cfg.StagingDir)
 	if err != nil {
@@ -363,7 +371,11 @@ func (a *App) RefillStaging(id, volumeID int, sourceDir string, progress func(fl
 	}
 	a.Store.Log("refill", fmt.Sprintf("%s: staging refilled from the copy on volume %d", c.Name, volumeID))
 	progress(1.0, "staging refilled")
-	return map[string]any{"chunk": c.Name, "staged_dir": work, "status": c.Status, "from_volume": volumeID}, nil
+	res := map[string]any{"chunk": c.Name, "staged_dir": work, "status": c.Status, "from_volume": volumeID}
+	if keyNotice != "" {
+		res["key_drive_notice"] = keyNotice
+	}
+	return res, nil
 }
 
 // copyFolderInto copies the plain files directly inside from into to.

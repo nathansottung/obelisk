@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -180,11 +181,10 @@ func TestKeystoreValidation_ExactSecretsAndLocalDuplicates(t *testing.T) {
 	}
 }
 
-// The Windows containment gate deliberately stops before helper lookup or any
-// key generation. Reaching it proves the encrypted-build first-use precheck
-// remains available without pretending to test encryption with missing helpers.
-// No production build runs an external tar any more, so the gate is switched on
-// through its test hook, which also lets this run on every platform.
+// An encrypted build does not start unless every keystore is present and
+// readable: missing keystore files are refused before helper lookup, any key
+// generation or any file is made. A first key is made by key generation (Keys),
+// which keeps its first-use workflow (TestKeystoreValidation_FirstUseCompatibility).
 func TestKeystoreValidation_FirstBuildInitializationPrecheck(t *testing.T) {
 	onWindowsTarPath(t, true)
 	f := newKV(t, nil, nil)
@@ -199,9 +199,8 @@ func TestKeystoreValidation_FirstBuildInitializationPrecheck(t *testing.T) {
 	c := f.app.Store.AddChunk(Chunk{Name: "synthetic", Status: "PLANNED", Encrypted: true})
 	before := kvSnapshot(t, f.root)
 	err := f.app.BuildChunk(c.ID, func(float64, string) {})
-	want := assertWindowsTarBuildVerifiable(Integrity{BuildVerify: "none"})
-	if err == nil || want == nil || err.Error() != want.Error() {
-		t.Fatal("first-use build did not reach the unchanged containment refusal")
+	if err == nil || !strings.Contains(err.Error(), "refusing to encrypt") || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("an encrypted build started with its keystores missing: %v", err)
 	}
 	kvUnchanged(t, f, before)
 }

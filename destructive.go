@@ -243,6 +243,13 @@ func needsConfirmation(w http.ResponseWriter, op string) {
 
 // destructiveHTTPError answers a refusal with its status (400 otherwise).
 func destructiveHTTPError(w http.ResponseWriter, err error) {
+	var kd *KeyDriveError
+	if errors.As(err, &kd) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(409)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": storedErrorText(err.Error()), "key_drive": true})
+		return
+	}
 	var de *destructiveError
 	if errors.As(err, &de) {
 		jsonErr(w, de.status, err)

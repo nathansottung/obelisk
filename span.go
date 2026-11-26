@@ -109,18 +109,18 @@ func dataSegmentCount(segs []Segment) int {
 // throttle), then reads it back and verifies before marking VERIFIED. Sidecars
 // (manifest + RESTORE.txt) land on every tape; the par2 set rides the last data
 // tape or its own, per the build-time plan.
-func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string)) (map[string]any, error) {
-	return a.spanWriteNext(id, destDir, bufferGB, blockMB, throttleMbps, volumeID, progress, false)
+func (a *App) SpanWriteNext(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string), opts ...PackageWriteOptions) (map[string]any, error) {
+	return a.spanWriteNext(id, destDir, bufferGB, blockMB, throttleMbps, volumeID, progress, false, packageWriteOptions(opts))
 }
 
 // SpanWriteNextOver is SpanWriteNext onto a tape that holds another set of this
 // package (or other files at its names), replacing them. Only the delete gate's
 // "span-write-over" runs it, after the typed word (removal_rule_test.go, gateOnly).
-func (a *App) SpanWriteNextOver(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string)) (map[string]any, error) {
-	return a.spanWriteNext(id, destDir, bufferGB, blockMB, throttleMbps, volumeID, progress, true)
+func (a *App) SpanWriteNextOver(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string), opts ...PackageWriteOptions) (map[string]any, error) {
+	return a.spanWriteNext(id, destDir, bufferGB, blockMB, throttleMbps, volumeID, progress, true, packageWriteOptions(opts))
 }
 
-func (a *App) spanWriteNext(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string), over bool) (map[string]any, error) {
+func (a *App) spanWriteNext(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string), over bool, opts PackageWriteOptions) (map[string]any, error) {
 	cfg, cfgErr := a.LoadConfig()
 	if cfgErr != nil {
 		return nil, cfgErr
@@ -155,6 +155,11 @@ func (a *App) spanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 	}
 	if strings.TrimSpace(destDir) == "" {
 		return nil, fmt.Errorf("dest_dir (the mounted tape/drive) required")
+	}
+	// An encrypted package never goes to a drive that holds its key.
+	keyNotice, err := a.checkKeyPlacement(c, destDir, cfg.KeystorePaths, opts.AllowKeyDrive)
+	if err != nil {
+		return nil, err
 	}
 	segIdx := -1
 	for i := range c.Segments {
@@ -354,7 +359,11 @@ func (a *App) spanWriteNext(id int, destDir string, bufferGB float64, blockMB in
 		msg = fmt.Sprintf("Segment %d/%d verified — %s. ALL %d tapes done; package %s.", seg.Index, N, label, N, c.Status)
 	}
 	progress(1.0, msg)
-	return map[string]any{"chunk": c.Name, "segment": seg.Index, "of": N, "done": done, "complete": done == N, "message": msg}, nil
+	res := map[string]any{"chunk": c.Name, "segment": seg.Index, "of": N, "done": done, "complete": done == N, "message": msg}
+	if keyNotice != "" {
+		res["key_drive_notice"] = keyNotice
+	}
+	return res, nil
 }
 
 // copyPar2Set copies the package's par2 set into its folder on the medium. Each

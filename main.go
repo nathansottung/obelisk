@@ -401,6 +401,28 @@ func destinationGate(w http.ResponseWriter, app *App, dest string) bool {
 // outFolderGate is destinationGate for a writer's output folder (see
 // openOutFolder). Where the destination guard is not available the job checks the
 // folder by real location itself, so there is nothing to ask here.
+// keyDriveGate refuses, before a job starts, an encrypted package write the key
+// placement rule refuses (key_placement.go), with 409 and key_drive: true so the
+// page can put the notice to the user and resend with allow_key_drive. With the
+// override chosen the job itself checks again and reports the notice.
+func keyDriveGate(w http.ResponseWriter, app *App, c *Chunk, dest string, opt PackageWriteOptions) bool {
+	if opt.AllowKeyDrive {
+		return true
+	}
+	cfg, err := app.LoadConfig()
+	if err != nil {
+		jsonErr(w, 400, err)
+		return false
+	}
+	if _, err := app.checkKeyPlacement(c, dest, cfg.KeystorePaths, false); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(409)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": storedErrorText(err.Error()), "key_drive": true})
+		return false
+	}
+	return true
+}
+
 func outFolderGate(w http.ResponseWriter, app *App, dest string) bool {
 	if !destGuardAvailable {
 		return true
@@ -2247,8 +2269,12 @@ func api(mux routeRegistrar, app *App) {
 		b := body(r)
 		volumeID := int(f(b, "volume_id"))
 		sourceDir := strings.TrimSpace(s(b, "source_dir"))
+		keyOpt := PackageWriteOptions{AllowKeyDrive: bl(b, "allow_key_drive")}
+		if cfg, err := app.LoadConfig(); err == nil && !keyDriveGate(w, app, c, cfg.StagingDir, keyOpt) {
+			return
+		}
 		startedOn(w).write(runJob(app, "refill", "Refill staging "+c.Name, func(p func(float64, string)) (map[string]any, error) {
-			return app.RefillStaging(id, volumeID, sourceDir, p)
+			return app.RefillStaging(id, volumeID, sourceDir, p, keyOpt)
 		}))
 	})
 	// Settle a copy whose ID two media hold: the medium at its recorded place is the
@@ -2273,8 +2299,12 @@ func api(mux routeRegistrar, app *App) {
 			jsonErr(w, 404, fmt.Errorf("package not found"))
 			return
 		}
+		keyOpt := PackageWriteOptions{AllowKeyDrive: bl(body(r), "allow_key_drive")}
+		if cfg, err := app.LoadConfig(); err == nil && !keyDriveGate(w, app, c, cfg.StagingDir, keyOpt) {
+			return
+		}
 		startedOn(w).write(runJob(app, "build", "Build "+c.Name, func(p func(float64, string)) (map[string]any, error) {
-			if err := app.BuildChunk(id, p); err != nil {
+			if err := app.BuildChunk(id, p, keyOpt); err != nil {
 				return nil, err
 			}
 			// Re-read the freshly built chunk for its staged path and payload size, and
@@ -2316,7 +2346,13 @@ func api(mux routeRegistrar, app *App) {
 		if !outFolderGate(w, app, dest) {
 			return
 		}
-		// What is already at the target is said first, once the folder is decided,
+		// The key drive is asked about before what is at the target, so a user who
+		// confirms an overwrite there has already chosen the override.
+		keyOpt := PackageWriteOptions{AllowKeyDrive: bl(b, "allow_key_drive")}
+		if !keyDriveGate(w, app, c, dest, keyOpt) {
+			return
+		}
+		// What is already at the target is said next, once the folder is decided,
 		// before any job starts. A volume asked for is made only after.
 		if wo := inspectWriteTarget(c, filepath.Join(dest, c.Name)); wo != nil {
 			writeOverResponse(w, wo)
@@ -2328,7 +2364,7 @@ func api(mux routeRegistrar, app *App) {
 			return
 		}
 		startedOn(w).write(runJob(app, "write", "Write "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {
-			return app.WriteChunk(id, dest, f(b, "buffer_gb"), int(f(b, "block_mb")), f(b, "throttle_mbps"), vol, p)
+			return app.WriteChunk(id, dest, f(b, "buffer_gb"), int(f(b, "block_mb")), f(b, "throttle_mbps"), vol, p, keyOpt)
 		}))
 	})
 	// Gated: prepare op "rewrite-copy" {id, volume_id, ...}, then execute with
@@ -2352,6 +2388,10 @@ func api(mux routeRegistrar, app *App) {
 		if !outFolderGate(w, app, dest) {
 			return
 		}
+		keyOpt := PackageWriteOptions{AllowKeyDrive: bl(b, "allow_key_drive")}
+		if !keyDriveGate(w, app, c, dest, keyOpt) {
+			return
+		}
 		if wo := app.spanTargetConflict(c, filepath.Join(dest, c.Name)); wo != nil {
 			writeOverResponse(w, wo)
 			return
@@ -2362,7 +2402,7 @@ func api(mux routeRegistrar, app *App) {
 			return
 		}
 		startedOn(w).write(runJob(app, "write", "Span-write next segment of "+c.Name+" → "+dest, func(p func(float64, string)) (map[string]any, error) {
-			return app.SpanWriteNext(id, dest, f(b, "buffer_gb"), int(f(b, "block_mb")), f(b, "throttle_mbps"), vol, p)
+			return app.SpanWriteNext(id, dest, f(b, "buffer_gb"), int(f(b, "block_mb")), f(b, "throttle_mbps"), vol, p, keyOpt)
 		}))
 	})
 	register(mux, "POST /api/chunks/{id}/verify", func(w http.ResponseWriter, r *http.Request) {
@@ -2524,12 +2564,12 @@ func api(mux routeRegistrar, app *App) {
 		jsonOut(w, map[string]any{"key_ref": ref, "passphrase": pass, "fingerprint": fpr})
 	})
 	mux.HandleFunc("POST /api/keys/sync", func(w http.ResponseWriter, r *http.Request) {
-		n, err := app.SyncKeystores()
+		rep, err := app.syncKeystores()
 		if err != nil {
 			jsonErr(w, 400, err)
 			return
 		}
-		jsonOut(w, map[string]any{"key_count": n})
+		jsonOut(w, rep)
 	})
 	mux.HandleFunc("GET /api/keys/{ref}/qr.png", func(w http.ResponseWriter, r *http.Request) {
 		ref := r.PathValue("ref")

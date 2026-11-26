@@ -70,6 +70,7 @@ var replaceAllowed = map[string]string{
 	"config.go:App.publishConfig":                     "the settings",
 	"heldsettings.go:App.saveHeldSettings":            "settings held from a backup restore",
 	"pipeline.go:writeStoreObserved":                  "a keystore, rewritten with the keys it already holds and any new one",
+	"keystore_lock.go:App.publishKeystore":            "a keystore and its previous generation, each rewritten with the keys it already holds and any new one",
 	"session_signin.go:sessionAuth.publishSigninFile": "this run's sign-in file, in Obelisk's private sign-in folder",
 	"catalogdb_migrate.go:writeCatalogStub":           "catalog.json becomes the pointer to catalog.db once its bytes are kept beside it",
 	"escrow.go:writeEscrowDownloads":                  "the cache's record of what it downloaded",
