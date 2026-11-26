@@ -112,7 +112,8 @@ func TestKeySheetCatchesTypo(t *testing.T) {
 	for i, ln := range lines {
 		if strings.HasPrefix(strings.TrimSpace(ln), "L01") {
 			// flip one payload char (the group right after "L01  ")
-			idx := strings.Index(ln, "L01") + 5
+			label := strings.Fields(ln)[0] // "L01/03"
+			idx := strings.Index(ln, label) + len(label) + 2
 			b := []byte(ln)
 			if b[idx] == 'A' {
 				b[idx] = 'B'
