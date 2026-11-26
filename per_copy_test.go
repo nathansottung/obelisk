@@ -107,9 +107,11 @@ func TestPerCopy_RebuildChangesNoExistingCopy(t *testing.T) {
 	if before.KeyRef != c.KeyRef || before.PayloadHash != c.EncHash || before.TarHash != c.TarHash || len(before.Sidecars) == 0 {
 		t.Fatalf("the copy did not record its own values: %+v", before)
 	}
+	// The user makes a new key (rotation); the rebuild uses it.
+	newKey := readyTestKey(t, app)
 	c = rebuildPackage(t, app, c)
-	if c.KeyRef == before.KeyRef {
-		t.Fatal("the rebuild did not make a new key")
+	if c.KeyRef == before.KeyRef || c.KeyRef != newKey {
+		t.Fatal("the rebuild did not use the new current key")
 	}
 	if len(c.Copies) != 1 || !reflect.DeepEqual(snapshotCopy(c.Copies[0]), before) {
 		t.Fatalf("the rebuild changed the copy:\n was %+v\n now %+v", before, c.Copies)
@@ -489,7 +491,7 @@ func TestPerCopy_RebuildNeedsNoConfirmation(t *testing.T) {
 	medium := t.TempDir()
 	s.job(s.obj("POST", fmt.Sprintf("/api/chunks/%d/write", pid), map[string]any{"dest_dir": medium, "volume_id": vid}))
 	ch := s.app.Store.Chunk(pid)
-	oldKey := ch.KeyRef
+	oldHash := ch.EncHash
 	ch.Status = "FAILED"
 	s.app.Store.UpdateChunk(ch)
 	m := s.obj("POST", fmt.Sprintf("/api/chunks/%d/build", pid), nil)
@@ -498,8 +500,8 @@ func TestPerCopy_RebuildNeedsNoConfirmation(t *testing.T) {
 	}
 	s.job(m)
 	got := s.app.Store.Chunk(pid)
-	if got.KeyRef == oldKey || got.VerifiedCopyCount() != 1 {
-		t.Fatalf("after the rebuild: new key=%v verified=%d", got.KeyRef != oldKey, got.VerifiedCopyCount())
+	if got.EncHash == oldHash || got.VerifiedCopyCount() != 1 {
+		t.Fatalf("after the rebuild: new hash=%v verified=%d", got.EncHash != oldHash, got.VerifiedCopyCount())
 	}
 }
 

@@ -425,6 +425,9 @@ func TestFrozenCatalogs_MigrateAndOldCopiesKeepWorking(t *testing.T) {
 			h.checkOldCopies(t, app)
 
 			// A rebuild gives each package new values and leaves the old copy working.
+			// An old catalog's keys were made one per package; a rebuild needs a
+			// key that is ready, as the user makes on the Keys page.
+			readyTestKey(t, app)
 			for name, want := range h.want {
 				c := frozenChunk(t, app, name)
 				c.Status = "FAILED"

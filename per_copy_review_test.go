@@ -86,6 +86,9 @@ func TestFrozenBackups_RestoreOnBothEngines(t *testing.T) {
 			h.checkInherited(t, app)
 			h.checkOldCopies(t, app)
 
+			// An old catalog's keys were made one per package; a rebuild needs a
+			// key that is ready, as the user makes on the Keys page.
+			readyTestKey(t, app)
 			for name, want := range h.want {
 				c := frozenChunk(t, app, name)
 				c.Status = "FAILED"
@@ -264,6 +267,7 @@ func frozenSpanRebuilt(t *testing.T) (*frozenHome, *App, *Chunk) {
 	c := frozenChunk(t, app, "FROZEN-SPANNED")
 	c.Status = "FAILED"
 	app.Store.UpdateChunk(c)
+	readyTestKey(t, app) // a rebuild needs a ready key
 	if err := app.BuildChunk(c.ID, noProg); err != nil {
 		t.Fatal(err)
 	}

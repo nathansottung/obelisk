@@ -693,6 +693,40 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 			"the restore was being prepared. Start it again")
 	}
 
+	// The backup's keystores are a key change like any other: they are checked
+	// now, and written under the same keystore lock, merged into what is there so
+	// no key is dropped (keystore_lock.go). The lock is taken before anything
+	// changes, so a key change elsewhere is waited for, not overwritten.
+	restoreKS := map[string]*keystoreFile{}
+	var ksDests []string
+	for _, m := range man.Members {
+		if !strings.HasPrefix(m.Name, "keystores/") {
+			continue
+		}
+		dest := filepath.Join(a.DataDir, "keystores", filepath.Base(m.Name))
+		ks, kerr := decodeKeystoreBytes(m.Name, members[m.Name])
+		if kerr != nil {
+			// Restored as it is when nothing is at dest (as before); merging
+			// into a keystore already there needs both to read.
+			if _, cerr := a.readExistingKeystore(dest, false); cerr == nil {
+				return RestoreResult{}, fmt.Errorf("the restore stopped before changing anything: the backup's %s cannot be read as a keystore, and writing it over the keystore at %s would drop the keys that one holds: %w", m.Name, dest, kerr)
+			}
+			ks = nil
+		}
+		if _, dup := restoreKS[dest]; dup {
+			return RestoreResult{}, fmt.Errorf("the restore stopped before changing anything: the backup holds two keystores named %s", filepath.Base(m.Name))
+		}
+		restoreKS[dest] = ks
+		ksDests = append(ksDests, dest)
+	}
+	if len(ksDests) > 0 {
+		unlockKS, lerr := lockKeystores(ksDests, true)
+		if lerr != nil {
+			return RestoreResult{}, fmt.Errorf("the restore stopped before changing anything: %w", lerr)
+		}
+		defer unlockKS()
+	}
+
 	// (4) Back up the current records first, so the restore is itself reversible.
 	// Each restore has a folder of its own: one made earlier the same second is
 	// never written into.
@@ -783,7 +817,7 @@ func (a *App) RestoreAppBackup(tarPath string) (RestoreResult, error) {
 			continue // in the catalog database swapped in above
 		case strings.HasPrefix(m.Name, "keystores/"):
 			dest := filepath.Join(a.DataDir, "keystores", filepath.Base(m.Name))
-			if err := writeFile(dest, b, 0o600); err != nil { // key material: owner only
+			if err := a.restoreKeystoreLocked(dest, restoreKS[dest], b, writeFile); err != nil {
 				return fail(fmt.Errorf("restore %s: %w", m.Name, err))
 			}
 		case strings.HasPrefix(m.Name, "scans/"):
@@ -996,7 +1030,8 @@ func (a *App) copyPreRestore(cfg Config, preDir string) error {
 		return fmt.Errorf("read %s: %w", ksDir, err)
 	}
 	for _, e := range entries {
-		if !e.Type().IsRegular() {
+		// A lock sidecar holds nothing, and this restore holds it locked.
+		if !e.Type().IsRegular() || strings.HasSuffix(e.Name(), keystoreLockSuffix) {
 			continue
 		}
 		if err := copyOne(filepath.Join(ksDir, e.Name()), filepath.Join(preDir, "keystores", e.Name()), 0o600); err != nil {
@@ -1103,4 +1138,38 @@ func logLeftOut(a *App, names []string) []string {
 		a.Store.Log("appbackup", fmt.Sprintf("app backup left out %d scan file list(s) that are missing or do not match their scan records", len(names)))
 	}
 	return names
+}
+
+// restoreKeystoreLocked writes a backup's keystore to dest, with dest's keystore
+// lock held. With nothing at dest, the backup's bytes are written as they are.
+// A keystore already at dest is merged with the backup's, so a key either holds
+// is kept; the write keeps the previous generation and is read back
+// (publishKeystore). Two different secrets under one key refuse.
+func (a *App) restoreKeystoreLocked(dest string, backup *keystoreFile, raw []byte, writeRaw func(string, []byte, os.FileMode) error) error {
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(dest); errors.Is(err, fs.ErrNotExist) {
+		if _, perr := os.Lstat(dest + keystorePrevSuffix); errors.Is(perr, fs.ErrNotExist) {
+			return writeRaw(dest, raw, 0o600) // key material: owner only
+		}
+	}
+	if _, err := a.recoverKeystore(dest); err != nil {
+		return err
+	}
+	cur, err := a.readExistingKeystore(dest, true)
+	if err != nil || backup == nil {
+		// What is at dest holds no readable keystore (it is kept in the
+		// pre-restore copy), or the backup's cannot be read and nothing
+		// readable is there to merge it into: restored as it is, as before.
+		if err == nil {
+			return fmt.Errorf("the backup's keystore cannot be read, so it was not written over the keystore at %s", dest)
+		}
+		return writeRaw(dest, raw, 0o600)
+	}
+	merged, err := mergeKeystores([]*keystoreFile{cur, backup})
+	if err != nil {
+		return err
+	}
+	return a.publishKeystore(dest, merged)
 }

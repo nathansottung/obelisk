@@ -124,8 +124,11 @@ func keySheet(ref, note, fingerprint, pass string) string {
 	b.WriteString("    Obelisk -> Keys -> \"Enter key from sheet\" checks every line and pinpoints\n")
 	b.WriteString("    the exact line to fix if a single character is wrong.\n")
 	b.WriteString("  • Tool-free FINAL proof: the SHA-256 of the whole passphrase equals the\n")
-	b.WriteString("    fingerprint above. Retype it all, then check by hand with:\n")
-	b.WriteString("        printf %s \"THEWHOLEPASSPHRASE\" | sha256sum\n\n")
+	b.WriteString("    fingerprint above. Check it by hand with one of these. Each asks for the\n")
+	b.WriteString("    passphrase, so it never goes on a command line or into shell history:\n")
+	b.WriteString("        bash or zsh:  read -rs P; printf %s \"$P\" | sha256sum; unset P\n")
+	b.WriteString("        PowerShell:   $p = Read-Host 'Passphrase'; -join ([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($p)) | ForEach-Object { $_.ToString('x2') }); Remove-Variable p\n")
+	b.WriteString("  • To decrypt, gpg asks for the passphrase. Never type it on a command line.\n\n")
 	b.WriteString("PAYLOAD:\n")
 
 	lines := keyLines(pass)

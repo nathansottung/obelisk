@@ -1228,15 +1228,17 @@ func packageWorkKey(id int) string { return fmt.Sprintf("package:%d", id) }
 // build failed, or one whose copies all failed and whose staging is gone, which has
 // no other way forward.
 func chunkCanBuild(c *Chunk, staged bool) bool {
-	return c.Status == "PLANNED" || c.Status == "FAILED" || chunkNeedsRestaging(c) && !staged
+	return !c.Adopted && c.Status == "PLANNED" || c.Status == "FAILED" || chunkNeedsRestaging(c) && !staged
 }
 
 func chunkNeedsRestaging(c *Chunk) bool {
 	return c.Status == "WRITTEN" && !c.Adopted && c.VerifiedCopyCount() == 0
 }
 
-// BuildChunk builds a package. A rebuild gives the package a new key and hash; each
-// copy already on media keeps the ones it was written with.
+// BuildChunk builds a package. An encrypted package is encrypted with the current
+// shared key, or with its own separate key when it has one (keys_ready.go); a
+// rebuild gives it a new hash, and the current key. Each copy already on media
+// keeps the key and hash it was written with.
 func (a *App) BuildChunk(id int, progress func(float64, string), opts ...PackageWriteOptions) error {
 	cfg, cfgErr := a.LoadConfig()
 	if cfgErr != nil {
@@ -1252,6 +1254,11 @@ func (a *App) BuildChunk(id int, progress func(float64, string), opts ...Package
 		return err
 	}
 	defer releasePackage()
+	if c.Adopted {
+		// Obelisk never encrypts or rebuilds data in place: an adopted backup is
+		// recorded as it was found.
+		return fmt.Errorf("package %s was adopted as found; Obelisk never encrypts or rebuilds an adopted backup. To get an encrypted copy, plan and build a new package from the source", c.Name)
+	}
 	staged := a.stagedPayloadPresent(c)
 	if !chunkCanBuild(c, staged) {
 		if chunkNeedsRestaging(c) {
@@ -1291,6 +1298,11 @@ func (a *App) BuildChunk(id int, progress func(float64, string), opts ...Package
 		// it. A first key is made with key generation (Keys), not by a build.
 		if st := a.settledKeystoreStatus(cfg.KeystorePaths, false); !st["ok"].(bool) {
 			return fmt.Errorf("refusing to encrypt: %s", st["reason"])
+		}
+		// And its key must be ready: in every keystore, with an offline copy
+		// proven (keys_ready.go). A build no longer makes a key of its own.
+		if err := a.keyBuildGate(c); err != nil {
+			return err
 		}
 	}
 	// The EFFECTIVE integrity for this archive (its own override, else the global
@@ -1500,7 +1512,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string), opts ...Package
 	if nb.Encrypted {
 		progress(0.40, strings.Join(summary, " · ")+" · encrypt…")
 		t = time.Now()
-		ref, pass, keyFpr, gerr := a.GenerateKey("package " + nb.Name)
+		ref, pass, keyFpr, gerr := a.keyForBuild(nb)
 		if gerr != nil {
 			return fail(gerr)
 		}
@@ -1593,7 +1605,7 @@ func (a *App) BuildChunk(id int, progress func(float64, string), opts ...Package
 			return fail(fmt.Errorf("encrypting private manifest: %w", err))
 		}
 	}
-	if err := writeRestoreTxt(buildDir, nb, cfg.eccIntended()); err != nil {
+	if err := writeRestoreTxt(buildDir, nb, cfg.eccIntended(), a.keyLabel(nb.KeyRef)); err != nil {
 		return fail(fmt.Errorf("writing RESTORE.txt: %w", err))
 	}
 	// Record the sidecars the medium must carry, so a write can require them in
@@ -1903,10 +1915,10 @@ func checkSidecarsAt(c *Chunk, dir string) error {
 	return nil
 }
 
-func writeRestoreTxt(dir string, c *Chunk, opticalEcc bool) error {
+func writeRestoreTxt(dir string, c *Chunk, opticalEcc bool, keyLabel ...string) error {
 	var t string
 	if c.Spanned {
-		t = spannedRestoreTxt(c) + "\n" + copyIDNote
+		t = restoreKeyNote(spannedRestoreTxt(c), c, keyLabel) + "\n" + copyIDNote
 		t = appendWindowsTarNote(t, c)
 		t = appendPrivacyNote(t, c)
 		t = appendOpticalNote(t, c, opticalEcc)
@@ -1937,6 +1949,7 @@ Full file list: %[7]s
 No compression anywhere — extracted bytes are the originals.
 ==========================================================
 `, c.Name, c.KeyRef, c.HashAlg, c.EncHash, c.TarHash, pl, fileListNote(c))
+		t = restoreKeyNote(t, c, keyLabel)
 	} else {
 		pl := payloadName(c) // <name>.tar
 		t = fmt.Sprintf(`HOW TO RESTORE %[1]s
@@ -1993,6 +2006,24 @@ func appendOpticalNote(t string, c *Chunk, eccEnabled bool) string {
 
 // appendPrivacyNote adds the one paragraph RESTORE.txt needs when this medium's
 // file listing is encrypted. RESTORE.txt itself contains no filenames.
+// restoreKeyNote names, under RESTORE.txt's heading, which key opens an
+// encrypted package: its reference, the name the user gave it and the date it
+// was made, so the right offline copy is found.
+func restoreKeyNote(t string, c *Chunk, keyLabel []string) string {
+	if !c.Encrypted || len(keyLabel) == 0 || keyLabel[0] == "" {
+		return t
+	}
+	const rule = "==========================================================\n"
+	i := strings.Index(t, rule)
+	if i < 0 {
+		return t
+	}
+	i += len(rule)
+	return t[:i] + "KEY: this package opens with key " + keyLabel[0] + ".\n" +
+		"Its passphrase is in the Obelisk keystores and on the offline copies\n" +
+		"made of that key (a printout, a text file or a password-manager note).\n\n" + t[i:]
+}
+
 func appendPrivacyNote(t string, c *Chunk) string {
 	if !c.PrivateManifest {
 		return t

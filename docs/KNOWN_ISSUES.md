@@ -23,11 +23,21 @@ not work.
 
 ## Keys since PR #42
 
-- **New first step before the first encrypted build: create the keystores.** An encrypted build now needs every keystore present and readable. It no longer creates missing keystore files, because a key may be issued only once it is in every keystore. Keystores are now created only by generating a key, and **the Keys page has no button for that yet**. On a new setup, encrypted builds refuse and name the missing keystore until that button is added. Setups whose keystores already exist are not affected. Plain builds are not affected.
 - **A disconnected keystore blocks encrypted writes.** While any keystore is not connected, every encrypted build, write, span-write, refill and copy re-write refuses and asks you to reconnect it. This includes a keystore kept on a drive you store somewhere else. Obelisk cannot yet recognise that drive when it comes back, because Windows renumbers disks as drives are plugged in. Reconnect the keystore for the write, or confirm **Write here anyway**, then check afterwards that its drive holds no package encrypted with its keys. A fix is tracked in [#43](https://github.com/nathansottung/obelisk/issues/43) and is required before the beta.
 - **A key may not sit beside what it unlocks.** An encrypted package is not written to a drive that holds a keystore, or to a drive Obelisk cannot identify. Two partitions of one disk count as one drive. **Write here anyway** goes ahead and shows an **ACTION NEEDED** notice, also kept in the log, that says what to move or check. Plain packages are not checked.
 - **Each keystore keeps its previous version.** A `keys.json.prev` file sits beside each keystore. It holds every key the keystore held before its last change, and Obelisk never removes it. Keep it with its keystore.
 - **Sync reports differences.** When keystores disagree, sync keeps every key from all of them and names the keys each one lacked. It never picks one side.
+
+## Making and proving a key
+
+- **Create a key before the first encrypted build.** On the **Keys** page, **Create key** asks for two keystores on different drives if they are not set, makes the key, and goes straight on to an offline copy. A key is **not ready**, and no encrypted build runs, until it is in both keystores and you have made an offline copy (a printout, a plain-text file on a drive you choose, or a password-manager note) and proved it by typing or pasting it back. A build that cannot run says which step is left and links to it.
+- **One key opens every package made with it.** Encrypted builds no longer make a key each. They all use your current key: the newest key that is ready. Anyone who has that key can open every package made with it. To limit that, make a new key on the Keys page. Once it is proven, new packages use it, and older packages keep opening with the key they were made with. No key is ever removed.
+- **A separate key for one package** is there for a package meant to be handed to someone else. It is off unless you choose **Separate key…** on that package, and it needs its own offline copy and proof before that package is built.
+- **Keys made before this change show "not proven".** Each was made by a build for one package. Make an offline copy of each and prove it from the Keys page. Restores do not wait for this, and no new package uses those keys.
+- **Lose every copy of a key and every package made with it can never be opened.** Keep the copies in separate places, apart from your backups and from the keystores.
+- **The Recovery Kit holds every key.** Handing a kit to someone gives them every key, the shared key included. To hand over a single package, give a separate key's offline copy instead. The escrow bundle holds tools only, never a key.
+- **Key sheets now number their lines with the line count** (`L02/03`), so a missing line, the last one included, is named. Sheets printed earlier still check, and a missing middle line on them is found by the gap.
+- **Adopted backups are recorded as found.** Obelisk never encrypts data in place. An adopted backup that was not encrypted shows "not encrypted, adopted as found" and has no build or encrypt control, and it is never re-written or written over. To get an encrypted copy, build a new package from the source.
 
 ## Removal and overwrite since PR #40
 
@@ -85,7 +95,7 @@ Older private media can also have a `RESTORE.txt` that names `NAME.manifest.json
 
 ## Rebuilding a package that already has copies
 
-Each copy now records its own key and hashes. A rebuild gives the package new ones and changes no existing copy, so older copies keep verifying and restoring in the app, and Obelisk no longer warns before a rebuild.
+Each copy now records its own key and hashes. A rebuild gives the package new hashes, encrypted with the current key, and changes no existing copy, so older copies keep verifying and restoring in the app, and Obelisk no longer warns before a rebuild.
 
 When a catalog is upgraded, each existing copy inherits its package's current key and hash. **One limit applies to a copy that an earlier version retired after an accepted rebuild.** It stays listed as superseded, and the key and hash it inherits may not be the ones it was written with. Restore such a copy by hand with `par2`, `gpg` and `tar`, using the key named in the `RESTORE.txt` on its medium. The old key is still in the keystore.
 
@@ -103,7 +113,7 @@ If two media hold the same ID, for example after a drive was cloned, neither cou
 
 ## Being fixed
 
-- Creating the first keystores from the Keys page, key backups, and recognising a put-away keystore drive
+- Key backups, and recognising a put-away keystore drive
 - Interrupted moves, restores, and upgrades
 - Restore checks
 - Copy-verification credit and what the screens claim

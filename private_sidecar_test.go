@@ -63,6 +63,7 @@ func TestRebuild_OldCopyStillRestoresByHand(t *testing.T) {
 	key, hash := c.KeyRef, c.EncHash
 	c.Status = "FAILED"
 	app.Store.UpdateChunk(c)
+	readyTestKey(t, app) // the user made a new key since: the rebuild uses it
 	if err := app.BuildChunk(c.ID, noProg); err != nil {
 		t.Fatalf("the rebuild: %v", err)
 	}

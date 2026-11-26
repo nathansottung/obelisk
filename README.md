@@ -1228,8 +1228,10 @@ and links each unchecked step to the exact spot.
   AES-256** over the tar (no compression). The `.tar.gpg` payload on the medium
   is ciphertext; par2 is computed over it so a scratched tape can be *repaired
   without any key present* — repair and custody are independent problems.
-- **Where secrets live.** Per-package random ~288-bit passphrases live **only**
-  in keystore JSON files; the catalog stores fingerprints, never secrets. The
+- **Where secrets live.** Random ~288-bit passphrases live **only**
+  in keystore JSON files. One shared key encrypts every package until you make
+  a new one, and a key is used only once it is in both keystores and an offline
+  copy of it has been proven by typing it back; the catalog stores fingerprints, never secrets. The
   Recovery Kit prints each key as a **one-per-page key page** for the fireproof
   box: a QR to scan *and* a retypable character grid (groups of 4, a **CRC-16**
   per line, and the whole passphrase proven by its SHA-256 fingerprint) so a
@@ -1328,8 +1330,9 @@ back. The catalog is an index for convenience, not a dependency for recovery.
 **What if I lose the encryption keys?**
 Then encrypted packages are cryptographically gone — that is what AES-256
 promises. This is exactly why builds **enforce ≥2 keystores on different
-devices**, and why you should print the per-key QR cards and store them
-off-site. Plaintext packages have no such risk.
+devices** and wait until you have made an offline copy of the key (a printout,
+a text file or a password-manager note) and proved it by typing it back. Keep
+the copies in separate places. Plaintext packages have no such risk.
 
 **How much scratch (staging) space do I need?**
 **Not the size of your archive — just enough for one package.** Obelisk builds

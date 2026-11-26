@@ -42,8 +42,16 @@ func nativeTools(t *testing.T) map[string]string {
 }
 
 // newTestApp wires an App on a temp catalog with a temp staging dir and two
-// (empty, consistent) keystores so GenerateKey is allowed to run.
+// keystores holding one ready shared key, so an encrypted build can run.
 func newTestApp(t *testing.T, tools map[string]string) (*App, string) {
+	t.Helper()
+	app, staging := newBareTestApp(t, tools)
+	readyTestKey(t, app)
+	return app, staging
+}
+
+// newBareTestApp is newTestApp with two empty keystores and no key yet.
+func newBareTestApp(t *testing.T, tools map[string]string) (*App, string) {
 	t.Helper()
 	dataDir := t.TempDir()
 	store, err := openTestStore(t, dataDir)
