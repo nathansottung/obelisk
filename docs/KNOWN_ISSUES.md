@@ -19,6 +19,15 @@ not work.
 - The local web interface now requires a signed-in session on every start ([#29](https://github.com/nathansottung/obelisk/pull/29)).
 - Encrypted media no longer receive `filelist.txt` or a plain tar. Private media also keep every plain file list off the medium, and restore notes name only files on it ([#31](https://github.com/nathansottung/obelisk/pull/31)). Encrypted media with private media off still show file names in their manifest. Media already written are not changed. See below.
 - Obelisk no longer removes or overwrites anything you own unless you type **Delete** or **Overwrite**. It removes on its own only files it made, inside its own folders ([#40](https://github.com/nathansottung/obelisk/pull/40)). See below for what changes in use.
+- Key sync can no longer erase a key that was just made, and a crash during a key change no longer loses a key. Obelisk no longer writes an encrypted package to the drive that holds its key ([#42](https://github.com/nathansottung/obelisk/pull/42)). See below for what changes in use.
+
+## Keys since PR #42
+
+- **New first step before the first encrypted build: create the keystores.** An encrypted build now needs every keystore present and readable. It no longer creates missing keystore files, because a key may be issued only once it is in every keystore. Keystores are now created only by generating a key, and **the Keys page has no button for that yet**. On a new setup, encrypted builds refuse and name the missing keystore until that button is added. Setups whose keystores already exist are not affected. Plain builds are not affected.
+- **A disconnected keystore blocks encrypted writes.** While any keystore is not connected, every encrypted build, write, span-write, refill and copy re-write refuses and asks you to reconnect it. This includes a keystore kept on a drive you store somewhere else. Obelisk cannot yet recognise that drive when it comes back, because Windows renumbers disks as drives are plugged in. Reconnect the keystore for the write, or confirm **Write here anyway**, then check afterwards that its drive holds no package encrypted with its keys. A fix is tracked in [#43](https://github.com/nathansottung/obelisk/issues/43) and is required before the beta.
+- **A key may not sit beside what it unlocks.** An encrypted package is not written to a drive that holds a keystore, or to a drive Obelisk cannot identify. Two partitions of one disk count as one drive. **Write here anyway** goes ahead and shows an **ACTION NEEDED** notice, also kept in the log, that says what to move or check. Plain packages are not checked.
+- **Each keystore keeps its previous version.** A `keys.json.prev` file sits beside each keystore. It holds every key the keystore held before its last change, and Obelisk never removes it. Keep it with its keystore.
+- **Sync reports differences.** When keystores disagree, sync keeps every key from all of them and names the keys each one lacked. It never picks one side.
 
 ## Removal and overwrite since PR #40
 
@@ -94,7 +103,7 @@ If two media hold the same ID, for example after a drive was cloned, neither cou
 
 ## Being fixed
 
-- Key handling and key backups
+- Creating the first keystores from the Keys page, key backups, and recognising a put-away keystore drive
 - Interrupted moves, restores, and upgrades
 - Restore checks
 - Copy-verification credit and what the screens claim
