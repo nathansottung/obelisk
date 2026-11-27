@@ -66,25 +66,27 @@ func TestAppRestore_ConflictingKeySecretRefusesBeforeChangingAnything(t *testing
 }
 
 // An adopted backup is never written over, by its own package or by another one
-// whose folder would land on it or inside it.
+// whose folder would land on it. A write-over replaces only the files of its own
+// package's folder, so writing a new package's folder elsewhere on the drive of
+// an adopted backup (one adopted at a drive's root, say) is not refused.
 func TestAdopted_AnotherPackageNeverWritesOverAnAdoptedCopy(t *testing.T) {
 	app, _ := newTestApp(t, nil)
 	adopted, where := adoptedPackage(t, app, StatusAdoptedVerified, false)
 	before, _ := os.ReadFile(filepath.Join(where, "FOUND.tar"))
-	for _, tc := range []struct{ name, dest string }{
-		{adopted.Name, filepath.Dir(where)}, // the same folder
-		{"INSIDE", where},                   // a folder inside the adopted copy
-	} {
-		other := app.Store.AddChunk(Chunk{Name: tc.name, Status: "STAGED", HashAlg: "SHA256", MediaKind: "HDD"})
-		if _, err := app.WriteChunkOver(other.ID, tc.dest, 0, 0, 0, 0, noProg); err == nil || !strings.Contains(err.Error(), "adopted as found") {
-			t.Fatalf("package %s was written over the adopted copy at %s: %v", tc.name, where, err)
-		}
-		if _, err := app.PrepareDestructive(testSession, "write-over", map[string]any{"id": other.ID, "dest_dir": tc.dest}); err == nil || !strings.Contains(err.Error(), "adopted as found") {
-			t.Fatalf("a write-over of package %s onto the adopted copy was offered: %v", tc.name, err)
-		}
+	other := app.Store.AddChunk(Chunk{Name: adopted.Name, Status: "STAGED", HashAlg: "SHA256", MediaKind: "HDD"})
+	if _, err := app.WriteChunkOver(other.ID, filepath.Dir(where), 0, 0, 0, 0, noProg); err == nil || !strings.Contains(err.Error(), "adopted as found") {
+		t.Fatalf("package %s was written over the adopted copy at %s: %v", other.Name, where, err)
+	}
+	if _, err := app.PrepareDestructive(testSession, "write-over", map[string]any{"id": other.ID, "dest_dir": filepath.Dir(where)}); err == nil || !strings.Contains(err.Error(), "adopted as found") {
+		t.Fatalf("a write-over of package %s onto the adopted copy was offered: %v", other.Name, err)
 	}
 	if after, _ := os.ReadFile(filepath.Join(where, "FOUND.tar")); string(after) != string(before) {
 		t.Fatal("the adopted backup's bytes changed")
+	}
+	// A folder of its own under the adopted copy's folder is not that copy.
+	inside := app.Store.AddChunk(Chunk{Name: "INSIDE", Status: "STAGED", HashAlg: "SHA256", MediaKind: "HDD"})
+	if err := app.refuseAdoptedRewrite(inside, filepath.Join(where, inside.Name), false); err != nil {
+		t.Fatalf("a package's own folder under an adopted copy's folder was refused: %v", err)
 	}
 }
 

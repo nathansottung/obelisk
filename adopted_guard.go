@@ -28,16 +28,16 @@ func adoptedPathKey(p string) string {
 	return p
 }
 
-// adoptedCopyAt reports whether dir is where a copy of adopted package c is, or
-// a folder inside one.
+// adoptedCopyAt reports whether dir is where a copy of adopted package c is. A
+// folder inside one is not: a write-over replaces only the files of its own
+// package's folder, and an adopted backup may sit at a drive's root.
 func adoptedCopyAt(c *Chunk, dir string) bool {
 	if c == nil || !c.Adopted {
 		return false
 	}
 	want := adoptedPathKey(dir)
 	on := func(p string) bool {
-		k := adoptedPathKey(p)
-		return k == want || canonicalWithin(k, want)
+		return adoptedPathKey(p) == want
 	}
 	for i := range c.Copies {
 		if c.Copies[i].Path != "" && on(c.Copies[i].Path) {
@@ -48,9 +48,8 @@ func adoptedCopyAt(c *Chunk, dir string) bool {
 }
 
 // refuseAdoptedRewrite refuses a re-write of adopted package c's copy (always),
-// or a write by c over dir when dir is where any adopted backup's copy is, or a
-// folder inside one: an adopted backup is never written over, by its own
-// package or by another.
+// or a write by c over dir when dir is where any adopted backup's copy is: an
+// adopted backup is never written over, by its own package or by another.
 func (a *App) refuseAdoptedRewrite(c *Chunk, dir string, always bool) error {
 	if c == nil {
 		return nil
