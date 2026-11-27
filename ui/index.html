@@ -3076,11 +3076,16 @@ async function offlineCopyDlg(ref){
     <div class="row" style="margin-top:6px"><button class="btn ghost" data-call="keyPMNote" data-args="${callArgs(ref)}">Show the note</button></div><div id="kcpmout"></div></div>
   <div class="row" style="margin-top:12px"><button class="btn" onclick="go()">I made a copy: prove it →</button></div>`,
   async()=>{_kcNote='';setTimeout(()=>proveKeyDlg(ref),0)});
-  // However the dialog closes, the key shown in it leaves the page.
-  const d=$('#dlg');if(d&&d.addEventListener)d.addEventListener('close',()=>{_kcNote='';
-    for(const id of ['#kcprintout','#kcpmout']){const e=$(id);if(e)e.innerHTML=''}
-    keyPrintPage._html=''},{once:true});
+  keyWipeOnClose();
 }
+/* However a key dialog closes, the key shown in it, and what was typed into a
+   proof (a key, or nearly one), leave the page. One listener stays on the dialog
+   for good, so a late close event of the dialog before cannot use it up. */
+function keyWipe(){_kcNote='';keyPrintPage._html='';
+  for(const id of ['#kcprintout','#kcpmout','#kpout']){const e=$(id);if(e)e.innerHTML=''}
+  const t=$('#kptext');if(t)t.value=''}
+function keyWipeOnClose(){const d=$('#dlg');
+  if(d&&d.addEventListener&&!d._keyWipe){d._keyWipe=true;d.addEventListener('close',keyWipe)}}
 async function keyPrintout(ref){
   const r=await api('POST','/api/keys/'+encodeURIComponent(ref)+'/reveal',{kind:'printout'});
   const rows=(r.lines||[]).map(l=>`<tr><td class="mono">${esc(l.label)}</td><td class="mono" style="letter-spacing:.12em">${esc(l.groups)}</td><td class="mono">${esc(l.code)}</td></tr>`).join('');
@@ -3126,7 +3131,9 @@ function proveKeyDlg(ref){dlg(`<h1>Prove your copy of ${esc(ref)}</h1>
   <label style="margin-top:8px">The key, typed or pasted back</label>
   <textarea id="kptext" class="full mono" rows="8" autocomplete="off" spellcheck="false"></textarea>
   <div id="kpout" style="margin-top:8px"></div>
-  <div class="row" style="margin-top:12px"><button class="btn" data-call="keyProve" data-args="${callArgs(ref)}">Prove it</button></div>`,async()=>{})}
+  <div class="row" style="margin-top:12px"><button class="btn" data-call="keyProve" data-args="${callArgs(ref)}">Prove it</button></div>`,async()=>{});
+  keyWipeOnClose();
+}
 async function keyProve(ref){
   const out=$('#kpout');
   try{const r=await api('POST','/api/keys/'+encodeURIComponent(ref)+'/prove',{text:$('#kptext').value,kind:$('#kpkind').value});

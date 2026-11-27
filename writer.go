@@ -574,7 +574,7 @@ func (a *App) RewriteCopy(id, volumeID int, bufferGB float64, blockMB int, throt
 	if dest == "" {
 		return nil, fmt.Errorf("no current copy of %s on volume %d to re-write", c.Name, volumeID)
 	}
-	if err := refuseAdoptedRewrite(c, dest, true); err != nil {
+	if err := a.refuseAdoptedRewrite(c, dest, true); err != nil {
 		return nil, err
 	}
 	// Check the package and open the folder (deciding it and taking its lease)
@@ -1119,7 +1119,7 @@ var destFree = diskFree
 // (removal_rule_test.go, gateOnly).
 func (a *App) WriteChunkOver(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string), opts ...PackageWriteOptions) (map[string]any, error) {
 	if c := a.Store.Chunk(id); c != nil {
-		if err := refuseAdoptedRewrite(c, filepath.Join(destDir, c.Name), false); err != nil {
+		if err := a.refuseAdoptedRewrite(c, filepath.Join(destDir, c.Name), false); err != nil {
 			return nil, err
 		}
 	}

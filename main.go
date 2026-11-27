@@ -27,8 +27,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	qrcode "github.com/skip2/go-qrcode"
 )
 
 //go:embed ui
@@ -2634,21 +2632,9 @@ func api(mux routeRegistrar, app *App) {
 		}
 		jsonOut(w, rep)
 	})
-	mux.HandleFunc("GET /api/keys/{ref}/qr.png", func(w http.ResponseWriter, r *http.Request) {
-		ref := r.PathValue("ref")
-		pass, err := app.Passphrase(ref)
-		if err != nil {
-			jsonErr(w, 404, err)
-			return
-		}
-		png, err := qrcode.Encode("MNEMO1|"+ref+"|"+pass, qrcode.Medium, 320)
-		if err != nil {
-			jsonErr(w, 500, err)
-			return
-		}
-		w.Header().Set("Content-Type", "image/png")
-		_, _ = w.Write(png)
-	})
+	// No GET route serves a key, as text or as a QR image: the secret leaves the
+	// server only in the reply to a deliberate reveal above, which the audit log
+	// records. The Recovery Kit's QR cards are written into the kit itself.
 
 	// burn queues — persistent, reboot-resumable optical burning
 	mux.HandleFunc("GET /api/burnqueues", func(w http.ResponseWriter, r *http.Request) {
