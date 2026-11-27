@@ -28,6 +28,8 @@ import (
 	"fmt"
 	"html"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -122,29 +124,41 @@ func keySheet(ref, note, fingerprint, pass string) string {
 	b.WriteString("    Obelisk -> Keys -> \"Enter key from sheet\" checks every line and pinpoints\n")
 	b.WriteString("    the exact line to fix if a single character is wrong.\n")
 	b.WriteString("  • Tool-free FINAL proof: the SHA-256 of the whole passphrase equals the\n")
-	b.WriteString("    fingerprint above. Retype it all, then check by hand with:\n")
-	b.WriteString("        printf %s \"THEWHOLEPASSPHRASE\" | sha256sum\n\n")
+	b.WriteString("    fingerprint above. Check it by hand with one of these. Each asks for the\n")
+	b.WriteString("    passphrase, so it never goes on a command line or into shell history:\n")
+	b.WriteString("        bash or zsh:  read -rs P; printf %s \"$P\" | sha256sum; unset P\n")
+	b.WriteString("        PowerShell:   $p = Read-Host 'Passphrase'; -join ([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($p)) | ForEach-Object { $_.ToString('x2') }); Remove-Variable p\n")
+	b.WriteString("  • To decrypt, gpg asks for the passphrase. Never type it on a command line.\n\n")
 	b.WriteString("PAYLOAD:\n")
 
-	for _, ln := range keyLines(pass) {
-		fmt.Fprintf(&b, "  L%02d  %-*s  [%s]\n", ln.No,
+	lines := keyLines(pass)
+	for _, ln := range lines {
+		fmt.Fprintf(&b, "  %s  %-*s  [%s]\n", sheetLineLabel(ln.No, len(lines)),
 			keySheetGroupsPerLn*(keySheetGroup+1), ln.Groups, ln.Code)
 	}
-	b.WriteString("\nEND — reconstruct the passphrase = every group above, concatenated, no spaces.\n")
+	fmt.Fprintf(&b, "\nEND — %d lines. Reconstruct the passphrase = every group above, concatenated, no spaces.\n", len(lines))
 	return b.String()
 }
 
-var keySheetLineRe = regexp.MustCompile(`(?i)^\s*L\d+\s+(.*?)\s*\[([0-9a-f]{4})\]\s*$`)
+// sheetLineLabel numbers a payload line with the sheet's line count, as
+// "L02/03", so a line left out, the last one included, is found by its number.
+func sheetLineLabel(no, total int) string { return fmt.Sprintf("L%02d/%02d", no, total) }
+
+// keySheetLineRe matches a payload line: its number, the optional line count
+// (sheets printed before the count was added have none), the characters, and
+// the line's check code.
+var keySheetLineRe = regexp.MustCompile(`(?i)^\s*L(\d+)(?:\s*/\s*(\d+))?\s+(.*?)\s*\[([0-9a-f]{4})\]\s*$`)
 
 // KeySheetResult reports a parsed/verified sheet without ever returning the
 // secret itself.
 type KeySheetResult struct {
-	OK          bool     `json:"ok"`          // every line's code matched
-	Lines       int      `json:"lines"`       // payload lines parsed
-	BadLines    []int    `json:"bad_lines"`   // 1-based line numbers whose code failed
-	Fingerprint string   `json:"fingerprint"` // SHA-256 of the reconstructed passphrase
-	Length      int      `json:"length"`      // reconstructed passphrase length
-	Notes       []string `json:"notes,omitempty"`
+	OK           bool     `json:"ok"`                      // every line's code matched
+	Lines        int      `json:"lines"`                   // payload lines parsed
+	BadLines     []int    `json:"bad_lines"`               // 1-based line numbers whose code failed
+	MissingLines []int    `json:"missing_lines,omitempty"` // 1-based line numbers the sheet lacks
+	Fingerprint  string   `json:"fingerprint"`             // SHA-256 of the reconstructed passphrase
+	Length       int      `json:"length"`                  // reconstructed passphrase length
+	Notes        []string `json:"notes,omitempty"`
 }
 
 // parseKeySheet reconstructs the passphrase from a typed/retyped sheet and
@@ -152,31 +166,76 @@ type KeySheetResult struct {
 // use) plus a result summarizing which lines, if any, failed — so a retyped sheet
 // pinpoints the exact line to fix.
 func parseKeySheet(text string) (pass string, res KeySheetResult) {
-	var sb strings.Builder
-	n := 0
+	type typed struct {
+		no            int
+		payload, code string
+	}
+	var got []typed
+	total := 0
+	seen := map[int]bool{}
 	for _, raw := range strings.Split(text, "\n") {
 		m := keySheetLineRe.FindStringSubmatch(raw)
 		if m == nil {
 			continue
 		}
-		n++
-		payload := strings.ReplaceAll(strings.ReplaceAll(m[1], " ", ""), "\t", "")
-		sb.WriteString(payload)
-		if !strings.EqualFold(lineCode(payload), m[2]) {
-			res.BadLines = append(res.BadLines, n)
+		no, _ := strconv.Atoi(m[1])
+		if m[2] != "" {
+			if t, _ := strconv.Atoi(m[2]); t > total {
+				total = t
+			}
+		}
+		if no < 1 || seen[no] {
+			res.BadLines = append(res.BadLines, no)
+			res.Notes = append(res.Notes, fmt.Sprintf("line L%02d is typed more than once, or is not numbered from L01", no))
+			continue
+		}
+		seen[no] = true
+		payload := strings.ReplaceAll(strings.ReplaceAll(m[3], " ", ""), "\t", "")
+		got = append(got, typed{no, payload, m[4]})
+	}
+	sort.Slice(got, func(i, j int) bool { return got[i].no < got[j].no })
+	var sb strings.Builder
+	last := 0
+	for _, g := range got {
+		last = g.no
+		sb.WriteString(g.payload)
+		if !strings.EqualFold(lineCode(g.payload), g.code) {
+			res.BadLines = append(res.BadLines, g.no)
 		}
 	}
-	res.Lines = n
+	sort.Ints(res.BadLines)
+	if total < last {
+		total = last
+	}
+	for no := 1; no <= total; no++ {
+		if !seen[no] {
+			res.MissingLines = append(res.MissingLines, no)
+		}
+	}
+	res.Lines = len(got)
 	pass = sb.String()
 	res.Length = len(pass)
 	res.Fingerprint = passFingerprint(pass)
-	res.OK = n > 0 && len(res.BadLines) == 0
-	if n == 0 {
+	res.OK = len(got) > 0 && len(res.BadLines) == 0 && len(res.MissingLines) == 0
+	if len(got) == 0 {
 		res.Notes = append(res.Notes, "no payload lines found — paste the L01/L02/… PAYLOAD lines of the sheet")
-	} else if len(res.BadLines) > 0 {
-		res.Notes = append(res.Notes, fmt.Sprintf("%d line(s) failed their checksum — a typo on: %v", len(res.BadLines), res.BadLines))
+	}
+	if len(res.MissingLines) > 0 {
+		res.Notes = append(res.Notes, "missing line(s): "+lineNames(res.MissingLines))
+	}
+	if len(res.BadLines) > 0 {
+		res.Notes = append(res.Notes, fmt.Sprintf("%d line(s) failed their check code — a typo on: %s", len(res.BadLines), lineNames(res.BadLines)))
 	}
 	return pass, res
+}
+
+// lineNames spells line numbers as the sheet prints them: L01, L02, …
+func lineNames(nos []int) string {
+	names := make([]string, len(nos))
+	for i, n := range nos {
+		names[i] = fmt.Sprintf("L%02d", n)
+	}
+	return strings.Join(names, ", ")
 }
 
 // ---- printable one-key-per-page layout ----------------------------------
@@ -208,9 +267,10 @@ func keyPageHTML(ref, note, fingerprint, pass, qrDataURI string) string {
 	b.WriteString(`</tbody></table></div>`)
 	b.WriteString(`<p class="howto">Retype every group below left-to-right, top-to-bottom, <strong>no spaces</strong> — that string is the passphrase. The <code>CRC-16</code> after each line lets <em>Keys → Enter key from sheet</em> pinpoint a mistyped line; the tool-free final proof is that the whole passphrase's SHA-256 equals the <em>fingerprint</em> above.</p>`)
 	b.WriteString(`<table class="payload"><thead><tr><th>#</th><th>characters (groups of 4)</th><th>CRC-16</th></tr></thead><tbody>`)
-	for _, ln := range keyLines(pass) {
-		b.WriteString(fmt.Sprintf(`<tr><td class="ln">L%02d</td><td class="mono chars">%s</td><td class="mono crc">%s</td></tr>`,
-			ln.No, html.EscapeString(ln.Groups), ln.Code))
+	pageLines := keyLines(pass)
+	for _, ln := range pageLines {
+		b.WriteString(fmt.Sprintf(`<tr><td class="ln">%s</td><td class="mono chars">%s</td><td class="mono crc">%s</td></tr>`,
+			sheetLineLabel(ln.No, len(pageLines)), html.EscapeString(ln.Groups), ln.Code))
 	}
 	b.WriteString(`</tbody></table>`)
 	b.WriteString(`<p class="warn"><strong>Warning:</strong> SECRET IN THE CLEAR — anyone who reads this page can decrypt the packages. Locked, off-site, access-controlled, exactly like a keystore.</p>`)

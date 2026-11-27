@@ -769,6 +769,21 @@ type KeyMeta struct { // secrets are NEVER here — keystore files only
 	Fingerprint string    `json:"fingerprint"`
 	Note        string    `json:"note"`
 	CreatedAt   time.Time `json:"created_at"`
+	// The fields below came with key readiness (keys_ready.go). A key from
+	// before has none of them: it was made by a build for one package, has no
+	// purpose, and shows as not proven.
+	Name      string     `json:"name,omitempty"`       // what the user calls it
+	Purpose   string     `json:"purpose,omitempty"`    // keyPurposeShared or keyPurposePackage
+	PackageID int        `json:"package_id,omitempty"` // the one package a separate key is for
+	ProvenAt  *time.Time `json:"proven_at,omitempty"`  // first proof of an offline copy
+	Proofs    []KeyProof `json:"proofs,omitempty"`     // every proof, by the kind of copy
+}
+
+// KeyProof records that the user typed or pasted back one offline copy of a key
+// and it matched the key's whole SHA-256 fingerprint. It holds no secret.
+type KeyProof struct {
+	Kind string    `json:"kind"` // printout, file or password-manager
+	At   time.Time `json:"at"`
 }
 
 type Job struct {
@@ -4032,6 +4047,57 @@ func (s *Store) KeyMetas() []*KeyMeta {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]*KeyMeta{}, s.c.Keys...)
+}
+
+// KeyMetaCopy returns a copy of the key record for ref, or nil.
+func (s *Store) KeyMetaCopy(ref string) *KeyMeta {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, k := range s.c.Keys {
+		if k.Ref == ref {
+			cp := *k
+			cp.Proofs = append([]KeyProof(nil), k.Proofs...)
+			return &cp
+		}
+	}
+	return nil
+}
+
+// UpdateKeyMeta changes the key record for ref and saves the catalog. No key
+// record is ever removed.
+func (s *Store) UpdateKeyMeta(ref string, change func(*KeyMeta)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, k := range s.c.Keys {
+		if k.Ref == ref {
+			change(k)
+			return s.save()
+		}
+	}
+	return fmt.Errorf("key %s is not in the catalog", ref)
+}
+
+// KeyPackageCounts is, for each key, how many packages it opens: the package's
+// current key and the key each of its copies was written with.
+func (s *Store) KeyPackageCounts() map[string]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string]int{}
+	for _, c := range s.c.Chunks {
+		seen := map[string]bool{}
+		if c.Encrypted && c.KeyRef != "" {
+			seen[c.KeyRef] = true
+		}
+		for i := range c.Copies {
+			if ref := c.valuesOf(&c.Copies[i]).KeyRef; ref != "" {
+				seen[ref] = true
+			}
+		}
+		for ref := range seen {
+			out[ref]++
+		}
+	}
+	return out
 }
 
 // ---- jobs (persisted to a jobs.json sidecar; in-progress ones are picked up as

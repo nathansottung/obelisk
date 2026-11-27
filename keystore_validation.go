@@ -30,6 +30,13 @@ func (a *App) readExistingKeystore(path string, allowMissing bool) (*keystoreFil
 	if err != nil {
 		return nil, fmt.Errorf("cannot read keystore %s: %w", path, err)
 	}
+	return decodeKeystoreBytes(path, b)
+}
+
+// decodeKeystoreBytes checks and decodes keystore bytes read from path (or, for
+// an app-state restore, taken from a backup), by the rules every keystore read
+// keeps.
+func decodeKeystoreBytes(path string, b []byte) (*keystoreFile, error) {
 	// Reject duplicate JSON fields before decoding: accepting the last value
 	// could hide a second secret or silently lose metadata. Never echo tokens.
 	if err := uniqueJSON(b); err != nil {

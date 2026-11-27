@@ -277,6 +277,9 @@ func rewriteCopyTargets(a *App, p map[string]any) ([]destructiveTarget, error) {
 	if c.Spanned {
 		return nil, refuseDestructive(400, "package %s is spanned; re-write its segments via span-write", c.Name)
 	}
+	if err := a.refuseAdoptedRewrite(c, "", true); err != nil {
+		return nil, refuseDestructive(409, "%s", err.Error())
+	}
 	if err := sealGuard(a, vol); err != nil {
 		return nil, refuseDestructive(409, "%s", err.Error())
 	}
@@ -373,6 +376,9 @@ func writeOverTargets(a *App, p map[string]any) ([]destructiveTarget, error) {
 	}
 	if err := keyDrivePrecheck(a, c, dest, p); err != nil {
 		return nil, err
+	}
+	if err := a.refuseAdoptedRewrite(c, filepath.Join(dest, c.Name), false); err != nil {
+		return nil, refuseDestructive(409, "%s", err.Error())
 	}
 	dir := filepath.Join(dest, c.Name)
 	if inspectWriteTarget(c, dir) == nil {

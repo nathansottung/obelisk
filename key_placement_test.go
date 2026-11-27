@@ -195,13 +195,14 @@ func TestKeyPlacement_BuildStagingOnKeystoreDrive(t *testing.T) {
 		filepath.Dir(cfg.KeystorePaths[1]): "disk-2",
 	})
 	c := app.Store.AddChunk(Chunk{Name: "ENC-STAGE", Status: "PLANNED", Encrypted: true, HashAlg: "SHA256", Par2: 5})
+	keysBefore := len(app.Store.KeyMetas())
 	err := app.BuildChunk(c.ID, noProg)
 	var kd *KeyDriveError
 	if !errors.As(err, &kd) {
 		t.Fatalf("build staged on the keystore's drive: %v", err)
 	}
-	if len(app.Store.KeyMetas()) != 0 {
-		t.Fatal("a key was generated for a refused build")
+	if len(app.Store.KeyMetas()) != keysBefore || app.Store.Chunk(c.ID).KeyRef != "" {
+		t.Fatal("a refused build made or took a key")
 	}
 	mux := http.NewServeMux()
 	api(mux, app)

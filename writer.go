@@ -574,6 +574,9 @@ func (a *App) RewriteCopy(id, volumeID int, bufferGB float64, blockMB int, throt
 	if dest == "" {
 		return nil, fmt.Errorf("no current copy of %s on volume %d to re-write", c.Name, volumeID)
 	}
+	if err := a.refuseAdoptedRewrite(c, dest, true); err != nil {
+		return nil, err
+	}
 	// Check the package and open the folder (deciding it and taking its lease)
 	// first, so a re-write that cannot run changes nothing. WriteChunk rebuilds dest
 	// as destDir/<name>, so the copy folder's parent is opened.
@@ -1115,6 +1118,11 @@ var destFree = diskFree
 // folder there. Only the delete gate's "write-over" runs it, after the typed word
 // (removal_rule_test.go, gateOnly).
 func (a *App) WriteChunkOver(id int, destDir string, bufferGB float64, blockMB int, throttleMbps float64, volumeID int, progress func(float64, string), opts ...PackageWriteOptions) (map[string]any, error) {
+	if c := a.Store.Chunk(id); c != nil {
+		if err := a.refuseAdoptedRewrite(c, filepath.Join(destDir, c.Name), false); err != nil {
+			return nil, err
+		}
+	}
 	out, err := a.openOutFolderOver(destDir)
 	if err != nil {
 		return nil, err

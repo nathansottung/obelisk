@@ -135,8 +135,8 @@ jobs:
         timeout-minutes: 10
         run: sudo apt-get update && sudo apt-get install -y gnupg par2
 
-      - name: Test report script
-        run: node --test scripts/ci/slowest-tests.test.mjs
+      - name: Test the report and gate scripts
+        run: node --test scripts/ci/slowest-tests.test.mjs scripts/ci/go-known-failures.test.mjs
 
       - name: go test -race
         run: |

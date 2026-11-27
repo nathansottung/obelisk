@@ -524,7 +524,7 @@ const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 // (input), and its arguments as JSON in data-args, built with callArgs (escaped
 // as an attribute value, so the browser hands back exactly the JSON). Only the
 // functions listed in UI_CALLS can be called this way.
-const UI_CALLS=new Set(['adoptFolderDlg','assignDlgArchive','backupChangesDlg','backupHistoryDlg','bagExportDlg','bagPackageDlg','censusDlg','doReconcile','doRefill','doRewriteCopy','doSettleCopy','dockIngest','dockIngestAnyway','dockReverifyDlg','driveEncDlg','exploreGo','finalizeDlg','integrityArchiveDlg','mirrorDlg','overrideFile','parkFile','planDlg','planExecFromDock','planTree','prevExports','printLabel','readMediumDlg','removeDlg','removeExport','removeKeptRun','removeLeftover','restoreDlg','restoreFileVersion','retireDlg','rmPickExport','rmToggle','scanDlg','snapTree','spanWriteDlg','tmZoom','toolBrowse','unsealDlg','vDrift','verifyMirrorDlg','writeDlg']);
+const UI_CALLS=new Set(['adoptFolderDlg','assignDlgArchive','backupChangesDlg','backupHistoryDlg','bagExportDlg','bagPackageDlg','censusDlg','doReconcile','doRefill','doRewriteCopy','doSettleCopy','dockIngest','dockIngestAnyway','dockReverifyDlg','driveEncDlg','exploreGo','finalizeDlg','integrityArchiveDlg','keyPMNote','keyPrintout','keyProve','keySaveFile','mirrorDlg','offlineCopyDlg','overrideFile','parkFile','planDlg','planExecFromDock','planTree','prevExports','printLabel','proveKeyDlg','readMediumDlg','removeDlg','removeExport','removeKeptRun','removeLeftover','restoreDlg','restoreFileVersion','retireDlg','rmPickExport','rmToggle','scanDlg','separateKeyDlg','snapTree','spanWriteDlg','tmZoom','toolBrowse','unsealDlg','vDrift','verifyMirrorDlg','writeDlg']);
 const callArgs=(...a)=>esc(JSON.stringify(a));
 function _uiDispatch(attr,e){
   const el=e&&e.target&&e.target.closest?e.target.closest('['+attr+']'):null;if(!el)return;
@@ -550,7 +550,7 @@ const HELP={
   volumes:['Volumes — where the bytes physically live','A Volume is a physical medium you can hold: a tape, drive, or disc, with a barcode, kind, an Onsite/Offsite flag (the "1" in 3-2-1), and free-text location ("office safe"). Each Copy records which package sits on which volume and when it last verified. Scan a barcode into the lookup box to jump straight to a medium\'s contents — no mounting needed. When a volume is done, Finalize seals it: it enforces preconditions (recent verify, free-space buffer, SMART), writes a seal record + inventory onto the medium, marks it SEALED (further writes need an audit-logged unseal), and opens the printable label — the "close the box and label it" moment.'],
   cardcheck:['Check a card — how many backup copies does it have?','Plug in an SD/CF card or a drive and Obelisk reads it (never writes, never adds it as a source) and looks up every file BY CONTENT. For each file it shows how many backup copies exist, where each one lives, and when each was last verified. A copy counts only when it is a package or adopted backup copy on a different drive from the card, and its last verification passed. A file the catalog knows only from a scan or a drive snapshot shows as recorded, with no backup copy. Matching is by SHA-256, whatever the file is called on the card. Obelisk reports copies and dates; what you do with the card is your decision.'],
   dock:['Dock — inventory a stack of legacy drives, one at a time','Pick the Archive(s) to compare against, then dock drives one by one. Obelisk watches for each newly-inserted drive, and on one click does everything hands-off: identifies the drive by serial, hashes every file and matches it by CONTENT against your archives, records the matches as verified copies, and writes an inventory sidecar onto the drive itself. It is strictly read-only toward your sources — NAS folders are only ever hashed. A re-inserted drive is recognized by serial and re-verified, not re-adopted. The session survives closing the app; resume it days later.'],
-  keys:['Keys — encryption secrets','Encrypted packages use per-package random ~288-bit passphrases that live ONLY in keystore files — the catalog stores fingerprints, never the secret. Encrypted builds refuse to run until ≥2 keystores on different devices are registered and in sync. Print a QR card per key, and export a Recovery Kit for the fireproof box.'],
+  keys:['Keys — encryption secrets','Encrypted packages use a random ~288-bit passphrase that lives ONLY in keystore files — the catalog stores fingerprints, never the secret. One key opens every package made with it; make a new key to limit that. A key is ready only when it is in both keystores (on different devices) and you have made an offline copy and proved it by typing it back. Lose every copy and those backups can never be opened: keep the copies in separate places.'],
   jobs:['Jobs — background work','Long operations (scan, build, write, verify, compare, recovery kit) run in the background so the UI stays responsive. It is safe to navigate away; this list refreshes automatically while anything is still running. Click any job — running or finished — to open its detail: a plain summary, live counters, and an Artifacts list where every output has a Show action that opens the thing itself. Jobs persist across restarts; one interrupted by a shutdown shows as INTERRUPTED so you can re-run it.'],
   explore:['Explore data — structure, sizes & what’s verified','One screen to browse any archive or inventoried drive the same way: a size-weighted treemap (area = bytes) plus a breakdown panel (totals, largest folders, roles, per-extension counts). Colour the map by Protection, Drift, or Validation — verified ✓ (a proven copy exists), hashed-but-unverified, or failed ✗ — always shown as colour + text. Reachable on its own, or opened scoped from a scan/verify job’s "View results".'],
   settings:['Settings — one config file','Everything lives in one config.json in the data folder: paths to the external tools, the staging folder, keystore locations, redundancy goal, re-verify window, write throttle, and the optical burn command. Preflight at the top shows whether tar/gpg/par2 (and any LTFS tape) are ready.'],
@@ -1199,10 +1199,11 @@ async function vHome(){
   // Truly-empty catalog (no archives, no drives): the very first time, run the setup
   // interview; once setup is done (or skipped), show the checklist scoped to the answers.
   if(home.empty){
-    const [cfgr,pre,st]=await Promise.all([api('GET','/api/config'),api('GET','/api/preflight'),api('GET','/api/setup')]);
+    const [cfgr,pre,st,keys]=await Promise.all([api('GET','/api/config'),api('GET','/api/preflight'),api('GET','/api/setup'),api('GET','/api/keys').catch(()=>null)]);
     const cfg=(cfgr&&cfgr.config)||{};
     if(!cfg.setup_complete){startSetup(false,cfg);return;}
-    $('#view').innerHTML=gettingStarted(cfg,pre||{},[],[],st||null); return;
+    const pf=pre||{};pf.key_ready=!!(keys&&(keys.keys||[]).some(k=>k.current));
+    $('#view').innerHTML=gettingStarted(cfg,pf,[],[],st||null); return;
   }
   const t=home.totals||{}, arcs=home.archives||[], ung=home.ungrouped, hl=home.health||{}, inc=home.incremental||[];
   let h=hdr('Home','what this tool knows about all your data','home');
@@ -1317,7 +1318,7 @@ function gettingStarted(cfg,pre,archives,pkgs,st){
   }
   items.push(
     ['Set a staging folder','Big, fast scratch space where packages are built before being written to media.',staging,'settings','Open Settings →'],
-    ['Register 2 keystores','On different devices. Encrypted builds refuse to run without them; secrets never touch the catalog.',keystores,'keys','Open Keys →'],
+    ['Create your key','Keys → Create key: two keystores on different devices, then an offline copy you prove by typing it back. Encrypted builds wait for it. Lose every copy and the backups can never be opened.',keystores&&!!pre.key_ready,'keys','Open Keys →'],
     sourceless
       ? ['Create your first archive','A scattered-drives archive — it has no source folder; its files come from the drives you adopt into it.',hasArchive,'vault','Go to Vault →']
       : ['Create your first archive','A body of work you keep together — e.g. "Personal" or "Client Work". It has a source folder you scan.',hasArchive,'vault','Go to Vault →'],
@@ -2254,7 +2255,7 @@ async function vChunks(){
   if(!chunks.length){h+='<div class="empty">No packages yet — packages are media-sized units built from an archive&#39;s files.<div class="row" style="justify-content:center;margin-top:12px"><button class="btn" onclick="loc(&#39;vault&#39;)">Go to an Archive →</button></div></div>'}
   else{h+='<table><tr><th>Package</th><th>Lifecycle</th><th class="num">Data</th><th class="num">Files</th><th>Key</th><th></th></tr>';
     for(const c of chunks.sort((a,b)=>b.id-a.id)){
-      h+=`<tr><td><div class="mono">${esc(c.name)} <span class="etag ${c.encrypted?'enc':'plain'}">${c.encrypted?'AES-256':'plaintext'}</span>${c.adopted?' <span class="etag" title="cataloged from pre-existing media">adopted</span>':''}${c.listing_unknown?' <span class="etag due" title="contents not enumerated — restore or deep-adopt to list">listing unknown</span>':''}${isVerifyDue(c,months)?' <span class="etag due">verify due</span>':''}${copyTag(c,required)}</div><div class="dim" style="font-size:11.5px">${esc(c.media_kind)} · ${esc(c.src_root||(c.adopted?'adopted in place':''))}</div>
+      h+=`<tr><td><div class="mono">${esc(c.name)} <span class="etag ${c.encrypted?'enc':'plain'}">${c.encrypted?'AES-256':(c.adopted?ADOPTED_NOTICE:'plaintext')}</span>${c.adopted?' <span class="etag" title="cataloged from pre-existing media; Obelisk never encrypts or rewrites it">adopted</span>':''}${c.listing_unknown?' <span class="etag due" title="contents not enumerated — restore or deep-adopt to list">listing unknown</span>':''}${isVerifyDue(c,months)?' <span class="etag due">verify due</span>':''}${copyTag(c,required)}</div><div class="dim" style="font-size:11.5px">${esc(c.media_kind)} · ${esc(c.src_root||(c.adopted?'adopted in place':''))}</div>
         ${c.build_timings?`<div class="dim mono" style="font-size:11px">${esc(timingStr(c.build_timings))}</div>`:''}
         ${buildVerifiedStr(c)}
         ${ringStr(c)}
@@ -2277,7 +2278,10 @@ function segStr(c){if(!c.spanned||!c.segments)return '';
   return h+'</div>'}
 function actions(c){
   const b=[];
-  if(c.status==='PLANNED'||c.status==='FAILED'||(c.status==='WRITTEN'&&c.verify_ok===false&&!c.adopted))b.push(`<button class="btn" onclick="doBuild(${c.id})">Build package</button>`);
+  // An adopted backup is recorded as it was found: never built, encrypted or rewritten.
+  if(c.adopted)b.push(`<span class="dim" title="To get an encrypted copy, plan and build a new package from the source">${c.encrypted?'adopted as found':ADOPTED_NOTICE}: Obelisk never encrypts data in place</span>`);
+  else if(c.status==='PLANNED'||c.status==='FAILED'||(c.status==='WRITTEN'&&c.verify_ok===false))b.push(`<button class="btn" onclick="doBuild(${c.id})">Build package</button>`);
+  if(!c.adopted&&c.encrypted&&(c.status==='PLANNED'||c.status==='FAILED'))b.push(`<button class="btn ghost" data-call="separateKeyDlg" data-args="${callArgs(c.id,c.name)}">Separate key…</button>`);
   if(c.spanned){
     if(c.staged_dir&&c.status==='STAGED')b.push(`<button class="btn" data-call="spanWriteDlg" data-args="${callArgs(c.id,c.name)}">Write next segment →</button>`);
   }else if(c.staged_dir&&c.status!=='PLANNED'&&c.status!=='BUILDING'){
@@ -2331,7 +2335,8 @@ async function doBuild(id){
     </div>
     <div class="row" style="margin-top:12px"><button class="btn" onclick="go()">Build now</button></div>`;
   dlg(body,async()=>{
-    if(!(await keyDriveRetry({},b=>api('POST',`/api/chunks/${id}/build`,b))))return;
+    try{if(!(await keyDriveRetry({},b=>api('POST',`/api/chunks/${id}/build`,b))))return;}
+    catch(e){if(e.body&&e.body.key_not_ready){setTimeout(()=>keyNotReadyDlg(e.body),0);return}throw e}
     toast('Build started — see Jobs');loc('jobs')});
 }
 async function writeDlg(id,name,payload){
@@ -2963,11 +2968,34 @@ function newVolumeDlg(){dlg(`<h1>Register volume</h1>
   setTimeout(()=>{const e=$('#d0');if(e)e.focus()},60);
 }
 
-/* ---------------- Keys ---------------- */
+/* ---------------- Keys ----------------
+   A key is ready only when it is in both keystores and an offline copy of it
+   (a printout, a plain-text file or a password-manager note) has been proven by
+   typing or pasting it back. Encrypted builds use the current key: the newest
+   shared key that is ready. The secret is shown only inside the offline-copy
+   dialog, only after a click, and never goes into a URL. No key is ever removed. */
+const KEY_WHY='Lose every copy of a key and every package made with it can never be opened. Keep the copies in separate places: a printout in one place, a file or a password-manager note in another.';
+const KEY_SHARED='One key opens every package made with it. To limit that, make a new key: once it is proven, new packages use it, and every older key stays so its packages still open.';
+const ADOPTED_NOTICE='not encrypted, adopted as found';
+const KEY_CLIP_SECONDS=30;
+const dateOnly=s=>(s||'').slice(0,10);
+function keyStateChip(k){
+  const cls={ready:'VERIFIED',proven:'VERIFIED'}[k.state]||'FAILED';
+  return `<span class="stamp ${cls}">${esc(k.state)}</span>`}
 async function vKeys(){
   const k=await api('GET','/api/keys');
   const st=k.status||{};
+  const keys=k.keys||[];
   let h=`${hdr('Keys','secrets live only in keystore files — never in the catalog','keys')}`;
+  const cur=keys.find(x=>x.current);
+  const pending=keys.find(x=>x.purpose==='shared'&&x.state!=='ready');
+  h+=`<div class="panel"><h2>Your key</h2>`;
+  if(cur)h+=`<div>Encrypted builds use <b>${esc(cur.name)}</b> <span class="chip">${esc(cur.key_ref)}</span>, created ${esc(dateOnly(cur.created_at))}. It opens ${cur.packages} package(s).</div>`;
+  else h+=`<div class="err">No key is ready, so encrypted builds wait. ${esc(pending?pending.step:'Create a key, make an offline copy and prove it.')}</div>`;
+  if(cur&&pending&&pending.key_ref!==cur.key_ref)h+=`<div class="dim" style="margin-top:4px">New key <b>${esc(pending.name)}</b> is not ready yet, so builds keep using ${esc(cur.name)}. ${esc(pending.step)}</div>`;
+  h+=`<div class="dim" style="margin-top:6px">${esc(KEY_WHY)}</div>
+    <div class="dim" style="margin-top:4px">${esc(KEY_SHARED)}</div>
+    <div class="row" style="margin-top:10px"><button class="btn" onclick="createKeyDlg()">${cur?'Make a new key…':'Create key…'}</button></div></div>`;
   h+=`<div class="panel"><h2>Keystores (${st.min_required} required, different devices)</h2>`;
   if(!st.ok)h+=`<div class="err" style="margin-bottom:10px">${esc(st.reason||'')}</div>`;
   if(st.warning)h+=`<div class="err" style="margin-bottom:10px">Warning: ${esc(st.warning)}</div>`;
@@ -2979,14 +3007,141 @@ async function vKeys(){
     <button class="btn danger" onclick="recoveryKitDlg()">Export Recovery Kit…</button>
     <button class="btn ghost" onclick="keySheetDlg()">Enter key from sheet…</button>
     <span class="dim">Register paths in Settings.</span></div></div>`;
-  h+='<div class="panel"><h2>Key registry (fingerprints only)</h2>';
-  if(!(k.keys||[]).length)h+='<div class="empty">Keys are generated automatically per package at build time.</div>';
-  else{h+='<table><tr><th>Ref</th><th>Note</th><th>Fingerprint (SHA-256 of passphrase)</th><th></th></tr>';
-    for(const m of k.keys)h+=`<tr><td><span class="chip">${esc(m.key_ref)}</span></td><td>${esc(m.note)}</td>
-      <td class="mono dim">${esc((m.fingerprint||'').slice(0,24))}…</td>
-      <td><a class="btn ghost" style="text-decoration:none" href="${esc(mediaURL('/api/keys/'+m.key_ref+'/qr.png'))}" target="_blank">Print QR card</a></td></tr>`;
-    h+='</table>'}
+  h+='<div class="panel"><h2>Keys (fingerprints only)</h2>';
+  if(!keys.length)h+='<div class="empty">No key yet. Create key makes one; it is ready once you have proven an offline copy.</div>';
+  else{h+='<table><tr><th>Name</th><th>Ref</th><th>Created</th><th class="num">Opens</th><th>State</th><th></th></tr>';
+    for(const m of keys){
+      const what=m.purpose==='package'?`only package ${esc(m.package_name||m.package_id)}`:(m.purpose==='shared'?'shared':'one package (made before key readiness)');
+      h+=`<tr><td>${esc(m.name)}${m.current?' <span class="etag enc">current</span>':''}<div class="dim" style="font-size:11px">${what}</div>${m.step?`<div class="dim" style="font-size:11px">${esc(m.step)}</div>`:''}</td>
+      <td><span class="chip">${esc(m.key_ref)}</span><div class="mono dim" style="font-size:10.5px">${esc((m.fingerprint||'').slice(0,24))}…</div></td>
+      <td>${esc(dateOnly(m.created_at))}</td><td class="num">${m.packages} package(s)</td><td>${keyStateChip(m)}</td>
+      <td class="row" style="justify-content:flex-end"><button class="btn ghost" data-call="offlineCopyDlg" data-args="${callArgs(m.key_ref)}">Make an offline copy…</button>
+        <button class="btn ghost" data-call="proveKeyDlg" data-args="${callArgs(m.key_ref)}">Prove a copy…</button></td></tr>`}
+    h+='</table><div class="dim" style="margin-top:6px">A key is never removed: every package keeps opening with the key it was made with.</div>'}
   $('#view').innerHTML=h+'</div>';
+}
+/* Create key: first makes sure two keystore locations are set (the server checks
+   they are on different devices), then makes the key, then goes straight on to
+   the offline copy. o.purpose 'package' makes a separate key for one package. */
+async function createKeyDlg(o){o=o||{};
+  const cfgr=await api('GET','/api/config').catch(()=>({}));
+  const paths=((cfgr&&cfgr.config)||{}).keystore_paths||[];
+  const need=paths.length<2;
+  const title=o.purpose==='package'?`A separate key for ${esc(o.package_name||'')}`:'Create key';
+  dlg(`<h1>${title}</h1>
+  ${need?`<div class="dim" style="margin-bottom:6px">Keys are kept in two keystore files on <b>different drives</b>, so losing one drive loses no key. Give the two files (they are created if new).</div>
+    <label>Keystore 1</label><input id="ckks1" class="full mono" placeholder="D:\\obelisk-keys\\keys.json" value="${esc(paths[0]||'')}">
+    <label>Keystore 2 (another drive)</label><input id="ckks2" class="full mono" placeholder="E:\\obelisk-keys\\keys.json">`
+  :`<div class="dim" style="margin-bottom:6px">Saved to both keystores: <span class="mono">${paths.map(esc).join(' · ')}</span></div>`}
+  <label>Name</label><input id="ckname" class="full" placeholder="${o.purpose==='package'?'Key for package '+esc(o.package_name||''):'e.g. Family archive key'}">
+  ${o.purpose==='package'?'<div class="dim" style="margin-top:6px">This key opens only this package, so you can hand the package and this key to someone without giving them your other backups. It needs its own offline copy and proof before the package is built.</div>':`<div class="dim" style="margin-top:6px">${esc(KEY_SHARED)}</div>`}
+  <div class="err" style="margin-top:6px">${esc(KEY_WHY)}</div>
+  <div class="row" style="margin-top:12px"><button class="btn" onclick="go()">Create key</button></div>`,
+  async()=>{
+    if(need){const a=$('#ckks1').value.trim(),b=$('#ckks2').value.trim();
+      if(!a||!b)throw new Error('Give two keystore files, on different drives.');
+      await api('PUT','/api/config',{keystore_paths:[a,b]});}
+    const r=await api('POST','/api/keys',{name:$('#ckname').value.trim(),purpose:o.purpose||'shared',package_id:o.package_id||0});
+    toast('Key '+r.name+' created. It is not ready until you make an offline copy and prove it.');
+    setTimeout(()=>offlineCopyDlg(r.key_ref),0);
+  });
+}
+function separateKeyDlg(id,name){dlg(`<h1>Use a separate key for ${esc(name)}?</h1>
+  <div style="margin:6px 0">Off by default. Every package uses your shared key unless you choose this. Choose it for a package meant to be handed to someone else: its own key opens only it.</div>
+  <div class="dim">The new key needs its own offline copy and proof before this package is built. It is never removed and never replaced.</div>
+  <div class="row" style="margin-top:12px"><button class="btn" onclick="go()">Make its key…</button></div>`,
+  async()=>{setTimeout(()=>createKeyDlg({purpose:'package',package_id:id,package_name:name}),0)})}
+function keyNotReadyDlg(b){dlg(`<h1>No key is ready for this build</h1>
+  <div style="margin:6px 0">${esc(b.step||b.error||'')}</div>
+  <div class="dim">${esc(KEY_WHY)}</div>
+  <div class="row" style="margin-top:12px"><button class="btn" onclick="go()">${b.key_ref?'Finish the key →':'Create key →'}</button></div>`,
+  async()=>{loc('keys');setTimeout(()=>b.key_ref?offlineCopyDlg(b.key_ref):createKeyDlg(),0)})}
+/* The offline copies. Nothing secret is on screen until the user clicks to show
+   it. The password-manager note can be copied; the clipboard is cleared after
+   KEY_CLIP_SECONDS and the dialog says so. */
+let _kcNote='';
+async function offlineCopyDlg(ref){
+  const k=await api('GET','/api/keys').catch(()=>({}));
+  const m=(k.keys||[]).find(x=>x.key_ref===ref)||{key_ref:ref,name:ref};
+  _kcNote='';
+  dlg(`<h1>Make an offline copy of ${esc(m.name)}</h1>
+  <div class="err" style="margin-bottom:6px">${esc(KEY_WHY)}</div>
+  <div class="dim" style="margin-bottom:8px">Make at least one copy, then prove it by typing it back. You may make all three. The key is shown only here, and only when you ask.</div>
+  <div class="panel"><h2>Print it</h2><div class="dim">Short lines, each with its own check code so a typo is found on its line, and the full SHA-256 fingerprint.</div>
+    <div class="row" style="margin-top:6px"><button class="btn ghost" data-call="keyPrintout" data-args="${callArgs(ref)}">Show the key to print</button></div><div id="kcprintout"></div></div>
+  <div class="panel"><h2>Save a plain-text file</h2><div class="dim">Choose a new file on a drive you keep apart. Obelisk refuses its data folder, a drive that holds your backups, and a drive that holds a package this key opens. It never saves one on its own.</div>
+    <input id="kcfile" class="full mono" placeholder="F:\\keys\\obelisk-key.txt">
+    <div class="row" style="margin-top:6px"><button class="btn ghost" data-call="keySaveFile" data-args="${callArgs(ref)}">Save the file</button></div><div id="kcfileout"></div></div>
+  <div class="panel"><h2>Copy it into a password manager</h2><div class="dim">One plain note: the key, its fingerprint, what it opens, and how to restore by hand. Paste it into a secure note.</div>
+    <div class="row" style="margin-top:6px"><button class="btn ghost" data-call="keyPMNote" data-args="${callArgs(ref)}">Show the note</button></div><div id="kcpmout"></div></div>
+  <div class="row" style="margin-top:12px"><button class="btn" onclick="go()">I made a copy: prove it →</button></div>`,
+  async()=>{_kcNote='';setTimeout(()=>proveKeyDlg(ref),0)});
+  keyWipeOnClose();
+}
+/* However a key dialog closes, the key shown in it, and what was typed into a
+   proof (a key, or nearly one), leave the page. One listener stays on the dialog
+   for good, so a late close event of the dialog before cannot use it up. */
+function keyWipe(){_kcNote='';keyPrintPage._html='';
+  for(const id of ['#kcprintout','#kcpmout','#kpout']){const e=$(id);if(e)e.innerHTML=''}
+  const t=$('#kptext');if(t)t.value=''}
+function keyWipeOnClose(){const d=$('#dlg');
+  if(d&&d.addEventListener&&!d._keyWipe){d._keyWipe=true;d.addEventListener('close',keyWipe)}}
+async function keyPrintout(ref){
+  const r=await api('POST','/api/keys/'+encodeURIComponent(ref)+'/reveal',{kind:'printout'});
+  const rows=(r.lines||[]).map(l=>`<tr><td class="mono">${esc(l.label)}</td><td class="mono" style="letter-spacing:.12em">${esc(l.groups)}</td><td class="mono">${esc(l.code)}</td></tr>`).join('');
+  const page=`<h1>Obelisk key: ${esc(r.name)}</h1><p>Key ref <b>${esc(r.key_ref)}</b>, created ${esc(dateOnly(r.created_at))}. Opens ${esc(r.opens)}.</p>
+    <p><b>This page is the key.</b> ${esc(KEY_WHY)}</p>
+    <table border="1" cellpadding="4" style="border-collapse:collapse"><tr><th>Line</th><th>Characters (groups of 4, type with no spaces)</th><th>Check</th></tr>${rows}</table>
+    <p>SHA-256 fingerprint of the whole key:<br><span style="font-family:monospace;word-break:break-all">${esc(r.fingerprint)}</span></p>
+    <p>Restore by hand: <code>par2 verify NAME.tar.gpg.par2</code>, then <code>gpg -d -o NAME.tar NAME.tar.gpg</code> (gpg asks for the key; never type it on a command line), then <code>tar -xf NAME.tar</code>.</p>`;
+  $('#kcprintout').innerHTML=`<table style="margin-top:6px"><tr><th>Line</th><th>Characters</th><th>Check</th></tr>${rows}</table>
+    <div class="dim mono" style="font-size:11px;word-break:break-all">SHA-256 ${esc(r.fingerprint)}</div>
+    <div class="row" style="margin-top:6px"><button class="btn ghost" onclick="keyPrintPage()">Print…</button></div>`;
+  keyPrintPage._html=page;
+}
+function keyPrintPage(){const w=window.open('','_blank');if(!w){toast('Your browser blocked the print window',1);return}
+  w.document.write('<!doctype html><meta charset="utf-8"><title>Obelisk key</title><body style="font:14px sans-serif">'+(keyPrintPage._html||'')+'</body>');
+  w.document.close();w.focus();w.print()}
+async function keySaveFile(ref){
+  const p=$('#kcfile').value.trim();const out=$('#kcfileout');
+  if(!p){out.innerHTML='<span class="err">Give the whole path of a new file.</span>';return}
+  const dir=p.replace(/[\\/][^\\/]*$/,'');
+  try{if(dir&&!(await destGate(dir)))return;
+    const r=await api('POST','/api/keys/'+encodeURIComponent(ref)+'/save-file',{path:p});
+    out.innerHTML=`<span style="color:var(--ok)">Saved to <span class="mono">${esc(r.path)}</span>. Keep that drive apart from your backups, then prove the file.</span>`;
+  }catch(e){out.innerHTML=`<span class="err">${esc(e.message)}</span>`}
+}
+async function keyPMNote(ref){
+  const r=await api('POST','/api/keys/'+encodeURIComponent(ref)+'/reveal',{kind:'password-manager'});
+  _kcNote=r.block||'';
+  $('#kcpmout').innerHTML=`<textarea id="kcpmtext" class="full mono" rows="12" readonly style="font-size:11.5px">${esc(_kcNote)}</textarea>
+    <div class="row" style="margin-top:6px"><button class="btn ghost" onclick="keyCopyNote()">Copy the note</button><span class="dim" id="kcclip"></span></div>`;
+}
+async function keyCopyNote(){
+  const note=_kcNote;if(!note)return;
+  try{await navigator.clipboard.writeText(note);}catch(e){toast('Copy did not work; select the note and copy it yourself',1);return}
+  const m=$('#kcclip');if(m)m.textContent=`Copied. Obelisk clears the clipboard in ${KEY_CLIP_SECONDS} seconds.`;
+  setTimeout(async()=>{try{await navigator.clipboard.writeText('')}catch(e){}
+    const m2=$('#kcclip');if(m2)m2.textContent='The clipboard was cleared.'},KEY_CLIP_SECONDS*1000);
+}
+function proveKeyDlg(ref){dlg(`<h1>Prove your copy of ${esc(ref)}</h1>
+  <div class="dim" style="margin-bottom:6px">Type the key back from your printout, line by line as printed (for example <span class="mono">L01/03 Ab3d …  [1F2E]</span>), or paste back your text file or password-manager note. Obelisk compares the whole key by its SHA-256 fingerprint, and names any missing or changed line.</div>
+  <label>Which copy is this?</label>
+  <select id="kpkind"><option value="printout">Printout</option><option value="file">Plain-text file</option><option value="password-manager">Password-manager note</option></select>
+  <label style="margin-top:8px">The key, typed or pasted back</label>
+  <textarea id="kptext" class="full mono" rows="8" autocomplete="off" spellcheck="false"></textarea>
+  <div id="kpout" style="margin-top:8px"></div>
+  <div class="row" style="margin-top:12px"><button class="btn" data-call="keyProve" data-args="${callArgs(ref)}">Prove it</button></div>`,async()=>{});
+  keyWipeOnClose();
+}
+async function keyProve(ref){
+  const out=$('#kpout');
+  try{const r=await api('POST','/api/keys/'+encodeURIComponent(ref)+'/prove',{text:$('#kptext').value,kind:$('#kpkind').value});
+    if(r.ok){$('#kptext').value='';
+      out.innerHTML=`<span style="color:var(--ok)">✓ Proven: your copy matches the key. It is ${esc(r.state)}.</span> <span class="dim">Keep that copy apart from your backups and from the keystores.</span>`;
+      toast('Key proven');if(location.hash==='#keys')vKeys();}
+    else out.innerHTML=`<span class="err">✗ Not proven: ${esc((r.notes||[]).join('. '))}</span>`;
+  }catch(e){out.innerHTML=`<span class="err">${esc(e.message)}</span>`}
 }
 /* Retype a paper key sheet and prove it's right — each line self-checks (CRC-16),
    and the whole passphrase's SHA-256 fingerprint confirms the key. The secret is

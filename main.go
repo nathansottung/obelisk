@@ -27,8 +27,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	qrcode "github.com/skip2/go-qrcode"
 )
 
 //go:embed ui
@@ -2300,6 +2298,20 @@ func api(mux routeRegistrar, app *App) {
 			return
 		}
 		keyOpt := PackageWriteOptions{AllowKeyDrive: bl(body(r), "allow_key_drive")}
+		if c.Adopted {
+			jsonErr(w, 409, fmt.Errorf("package %s was adopted as found; Obelisk never encrypts or rebuilds an adopted backup", c.Name))
+			return
+		}
+		// A key that is not ready refuses before a job starts, naming the step,
+		// so the page can take the user straight to it.
+		var nr *KeyNotReadyError
+		if err := app.keyBuildGate(c); errors.As(err, &nr) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(409)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error(), "key_not_ready": true,
+				"key_ref": nr.Ref, "step": nr.Step})
+			return
+		}
 		if cfg, err := app.LoadConfig(); err == nil && !keyDriveGate(w, app, c, cfg.StagingDir, keyOpt) {
 			return
 		}
@@ -2553,15 +2565,64 @@ func api(mux routeRegistrar, app *App) {
 
 	// keys
 	mux.HandleFunc("GET /api/keys", func(w http.ResponseWriter, r *http.Request) {
-		jsonOut(w, map[string]any{"status": app.KeystoreStatus(), "keys": app.Store.KeyMetas()})
+		jsonOut(w, map[string]any{"status": app.KeystoreStatus(), "keys": app.KeyStates()})
 	})
+	// Create key: a new key, shared or for one package, in both keystores. The
+	// reply never holds the secret; the key is not ready until an offline copy of
+	// it is proven (keys_ready.go).
 	mux.HandleFunc("POST /api/keys", func(w http.ResponseWriter, r *http.Request) {
-		ref, pass, fpr, err := app.GenerateKey(s(body(r), "note"))
+		b := body(r)
+		name := s(b, "name")
+		if name == "" {
+			name = s(b, "note")
+		}
+		pid, _ := b["package_id"].(float64)
+		st, err := app.CreateKey(name, s(b, "purpose"), int(pid))
 		if err != nil {
 			jsonErr(w, 400, err)
 			return
 		}
-		jsonOut(w, map[string]any{"key_ref": ref, "passphrase": pass, "fingerprint": fpr})
+		jsonOut(w, st)
+	})
+	// The secret, for an offline copy the user chose to make: only in a POST
+	// reply, after a deliberate click on the Keys page.
+	mux.HandleFunc("POST /api/keys/{ref}/reveal", func(w http.ResponseWriter, r *http.Request) {
+		out, err := app.RevealKey(r.PathValue("ref"), s(body(r), "kind"))
+		if err != nil {
+			jsonErr(w, 400, err)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		jsonOut(w, out)
+	})
+	mux.HandleFunc("POST /api/keys/{ref}/save-file", func(w http.ResponseWriter, r *http.Request) {
+		path := s(body(r), "path")
+		if path == "" {
+			jsonErr(w, 400, fmt.Errorf("path required: the new file to create"))
+			return
+		}
+		if err := app.keyFileRefusal(r.PathValue("ref"), path); err != nil {
+			jsonErr(w, 400, err)
+			return
+		}
+		if !outFolderGate(w, app, filepath.Dir(path)) {
+			return
+		}
+		saved, err := app.SaveKeyFile(r.PathValue("ref"), path)
+		if err != nil {
+			jsonErr(w, 400, err)
+			return
+		}
+		jsonOut(w, map[string]any{"path": saved})
+	})
+	mux.HandleFunc("POST /api/keys/{ref}/prove", func(w http.ResponseWriter, r *http.Request) {
+		b := body(r)
+		res, err := app.ProveKey(r.PathValue("ref"), s(b, "text"), s(b, "kind"))
+		if err != nil {
+			jsonErr(w, 400, err)
+			return
+		}
+		jsonOut(w, res)
 	})
 	mux.HandleFunc("POST /api/keys/sync", func(w http.ResponseWriter, r *http.Request) {
 		rep, err := app.syncKeystores()
@@ -2571,21 +2632,9 @@ func api(mux routeRegistrar, app *App) {
 		}
 		jsonOut(w, rep)
 	})
-	mux.HandleFunc("GET /api/keys/{ref}/qr.png", func(w http.ResponseWriter, r *http.Request) {
-		ref := r.PathValue("ref")
-		pass, err := app.Passphrase(ref)
-		if err != nil {
-			jsonErr(w, 404, err)
-			return
-		}
-		png, err := qrcode.Encode("MNEMO1|"+ref+"|"+pass, qrcode.Medium, 320)
-		if err != nil {
-			jsonErr(w, 500, err)
-			return
-		}
-		w.Header().Set("Content-Type", "image/png")
-		_, _ = w.Write(png)
-	})
+	// No GET route serves a key, as text or as a QR image: the secret leaves the
+	// server only in the reply to a deliberate reveal above, which the audit log
+	// records. The Recovery Kit's QR cards are written into the kit itself.
 
 	// burn queues — persistent, reboot-resumable optical burning
 	mux.HandleFunc("GET /api/burnqueues", func(w http.ResponseWriter, r *http.Request) {

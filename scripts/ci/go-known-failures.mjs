@@ -2,7 +2,7 @@
 // top-level tests is exactly the known list below: a new failure fails the gate,
 // and so does a known failure that passed, was skipped or did not run. A package
 // failure with no failing test (build error, crash outside a test) also fails, and
-// so does a must-pass test that did not pass.
+// so does a must-pass test that did not pass, or that passed with a skipped subtest.
 // Skips are listed; they are not passes.
 //
 // Usage: node scripts/ci/go-known-failures.mjs GO_TEST_JSON_FILE
@@ -23,6 +23,11 @@ const mustPass = [
   'TestBuildFilelist_IsNulDelimited',
   'TestBuildRestore_HostileFilenamesRoundTrip',
   'TestBuildRestore_UnicodeRoundTrip',
+  // The page alone takes a fresh data folder from a first encrypted build to a
+  // finished one through Create key, an offline copy and its proof; and packages
+  // made with an old per-package key and with one shared key restore by hand.
+  'TestUI_FirstStartToEncryptedBuildThroughThePage',
+  'TestHandRestore_OldPerPackageKeyAndNewSharedKey',
 ];
 
 const [file] = process.argv.slice(2);
@@ -39,7 +44,13 @@ const top = [...final.values()].filter(r => !r.test.includes('/'));
 const count = a => top.filter(r => r.action === a).length;
 const failed = top.filter(r => r.action === 'fail').map(r => r.test);
 const skipped = top.filter(r => r.action === 'skip');
-const status = name => top.find(r => r.test === name)?.action ?? 'did not run';
+// A must-pass test passes only when it and every one of its subtests ran: a
+// skipped subtest is part of it that did not run.
+const skippedSubtest = name => [...final.values()].some(r => r.test.startsWith(name + '/') && r.action === 'skip');
+const status = name => {
+  const a = top.find(r => r.test === name)?.action ?? 'did not run';
+  return a === 'pass' && skippedSubtest(name) ? 'a subtest skipped' : a;
+};
 
 console.log(`Top-level tests: ${count('pass')} pass, ${count('fail')} fail, ${count('skip')} skip; packages: ${[...packages].map(([p, a]) => p + '=' + a).join(', ') || 'none reported'}`);
 console.log(`Skipped (not passes): ${skipped.length}`);

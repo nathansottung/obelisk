@@ -155,6 +155,11 @@ func (s *itServer) setConfig(extra map[string]any) {
 	if m := s.obj("PUT", "/api/config", cfg); s.status(m) != 200 {
 		s.t.Fatalf("config PUT failed: %v", m)
 	}
+	// With two keystores, make the ready key an encrypted build needs, as the
+	// user does on the Keys page.
+	if ks, ok := extra["keystore_paths"].([]string); ok && len(ks) >= MinKeystores {
+		readyTestKey(s.t, s.app)
+	}
 }
 
 func (s *itServer) makeKeystores(n int) []string {

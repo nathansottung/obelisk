@@ -27,7 +27,11 @@ A couple of words used below:
 
 **Symptom:** Building an encrypted package stops with **"refusing to encrypt: need 2 keystores."**
 **Why:** Encryption is only allowed once you have at least **two** keystores (two copies of your secret), so a single lost keystore can never wipe out your data.
-**Fix:** Add a second keystore path in **Settings**, ideally on a different device (like a USB stick). Or, if you do not need encryption, turn encryption off for this package.
+**Fix:** On the **Keys** tab, click **Create key…**: it asks for two keystore files on different drives. Or, if you do not need encryption, turn encryption off for this package.
+
+**Symptom:** Building an encrypted package stops with **"no key is ready for it"**.
+**Why:** A key is used only once it is in both keystores and you have made an offline copy of it and proved that copy by typing it back. Lose every copy and the package could never be opened.
+**Fix:** Click **Create key →** or **Finish the key →** in the message, or open the **Keys** tab and finish the step it names. A package with its own separate key waits for that key.
 
 **Symptom:** A whole package shows **FAILED** (a red rail).
 **Why:** The build or the staging step failed partway through.
