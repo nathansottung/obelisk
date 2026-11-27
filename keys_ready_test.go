@@ -37,14 +37,24 @@ func plannedEncrypted(t *testing.T, app *App, name string) *Chunk {
 		HashAlg: "SHA256", Par2: 5, Encrypted: true, Files: append([]ChunkFileRef{}, refs...)})
 }
 
-// waitBuilt waits for package id to leave PLANNED/BUILDING after a build job.
-func waitBuilt(t *testing.T, app *App, id int) *Chunk {
+// waitBuilt waits for the build job a build reply started to finish, through
+// the jobs API, and returns the package as recorded then. It never reads the
+// package while the build may still be changing it.
+func waitBuilt(t *testing.T, app *App, id int, reply map[string]any) *Chunk {
 	t.Helper()
+	jid, ok := reply["job_id"].(float64)
+	if !ok {
+		t.Fatalf("the build of package %d did not start a job: %v", id, reply)
+	}
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		c := app.Store.Chunk(id)
-		if c != nil && c.Status != "PLANNED" && c.Status != "BUILDING" {
-			return c
+		_, _, raw := keysAPI(t, app, "GET", "/api/jobs", nil)
+		var jobs []map[string]any
+		_ = json.Unmarshal([]byte(raw), &jobs)
+		for _, j := range jobs {
+			if j["id"] == jid && j["status"] != "RUNNING" && j["status"] != "QUEUED" && j["status"] != "PENDING" {
+				return app.Store.Chunk(id)
+			}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -415,8 +425,10 @@ func TestKeyReady_SentinelPassphraseNeverLeaks(t *testing.T) {
 	call("POST", "/api/keys/"+ref+"/save-file", map[string]any{"path": keyFile})
 	block := revealAPI(t, app, ref, "password-manager")["block"].(string)
 	call("POST", "/api/keys/"+ref+"/prove", map[string]any{"text": block, "kind": "password-manager"})
-	call("POST", "/api/chunks/"+itoaForTest(c.ID)+"/build", nil)
-	waitBuilt(t, app, c.ID)
+	built := call("POST", "/api/chunks/"+itoaForTest(c.ID)+"/build", nil)
+	if got := waitBuilt(t, app, c.ID, built); got.Status != "STAGED" {
+		t.Fatalf("the build with the proven key did not finish: %s %s", got.Status, got.Error)
+	}
 	call("GET", "/api/keys", nil)
 	call("GET", "/api/jobs", nil)
 	for i, r := range replies {
